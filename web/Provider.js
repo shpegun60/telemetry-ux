@@ -243,11 +243,18 @@ function staticAdapter({client, metadata, sdk})
 			    fail('Generated value codec is missing');
 		    codec.encode(value);
 		},
-		submit(endpoint, operation, value) {
+		submit(endpoint, operation, value, originalPayload) {
 		    if (operation === 'read')
 			    return client.read(endpoint.binding);
-		    if (operation === 'write')
-			    return client.write(endpoint.binding, value);
+		    if (operation === 'write') {
+			    const write = endpoint.binding.write;
+			    if (typeof write?.encodePreserving !== 'function')
+				    fail(
+				        'Unsupported: regenerate the SDK with --wire-editing for safe Field editing');
+			    return client.write(
+			        {...write, encode : edited => write.encodePreserving(edited, originalPayload)},
+			        value);
+		    }
 		    if (operation === 'command')
 			    return client.command(endpoint.binding, value);
 		    return client.service(endpoint.binding, value);
@@ -296,7 +303,7 @@ function dynamicAdapter({client})
 		validate(id, value, schema) {
 		    encodeValue(schema, id, value);
 		},
-		submit(endpoint, operation, value) {
+		submit(endpoint, operation, value, originalPayload) {
 		    const method = {
 			    read : 'FieldRead',
 			    write : 'FieldWrite',
@@ -308,8 +315,11 @@ function dynamicAdapter({client})
 			    fail(names.get(bound.status) || 'Binding refused');
 		    if (operation === 'read')
 			    return client.readField(bound.endpoint);
-		    if (operation === 'write')
-			    return client.writeField(bound.endpoint, value);
+		    if (operation === 'write') {
+			    if (typeof client.writeFieldPreserving !== 'function')
+				    fail('Unsupported: this SDK does not support safe Field editing');
+			    return client.writeFieldPreserving(bound.endpoint, value, originalPayload);
+		    }
 		    return client[operation](bound.endpoint, value);
 		},
 		result : result => result
@@ -324,6 +334,7 @@ function presentation(adapter, inputLimits)
 	let publishing = false, notifying = false, notifyAgain = false, active;
 	let value, draft, response, hasValue = false, hasDraft = false, hasResponse = false,
 	                            dirty = false, error = '';
+	let valuePayload, draftPayload;
 	let texts = new Map(), outcomes = Object.create(null);
 	const outcomeVersions = Object.create(null);
 
@@ -343,6 +354,7 @@ function presentation(adapter, inputLimits)
 	function clearValues()
 	{
 		value = draft = response = undefined;
+		valuePayload = draftPayload = undefined;
 		hasValue = hasDraft = hasResponse = dirty = false;
 		texts.clear();
 		++revision;
@@ -515,6 +527,7 @@ function presentation(adapter, inputLimits)
 			if (!isCurrent() || token !== epoch)
 				return false;
 			draft = candidate;
+			draftPayload = selected.category === 1 ? valuePayload : undefined;
 			hasDraft = true;
 			dirty = selected.category !== 1;
 			texts.clear();
@@ -705,6 +718,7 @@ function presentation(adapter, inputLimits)
 				    kind === 'service' ? record.endpoint.responseType : record.endpoint.valueType;
 				model.preflight(id);
 				const candidate = copyValue(model.types, id, decoded.value);
+				const payload = kind === 'service' ? undefined : new Uint8Array(operation.payload);
 				validate(id, candidate);
 				if (record.epoch === epoch && isCurrent()) {
 					if (kind === 'service') {
@@ -712,6 +726,7 @@ function presentation(adapter, inputLimits)
 						hasResponse = model.types[id].kind !== 0;
 					} else {
 						value = candidate;
+						valuePayload = payload;
 						hasValue = model.types[id].kind !== 0;
 					}
 					error = '';
@@ -787,7 +802,7 @@ function presentation(adapter, inputLimits)
 			if (record.epoch !== epoch || !isCurrent())
 				return false;
 			active = record;
-			request = adapter.submit(record.endpoint, kind, draft);
+			request = adapter.submit(record.endpoint, kind, draft, draftPayload);
 			if (request.requestId === 0) {
 				active = undefined;
 				request.then(
@@ -821,6 +836,7 @@ function presentation(adapter, inputLimits)
 			});
 			if (kind === 'read' || kind === 'write') {
 				value = undefined;
+				valuePayload = undefined;
 				hasValue = false;
 			}
 			if (kind === 'service') {
@@ -829,6 +845,7 @@ function presentation(adapter, inputLimits)
 			}
 			if (kind === 'write') {
 				draft = undefined;
+				draftPayload = undefined;
 				hasDraft = dirty = false;
 				texts.clear();
 			}
@@ -872,6 +889,7 @@ function presentation(adapter, inputLimits)
 		    if (notifying || !snapshot().actions.cancelEdit)
 			    return false;
 		    draft = undefined;
+		    draftPayload = undefined;
 		    hasDraft = dirty = false;
 		    texts.clear();
 		    error = '';

@@ -245,7 +245,7 @@ def main():
                     const test = await import('./Renderer.js');
                     return await test.runRendererChecks();
                 }''')
-                check(renderer.get('passed') and renderer.get('checks', 0) >= 30,
+                check(renderer.get('passed') and renderer.get('checks', 0) >= 38,
                       'Independent renderer pagination and lifecycle controls')
                 check(state() == before, 'Presentation-only controls perform no device I/O')
                 check(not report['errors'] and not report['warnings'], 'Final browser console must stay clean')

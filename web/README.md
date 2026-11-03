@@ -12,6 +12,10 @@ already admitted DeviceClient, generated `device.js` exports and its matching
 opt-in `device.metadata.js` module. The generated module fingerprint must match
 the metadata. Both providers expose the same `PresentationProvider` contract in
 [Provider.d.ts](Provider.d.ts); neither provider constructs another client.
+Generate editable static Fields with `--wire-editing`; `--ux-starter web`
+enables this SDK helper automatically. Older generated modules remain readable,
+but applying a Field without the preserving helper reports `Unsupported` rather
+than silently re-encoding untouched floating-point values.
 
 Subscribe after creating the provider, then render `provider.snapshot()` once.
 `subscribe(listener)` returns an unsubscribe function and subsequently delivers
@@ -35,6 +39,13 @@ and U64/S64 values remain exact decimal text; open enum values are accepted by
 the existing SDK codec. Boolean input is `true` or `false`; integers use decimal
 text without a JavaScript Number intermediate for U64/S64. Signed zero is shown
 as `-0`. JavaScript numeric values do not preserve arbitrary NaN payload bits.
+For Field editing, the provider privately owns the checked original payload and
+passes it to the SDK's preserving write operation. The SDK retains original wire
+bytes for unchanged leaves, including signed signaling NaNs, while explicitly
+changed values use the existing canonical encoder. The provider does not encode
+or patch floating-point bytes itself.
+A NaN-to-NaN edit retains the seed representation; numeric text does not select
+NaN payload bits.
 
 Forward each raw input string with its row path and the revision captured when
 that live row was rendered to `setText(path, text, revision)`. Retire old editors
@@ -46,6 +57,10 @@ codec or SDK `encodeValue`, not a second payload codec. A stale revision refuses
 the edit. Actions return a synchronous boolean indicating whether they started;
 completion arrives through state subscription. A submission with request ID zero
 retains the preceding snapshot and draft.
+The original Field payload stays with its draft even if a later Refresh obtains
+a newer value. This is the draft's known base, not a server-side compare-and-swap
+or a guarantee against concurrent device changes. Cancel, accepted Write,
+selection changes and invalidation retire the corresponding private seed.
 
 Accepted Write retires the old Field value and draft. A confirmed Write is
 followed by a separate FieldRead. The `write` and `readback` outcomes remain

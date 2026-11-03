@@ -250,6 +250,8 @@ export function mountConfigurator(element, {provider} = {})
 			});
 			input.addEventListener('blur', () => update(provider.snapshot()));
 			children.addEventListener('click', () => {
+				if (!alive || !entry.live || entry.context !== context)
+					return;
 				if (expanded.has(token))
 					expanded.delete(token);
 				else
@@ -343,7 +345,10 @@ export function mountConfigurator(element, {provider} = {})
 				more.dataset.action = 'load-more';
 				more.dataset.source = source;
 				more.dataset.path = JSON.stringify(path);
+				const ownerContext = context;
 				more.addEventListener('click', () => {
+					if (!alive || ownerContext !== context || more.parentNode !== section.rowList)
+						return;
 					pages.set(pageKey, count + 1);
 					update(provider.snapshot());
 				});

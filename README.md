@@ -73,6 +73,8 @@ generated SDK. Both modes share one renderer. It builds request forms from the
 schema, keeps 64-bit inputs as decimal text, preserves invalid/intermediate input
 and reads back the device's applied configuration. Changes require explicit
 opt-in; `Accepted`, `Executed`, endpoint refusal and `OutcomeUnknown` stay distinct.
+Editing a Field keeps its original wire payload privately so unchanged F32/F64
+NaNs retain their sign, signaling bit and payload when another member is edited.
 
 The host forwards lifecycle changes with `provider.invalidate()` before closing
 or resetting its client, and `provider.sync()` after a new admission. Removing a
@@ -125,6 +127,9 @@ SDK and structural metadata:
 Import `mountDevice` from the generated `ui/DevicePage.js` and pass the host's
 admitted `DeviceClient`. It returns `{provider, unmount}` and uses the same shared
 browser view. The host supplies connection controls and its chosen transport.
+The starter enables the SDK's optional `--wire-editing` codecs. When generating
+a static SDK without the starter, select that option explicitly for Field editing;
+older read-only generated codecs remain usable for inspection.
 The [starter test](tests/web_starter/README.md) checks this ownership wiring.
 
 Keep user UI code outside generated output. Regeneration and `--check` preserve

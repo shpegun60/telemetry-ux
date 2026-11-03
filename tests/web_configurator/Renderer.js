@@ -44,6 +44,7 @@ export async function runRendererChecks()
 	const windows = [];
 	let subscriptions = 0, unsubscriptions = 0, lifecycleCalls = 0, selections = 0, textCalls = 0;
 	let draftText = '';
+	let nested = false, snapshotCalls = 0;
 	const publish = changes => {
 		state = Object.freeze({...state, ...changes, revision : state.revision + 1});
 		for (const listener of [...listeners])
@@ -54,7 +55,10 @@ export async function runRendererChecks()
 		return false;
 	};
 	const provider = {
-		snapshot : () => state,
+		snapshot : () => {
+		    ++snapshotCalls;
+		    return state;
+		},
 		subscribe(listener) {
 		    ++subscriptions;
 		    listeners.add(listener);
@@ -68,17 +72,21 @@ export async function runRendererChecks()
 		    const available = source === 'value'   ? state.hasValue
 		                      : source === 'draft' ? state.hasDraft
 		                                           : false;
-		    const total = available ? source === 'value' ? 300 : 1 : 0;
+		    const aggregate = source === 'value' && nested && path.length === 0;
+		    const total = available ? source === 'value' && !aggregate ? 300 : 1 : 0;
 		    const rows = [];
 		    for (let index = offset; index < Math.min(total, offset + limit); ++index) {
-			    const rowPath = source === 'value' ? [ index ] : [ 'counter' ];
+			    const rowPath =
+			        source === 'value'
+			            ? nested ? aggregate ? [ 'samples' ] : [ 'samples', index ] : [ index ]
+			            : [ 'counter' ];
 			    rows.push(Object.freeze({
 				    key : JSON.stringify(rowPath),
 				    path : Object.freeze(rowPath),
 				    name : source === 'value' ? 'Row ' + index + ' <script>' : 'Counter',
-				    kind : 'scalar',
-				    type : 'U64',
-				    children : 0,
+				    kind : aggregate ? 'array' : 'scalar',
+				    type : aggregate ? 'array' : 'U64',
+				    children : aggregate ? 300 : 0,
 				    text : source === 'draft' ? draftText
 				           : index === 0      ? hostile
 				                              : String(index),
@@ -92,7 +100,7 @@ export async function runRendererChecks()
 			    total,
 			    offset,
 			    available,
-			    kind : source === 'value'   ? 'array'
+			    kind : source === 'value'   ? aggregate ? 'struct' : 'array'
 			           : source === 'draft' ? 'scalar'
 			                                : null,
 			    rows : Object.freeze(rows)
@@ -139,6 +147,7 @@ export async function runRendererChecks()
 		check(windows.filter(row => row.source === 'value').every(row => row.offset === 0),
 		      'No eager second array window');
 		check(more() !== null, 'Additional rows have an explicit action');
+		const retiredMore = more();
 		more().click();
 		check(count() === 256, 'One explicit action adds the next 128 rows');
 		check(more() !== null, 'The last partial window is still explicit');
@@ -150,6 +159,13 @@ export async function runRendererChecks()
 		      'Second window starts at 128');
 		check(windows.some(row => row.source === 'value' && row.offset === 256),
 		      'Third window starts at 256');
+		publish({selected : endpoints[1]});
+		check(count() === 128 && !retiredMore.isConnected,
+		      'A different selection starts with its own first window');
+		const windowsBeforeRetired = windows.length;
+		retiredMore.click();
+		check(count() === 128 && windows.length === windowsBeforeRetired,
+		      'A retired load control cannot paginate a different selection');
 		check(host.querySelector('button[data-endpoint="1:0"]').textContent === hostile,
 		      'Endpoint names remain literal text');
 		check(host.querySelector('.tux-row[data-source="value"] .tux-value').textContent ===
@@ -198,7 +214,30 @@ export async function runRendererChecks()
 		      'Detached stale input cannot edit a new draft at the same path');
 		check(lifecycleCalls === 0,
 		      'Mount, pagination and presentation changes never call host I/O or lifecycle');
+		nested = true;
+		publish({selected : endpoints[0], hasValue : true, hasDraft : false, error : ''});
+		const aggregateButton = () => host.querySelector('[data-expand=\'value:["samples"]\']');
+		const retiredExpand = aggregateButton();
+		check(count() === 1, 'Nested array starts collapsed');
+		retiredExpand.click();
+		check(count() === 129, 'Explicit expansion loads one child window');
+		publish({selected : endpoints[1]});
+		check(count() === 1 && !retiredExpand.isConnected,
+		      'New selection retires expansion control');
+		const windowsBeforeExpand = windows.length;
+		retiredExpand.click();
+		check(count() === 1 && windows.length === windowsBeforeExpand,
+		      'A retired expansion control cannot expand a different selection');
+		const liveExpand = aggregateButton();
+		liveExpand.click();
+		check(count() === 129, 'Current expansion control remains functional');
+		const liveMore = host.querySelector('[data-action="load-more"]');
+		const snapshotsBeforeUnmount = snapshotCalls, windowsBeforeUnmount = windows.length;
 		view.unmount();
+		liveExpand.click();
+		liveMore.click();
+		check(snapshotCalls === snapshotsBeforeUnmount && windows.length === windowsBeforeUnmount,
+		      'Retired controls after unmount do not query or render the provider');
 		check(unsubscriptions === 1 && listeners.size === 0, 'Unmount unsubscribes exactly once');
 		check(sibling.isConnected && sibling.parentNode === host,
 		      'Unmount preserves host-owned siblings');

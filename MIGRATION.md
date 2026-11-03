@@ -58,3 +58,18 @@ typed-client integration or new physical hardware behavior.
 
 The Widgets playground and other example UI consumers have separate migration
 gates. This view extraction does not claim those later migrations are complete.
+
+## Browser presentation and starter
+
+The browser provider and renderer are UX-owned ES modules. Static mode imports
+the generated JavaScript SDK and structural metadata; dynamic mode uses the
+SDK's admitted DynamicClient and validated runtime schema. Both supply one
+presentation contract to the same renderer, retaining the host's existing
+client, FIFO and transport ownership. No Descriptor parser, payload codec or
+retry engine is copied into UX.
+
+The optional `generate_web_starter` extension uses the same frozen SDK schema
+and guarded CLI publication as the QML emitters. It generates three thin entry
+files, not another form implementation. Installed-package browser tests exercise
+both actual clients against a persistent native Model and Encoded dispatcher;
+they do not establish a physical-device, Ethernet or firmware HTTP port.

@@ -28,6 +28,8 @@ The maintained checks cover:
 - Real static and dynamic providers through one existing SDK client per mode,
   persistent native Encoded dispatch, owned drafts, refused QueueFull submissions,
   stale revisions, subscriber reentry and separate Write/readback outcomes.
+- Exact untouched F32/F64 NaN wire bits, both signs and signaling/quiet variants,
+  preserved through another member's edit; draft seed ownership and old-codec refusal.
 - Chromium keyboard/input/pointer actions for exact U64/S64, overflow,
   intermediate text, Apply without Enter, device normalization, Accepted versus
   Executed, Service refusal, Void versus empty structure, nested values and
@@ -37,6 +39,8 @@ The maintained checks cover:
   reconnect without replay.
 - Pure renderer controls for 128→256→300 rows, exact 128-row windows, safe text,
   keyboard focus, unsubscribing once and preserving a host-owned sibling/client.
+  Detached expand and pagination controls cannot change a new selection or an
+  unmounted view.
   These small presentation controls use a provided model; the primary two
   client journeys always use the actual native SDK dispatcher.
 
