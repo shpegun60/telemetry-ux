@@ -106,3 +106,12 @@ source checkout. Its existing one-process-per-call demonstration contract and
 manual payload-file workflow are preserved; this tool does not create a second
 SDK client or replace the standard Configurator. SDK presentation-copy cleanup
 follows qualification of the installed UX consumer.
+
+## Standard HTML element
+
+`defineConfiguratorElement()` optionally registers `<telemetry-configurator>`.
+It delegates to the existing `mountConfigurator` renderer and accepts the same
+host-supplied provider. The element introduces no other form implementation,
+client, transport, polling timer or execution queue. Registration is explicit;
+importing the package does not require a DOM or modify a custom-element registry.
+Connection, removal and provider replacement manage only the view subscription.

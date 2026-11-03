@@ -1,4 +1,5 @@
 /* Provider-neutral browser view. Authors: Ruslan Kovtun, codexAi. MIT. */
+import {assertPresentationProvider} from './ProviderContract.js';
 
 let nextViewId = 0;
 const pageSize = 128;
@@ -19,9 +20,7 @@ export function mountConfigurator(element, {provider} = {})
 {
 	if (!element?.ownerDocument || typeof element.appendChild !== 'function')
 		throw new TypeError('mountConfigurator requires a host element');
-	if (!provider || typeof provider.snapshot !== 'function' ||
-	    typeof provider.subscribe !== 'function' || typeof provider.rows !== 'function')
-		throw new TypeError('mountConfigurator requires an explicit provider');
+	assertPresentationProvider(provider);
 
 	const document = element.ownerDocument;
 	const viewId = 'telemetry-configurator-' + (++nextViewId);
