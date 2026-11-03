@@ -1,0 +1,2 @@
+include VERSION LICENSE README.md MIGRATION.md
+recursive-include python/telemetry_ux_codegen *.py

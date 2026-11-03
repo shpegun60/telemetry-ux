@@ -1,0 +1,7 @@
+# Local Python/build output; application sources remain reviewable.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
