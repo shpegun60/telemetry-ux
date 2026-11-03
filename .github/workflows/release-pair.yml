@@ -51,16 +51,25 @@ jobs:
       sdk_revision: ${{ needs.identity.outputs.sdk_revision }}
       ux_revision: ${{ needs.identity.outputs.ux_revision }}
 
+  windows-portable:
+    needs: identity
+    uses: ./.github/workflows/windows-portable.yml
+    with:
+      sdk_revision: ${{ needs.identity.outputs.sdk_revision }}
+      ux_revision: ${{ needs.identity.outputs.ux_revision }}
+
   qualified:
     name: Exact SDK + UX integration
     if: always()
-    needs: [identity, integration]
+    needs: [identity, integration, windows-portable]
     runs-on: ubuntu-24.04
     env:
       IDENTITY_RESULT: ${{ needs.identity.result }}
       INTEGRATION_RESULT: ${{ needs.integration.result }}
+      WINDOWS_RESULT: ${{ needs.windows-portable.result }}
     steps:
       - name: Require every actual consumer job
         run: |
           test "$IDENTITY_RESULT" = success
           test "$INTEGRATION_RESULT" = success
+          test "$WINDOWS_RESULT" = success

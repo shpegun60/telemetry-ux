@@ -18,3 +18,8 @@ Update `sdkRevision` by reviewed PR when choosing a new joint delivery. A moving
 SDK `main` is never silently substituted for a recorded commit. A successful old
 compatibility profile alone does not qualify the selected release pair. Add the
 aggregate check to the required checks after its first successful qualification.
+
+The same release-pair gate also requires the separate Windows portable producer
+and clean consumer from `workflows/windows-portable.yml`. The consumer installs
+no development dependencies and runs actual QML read/edit/TCP journeys from the
+relocated ZIP. See [the distribution contract](../packaging/windows/README.md).
