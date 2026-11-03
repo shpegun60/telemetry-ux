@@ -160,7 +160,6 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/web-chromium
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
@@ -184,6 +183,8 @@ jobs:
       - name: Install headless compilers and pinned browser tooling
         run: |
           set -euo pipefail
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/web-chromium"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
           sudo apt-get update
           sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv
