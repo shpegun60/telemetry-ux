@@ -45,14 +45,18 @@ limits are 256 files and 4 MiB of runtime data; use `--max-files` and `--max-byt
 for a smaller firmware budget. Header text expansion is a build artifact and is
 not included in that runtime-byte limit.
 
-All input paths, file budgets and literal module/HTML/CSS references are checked
-before creating output. Symlinks/reparse points, traversal, case aliases, remote
+All input paths and file budgets are checked before creating output. Reference
+checks cover ordinary literal module imports/re-exports, HTML `src`/stylesheet
+links/`srcset`, CSS `url(...)` and quoted `@import`, including inline style blocks
+and attributes. Nonliteral CSS imports are refused. Symlinks/reparse points,
+traversal, case aliases, remote
 asset URLs, missing dependencies and existing destinations are refused. Keep
 the input tree and output parent trusted and unchanged during export; this is
 not a defense against another process replacing paths between checks and writes.
 A disk error can leave an incomplete **new** directory; inspect the successful
 exit and manifest before deploying it. No existing output is reused.
 
+The reference scanner is not a general JavaScript/CSS parser or security filter.
 The exporter does not interpret arbitrary application JavaScript, computed
 imports, runtime `fetch()` URLs or authentication logic. Review those in the
 application. It supplies no HTTP/WebSocket implementation, TLS, authentication,

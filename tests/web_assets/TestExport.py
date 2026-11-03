@@ -115,6 +115,10 @@ class ExportTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.write('app.js', "import {x} from '" + value + "';\n")
                 self.refused()
+        for script in ("import {DeviceClient} from 'telemetry-sdk/client'; import './absent.js';\n",
+                       "import {DeviceClient} from 'telemetry-sdk/client'; export {\nx\n} from './absent.js';\n"):
+            self.write('app.js', script)
+            self.refused()
         self.write('app.js', "export {x} from './child.js';\n")
         self.write('child.js', 'export const x=1;\n')
         self.export(assets=['index.html', 'app.js', 'child.js'])
@@ -131,6 +135,28 @@ class ExportTests(unittest.TestCase):
         self.write('index.html', self.html)
         self.write('node_modules/telemetry-ux/web/Configurator.css', 'body{background:url(missing.png)}')
         self.refused()
+
+    def test_css_import_style_and_srcset_preflight(self):
+        for style in ('@import "https://cdn.invalid/remote.css";',
+                      "@import './missing.css';", '@import /* comment */ "//cdn.invalid/x.css";',
+                      '@import var(--computed);', 'body{background:url("//cdn.invalid/p.png")}'):
+            with self.subTest(style=style):
+                self.write('node_modules/telemetry-ux/web/Configurator.css', style)
+                self.refused()
+        self.write('node_modules/telemetry-ux/web/Configurator.css', '')
+        for addition in ('<style>@import "https://cdn.invalid/x.css";</style>',
+                         '<style>body{background:url(missing.png)}</style>',
+                         '<div style="background:url(https://cdn.invalid/p.png)"></div>',
+                         '<img srcset="present.png 1x, missing.png 2x">',
+                         '<img srcset="present.png 1x, https://cdn.invalid/p.png 2x">'):
+            self.write('present.png', '')
+            self.write('index.html', self.html.replace('</body>', addition + '</body>'))
+            self.refused(assets=['index.html', 'app.js', 'present.png'])
+        self.write('local.css', 'body{color:red}')
+        self.write('index.html', self.html.replace('</body>',
+            '<style>@import "local.css";</style><div style="background:url(present.png)"></div>'
+            '<img srcset="present.png 1x, present.png 2x"></body>'))
+        self.export(assets=['index.html', 'app.js', 'present.png', 'local.css'])
 
     def test_import_map_preflight(self):
         for mapping in ('{}', '{"scopes":{},"imports":{}}', '{"imports":{"telemetry-sdk/client":"https://bad"}}'):

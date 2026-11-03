@@ -31,8 +31,8 @@ MIME = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=ut
         '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
         '.woff2': 'font/woff2'}
 MAP = re.compile(r'(<script\b[^>]*\btype\s*=\s*[\'"]importmap[\'"][^>]*>)([\s\S]*?)(</script\s*>)', re.I)
-MODULE = re.compile(r'(?:^\s*(?:import|export)\s+[^;]*?\bfrom\s*|'
-                    r'^\s*import\s*|\bimport\s*\(\s*)[\'"]([^\'"\r\n]+)[\'"]', re.M)
+MODULE = re.compile(r'(?:(?:^|(?<=;))\s*(?:import|export)\s+[^;]*?\bfrom\s*|'
+                    r'(?:^|(?<=;))\s*import\s*|\bimport\s*\(\s*)[\'"]([^\'"\r\n]+)[\'"]', re.M)
 RESERVED = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)),
             *(f'LPT{i}' for i in range(1, 10))}
 
@@ -104,24 +104,55 @@ class References(HTMLParser):
         self.values = []
         self.inline_modules = []
         self.module = False
+        self.styles = []
+        self.style = False
 
     def handle_starttag(self, tag, attrs):
         if tag == 'base':
             raise ValueError('base elements would change local module resolution')
         if tag == 'script':
             self.module = dict(attrs).get('type') == 'module'
+        if tag == 'style':
+            self.style = True
         for name, value in attrs:
             # Hyperlinks remain application navigation, not runtime assets.
             if name == 'src' or (name == 'href' and tag in ('link', 'base')):
                 self.values.append(value or '')
+            if name == 'style':
+                self.styles.append(value or '')
+            if name == 'srcset' and value:
+                for candidate in value.split(','):
+                    parts = candidate.split()
+                    if not 1 <= len(parts) <= 2 or (len(parts) == 2 and not
+                            re.fullmatch(r'(?:[0-9]+w|[0-9]+(?:\.[0-9]+)?x)', parts[1])):
+                        raise ValueError('Unsupported srcset; use explicit local URL candidates')
+                    self.values.append(parts[0])
 
     def handle_endtag(self, tag):
         if tag == 'script':
             self.module = False
+        if tag == 'style':
+            self.style = False
 
     def handle_data(self, data):
         if self.module:
             self.inline_modules.append(data)
+        if self.style:
+            self.styles.append(data)
+
+
+def css_references(source):
+    """Recognize normal literal CSS URLs, refusing nonliteral @import forms."""
+    source = re.sub(r'/\*[\s\S]*?\*/', '', source)
+    for match in re.finditer(r'url\(\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s)]*))\s*\)', source, re.I):
+        yield next(group for group in match.groups() if group is not None)
+    for match in re.finditer(r'@import\b([^;]*)(?:;|$)', source, re.I):
+        value = match[1].lstrip()
+        quoted = re.match(r'([\'"])(.*?)\1', value)
+        if quoted:
+            yield quoted[2]
+        elif not re.match(r'url\(', value, re.I):
+            raise ValueError('CSS @import requires a literal local URL')
 
 
 def cpp_table(files):
@@ -231,12 +262,14 @@ def export_assets(public_root, output, assets, *, cpp=False, max_bytes=4 * 1024 
     for name, data in files.items():
         suffix = PurePosixPath(name).suffix.lower()
         modules = []
+        styles = []
         if suffix == '.html':
             refs = References()
             refs.feed(data.decode('utf8'))
             for value in refs.values:
                 local_reference(value, name, files)
             modules += refs.inline_modules
+            styles += refs.styles
         if suffix in ('.js', '.mjs'):
             modules.append(data.decode('utf8'))
         for module in modules:
@@ -246,7 +279,9 @@ def export_assets(public_root, output, assets, *, cpp=False, max_bytes=4 * 1024 
                 elif value not in mapping['imports']:
                     raise ValueError('Bare module is absent from import map: ' + value)
         if suffix == '.css':
-            for value in re.findall(r'url\(\s*[\'"]?([^\'"\s)]+)', data.decode('utf8')):
+            styles.append(data.decode('utf8'))
+        for style in styles:
+            for value in css_references(style):
                 local_reference(value, name, files)
     for value in mapping['imports'].values():
         local_reference(value, 'index.html', files)
