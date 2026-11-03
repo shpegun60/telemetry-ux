@@ -1,6 +1,7 @@
 # Configurator view and provider contract
 
-`Telemetry.UX 1.0` supplies one presentation component, `Configurator`.
+`Telemetry.UX 1.0` supplies `Configurator` and the independently embeddable
+`FieldEditor`, `CommandPanel` and `ServicePanel`. All use one shared renderer.
 It has no Telemetry SDK, transport, client, FIFO, Descriptor parser or snapshot
 ownership. The host owns a non-null QObject provider and its models for the
 entire view lifetime. The existing InspectorController is one dynamic provider. The optional
@@ -20,6 +21,29 @@ Configurator {
 singleton is read. A host may place the view in its own page or tabs without
 copying the view or editing generated files. Connection controls, discovery,
 permission opt-in and device ownership remain host responsibilities.
+
+Use a narrow panel in a host-owned tab without endpoint navigation:
+
+```qml
+FieldEditor {
+    anchors.fill: parent
+    provider: host.deviceProvider
+    headerComponent: Component { Label { text: "Device configuration" } }
+    footerComponent: Component { Label { text: "Application-owned help" } }
+}
+```
+
+Import `QtQuick.Controls` for the example's `Label`. `CommandPanel` and
+`ServicePanel` have the same `provider`, `headerComponent` and `footerComponent`
+properties. The host selects an endpoint through its existing provider; mounting
+a panel neither selects nor submits it. A panel hides its editor and actions
+when the current selection belongs to another category. Several panels may
+observe one provider, sharing its selection and busy state.
+
+`Configurator` also accepts `headerComponent` and `footerComponent` for host
+content around the complete view. Narrow panels display only their category's
+operation history. `EndpointPanel` and `PlainToolTip` are implementation details;
+applications should use the four public components above.
 
 The provider exposes notifying properties:
 

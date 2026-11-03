@@ -16,11 +16,39 @@ const valueLabels = {
 };
 
 /** Mount presentation only. The host continues to own its provider and client. */
-export function mountConfigurator(element, {provider} = {})
+export function mountConfigurator(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 0, now);
+}
+
+/** Standalone panels use the host's current selection and the same renderer. */
+export function mountFieldEditor(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 1, now);
+}
+
+export function mountCommandPanel(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 2, now);
+}
+
+export function mountServicePanel(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 3, now);
+}
+
+export function mountWatchlist(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 4, now);
+}
+
+function mountPresentation(element, provider, categoryFilter, now)
 {
 	if (!element?.ownerDocument || typeof element.appendChild !== 'function')
 		throw new TypeError('mountConfigurator requires a host element');
 	assertPresentationProvider(provider);
+	if (typeof now !== 'function')
+		throw new TypeError('The Watchlist clock must be a function');
 
 	const document = element.ownerDocument;
 	const viewId = 'telemetry-configurator-' + (++nextViewId);
@@ -34,6 +62,8 @@ export function mountConfigurator(element, {provider} = {})
 	const pages = new Map();
 	const endpointButtons = new Map();
 	const endpointGroups = new Map();
+	const watchRows = new Map();
+	let watchContext;
 
 	function node(tag, className, text)
 	{
@@ -47,20 +77,82 @@ export function mountConfigurator(element, {provider} = {})
 
 	const root = node('section', 'telemetry-configurator');
 	root.dataset.role = 'configurator';
+	root.dataset.panel = ['configurator', 'field', 'command', 'service', 'watchlist'][categoryFilter];
+	root.setAttribute('part', 'root');
 	root.setAttribute('aria-label', 'Telemetry Configurator');
 	const header = node('header', 'tux-header');
-	const title = node('h2', '', 'Device Configurator');
+	header.setAttribute('part', 'header');
+	const title = node('h2', '', categoryFilter === 4 ? 'Watchlist' : 'Device Configurator');
 	const mode = node('span', 'tux-mode');
 	mode.dataset.role = 'mode';
 	header.append(title, mode);
 	const permission = node('label', 'tux-permission');
+	permission.setAttribute('part', 'permission');
 	const permissionInput = node('input');
 	permissionInput.type = 'checkbox';
 	permissionInput.dataset.action = 'writes';
 	permission.append(permissionInput,
 	                  document.createTextNode('Enable writes, Commands and Services'));
+	permission.hidden = categoryFilter === 4;
+	const watch = node('section', 'tux-section tux-watchlist');
+	watch.setAttribute('part', 'watchlist');
+	watch.setAttribute('aria-label', 'Watchlist');
+	watch.append(node('h3', '', 'Watchlist'));
+	const watchActions = node('div', 'tux-actions');
+	const watchButtons = new Map();
+	for (const [action, text] of [['addWatch', 'Add selected Field'], ['refreshWatch', 'Refresh'],
+	                             ['startWatch', 'Start'], ['stopWatch', 'Stop'],
+	                             ['clearWatch', 'Clear']]) {
+		const button = node('button', '', text);
+		button.type = 'button';
+		button.dataset.action = action;
+		button.disabled = true;
+		button.addEventListener('click', () => {
+			if (!watch.hidden && !button.disabled)
+				invoke(() => action === 'startWatch' ? provider.startWatch(now()) : provider[action]());
+		});
+		watchButtons.set(action, button);
+		watchActions.append(button);
+	}
+	const individualLabel = node('label', 'tux-permission');
+	const individualInput = node('input');
+	individualInput.type = 'checkbox';
+	individualInput.dataset.action = 'watch-individual';
+	individualLabel.append(individualInput, document.createTextNode('Individual FieldRead fallback'));
+	individualInput.addEventListener('change', () => {
+		if (!individualInput.disabled)
+			invoke(() => provider.setWatchIndividual(individualInput.checked));
+	});
+	const intervalLabel = node('label', '', 'Poll interval (ms)');
+	const intervalInput = node('input');
+	intervalInput.type = 'number';
+	intervalInput.min = '100';
+	intervalInput.max = '10000';
+	intervalInput.step = '100';
+	intervalInput.id = viewId + '-watch-interval';
+	intervalInput.dataset.action = 'watch-interval';
+	intervalLabel.htmlFor = intervalInput.id;
+	intervalInput.addEventListener('change', () => {
+		if (!intervalInput.disabled)
+			invoke(() => provider.setWatchInterval(Number(intervalInput.value)));
+	});
+	const watchStatus = node('p', 'tux-message');
+	watchStatus.dataset.role = 'watch-status';
+	const watchTable = node('table', 'tux-watch-table');
+	const watchHead = node('thead');
+	const watchHeading = node('tr');
+	for (const text of ['Field', 'Value', 'Status', ''])
+		watchHeading.append(node('th', '', text));
+	watchHead.append(watchHeading);
+	const watchBody = node('tbody');
+	watchTable.append(watchHead, watchBody);
+	watch.append(watchActions, individualLabel, intervalLabel, intervalInput, watchStatus, watchTable);
+	const noWatch = node('p', 'tux-message', 'Watchlist is unavailable in this provider.');
 	const layout = node('div', 'tux-layout');
+	layout.hidden = categoryFilter === 4;
 	const navigation = node('nav', 'tux-navigation');
+	navigation.setAttribute('part', 'endpoints');
+	navigation.hidden = categoryFilter !== 0;
 	navigation.setAttribute('aria-label', 'Device endpoints');
 	const searchLabel = node('label', '', 'Find an endpoint');
 	const search = node('input');
@@ -75,6 +167,7 @@ export function mountConfigurator(element, {provider} = {})
 	const selection = node('h3', 'tux-selection', 'Select an endpoint');
 	selection.dataset.role = 'selection';
 	const actions = node('div', 'tux-actions');
+	actions.setAttribute('part', 'actions');
 	const buttons = new Map();
 	for (const [action, text] of [[ 'refresh', 'Read' ], [ 'beginEdit', 'Edit' ],
 	                              [ 'cancelEdit', 'Cancel' ], [ 'apply', 'Apply + readback' ],
@@ -82,11 +175,15 @@ export function mountConfigurator(element, {provider} = {})
 		const button = node('button', '', text);
 		button.type = 'button';
 		button.dataset.action = action;
-		button.addEventListener('click', () => invoke(() => provider[action]()));
+		button.addEventListener('click', () => {
+			if (matchesSelection() && state.actions[action])
+				invoke(() => provider[action]());
+		});
 		actions.append(button);
 		buttons.set(action, button);
 	}
 	const error = node('p', 'tux-error');
+	error.setAttribute('part', 'error');
 	error.dataset.role = 'error';
 	error.setAttribute('role', 'alert');
 	content.append(selection, actions, error);
@@ -95,6 +192,7 @@ export function mountConfigurator(element, {provider} = {})
 	                               [ 'draft', 'Request / local draft' ],
 	                               [ 'response', 'Response' ]]) {
 		const panel = node('section', 'tux-section');
+		panel.setAttribute('part', source === 'draft' ? 'request' : source);
 		panel.dataset.source = source;
 		const heading = node('h3', '', label);
 		const headingId = viewId + '-' + source;
@@ -107,6 +205,7 @@ export function mountConfigurator(element, {provider} = {})
 		sections.set(source, {panel, heading, rowList, empty, cache : new Map()});
 	}
 	const outcomes = node('section', 'tux-section');
+	outcomes.setAttribute('part', 'outcomes');
 	outcomes.setAttribute('aria-label', 'Operation results');
 	outcomes.append(node('h3', '', 'Operation results'));
 	const outcomeList = node('div');
@@ -114,10 +213,16 @@ export function mountConfigurator(element, {provider} = {})
 	content.append(outcomes);
 	layout.append(navigation, content);
 	const status = node('p', 'tux-status');
+	status.setAttribute('part', 'status');
 	status.dataset.role = 'status';
 	status.setAttribute('role', 'status');
-	root.append(header, permission, layout, status);
+	root.append(header, permission, watch, noWatch, layout, status);
 	element.append(root);
+
+	function matchesSelection()
+	{
+		return categoryFilter === 0 || state.selected?.category === categoryFilter;
+	}
 
 	function invoke(action)
 	{
@@ -281,7 +386,8 @@ export function mountConfigurator(element, {provider} = {})
 			entry.label.removeAttribute('for');
 		// Never replace a focused input or rewrite intermediate text during a
 		// provider notification. Invalid raw text is retained by the provider.
-		if (entry.input !== document.activeElement && entry.input.value !== row.text)
+		const activeElement = root.getRootNode()?.activeElement || document.activeElement;
+		if (entry.input !== activeElement && entry.input.value !== row.text)
 			entry.input.value = row.text;
 		entry.rowError.textContent = row.error;
 		entry.rowError.hidden = !row.error;
@@ -380,6 +486,11 @@ export function mountConfigurator(element, {provider} = {})
 		for (const [operation, result] of Object.entries(state.outcomes)) {
 			if (!result)
 				continue;
+			if (categoryFilter && (!matchesSelection() ||
+			    (categoryFilter === 1 ? !['read', 'write', 'readback'].includes(operation)
+			     : categoryFilter === 2 ? operation !== 'command'
+			     : categoryFilter === 3 ? operation !== 'service' : true)))
+				continue;
 			const line = node('p', 'tux-outcome');
 			line.dataset.role = 'outcome';
 			line.dataset.operation = operation;
@@ -415,6 +526,72 @@ export function mountConfigurator(element, {provider} = {})
 		outcomes.hidden = nodes.length === 0;
 	}
 
+	function renderWatchlist()
+	{
+		const value = state.watch;
+		noWatch.hidden = categoryFilter !== 4 || Boolean(value);
+		watch.hidden = !value || (categoryFilter !== 0 && categoryFilter !== 4);
+		if (watch.hidden) {
+			for (const button of watchButtons.values())
+				button.disabled = true;
+			individualInput.disabled = true;
+			intervalInput.disabled = true;
+			return;
+		}
+		const identity = state.mode + ':' + state.session;
+		if (watchContext !== identity) {
+			for (const entry of watchRows.values())
+				entry.live = false;
+			watchRows.clear();
+			watchContext = identity;
+		}
+		watchButtons.get('addWatch').disabled = !value.canAdd;
+		watchButtons.get('refreshWatch').disabled = !value.canRefresh || value.active;
+		watchButtons.get('startWatch').disabled = !value.canRefresh || value.active;
+		watchButtons.get('stopWatch').disabled = !value.active;
+		watchButtons.get('clearWatch').disabled = value.active || !value.rows.length;
+		individualInput.checked = value.individual;
+		individualInput.disabled = value.active;
+		intervalInput.disabled = value.active;
+		if (intervalInput !== (root.getRootNode()?.activeElement || document.activeElement))
+			intervalInput.value = String(value.intervalMs);
+		watchStatus.textContent = value.status;
+		const nodes = [];
+		for (const entry of watchRows.values())
+			entry.live = false;
+		for (const row of value.rows) {
+			let entry = watchRows.get(row.key);
+			if (!entry) {
+				const element = node('tr');
+				element.dataset.watch = row.key;
+				const name = node('td'), text = node('td'), status = node('td'), action = node('td');
+				const remove = node('button', '', 'Remove');
+				remove.type = 'button';
+				remove.dataset.action = 'removeWatch';
+				action.append(remove);
+				element.append(name, text, status, action);
+				entry = {element, name, text, status, remove, live : false};
+				const owner = entry;
+				remove.addEventListener('click', () => {
+					if (alive && owner.live && watchRows.get(row.key) === owner && !remove.disabled)
+						invoke(() => provider.removeWatch(row.key));
+				});
+				watchRows.set(row.key, entry);
+			}
+			entry.live = true;
+			entry.name.textContent = row.catalog + ' / ' + row.name;
+			entry.text.textContent = row.text;
+			entry.text.setAttribute('part', 'watch-value');
+			entry.status.textContent = row.status;
+			entry.remove.disabled = value.active;
+			nodes.push(entry.element);
+		}
+		reconcile(watchBody, nodes);
+		for (const [key, entry] of watchRows)
+			if (!entry.live)
+				watchRows.delete(key);
+	}
+
 	function render()
 	{
 		const nextContext = state.mode + ':' + state.session + ':' + (state.selected?.key || '');
@@ -432,11 +609,15 @@ export function mountConfigurator(element, {provider} = {})
 		root.dataset.selected = state.selected?.key || '';
 		root.setAttribute('aria-busy', String(state.busy));
 		mode.textContent = state.mode === 'static' ? 'Static SDK' : 'Dynamic Descriptor';
+		renderWatchlist();
 		permissionInput.checked = state.writesEnabled;
 		permissionInput.disabled = state.busy || !state.current;
 		selection.textContent = state.selected
 		                            ? state.selected.catalog + ' / ' + state.selected.name
 		                            : 'Select an endpoint';
+		const matches = matchesSelection();
+		if (!matches)
+			selection.textContent = 'Select a ' + ['','Field','Command','Service','Field'][categoryFilter];
 		for (const [action, button] of buttons) {
 			const category = state.selected?.category;
 			button.hidden = action === 'execute'      ? category !== 2
@@ -447,21 +628,38 @@ export function mountConfigurator(element, {provider} = {})
 			                                          : category !== 1;
 			if (action === 'beginEdit')
 				button.textContent = category === 1 ? 'Edit' : 'Prepare arguments';
-			button.disabled = !state.actions[action];
+			button.hidden ||= !matches;
+			button.disabled = !matches || !state.actions[action];
 		}
 		error.textContent = localError || state.error;
 		error.hidden = !error.textContent;
-		renderEndpoints();
-		renderRows('value');
-		renderRows('draft');
-		renderRows('response');
+		if (!categoryFilter)
+			renderEndpoints();
+		if (matches) {
+			if (categoryFilter === 0 || categoryFilter === 1)
+				renderRows('value');
+			renderRows('draft');
+			if (categoryFilter === 0 || categoryFilter === 3)
+				renderRows('response');
+		} else {
+			for (const section of sections.values()) {
+				for (const entry of section.cache.values())
+					entry.live = false;
+				section.cache.clear();
+				section.rowList.replaceChildren();
+			}
+		}
 		sections.get('value').panel.hidden =
 		    Boolean(state.selected && state.selected.category !== 1);
 		sections.get('draft').heading.textContent =
 		    state.selected?.category === 1 ? 'Local Field draft' : 'Request arguments';
 		sections.get('draft').panel.hidden = !state.hasDraft;
 		sections.get('response').panel.hidden =
-		    !state.hasResponse && state.selected?.category !== 3;
+		    (categoryFilter !== 0 && categoryFilter !== 3) ||
+		    (!state.hasResponse && state.selected?.category !== 3);
+		if (!matches)
+			for (const section of sections.values())
+				section.panel.hidden = true;
 		renderOutcomes();
 		status.dataset.session = String(state.session);
 		status.textContent = (state.current ? 'Connected' : 'Disconnected') +

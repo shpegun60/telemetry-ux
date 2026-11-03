@@ -7,6 +7,12 @@ The application-owned Model, generated `DeviceApi`, existing `DeviceClientAdapte
 and one Encoded backend/FIFO execute the Field, Command and Service workflows.
 No SDK source-tree fallback, device connection or hardware operation is used.
 
+The real keyboard/mouse edit test runs through both Configurator and standalone
+FieldEditor. Standalone CommandPanel and ServicePanel reject mismatched
+selections and submit only after an explicit click, through the same generated
+API/FIFO. Mounting them sends no packet. The GUI floor is 450 checks, including
+exact U64/S64, lifecycle and permission regressions.
+
 ```sh
 python3 -B tests/static_qml_configurator/run.py \
   --sdk-prefix /external/installed-sdk \

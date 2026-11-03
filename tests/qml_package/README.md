@@ -17,9 +17,10 @@ CMake/Ninja and that Qt prefix. The runner puts the selected compiler and Qt
 runtime first on `PATH`; all generated output stays in a fresh external directory.
 
 The consumer owns an ordinary QObject provider and empty Qt models, injects it
-through a required host property, and loads its main QML file from disk. Six
-runtime checks prove view creation, provider identity, initial text, a notified
-text update and zero QML engine warnings. Its disabled operations are explicit
+through a required host property, and loads its main QML file from disk. The 38
+runtime checks prove view creation, provider identity, notified text updates,
+independently installed Field/Command/Service panels, category mismatch guards,
+host header/footer insertion and zero QML engine warnings. Its disabled operations are explicit
 refusals, without a client, timer, transport, schema parser or I/O. The real
 Inspector-provider edit/write/readback workflows have separate QML tests.
 

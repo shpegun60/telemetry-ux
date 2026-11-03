@@ -186,7 +186,7 @@ def main():
         binary = consumer_build / ('telemetry_ux_package_check' + suffix)
         runtime = run('owned-provider', [binary, consumer / 'Main.qml'])
         match = re.search(r'Configurator package checks=(\d+) provider=owned sdk=0 scanner=0 plugin=0 warnings=0', runtime)
-        check(match is not None and int(match[1]) == 6, 'Actual owned-provider UI checks did not complete warning-free')
+        check(match is not None and int(match[1]) == 38, 'Actual owned-provider and standalone panel UI checks did not complete warning-free')
         report['runtime_checks'] = int(match[1])
         report['binary_sha256'] = digest(binary)
         # A real local HTTP counter proves that the unsafe Qt AutoText control

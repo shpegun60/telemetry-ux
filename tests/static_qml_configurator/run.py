@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / 'tests/codegen_qml'))
 from support import (check_cache, check_compile_sources, codegen_identity, digest,
                      installed_sdk, sdk_inputs, snapshot)
 
-GUI_CHECK_FLOOR = 364
+GUI_CHECK_FLOOR = 450
 CONTRACT_CHECK_FLOOR = 185
 QT_TEXTURE_RULE = 'leak:QSGRenderContext::textureForFactory\n'
 QT_TEXTURE_SOURCES = (

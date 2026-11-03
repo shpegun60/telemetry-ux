@@ -32,3 +32,13 @@ Dynamic SDK/native browser journeys remain in [web_configurator](../web_configur
 Receipts preserve actual browser/version/counts, source and installed-package
 hashes, tool identities and before/after equality. Unexpected browser warnings
 and page errors fail the suite.
+
+The same installed-package fixture also mounts the independent Field, Command
+and Service panels with one shared provider, checks category mismatches and
+retired controls, and verifies shadow-mode named slot assignment, package-local
+CSS loading and real `::part` styling in Chromium. Shadow replacement and
+reconnection must preserve host-owned slot content without extra operations.
+An optional Watchlist fixture checks the standalone view's exact U64 text,
+explicit owner clock, pending-state controls, Stop and retired row buttons.
+This fixture tests presentation only; actual Static and Dynamic ReadMany
+execution belongs to the native provider suite.

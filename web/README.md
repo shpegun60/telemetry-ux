@@ -192,3 +192,69 @@ or SDK operation queue. The element never invokes host close, invalidate,
 cancel, transport or operation methods as part of its lifecycle. The host keeps
 responsibility for client admission, processing, pending work and recovery, just
 as with `mountConfigurator`.
+
+## Independent editors and panels
+
+Use the same provider in a full Configurator or mount only the selected endpoint
+inside an existing application layout:
+
+```js
+import {mountFieldEditor, mountCommandPanel, mountServicePanel} from 'telemetry-ux/web';
+
+// The application selects an endpoint explicitly. Mounting never selects or sends.
+provider.select(fieldKey);
+const field = mountFieldEditor(document.querySelector('#field'), {provider});
+const command = mountCommandPanel(document.querySelector('#command'), {provider});
+const service = mountServicePanel(document.querySelector('#service'), {provider});
+// Remove one view without closing the shared provider or client.
+field.unmount();
+```
+
+These panels reuse the Configurator's exact editor, validation, lazy row traversal
+and result display. They omit endpoint navigation and follow the host's current
+selection. A category mismatch shows a selection prompt and disables operations;
+it does not change the shared selection. Multiple mounted panels may share one
+provider, one client and one FIFO. Selection, mutations and lifecycle stay with
+the application and the provider's existing session-scoped permission policy.
+
+The full Configurator also renders `state.watch` when the provider exposes the
+optional Watchlist contract. Use `mountWatchlist(host, {provider})` for a separate
+read-only table. Add the host-selected Field, choose ReadMany or the explicit
+Individual fallback, then Refresh once or Start polling. The table keeps exact
+integer text and per-item statuses; an accepted cycle locks edits until it is
+finished, including after Stop. The renderer starts no timer and performs no
+request on mount. The application's owner loop drives `provider.tickWatch(now)`;
+Start uses `performance.now()` by default. Applications with a different clock
+pass the same clock as `now: () => ownerTimeMs` to the mount function. Capability
+admission remains a host decision, not an automatic fallback inferred by the UI.
+
+## Shadow slots and styling
+
+The default custom element retains its existing light-DOM behavior. Register a
+different tag with an explicit option for encapsulated styling and named slots:
+
+```js
+defineConfiguratorElement('device-control', {shadow: true});
+document.querySelector('device-control').provider = provider;
+```
+
+```html
+<device-control>
+  <h2 slot="header">Power analyzer</h2>
+  <p slot="before-content">Application instructions</p>
+  <aside slot="after-content">Application diagnostics</aside>
+  <small slot="footer">Connected by the host application</small>
+</device-control>
+<style>
+  device-control::part(header) { border-bottom: 1px solid steelblue; }
+  device-control::part(request) { background: #172735; }
+</style>
+```
+
+Shadow mode loads `Configurator.css` from the installed package beside the module;
+serve that local asset with the other UX files. Public parts are `root`, `header`,
+`permission`, `endpoints`, `actions`, `value`, `request`, `response`, `outcomes`,
+`status`, `error`, `watchlist` and `watch-value`. Slot content remains application-owned across provider
+replacement and detach/reconnect. The registration option is fixed for a tag;
+re-registering it with different options throws. The same underlying renderer
+and lifecycle contract apply in both modes.

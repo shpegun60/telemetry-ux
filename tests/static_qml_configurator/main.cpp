@@ -280,7 +280,7 @@ static QQuickItem* visual(QQuickItem* root, const QString& name, const QString& 
 	return nullptr;
 }
 
-static void qmlInput(const QString& image)
+static void qmlInput(const QString& image, bool standalone = false)
 {
 	ex::device.config = ex::initial;
 	Harness h;
@@ -292,8 +292,10 @@ static void qmlInput(const QString& image)
 	p.beginEdit();
 	QQmlEngine engine;
 	QQmlComponent component(&engine);
+	const auto form = standalone ? QByteArrayLiteral("FieldEditor") : QByteArrayLiteral("Configurator");
+	const auto options = standalone ? QByteArray{} : QByteArrayLiteral(";watchlistVisible:false");
 	component.setData(
-	    "import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1200;height:900;visible:true; Configurator { anchors.fill:parent; provider:host.deviceProvider;watchlistVisible:false } }",
+	    "import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1200;height:900;visible:true; " + form + " { anchors.fill:parent; provider:host.deviceProvider" + options + " } }",
 	    QUrl(QStringLiteral("qrc:/StaticWindow.qml")));
 	for (unsigned attempt = 0; component.isLoading() && attempt < 100; ++attempt) {
 		events();
@@ -308,7 +310,7 @@ static void qmlInput(const QString& image)
 	auto* window = qobject_cast<QQuickWindow*>(root.get());
 	check(window != nullptr, "real QQuickWindow");
 	auto* pane = root->findChild<QQuickItem*>(QStringLiteral("watchlistPane"));
-	check(pane && !pane->isVisible(), "whole unsupported Watchlist pane hidden");
+	check(standalone ? pane == nullptr : pane && !pane->isVisible(), "standalone has no navigation or Watchlist pane");
 	auto* input =
 	    visual(window->contentItem(), QStringLiteral("scalarEditor"), QStringLiteral("gain"));
 	check(input != nullptr, "live QML scalar editor");
@@ -330,6 +332,16 @@ static void qmlInput(const QString& image)
 	events();
 	QTest::qWait(40);
 	check(window->grabWindow().save(image), "retain actual QML Field form screenshot");
+	select(p, "Good");
+	p.callService();
+	drain(h, p);
+	check(!p.serviceResponseEndpoint().isEmpty(), "successful Service retains its owned response history");
+	select(p, "Config");
+	events();
+	QTest::qWait(30);
+	auto* responseTree = root->findChild<QQuickItem*>(QStringLiteral("responseTree"));
+	check(responseTree && responseTree->isVisible() == !standalone,
+	      "standalone Field hides unrelated Service response; full view retains history");
 	select(p, "Reset");
 	events();
 	QTest::qWait(30);
@@ -342,6 +354,56 @@ static void qmlInput(const QString& image)
 	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 	events();
 	check(warnings == 0, "strict QML diagnostics stay clean");
+}
+
+static void qmlActionPanels()
+{
+	for (const auto* type : {"CommandPanel", "ServicePanel"}) {
+		const bool command = std::strcmp(type, "CommandPanel") == 0;
+		Harness h;
+		Provider p{h.binding};
+		p.setAllowMutations(true);
+		select(p, "Config");
+		const auto before = h.packets;
+		QQmlEngine engine;
+		QQmlComponent component(&engine);
+		component.setData(
+		    QByteArrayLiteral("import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1000;height:700;visible:true; ") + type + " { objectName: \"standalone\"; anchors.fill:parent; provider:host.deviceProvider } }",
+		    QUrl(QStringLiteral("qrc:/ActionPanel.qml")));
+		check(component.isReady(), qPrintable(component.errorString()));
+		std::unique_ptr<QObject> root(component.createWithInitialProperties(
+		    {{QStringLiteral("deviceProvider"), QVariant::fromValue(&p)}}));
+		check(bool(root), "installed standalone action panel creates");
+		events();
+		QTest::qWait(50);
+		auto* window = qobject_cast<QQuickWindow*>(root.get());
+		check(window != nullptr, "standalone action uses real window");
+		auto* panel = root->findChild<QObject*>(QStringLiteral("standalone"));
+		check(panel && !panel->property("selectionMatches").toBool(), "wrong endpoint category hidden");
+		check(!visual(window->contentItem(), QStringLiteral("applyButton")) &&
+		          !visual(window->contentItem(), QStringLiteral("executeButton")) &&
+		          !visual(window->contentItem(), QStringLiteral("callServiceButton")),
+		      "mismatched panel has no visible actions");
+		check(h.packets == before && !p.busy(), "mounting panels performs no requests");
+		select(p, command ? "Reset" : "Ping");
+		events();
+		QTest::qWait(50);
+		auto* button = visual(window->contentItem(), command ? QStringLiteral("executeButton") : QStringLiteral("callServiceButton"));
+		check(button && button->isEnabled(), "selected category enables its explicit action");
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+		                  button->mapToScene(QPointF(button->width()/2, button->height()/2)).toPoint());
+		drain(h, p);
+		check(h.packets == before + 1, "one explicit click uses existing FIFO exactly once");
+		check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed")) :
+		                  p.serviceOutcome().contains(QStringLiteral("no response value")),
+		      "standalone action publishes actual endpoint result");
+		window->close();
+		root.reset();
+		engine.collectGarbage();
+		QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+		events();
+		check(warnings == 0, "standalone action QML diagnostics clean");
+	}
 }
 
 int main(int argc, char** argv)
@@ -364,6 +426,8 @@ int main(int argc, char** argv)
 		unknownWrite();
 		qmlInput(argc > 1 ? QString::fromLocal8Bit(argv[1])
 		                  : QStringLiteral("static-configurator.png"));
+		qmlInput((argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral("static-configurator.png")) + QStringLiteral(".field.png"), true);
+		qmlActionPanels();
 		if (argc == 3 && std::strcmp(argv[2], "--inject-nonqt-leak") == 0)
 			injectedNonQtLeak();
 		std::printf("Static QML provider checks=%u warnings=%u\n", checks, warnings);

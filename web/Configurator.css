@@ -107,6 +107,9 @@
     border: 1px solid var(--tux-border);
     border-radius: 0.5rem;
 }
+.telemetry-configurator:not([data-panel="configurator"]) .tux-layout {
+    grid-template-columns: minmax(0, 1fr);
+}
 .telemetry-configurator .tux-navigation {
     display: grid;
     gap: 0.75rem;
@@ -185,6 +188,24 @@
     color: var(--tux-muted);
     overflow-wrap: anywhere;
     white-space: pre-wrap;
+}
+.telemetry-configurator .tux-watchlist {
+    margin: 0.8rem 0;
+    overflow: auto;
+}
+.telemetry-configurator .tux-watch-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+.telemetry-configurator .tux-watch-table th,
+.telemetry-configurator .tux-watch-table td {
+    padding: 0.4rem;
+    border-bottom: 1px solid var(--tux-border);
+    overflow-wrap: anywhere;
+}
+.telemetry-configurator .tux-watch-table td:nth-child(2) {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .telemetry-configurator .tux-status {
     margin-top: 0.85rem;
