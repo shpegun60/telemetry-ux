@@ -189,7 +189,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv
           python -m venv "$RUNNER_TEMP/web-builder"
-          "$RUNNER_TEMP/web-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1 playwright==1.63.0
+          "$RUNNER_TEMP/web-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1 playwright==1.63.0 websockets==15.0.1
           "$RUNNER_TEMP/web-builder/bin/python" -m playwright install --with-deps chromium
           npm install --prefix "$RUNNER_TEMP/web-tools" --no-save --ignore-scripts --no-audit --no-fund typescript@5.9.3
           node --version
@@ -263,6 +263,25 @@ jobs:
             --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
             --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
             --npm-js "$(npm root -g)/npm/bin/npm-cli.js"
+      - name: Installed WebSocket carrier, lease and browser journeys
+        run: |
+          set -euo pipefail
+          for profile in gcc clang-asan; do
+            compiler=g++
+            checks=()
+            if [ "$profile" = clang-asan ]; then
+              compiler=clang++-18
+              checks+=(--sanitize)
+            fi
+            python -B tests/websocket_transport/run.py --build-dir "$RUNNER_TEMP/ux-websocket-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --codegen-python "$RUNNER_TEMP/web-codegen/bin/python" \
+              --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+              --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
+              --npm-js "$(npm root -g)/npm/bin/npm-cli.js" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+          done
       - name: Installed Descriptor and payload-file tools in Chromium
         run: |
           set -euo pipefail
@@ -301,6 +320,16 @@ jobs:
             ${{ runner.temp }}/ux-web-element/*.log
             ${{ runner.temp }}/ux-web-element/browser/summary.json
             ${{ runner.temp }}/ux-web-element/dist/*.tgz
+            ${{ runner.temp }}/ux-websocket-gcc/summary.json
+            ${{ runner.temp }}/ux-websocket-gcc/*.log
+            ${{ runner.temp }}/ux-websocket-gcc/server-unit.json
+            ${{ runner.temp }}/ux-websocket-gcc/http-browser/
+            ${{ runner.temp }}/ux-websocket-gcc/ws-browser/
+            ${{ runner.temp }}/ux-websocket-clang-asan/summary.json
+            ${{ runner.temp }}/ux-websocket-clang-asan/*.log
+            ${{ runner.temp }}/ux-websocket-clang-asan/server-unit.json
+            ${{ runner.temp }}/ux-websocket-clang-asan/http-browser/
+            ${{ runner.temp }}/ux-websocket-clang-asan/ws-browser/
             ${{ runner.temp }}/ux-web-starter/summary.json
             ${{ runner.temp }}/ux-web-starter/node.log
             ${{ runner.temp }}/ux-structured-tools-gcc/summary.json

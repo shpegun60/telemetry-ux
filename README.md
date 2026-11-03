@@ -2,7 +2,7 @@
 
 Telemetry UX contains host applications and optional UI generation for
 [Telemetry SDK](https://github.com/shpegun60/telemetry-sdk). Protocols, codecs,
-clients and transport components remain in the SDK. The UX applications reuse
+clients and portable transport components remain in the SDK. The UX applications reuse
 one existing client/FIFO per session.
 
 ## Universal Inspector
@@ -117,6 +117,12 @@ The [local browser demo](examples/web_demo/README.md) uses a persistent native
 Model and the existing Encoded dispatcher. Its [installed consumer test](tests/web_configurator/README.md)
 checks both real client modes in Chromium. This first browser version includes
 Fields, Commands and Services; the Qt Inspector also provides Watchlist controls.
+
+For an existing browser WebSocket connection, the optional
+[`telemetry-ux/transports/websocket` carrier](web/README.md#browser-websocket-carrier)
+binds the SDK's ordinary Encoded backend. The host retains bootstrap, session,
+client and socket ownership. The same demo can use a persistent localhost
+WebSocket; this is a host integration example, without a firmware network server.
 
 For low-level file inspection, the [structured payload tools](examples/structured_client/README.md)
 open Descriptor, ValuesFile and response bytes and save Service request payloads.
