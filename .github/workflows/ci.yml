@@ -255,6 +255,14 @@ jobs:
             --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
             --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
             --npm-js "$(npm root -g)/npm/bin/npm-cli.js" --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Installed declarative element lifecycle, SSR and type consumers
+        run: |
+          set -euo pipefail
+          python -B tests/web_element/run.py --build-dir "$RUNNER_TEMP/ux-web-element" \
+            --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+            --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+            --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
+            --npm-js "$(npm root -g)/npm/bin/npm-cli.js"
       - name: Installed Descriptor and payload-file tools in Chromium
         run: |
           set -euo pipefail
@@ -289,6 +297,10 @@ jobs:
             ${{ runner.temp }}/ux-web-clang-asan/summary.json
             ${{ runner.temp }}/ux-web-clang-asan/*.log
             ${{ runner.temp }}/ux-web-clang-asan/browser/
+            ${{ runner.temp }}/ux-web-element/summary.json
+            ${{ runner.temp }}/ux-web-element/*.log
+            ${{ runner.temp }}/ux-web-element/browser/summary.json
+            ${{ runner.temp }}/ux-web-element/dist/*.tgz
             ${{ runner.temp }}/ux-web-starter/summary.json
             ${{ runner.temp }}/ux-web-starter/node.log
             ${{ runner.temp }}/ux-structured-tools-gcc/summary.json

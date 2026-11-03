@@ -93,3 +93,45 @@ the static adapter is not a replacement Descriptor validator.
 
 Unmounting the renderer only removes presentation subscriptions and DOM. The
 host retains responsibility for every client, transport and pending operation.
+
+## Declarative HTML element
+
+With the host's normal npm/import-map resolution and the existing
+`Configurator.css` loaded, use the same provider with a custom element:
+
+```html
+<telemetry-configurator id="device-settings"></telemetry-configurator>
+```
+
+```js
+import {defineConfiguratorElement} from 'telemetry-ux/web';
+
+defineConfiguratorElement();
+document.querySelector('telemetry-configurator').provider = provider;
+```
+
+`provider` is the host's already-created Static or Dynamic presentation provider.
+It is a JavaScript property, not an HTML attribute or a connection URL. The
+default tag has TypeScript DOM typing. A custom name can use the returned
+constructor: `const Settings = defineConfiguratorElement('device-settings')`.
+Registration is explicit; importing the package works in Node without DOM
+globals. Calling registration requires a browser DOM. Repeating a known
+registration returns the same constructor; an existing foreign registration is
+refused.
+
+The element mounts the existing renderer only while connected and supplied with
+a provider. Assigning a provider before connection or before registration is
+supported. Reassigning the same provider does no work. An invalid provider shape
+throws before replacing the preceding view; assigning `null` removes that view.
+Removing the element unsubscribes its presentation, retains its provider, and
+reconnecting mounts one fresh view. Application-owned light-DOM children remain
+intact, so host panels and the existing stylesheet keep working.
+
+Normal assignment and connection mount synchronously. If a custom provider's
+subscribe/unsubscribe callback removes the element or replaces its provider, a
+retired candidate is cleaned up and the latest presentation is reconciled in a
+coalesced microtask follow-up. At most one follow-up is pending; there is no polling timer
+or SDK operation queue. The element never invokes host close, invalidate,
+cancel, transport or operation methods as part of its lifecycle. The host keeps
+responsibility for client admission, processing, pending work and recovery, just
+as with `mountConfigurator`.

@@ -93,6 +93,24 @@ open Descriptor, ValuesFile and response bytes and save Service request payloads
 They use the installed SDK codec and a separate localhost demonstration. The
 standard Configurator remains the normal interface for connected-device work.
 
+For declarative HTML embedding, register the standard element and attach the
+same host-owned provider:
+
+```html
+<telemetry-configurator id="device"></telemetry-configurator>
+<script type="module">
+  import {defineConfiguratorElement} from 'telemetry-ux/web';
+  defineConfiguratorElement();
+  document.querySelector('#device').provider = provider;
+</script>
+```
+
+The host supplies `provider`, using either static or dynamic mode. It can assign
+it before or after connecting the element. Detaching the element removes only
+its presentation subscription; reconnecting displays the provider's current
+state. The host retains connection and client ownership. See the
+[element contract](web/README.md) for replacement and lifecycle behavior.
+
 ## Optional generator
 
 The generator extension depends on the exact matching SDK code-generator
