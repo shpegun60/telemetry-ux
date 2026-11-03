@@ -659,7 +659,7 @@ function presentation(adapter, inputLimits)
 		selected = endpoint;
 		clearValues();
 		error = '';
-		if (endpoint.category !== 1)
+		if (endpoint.category !== 1 && snapshot().actions.beginEdit)
 			beginEdit();
 		else
 			notify();
