@@ -115,3 +115,16 @@ host-supplied provider. The element introduces no other form implementation,
 client, transport, polling timer or execution queue. Registration is explicit;
 importing the package does not require a DOM or modify a custom-element registry.
 Connection, removal and provider replacement manage only the view subscription.
+
+## Opt-in typed QML Configurator
+
+`--ux-starter qml` requires explicit `qml` and structural metadata and adds a
+small generated `ConfiguratorBinding.hpp`. It enables the C++ wire-preserving
+codec helper and generated raw-cache hooks only for this profile. Existing
+ordinary QML, C++, JS/TS and web-starter profiles retain their defaults.
+
+The installed Qt package exports `TelemetryUX::static_configurator` in addition
+to its existing provider-neutral view. It borrows the application's generated
+API; the existing dynamic Inspector remains a separate provider of that same
+view. The static provider has no watchlist implementation, so its host hides
+the whole watch panel with `watchlistVisible: false`.

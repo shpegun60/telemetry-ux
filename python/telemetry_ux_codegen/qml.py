@@ -40,11 +40,14 @@ def _title(name):
     return name[0].upper() + name[1:]
 
 
-def _family(stem, category):
+def _family(stem, category, configurator=False):
     names = {stem, stem + "Finished"}
     if category == 1:
         names.update((stem + "Valid", stem + "Changed", "refresh" + _title(stem),
                       "write" + _title(stem), "m_" + stem, "m_" + stem + "Valid"))
+        if configurator:
+            names.update((stem + "CanonicalPayload", "m_" + stem + "CanonicalPayload",
+                          "write" + _title(stem) + "Preserving"))
     return names
 
 
@@ -62,25 +65,26 @@ def _allocate(items, family, reserved=RESERVED):
     return result
 
 
-def layout(schema):
+def layout(schema, configurator=False):
     groups = list(dict.fromkeys(catalog["name"] for catalogs in schema.raw["catalogs"] for catalog in catalogs))
     group_names = _allocate([(name, 0) for name in groups], lambda name, _: {name, "m_" + name}, GROUP_RESERVED)
     result = []
     for index, (name, symbol) in enumerate(zip(groups, group_names)):
         endpoints = [ep for ep in schema.endpoints if ep.catalog_name == name]
-        symbols = _allocate([(ep.name, ep.category) for ep in endpoints], _family)
+        symbols = _allocate([(ep.name, ep.category) for ep in endpoints],
+                            lambda stem, category: _family(stem, category, configurator))
         result.append(dict(name=name, symbol=symbol, class_name=f"Group_{index}Api",
                            endpoints=list(zip(endpoints, symbols))))
     return result
 
 
-def symbol_mapping(schema):
+def symbol_mapping(schema, configurator=False):
     return {"module_uri": "Telemetry.Generated." + schema.namespace.replace("::", "."),
             "groups": [{"original_name": group["name"], "property": group["symbol"],
                         "endpoints": [{"category": ep.category, "id": ep.id,
                                        "original_name": ep.name, "property_or_method": stem}
                                       for ep, stem in group["endpoints"]]}
-                       for group in layout(schema)]}
+                       for group in layout(schema, configurator)]}
 
 
 def _ep(schema, endpoint):
@@ -453,7 +457,7 @@ void DeviceApi::expire() {
 '''
 
 
-def _group_header(group):
+def _group_header(group, configurator=False):
     name = group["class_name"]
     rows = [f"// Cached endpoint facade owned by DeviceApi; snapshots contain no live references.\nclass {name} final : public QObject {{\n    Q_OBJECT\n    QML_ANONYMOUS\n"]
     for ep, stem in group["endpoints"]:
@@ -465,10 +469,14 @@ def _group_header(group):
         if ep.category == 1:
             rows.append(f"    QVariant {stem}() const {{ return m_{stem}; }}\n"
                         f"    bool {stem}Valid() const noexcept {{ return m_{stem}Valid; }}\n")
+            if configurator:
+                rows.append(f"    QByteArray {stem}CanonicalPayload() const {{ return m_{stem}CanonicalPayload; }}\n")
             if ep.capabilities & 1:
                 rows.append(f"    Q_INVOKABLE QString refresh{_title(stem)}();\n")
             if ep.capabilities & 2:
                 rows.append(f"    Q_INVOKABLE QString write{_title(stem)}(const QVariant& value);\n")
+                if configurator:
+                    rows.append(f"    Q_INVOKABLE QString write{_title(stem)}Preserving(const QVariant& value, const QByteArray& originalPayload);\n")
         else:
             argument = "const QVariant& value" if ep.request_type else ""
             rows.append(f"    Q_INVOKABLE QString {stem}({argument});\n")
@@ -481,6 +489,8 @@ def _group_header(group):
     for ep, stem in group["endpoints"]:
         if ep.category == 1:
             rows.append(f"    QVariant m_{stem};\n    bool m_{stem}Valid = false;\n")
+            if configurator:
+                rows.append(f"    QByteArray m_{stem}CanonicalPayload;\n")
     rows.append("};\n")
     return "".join(rows)
 
@@ -495,14 +505,15 @@ def _decoder(schema, index):
             f"        out = ::{schema.namespace}::qml::values::to_{index}(*decoded); return true; }}")
 
 
-def _group_source(schema, group):
+def _group_source(schema, group, configurator=False):
     name = group["class_name"]
     rows = [f"{name}::{name}(DeviceApi* device) : QObject(device), m_device(device) {{\n"
             "    QQmlEngine::setObjectOwnership(this, QQmlEngine::CppOwnership);\n}\n",
             f"void {name}::invalidate() {{\n    QPointer<{name}> alive(this);\n"]
     for ep, stem in group["endpoints"]:
         if ep.category == 1:
-            rows.append(f"    if (m_{stem}Valid || m_{stem}.isValid()) {{ m_{stem}Valid = false; m_{stem}.clear(); Q_EMIT {stem}Changed(); if (!alive) return; }}\n")
+            clear_payload = f" m_{stem}CanonicalPayload.clear();" if configurator else ""
+            rows.append(f"    if (m_{stem}Valid || m_{stem}.isValid()) {{ m_{stem}Valid = false; m_{stem}.clear();{clear_payload} Q_EMIT {stem}Changed(); if (!alive) return; }}\n")
     rows.append("}\n")
     for ep, stem in group["endpoints"]:
         operations = []
@@ -513,10 +524,18 @@ def _group_source(schema, group):
                 operations.append(("write" + _title(stem), 1, ep.value_type, 0))
         else:
             operations.append((stem, ep.category, ep.request_type, ep.response_type))
+        if configurator and ep.category == 1 and ep.capabilities & 2:
+            operations.append(("write" + _title(stem) + "Preserving", 1, ep.value_type, 0))
         for method, operation, request, response in operations:
+            preserving = configurator and ep.category == 1 and method == "write" + _title(stem) + "Preserving"
             argument = "const QVariant& value" if request else ""
+            if preserving:
+                argument += ", const QByteArray& originalPayload"
             rows.append(f"QString {name}::{method}({argument}) {{\n    QPointer<{name}> alive(this);\n    const auto endpoint = {_ep(schema, ep)};\n"
                         "    QString error;\n    QByteArray payload;\n")
+            if preserving:
+                rows.append("    // Own the seed before QJS getters/converters can reenter and replace its source.\n"
+                            "    const QByteArray original(originalPayload.constData(), originalPayload.size());\n")
             if request:
                 rows.append(f"    auto input = std::make_unique<{_type(schema, request)}>();\n"
                             "    const auto inputSession = m_device->session();\n"
@@ -526,7 +545,9 @@ def _group_source(schema, group):
                             "    if (m_device->session() != inputSession) error = QStringLiteral(\"Session changed during request validation\");\n"
                             f"    if (snapped && error.isEmpty() && ::{schema.namespace}::qml::values::from_{request}(snapshot, *input, error)) {{\n"
                             f"        payload.resize(::{schema.namespace}::codec::wireSize<{_type(schema, request)}>);\n"
-                            f"        if (::{schema.namespace}::codec::encode(*input, ::{schema.namespace}::qml::byteOutput(payload)) != ::{schema.namespace}::codec::Status::Ok)\n"
+                            f"        if (::{schema.namespace}::codec::{'encodePreserving' if preserving else 'encode'}(*input, "
+                            + (f"::{schema.namespace}::qml::byteView(original), " if preserving else "")
+                            + f"::{schema.namespace}::qml::byteOutput(payload)) != ::{schema.namespace}::codec::Status::Ok)\n"
                             '            error = QStringLiteral("Cannot encode request");\n    }\n')
             req_id = "endpoint.valueTypeId" if operation == 1 else ("endpoint.requestTypeId" if request else "0")
             resp_id = "endpoint.valueTypeId" if operation == 4 else ("endpoint.responseTypeId" if response else "0")
@@ -535,32 +556,36 @@ def _group_source(schema, group):
             rows.append(f"    return m_device->submit({operation}, endpoint.id, {req_id}, {resp_id}, std::move(payload), {resp_bytes},\n"
                         f"        {_decoder(schema, response)},\n        [self = QPointer<{name}>(this){cache_epoch}](const QString& token, const Result& result) {{\n            if (!self) return;\n")
             if operation == 4:
-                rows.append(f"            if (result.success && self->m_device->ready() && self->m_device->session() == epoch) {{ self->m_{stem} = result.value; self->m_{stem}Valid = true; Q_EMIT self->{stem}Changed(); if (!self) return; }}\n")
+                payload_cache = f" self->m_{stem}CanonicalPayload = result.canonicalPayload;" if configurator else ""
+                rows.append(f"            if (result.success && self->m_device->ready() && self->m_device->session() == epoch) {{ self->m_{stem} = result.value;{payload_cache} self->m_{stem}Valid = true; Q_EMIT self->{stem}Changed(); if (!self) return; }}\n")
             if operation == 1:
-                rows.append(f"            if (result.success && self->m_device->ready() && self->m_device->session() == epoch && (self->m_{stem}Valid || self->m_{stem}.isValid())) {{ self->m_{stem}.clear(); self->m_{stem}Valid = false; Q_EMIT self->{stem}Changed(); if (!self) return; }}\n")
+                clear_payload = f" self->m_{stem}CanonicalPayload.clear();" if configurator else ""
+                rows.append(f"            if (result.success && self->m_device->ready() && self->m_device->session() == epoch && (self->m_{stem}Valid || self->m_{stem}.isValid())) {{ self->m_{stem}.clear();{clear_payload} self->m_{stem}Valid = false; Q_EMIT self->{stem}Changed(); if (!self) return; }}\n")
             rows.append(f"            Q_EMIT self->{stem}Finished(token, result.success, result.accepted, result.value, result.errorKind, result.message);\n"
                         "        }, error);\n}\n")
     return "".join(rows)
 
 
-def generate(schema):
+def generate(schema, configurator=False):
     """The qml target depends on the byte-identical existing cpp target."""
     from . import qml_js, qml_rpc, qml_client
     qml_macros.validate_namespace(schema)
-    groups = layout(schema)
+    groups = layout(schema, configurator)
     include = schema.namespace.replace("::", "/")
     qt_names = qml_macros.qt_names("QByteArray", "QDeadlineTimer", "QHash", "QObject", "QPointer",
                                   "QString", "QTimer", "QVariant", "QVariantMap", "QMetaObject", "QJSEngine")
     header = (_prefix(schema, "DEVICEAPI", "\n") +
               HEADER.replace("@NS@", schema.namespace).replace("@QT_NAMES@", qt_names))
-    header += "".join(_group_header(group) for group in groups)
+    header += "".join(_group_header(group, configurator) for group in groups)
+    if configurator:
+        header = header.replace("    QVariant value;\n", "    QVariant value;\n    QByteArray canonicalPayload;\n", 1)
     substitutions = {
         "@GROUP_PROPERTIES@": "\n".join(f'    Q_PROPERTY({g["class_name"]}* {g["symbol"]} READ {g["symbol"]} CONSTANT FINAL)' for g in groups),
         "@GROUP_GETTERS@": "\n".join(f'    {g["class_name"]}* {g["symbol"]}() const noexcept {{ return m_{g["symbol"]}; }}' for g in groups),
         "@GROUP_MEMBERS@": "\n".join(f'    QPointer<{g["class_name"]}> m_{g["symbol"]};' for g in groups),
         "@GROUP_INIT@": "\n".join(f'    m_{g["symbol"]} = new {g["class_name"]}(this);' for g in groups),
         "@INVALIDATE@": "\n".join(f'    if (m_{g["symbol"]}) m_{g["symbol"]}->invalidate();\n    if (!alive) return;' for g in groups),
-        "@GROUP_SOURCE@": "".join(_group_source(schema, group) for group in groups),
+        "@GROUP_SOURCE@": "".join(_group_source(schema, group, configurator) for group in groups),
         "@FINGERPRINT@": f"0x{schema.fingerprint:016x}", "@SHA@": schema.descriptor_sha256,
         "@INCLUDE@": include, "@NS@": schema.namespace,
         "@MACROS_PUSH@": qml_macros.push(schema), "@MACROS_POP@": qml_macros.pop(schema),
@@ -569,6 +594,14 @@ def generate(schema):
     tail, source = DEVICE, SOURCE
     for key, value in substitutions.items():
         tail, source = tail.replace(key, value), source.replace(key, value)
+    if configurator:
+        source = source.replace('{QStringLiteral("id"), id}};',
+                                '{QStringLiteral("id"), id}, {QStringLiteral("canonicalPayload"), result.canonicalPayload}};')
+        source = source.replace('        result.success = !result.accepted;\n',
+                                '        result.success = !result.accepted;\n'
+                                '        result.canonicalPayload = QByteArray(payload.constData(), payload.size());\n')
+        source = source.replace('if (alive) Q_EMIT operationFinished(token, ::@NS@::qml::resultMap(result, pending.operation, pending.id));'.replace('@NS@', schema.namespace),
+                                'if (alive) { auto outcome = ::' + schema.namespace + '::qml::resultMap(result, pending.operation, pending.id); outcome.insert(QStringLiteral("session"), pending.session); Q_EMIT operationFinished(token, outcome); }')
     # A signal is an ordinary generated C++ method. Avoid using a macro here
     # when a perfectly valid DTO member itself happens to be named Q_EMIT.
     source = source.replace("Q_EMIT ", "")

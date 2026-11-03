@@ -21,3 +21,9 @@ def generate_web_starter(schema):
     """Lazily emit the optional browser entry page, without importing QML."""
     from . import starter
     return starter.generate_web_starter(schema)
+
+
+def generate_qml_configurator(schema):
+    """Lazily opt in to the static provider binding and preserving Field edits."""
+    from . import qml_configurator
+    return qml_configurator.generate(schema)

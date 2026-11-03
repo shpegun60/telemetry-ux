@@ -7,6 +7,7 @@ import QtQuick.Layouts
 Control {
     id: configurator
     required property var provider
+    property bool watchlistVisible: true
     padding: 0
     background: Rectangle { color: configurator.palette.window }
     implicitWidth: contentItem.implicitWidth
@@ -22,6 +23,18 @@ Control {
     palette.highlightedText: "#ffffff"
     palette.placeholderText: "#718297"
 
+    // Schema/provider strings are data, including tooltip details.
+    component PlainToolTip: ToolTip {
+        id: plainToolTip
+        contentItem: Label {
+            textFormat: Text.PlainText
+            text: plainToolTip.text
+            font: plainToolTip.font
+            wrapMode: Text.Wrap
+            color: plainToolTip.palette.toolTipText
+        }
+    }
+
     contentItem: ColumnLayout {
         spacing: 16
         SplitView {
@@ -35,7 +48,7 @@ Control {
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: 12
-                    Label { text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
+                    Label { textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
                     TreeView {
                         id: endpointTree
                         objectName: "endpointTree"
@@ -54,11 +67,15 @@ Control {
                             implicitWidth: endpointTree.width
                             implicitHeight: 38
                             text: name
-                            ToolTip.visible: hovered && detail.length > 0
-                            ToolTip.text: detail
+                            PlainToolTip {
+                                objectName: "endpointToolTip"
+                                visible: endpointDelegate.hovered && endpointDelegate.detail.length > 0
+                                text: endpointDelegate.detail
+                            }
                             // Basic TreeViewDelegate reads model.display directly.
                             // A retired model may have no role data before its reset.
                             contentItem: Label {
+                                textFormat: Text.PlainText
                                 text: endpointDelegate.name
                                 elide: Text.ElideRight
                                 color: endpointDelegate.highlighted
@@ -76,7 +93,7 @@ Control {
                             endpointTree.expandRecursively(0, 2)
                         })
                     }
-                    Label { text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+                    Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
                 }
             }
             Pane {
@@ -89,6 +106,7 @@ Control {
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
+                            textFormat: Text.PlainText
                             text: configurator.provider.selection.length ? configurator.provider.selection : "Select a Field"
                             font.pixelSize: 21
                             font.weight: Font.DemiBold
@@ -174,11 +192,14 @@ Control {
                                 implicitWidth: valueTree.width
                                 implicitHeight: 40
                                 text: name
-                                ToolTip.visible: hovered && detail.length > 0
-                                ToolTip.text: detail
+                                PlainToolTip {
+                                    objectName: "valueToolTip"
+                                    visible: valueDelegate.hovered && valueDelegate.detail.length > 0
+                                    text: valueDelegate.detail
+                                }
                                 contentItem: RowLayout {
-                                    Label { text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                                    Label { visible: !editable; text: value; color: "#83e1ce"; font.family: "monospace" }
+                                    Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
+                                    Label { textFormat: Text.PlainText; visible: !editable; text: value; color: "#83e1ce"; font.family: "monospace" }
                                     TextField {
                                         id: scalarInput
                                         objectName: "scalarEditor"
@@ -209,6 +230,7 @@ Control {
                             }
                             ScrollBar.vertical: ScrollBar {}
                             Label {
+                                textFormat: Text.PlainText
                                 anchors.centerIn: parent
                                 visible: valueTree.rows === 0
                                 text: configurator.provider.busy
@@ -226,6 +248,7 @@ Control {
                             Layout.minimumWidth: 280
                             Layout.preferredWidth: valueColumns.width / valueColumns.columns
                             Label {
+                                textFormat: Text.PlainText
                                 text: configurator.provider.serviceResponseEndpoint.length
                                     ? "Last response · " + configurator.provider.serviceResponseEndpoint : "Last response"
                                 color: "#99abbf"
@@ -246,6 +269,7 @@ Control {
                                 columnWidthProvider: function() { return Math.max(1, responseTree.width) }
                                 onWidthChanged: Qt.callLater(function() { responseTree.forceLayout() })
                                 delegate: TreeViewDelegate {
+                                    id: responseDelegate
                                     objectName: "responseRow"
                                     required property string name
                                     required property string detail
@@ -256,11 +280,14 @@ Control {
                                     implicitWidth: responseTree.width
                                     implicitHeight: 40
                                     text: name
-                                    ToolTip.visible: hovered && detail.length > 0
-                                    ToolTip.text: detail
+                                    PlainToolTip {
+                                        objectName: "responseToolTip"
+                                        visible: responseDelegate.hovered && responseDelegate.detail.length > 0
+                                        text: responseDelegate.detail
+                                    }
                                     contentItem: RowLayout {
-                                        Label { text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                                        Label { text: value; color: "#83e1ce"; font.family: "monospace" }
+                                        Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Label { textFormat: Text.PlainText; text: value; color: "#83e1ce"; font.family: "monospace" }
                                         Button {
                                             visible: isAggregate && childCount > 128
                                             enabled: loadedCount < childCount
@@ -271,6 +298,7 @@ Control {
                                 }
                                 ScrollBar.vertical: ScrollBar {}
                                 Label {
+                                    textFormat: Text.PlainText
                                     anchors.centerIn: parent
                                     visible: responseTree.rows === 0
                                     text: configurator.provider.busy ? "Waiting for a response…" : "No owned response value."
@@ -280,6 +308,7 @@ Control {
                         }
                     }
                     Label {
+                        textFormat: Text.PlainText
                         text: configurator.provider.serviceSelected
                             ? "Initial request values are zero. Call submits one request; the read-only response is owned until a new accepted mutation or session change."
                             : configurator.provider.commandSelected
@@ -297,6 +326,7 @@ Control {
         }
         Pane {
             objectName: "watchlistPane"
+            visible: configurator.watchlistVisible
             Layout.fillWidth: true
             Layout.preferredHeight: watchPanelExpanded.checked ? 220 : 54
             background: Rectangle { color: "#17202b"; radius: 10 }
@@ -332,7 +362,7 @@ Control {
                         enabled: configurator.provider.watchActive || (configurator.provider.connected && configurator.provider.watchCount > 0)
                         onClicked: configurator.provider.watchActive ? configurator.provider.stopWatch() : configurator.provider.startWatch()
                     }
-                    Label { text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus; color: "#99abbf"; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: 330 }
+                    Label { textFormat: Text.PlainText; text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus; color: "#99abbf"; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: 330 }
                 }
                 RowLayout {
                     visible: watchPanelExpanded.checked
@@ -345,7 +375,7 @@ Control {
                         enabled: !configurator.provider.watchActive
                         onActivated: configurator.provider.watchIndividual = currentIndex === 1
                     }
-                    Label { text: "Frequency"; color: "#99abbf" }
+                    Label { textFormat: Text.PlainText; text: "Frequency"; color: "#99abbf" }
                     SpinBox {
                         objectName: "watchFrequency"
                         from: 1
@@ -354,7 +384,7 @@ Control {
                         enabled: !configurator.provider.watchActive
                         onValueModified: configurator.provider.watchIntervalMs = Math.round(1000 / value)
                     }
-                    Label { text: "Hz · scalar Fields only · sequential samples"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                    Label { textFormat: Text.PlainText; text: "Hz · scalar Fields only · sequential samples"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
                     Button {
                         objectName: "clearWatchButton"
                         text: "Clear"
@@ -381,9 +411,9 @@ Control {
                         height: 34
                         RowLayout {
                             anchors.fill: parent
-                            Label { text: watchRow.name; Layout.preferredWidth: Math.min(260, watchList.width / 3); elide: Text.ElideMiddle }
-                            Label { text: watchRow.text; font.family: "monospace"; color: "#83e1ce"; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: watchRow.status; color: "#99abbf" }
+                            Label { textFormat: Text.PlainText; text: watchRow.name; Layout.preferredWidth: Math.min(260, watchList.width / 3); elide: Text.ElideMiddle }
+                            Label { textFormat: Text.PlainText; text: watchRow.text; font.family: "monospace"; color: "#83e1ce"; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { textFormat: Text.PlainText; text: watchRow.status; color: "#99abbf" }
                             Button {
                                 objectName: "removeWatchButton"
                                 property int watchRowIndex: watchRow.index
@@ -394,11 +424,12 @@ Control {
                         }
                     }
                     ScrollBar.vertical: ScrollBar {}
-                    Label { anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
+                    Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
                 }
             }
         }
         Label {
+            textFormat: Text.PlainText
             objectName: "writeOutcomeLabel"
             visible: configurator.provider.writeOutcome.length > 0
             text: configurator.provider.writeOutcome
@@ -407,6 +438,7 @@ Control {
             wrapMode: Text.Wrap
         }
         Label {
+            textFormat: Text.PlainText
             objectName: "commandOutcomeLabel"
             visible: configurator.provider.commandOutcome.length > 0
             text: configurator.provider.commandOutcome
@@ -415,6 +447,7 @@ Control {
             wrapMode: Text.Wrap
         }
         Label {
+            textFormat: Text.PlainText
             objectName: "serviceOutcomeLabel"
             visible: configurator.provider.serviceOutcome.length > 0
             text: configurator.provider.serviceOutcome
@@ -423,6 +456,7 @@ Control {
             wrapMode: Text.Wrap
         }
         Label {
+            textFormat: Text.PlainText
             objectName: "statusLabel"
             text: configurator.provider.statusText
             color: configurator.provider.connected ? "#83e1ce" : "#99abbf"

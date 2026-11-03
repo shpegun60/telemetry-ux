@@ -7,3 +7,7 @@ qt_standard_project_setup(REQUIRES 6.4)
 qt_add_executable(telemetry_ux_package_check Consumer.cpp)
 target_link_libraries(telemetry_ux_package_check PRIVATE TelemetryUX::configurator)
 target_compile_features(telemetry_ux_package_check PRIVATE cxx_std_17)
+
+qt_add_executable(telemetry_ux_literal_check Literal.cpp)
+target_link_libraries(telemetry_ux_literal_check PRIVATE TelemetryUX::configurator)
+target_compile_features(telemetry_ux_literal_check PRIVATE cxx_std_17)

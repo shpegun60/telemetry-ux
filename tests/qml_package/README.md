@@ -23,6 +23,16 @@ text update and zero QML engine warnings. Its disabled operations are explicit
 refusals, without a client, timer, transport, schema parser or I/O. The real
 Inspector-provider edit/write/readback workflows have separate QML tests.
 
+A second, pure Qt provider supplies literal `<b>`/`<img>` strings through all 15
+endpoint/member/enum/watchlist/status/outcome display roles and all three delegate
+tooltips. The tooltips are opened through their public Popup methods. The gate
+checks that text remains unchanged and uses `Text.PlainText`, while a real local
+HTTP image counter stays at zero. A separate deliberately unsafe Qt `Label` with
+its default AutoText must fetch exactly one image from that same counter first;
+an inactive image loader therefore cannot make the regression pass. This local
+test server is bounded by the consumer process timeout and always shut down. No
+physical device, Telemetry client or external network service is used.
+
 Five CMake controls check absent-Qt required/default refusal, optional component
 acceptance and required/optional unknown components. A root configure with both
 view and Inspector disabled must also work with Qt and SDK discovery disabled.

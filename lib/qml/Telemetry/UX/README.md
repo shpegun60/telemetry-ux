@@ -3,8 +3,9 @@
 `Telemetry.UX 1.0` supplies one presentation component, `Configurator`.
 It has no Telemetry SDK, transport, client, FIFO, Descriptor parser or snapshot
 ownership. The host owns a non-null QObject provider and its models for the
-entire view lifetime. The existing InspectorController is one dynamic provider;
-this change does not implement a typed/static provider.
+entire view lifetime. The existing InspectorController is one dynamic provider. The optional
+[StaticConfiguratorProvider](StaticConfigurator.md) borrows a generated typed
+API through a separately generated binding and implements the same view contract.
 
 ```qml
 import Telemetry.UX
@@ -51,6 +52,11 @@ Value roles are `name`, `detail`, `value`, `isAggregate`, `childCount`,
 `editable`/`editorText`; watchlist rows expose `name`, `status`, `text` (ListView
 supplies `index`). Scalar display/editor values are strings, including U64/S64
 and enum codes; the view never converts them through JavaScript Number.
+
+All model/provider display strings and tooltip details are rendered as plain
+text. Names or enum labels containing markup remain literal data and cannot
+request embedded images. A host that needs rich content supplies it in its own
+custom panel rather than embedding HTML in these model roles.
 
 The host serializes actions and model notifications on its Qt owner thread,
 keeps the provider alive while the view or its deferred updates exist, and
