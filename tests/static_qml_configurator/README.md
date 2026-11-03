@@ -21,6 +21,9 @@ evidence. For Clang 18, add `--sanitize --cxx clang++-18` and supply fully
 ASan/UBSan-instrumented SDK and UX prefixes. The runner checks the actual installed
 archive symbol tables, uses `detect_leaks=1`, and retains the sanitizer settings.
 It sets offscreen/software Qt rendering, so no visible desktop window is opened.
+On Windows it selects the Basic controls style and the existing Windows Fonts
+directory: native theme handles are unavailable on the offscreen platform.
+The strict QML diagnostic check remains enabled; no warning is filtered.
 
 Qt 6.4.2 on Linux has a separately reproduced software scenegraph texture-cache
 leak, also present in a Qt-only Window/Controls program with no Telemetry code.

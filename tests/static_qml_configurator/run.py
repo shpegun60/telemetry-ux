@@ -84,6 +84,12 @@ def main():
     env.pop('PYTHONHOME', None)
     env.pop('LSAN_OPTIONS', None)
     env['PATH'] = os.pathsep.join((str(tools['cxx'].parent), str(qt / 'bin'), env.get('PATH', '')))
+    if os.name == 'nt':
+        fonts = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Fonts'
+        if not fonts.is_dir():
+            parser.error('Windows offscreen font directory is unavailable: ' + str(fonts))
+        # Native Windows controls require a real HWND, absent on offscreen.
+        env.update(QT_QUICK_CONTROLS_STYLE='Basic', QT_QPA_FONTDIR=str(fonts))
     if args.sanitize:
         env.update(ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',
                    UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1',
@@ -98,7 +104,8 @@ def main():
                   sdk_prefix=str(prefix), sdk_metadata=metadata, ux_prefix=str(ux_prefix),
                   qt_prefix=str(qt), sanitize=args.sanitize, commands=[],
                   environment={key: env.get(key) for key in
-                               ('QT_QPA_PLATFORM', 'QT_QUICK_BACKEND', 'ASAN_OPTIONS', 'UBSAN_OPTIONS',
+                               ('QT_QPA_PLATFORM', 'QT_QUICK_BACKEND', 'QT_QUICK_CONTROLS_STYLE',
+                                'QT_QPA_FONTDIR', 'ASAN_OPTIONS', 'UBSAN_OPTIONS',
                                 'LSAN_OPTIONS')},
                   source_sha256=candidate_inputs(), installed_sdk_sha256=sdk_inputs(prefix),
                   installed_ux_sha256=sdk_inputs(ux_prefix))
