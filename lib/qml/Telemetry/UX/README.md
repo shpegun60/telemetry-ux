@@ -53,6 +53,11 @@ Value roles are `name`, `detail`, `value`, `isAggregate`, `childCount`,
 supplies `index`). Scalar display/editor values are strings, including U64/S64
 and enum codes; the view never converts them through JavaScript Number.
 
+All model/provider display strings and tooltip details are rendered as plain
+text. Names or enum labels containing markup remain literal data and cannot
+request embedded images. A host that needs rich content supplies it in its own
+custom panel rather than embedding HTML in these model roles.
+
 The host serializes actions and model notifications on its Qt owner thread,
 keeps the provider alive while the view or its deferred updates exist, and
 implements all lifecycle/permission/error rules. Buttons forward their action to that provider; text can also be revalidated

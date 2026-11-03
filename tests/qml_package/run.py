@@ -4,6 +4,7 @@ import argparse
 import ctypes
 from datetime import datetime, timezone
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,10 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import struct
+import zlib
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -185,6 +189,48 @@ def main():
         check(match is not None and int(match[1]) == 6, 'Actual owned-provider UI checks did not complete warning-free')
         report['runtime_checks'] = int(match[1])
         report['binary_sha256'] = digest(binary)
+        # A real local HTTP counter proves that the unsafe Qt AutoText control
+        # loads an image, while the installed Configurator treats every role as data.
+        requests = []
+        def png_chunk(kind, data):
+            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+        png = (b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', struct.pack('>2I5B', 1, 1, 8, 6, 0, 0, 0)) +
+               png_chunk(b'IDAT', zlib.compress(b'\0\0\0\0\xff')) + png_chunk(b'IEND', b''))
+        class ImageHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/png')
+                self.send_header('Content-Length', str(len(png)))
+                self.end_headers()
+                self.wfile.write(png)
+            def log_message(self, *_):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), ImageHandler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        literal = consumer_build / ('telemetry_ux_literal_check' + suffix)
+        report['literal_binary_sha256'] = digest(literal)
+        try:
+            url = 'http://127.0.0.1:' + str(server.server_port)
+            positive = run('rich-text-positive-control', [literal, consumer/'Literal.qml', url, '--unsafe-control'])
+            check('mode=unsafe-control' in positive and 'warnings=0' in positive,
+                  'The deliberate AutoText control did not render warning-free')
+            check(requests == ['/unsafe.png'], 'The real HTTP image positive control did not execute exactly once')
+            requests.clear()
+            text = run('literal-provider', [literal, consumer/'Literal.qml', url])
+            match = re.search(r'Literal Configurator checks=(\d+) warnings=0 mode=literal Qt=', text)
+            check(match is not None and int(match[1]) >= 50, 'Hostile schema/provider role and tooltip checks were skipped')
+            check(requests == [], 'The Configurator interpreted a provider string as a network image')
+            report['literal_rendering'] = dict(checks=int(match[1]), warnings=0,
+                                               unsafe_requests=['/unsafe.png'], configurator_requests=[],
+                                               tooltips=3, provider_roles=15)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            check(not thread.is_alive(), 'The local image positive-control server did not stop')
         report['compile_commands_sha256'] = digest(consumer_build / 'compile_commands.json')
         controls = []
         for case, success in [('optional', True), ('optional-unknown', True), ('required', False),
