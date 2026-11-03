@@ -106,7 +106,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          ref: 6e15220b1271139b3f1996a16d385c660f856f45
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Checkout private SDK serial dependency
@@ -124,11 +124,11 @@ jobs:
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
       - name: Install and relocate the SDK prefix
         run: |
-          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = 6e15220b1271139b3f1996a16d385c660f856f45
           cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/sdk-build" -G Ninja \
             '-DTELEMETRY_COMPONENTS=inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_serial_transport;resource_adapter' \
             -DCOBS_ROOT="$GITHUB_WORKSPACE/.ci/cobs" -DCMAKE_BUILD_TYPE=Release \
-            -DTELEMETRY_SOURCE_REVISION=3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e \
+            -DTELEMETRY_SOURCE_REVISION=6e15220b1271139b3f1996a16d385c660f856f45 \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk-prefix-stage"
           cmake --build "$RUNNER_TEMP/sdk-build" --target install --parallel 2
           mv "$RUNNER_TEMP/sdk-prefix-stage" "$RUNNER_TEMP/sdk-prefix"
