@@ -1,0 +1,129 @@
+/* Explicit-provider presentation over Telemetry SDK. SPDX-License-Identifier: MIT. */
+import type {DeviceClient} from 'telemetry-sdk/client';
+import type {DynamicClient} from 'telemetry-sdk/dynamic';
+
+export type ValuePath = readonly(string|number)[];
+export type ValueSource = 'value'|'draft'|'response';
+export interface PresentationLimits {
+	readonly nodes?: number;
+	readonly depth?: number;
+	readonly wireBytes?: number;
+}
+export interface PresentationEndpoint {
+	readonly key: string;
+	readonly category: 1|2|3;
+	readonly id: number;
+	readonly catalog: string;
+	readonly name: string;
+}
+export type OutcomeKind = 'read'|'write'|'readback'|'command'|'service';
+export interface PresentationOutcome {
+	readonly operation: OutcomeKind;
+	readonly endpointKey: string;
+	readonly endpointName: string;
+	readonly status: number|null;
+	readonly name: string;
+	readonly display: string;
+	readonly session: number;
+	readonly requestId: number;
+	readonly dispatch: number|null;
+	readonly endpointStatus: number|null;
+	readonly succeeded: boolean;
+	readonly accepted: boolean;
+	readonly executed: boolean;
+	readonly valueStatus: string;
+	readonly historical: boolean;
+}
+export interface PresentationState {
+	readonly mode: 'static'|'dynamic';
+	readonly current: boolean;
+	readonly session: number;
+	readonly endpoints: readonly PresentationEndpoint[];
+	readonly selected: PresentationEndpoint|null;
+	readonly busy: boolean;
+	readonly writesEnabled: boolean;
+	readonly revision: number;
+	readonly hasValue: boolean;
+	readonly hasDraft: boolean;
+	readonly hasResponse: boolean;
+	readonly dirty: boolean;
+	readonly error: string;
+	readonly outcomes: Readonly<Partial<Record<OutcomeKind, PresentationOutcome>>>;
+	readonly actions:
+	    Readonly<Record<'refresh'|'beginEdit'|'cancelEdit'|'apply'|'execute'|'call', boolean>>;
+}
+export interface PresentationRow {
+	readonly key: string;
+	readonly path: ValuePath;
+	readonly name: string;
+	readonly kind: 'void'|'scalar'|'enum'|'struct'|'array';
+	readonly type: string;
+	readonly children: number;
+	readonly text: string;
+	readonly error: string;
+	readonly editable: boolean;
+	readonly enumEntries: readonly Readonly<{code : string; name : string}>[];
+}
+export interface PresentationRows {
+	readonly path: ValuePath;
+	readonly total: number;
+	readonly offset: number;
+	readonly kind: PresentationRow['kind']|null;
+	readonly available: boolean;
+	readonly rows: readonly PresentationRow[];
+}
+export interface PresentationProvider {
+	snapshot(): PresentationState;
+	subscribe(listener: (state: PresentationState) => void): () => void;
+	rows(path?: ValuePath, options
+	     ?: Readonly<{source?: ValueSource; offset?: number; limit?: number}>): PresentationRows;
+	/** Notify before the host revokes, resets or closes the supplied client. */
+	invalidate(): void;
+	/** Notify after admission; the same explicitly revoked session stays hidden. */
+	sync(): boolean;
+	select(key: string): boolean;
+	setWritesEnabled(enabled: boolean): boolean;
+	setText(path: ValuePath, text: string, revision: number): boolean;
+	refresh(): boolean;
+	beginEdit(): boolean;
+	cancelEdit(): boolean;
+	apply(): boolean;
+	execute(): boolean;
+	call(): boolean;
+}
+
+// Compatible with the optional generated StructuralMetadata v1 module. The UX
+// receives its graph, never parses a Descriptor or owns an SDK RuntimeSchema.
+export interface StructuralTypeInput {
+	readonly id: number;
+	readonly kind: number;
+	readonly wireBytes: number;
+}
+export interface StructuralEndpointInput {
+	readonly category: 1|2|3;
+	readonly id: number;
+	readonly catalogName: string;
+	readonly groupSymbol: string;
+	readonly symbol: string;
+	readonly name: string;
+	readonly valueType: number;
+	readonly requestType: number;
+	readonly responseType: number;
+	readonly capabilities: number;
+}
+export interface StructuralInput {
+	readonly format: 'telemetry-structural-metadata';
+	readonly version: 1;
+	readonly fingerprint: string;
+	readonly types: readonly StructuralTypeInput[];
+	readonly endpoints: readonly StructuralEndpointInput[];
+}
+export function createStaticProvider(options: {
+	readonly client: DeviceClient; readonly metadata : StructuralInput; readonly sdk : {
+		readonly fingerprint : bigint; readonly codecs : object
+	};
+	readonly limits?: PresentationLimits;
+}): PresentationProvider;
+export function createDynamicProvider(
+    options: {readonly client: DynamicClient; readonly limits?: PresentationLimits;}):
+    PresentationProvider;

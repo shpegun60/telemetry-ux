@@ -12,7 +12,7 @@ VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
 setup(
     name="telemetry-ux-codegen",
     version=VERSION,
-    description="Optional QML target for the Telemetry code generator",
+    description="Optional QML and browser starters for the Telemetry code generator",
     long_description=(ROOT / "README.md").read_text(encoding="utf8"),
     long_description_content_type="text/markdown",
     python_requires=">=3.10",

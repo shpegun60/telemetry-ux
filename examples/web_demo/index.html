@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telemetry UX · Browser Configurator</title>
+  <link rel="stylesheet" href="./node_modules/telemetry-ux/web/Configurator.css">
+  <style>
+    body { margin: 0; background: #101720; color: #e9eef5; font: 16px system-ui, sans-serif; }
+    main { max-width: 1360px; margin: auto; padding: 24px; }
+    .host-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px; }
+    h1 { margin: 0 auto 0 0; font-size: 24px; }
+    button, select { font: inherit; padding: 8px 12px; color: #e9eef5; background: #24384b;
+      border: 1px solid #3c5065; border-radius: 6px; }
+    button { cursor: pointer; }
+    button:disabled { opacity: .55; cursor: default; }
+    #demo-status { min-height: 24px; color: #b4c5d8; }
+    .host-note { color: #b4c5d8; max-width: 75ch; line-height: 1.5; }
+    :focus-visible { outline: 3px solid #68d6c2; outline-offset: 3px; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "telemetry-sdk/client": "./node_modules/telemetry-sdk/lib/client/web/Client.js",
+      "telemetry-sdk/runtime": "./node_modules/telemetry-sdk/web/telemetry.js",
+      "telemetry-sdk/dynamic": "./node_modules/telemetry-sdk/web/DynamicClient.js",
+      "telemetry-ux/web": "./node_modules/telemetry-ux/web/index.js"
+    }
+  }
+  </script>
+</head>
+<body>
+<main>
+  <header class="host-header">
+    <h1>Telemetry Configurator</h1>
+    <label for="mode">Client</label>
+    <select id="mode">
+      <option value="dynamic">Dynamic · device Descriptor</option>
+      <option value="static">Static · generated SDK</option>
+    </select>
+    <button id="connect-demo">Connect demo</button>
+    <button id="disconnect-demo" disabled>Disconnect</button>
+    <button id="detach-view" disabled>Hide view</button>
+  </header>
+  <p id="demo-status" role="status" aria-live="polite">Connect the local demonstration device.</p>
+  <div id="configurator"></div>
+  <p class="host-note">Simulated values from a persistent native Telemetry Model, not a physical device.
+    Each mode uses one SDK client and its existing FIFO. Changes require an explicit opt-in.
+    Accepted work and an unknown outcome are displayed separately from confirmed execution.</p>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

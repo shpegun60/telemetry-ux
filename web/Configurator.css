@@ -1,0 +1,217 @@
+/* Telemetry UX browser presentation. Authors: Ruslan Kovtun, codexAi. MIT. */
+.telemetry-configurator {
+    --tux-bg: #111923;
+    --tux-panel: #192532;
+    --tux-border: #344457;
+    --tux-text: #edf2fa;
+    --tux-muted: #b0bfd0;
+    --tux-accent: #8ce6d3;
+    color-scheme: dark;
+    box-sizing: border-box;
+    padding: 1rem;
+    background: var(--tux-bg);
+    color: var(--tux-text);
+    font: 400 0.94rem/1.45 system-ui, sans-serif;
+    border: 1px solid var(--tux-border);
+    border-radius: 0.75rem;
+    min-width: 0;
+}
+.telemetry-configurator *,
+.telemetry-configurator *::before,
+.telemetry-configurator *::after {
+    box-sizing: inherit;
+}
+.telemetry-configurator [hidden] {
+    display: none !important;
+}
+.telemetry-configurator h2,
+.telemetry-configurator h3,
+.telemetry-configurator p {
+    margin: 0;
+}
+.telemetry-configurator h2 {
+    font-size: 1.3rem;
+}
+.telemetry-configurator h3 {
+    font-size: 1rem;
+}
+.telemetry-configurator button,
+.telemetry-configurator input,
+.telemetry-configurator select {
+    font: inherit;
+    color: inherit;
+}
+.telemetry-configurator button {
+    min-height: 2.4rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--tux-border);
+    border-radius: 0.35rem;
+    background: #27394b;
+    cursor: pointer;
+}
+.telemetry-configurator button:hover:not(:disabled) {
+    background: #344d63;
+}
+.telemetry-configurator button:disabled,
+.telemetry-configurator input:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+.telemetry-configurator :focus-visible {
+    outline: 2px solid var(--tux-accent);
+    outline-offset: 2px;
+}
+.telemetry-configurator input[type="text"],
+.telemetry-configurator input[type="search"] {
+    width: 100%;
+    min-width: 0;
+    min-height: 2.4rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #778ba1;
+    border-radius: 0.3rem;
+    background: #101923;
+}
+.telemetry-configurator input[aria-invalid="true"] {
+    border-color: #ffb3ac;
+}
+.telemetry-configurator .tux-header,
+.telemetry-configurator .tux-actions,
+.telemetry-configurator .tux-section-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.telemetry-configurator .tux-header {
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+.telemetry-configurator .tux-mode {
+    color: var(--tux-accent);
+    border: 1px solid #4d807a;
+    border-radius: 1rem;
+    padding: 0.15rem 0.65rem;
+    font-size: 0.83rem;
+}
+.telemetry-configurator .tux-layout {
+    display: grid;
+    grid-template-columns: minmax(13rem, 19rem) minmax(0, 1fr);
+    align-items: start;
+    gap: 1rem;
+}
+.telemetry-configurator .tux-navigation,
+.telemetry-configurator .tux-section {
+    min-width: 0;
+    padding: 0.8rem;
+    background: var(--tux-panel);
+    border: 1px solid var(--tux-border);
+    border-radius: 0.5rem;
+}
+.telemetry-configurator .tux-navigation {
+    display: grid;
+    gap: 0.75rem;
+    max-height: 44rem;
+    overflow: auto;
+}
+.telemetry-configurator .tux-endpoint-group {
+    display: grid;
+    gap: 0.3rem;
+}
+.telemetry-configurator .tux-endpoint-group h3 {
+    margin-top: 0.2rem;
+    color: var(--tux-muted);
+}
+.telemetry-configurator .tux-endpoint {
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.telemetry-configurator .tux-endpoint[aria-current="true"] {
+    border-color: var(--tux-accent);
+    background: #254e55;
+}
+.telemetry-configurator .tux-content {
+    display: grid;
+    gap: 0.8rem;
+    min-width: 0;
+}
+.telemetry-configurator .tux-selection {
+    overflow-wrap: anywhere;
+    flex: 1 1 13rem;
+}
+.telemetry-configurator .tux-permission {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--tux-muted);
+}
+.telemetry-configurator .tux-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.2fr);
+    align-items: start;
+    gap: 0.4rem 0.75rem;
+    padding: 0.6rem 0 0.6rem calc(var(--tux-depth, 0) * 0.8rem);
+    border-top: 1px solid var(--tux-border);
+    min-width: 0;
+}
+.telemetry-configurator .tux-row:first-child {
+    border-top: 0;
+}
+.telemetry-configurator .tux-row-name,
+.telemetry-configurator .tux-value {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+.telemetry-configurator .tux-value,
+.telemetry-configurator .tux-editor {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.telemetry-configurator .tux-value {
+    color: var(--tux-accent);
+}
+.telemetry-configurator .tux-row-detail {
+    display: block;
+    color: var(--tux-muted);
+    font-size: 0.8rem;
+}
+.telemetry-configurator .tux-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.telemetry-configurator .tux-message,
+.telemetry-configurator .tux-status {
+    color: var(--tux-muted);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+.telemetry-configurator .tux-status {
+    margin-top: 0.85rem;
+}
+.telemetry-configurator .tux-error {
+    color: #ffb3ac;
+}
+.telemetry-configurator .tux-outcome {
+    color: #f5d890;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+.telemetry-configurator .tux-section-heading {
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+@media (max-width: 760px) {
+    .telemetry-configurator .tux-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .telemetry-configurator .tux-navigation {
+        max-height: 17rem;
+    }
+    .telemetry-configurator .tux-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .telemetry-configurator .tux-actions button {
+        flex: 1 1 auto;
+    }
+}
