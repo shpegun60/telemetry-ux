@@ -103,3 +103,18 @@ On Linux, `--sanitize --cxx clang++-18` enables fatal AddressSanitizer and
 UndefinedBehaviorSanitizer checks. Leak detection is explicitly disabled for
 the Qt offscreen plugin's process-global allocations; this profile does not
 claim LeakSanitizer coverage.
+
+
+The reusable `Telemetry.UX.Configurator` is also loaded inside `Embedded.qml`,
+an independent host window that passes its existing provider as an initial
+property. No `controller` context property is set. Actual mouse/keyboard input
+performs Read, Edit and one Apply/Refresh with device-normalized Gain=10. The host
+uses a light surface; a pixel in the view's layout gap must retain its own dark
+palette background so pale outcome/status text remains readable.
+The host
+can unload its view after disconnect while the same engine and provider remain
+alive; queued layout work must not warn or touch destroyed tree items. Valid
+embedding runs retain strict QML-warning checks. The missing required-provider
+case runs in a separate negative process: Qt may emit constructor binding
+diagnostics before rejecting the missing dependency. The exact required-property
+creation error is checked, and the complete negative log is retained.

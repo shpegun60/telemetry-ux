@@ -27,6 +27,32 @@ tree, generated per-device DTO or Python installation. The application README
 lists the SDK components to install. The root CMake project builds the same
 application; it does not introduce another implementation.
 
+## Embed the Configurator in your application
+
+Use the same [Configurator view](lib/qml/README.md) inside your own Qt Quick
+window or tab. Install the view package, link `TelemetryUX::configurator` and
+supply a QObject provider:
+
+```qml
+import Telemetry.UX
+
+Configurator {
+    anchors.fill: parent
+    provider: host.deviceProvider
+}
+```
+
+The [provider contract](lib/qml/Telemetry/UX/README.md) keeps connection controls,
+permission opt-in and device ownership in the host. The view creates no client,
+transport, polling timer or FIFO. The existing Inspector controller supplies the
+dynamic provider. A generated typed provider and generated web forms are later
+steps; the current generator does not create either of them.
+
+The pure Qt module can be built and installed without any Telemetry SDK. An
+installed consumer needs neither the UX source tree nor a QML plugin or manual
+engine import path. The [package test](tests/qml_package/README.md) verifies that
+path after moving the install prefix and hiding the producer source/build tree.
+
 ## Optional generator
 
 The generator extension depends on the exact matching SDK code-generator
@@ -57,7 +83,7 @@ owned by the core package.
 
 Keep user UI code outside generated output. Regeneration and `--check` preserve
 the generator's owned-output contract. The current QML target generates API and
-value adapters, not automatic forms. A reusable Configurator and generated web
-starter have separate implementation and usability gates. [Source provenance](MIGRATION.md)
+value adapters, not automatic forms. Generated web starters have separate
+implementation and usability gates. [Source provenance](MIGRATION.md)
 records the SDK revisions from which the implementations were moved.
 No registry publication or new hardware qualification is implied.

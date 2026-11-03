@@ -42,6 +42,19 @@ COBS profile. Those firmware fixtures are not copied into UX or required by a
 normal application build. Historical hardware receipts retain their original
 paths, revisions and bytes; this move makes no new physical-board claim.
 
-Reusable Configurator components, the Widgets playground and other example UI
-consumers have separate migration gates. Moving this application does not claim
-that those later components are already implemented.
+## Reusable QML view
+
+`lib/qml/Telemetry/UX/Configurator.qml` extracts the Inspector's existing endpoint,
+value, editor, Service response and Watchlist presentation. The application keeps
+its connection controls and supplies the same controller explicitly. Both hosts
+use the same view; no second client, queue, snapshot store or schema engine is
+introduced. Existing object names and user action routing are preserved.
+
+The static `TelemetryUX::configurator` package installs the QML view, public Qt
+dependencies and native resource objects. Its independent package gate hides the
+producer source/build tree, relocates the prefix and loads the view from a plain
+Qt host with a user-owned provider. This verifies view packaging, not generated
+typed-client integration or new physical hardware behavior.
+
+The Widgets playground and other example UI consumers have separate migration
+gates. This view extraction does not claim those later migrations are complete.
