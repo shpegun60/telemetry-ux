@@ -6,6 +6,7 @@ This example owns HTTP routing. The SDK owns every Telemetry request/reply byte.
 It listens only on localhost and deliberately serves one demo session at a time.
 """
 import argparse
+from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -16,8 +17,12 @@ import threading
 import time
 
 
+class PeerBusy(RuntimeError):
+    """The optional persistent transport owns this peer or a call is executing."""
+
+
 class NativePeer:
-    def __init__(self, executable, directory):
+    def __init__(self, executable, directory, *, leases=False):
         self.executable = Path(executable).resolve()
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -25,6 +30,10 @@ class NativePeer:
         subprocess.run([str(self.executable), '--descriptor', str(self.descriptor)],
                        check=True, timeout=30)
         self.lock = threading.RLock()
+        self.leases = leases
+        self._lease_owner = None
+        self._closing = False
+        self._io_uncertain = False
         self.lines = queue.Queue()
         self.log = (self.directory / 'native-stderr.log').open('w', encoding='utf8')
         self.process = subprocess.Popen([str(self.executable)], stdin=subprocess.PIPE,
@@ -40,28 +49,80 @@ class NativePeer:
         finally:
             self.lines.put(None)
 
-    def line(self, text):
-        with self.lock:
-            if self.process.poll() is not None:
-                raise RuntimeError('Native peer exited')
-            self.process.stdin.write(text + '\n')
-            self.process.stdin.flush()
-            answer = self.lines.get(timeout=15)
-            if answer is None:
-                raise RuntimeError('Native peer closed its reply stream')
-            return answer
+    @contextmanager
+    def _access(self, owner=None, *, diagnostic=False):
+        if not self.lock.acquire(blocking=not self.leases):
+            raise PeerBusy('Native peer is executing another call')
+        try:
+            if self._closing:
+                raise RuntimeError('Native peer is closing')
+            if self.leases and self._lease_owner is not owner and not diagnostic:
+                raise PeerBusy('Native peer belongs to another connection')
+            yield
+        finally:
+            self.lock.release()
 
-    def connect(self):
-        with self.lock:
+    def line(self, text, owner=None, *, diagnostic=False):
+        if diagnostic and text != 'state':
+            raise ValueError('Only state is a read-only native diagnostic')
+        with self._access(owner, diagnostic=diagnostic):
+            if self.process.poll() is not None:
+                self.stop_admission()
+                raise RuntimeError('Native peer exited')
+            complete = False
+            try:
+                self.process.stdin.write(text + '\n')
+                self.process.stdin.flush()
+                answer = self.lines.get(timeout=15)
+                if answer is None:
+                    raise RuntimeError('Native peer closed its reply stream')
+                complete = True
+                return answer
+            finally:
+                if not complete:
+                    # A pipe timeout/EOF/write error isn't evidence that native
+                    # execution ended. Never relabel a late line as a new reply.
+                    self._io_uncertain = True
+                    self.stop_admission()
+
+    def connect(self, owner=None):
+        with self._access(owner):
             if self.session == 0xffffffff:
                 raise RuntimeError('Demo session IDs exhausted; restart the demonstration')
             self.session += 1
-            if json.loads(self.line('session ' + str(self.session))) != {'session': self.session}:
+            if json.loads(self.line('session ' + str(self.session), owner)) != {'session': self.session}:
                 raise RuntimeError('Native peer refused the new demo session')
             return self.session
 
+    def claim(self, owner):
+        if not self.leases or owner is None:
+            raise ValueError('A persistent connection requires an explicit lease owner')
+        with self._access():
+            self._lease_owner = owner
+            try:
+                return self.connect(owner)
+            except BaseException:
+                if not self._io_uncertain:
+                    self._lease_owner = None
+                raise
+
+    def release(self, owner):
+        # Cleanup waits for any actual native call; no new session can overtake it.
+        with self.lock:
+            if owner is None or self._lease_owner is not owner:
+                return False
+            if self._io_uncertain:
+                return False
+            self._lease_owner = None
+            return True
+
+    def stop_admission(self):
+        # Logical revocation only. A call already inside the lock still finishes.
+        self._closing = True
+
     def close(self):
         with self.lock:
+            self._closing = True
             if self.process.poll() is None:
                 self.process.stdin.close()
                 try:
@@ -72,15 +133,17 @@ class NativePeer:
             self.reader.join(timeout=5)
             self.process.stdout.close()
             self.log.close()
+            # Owned process exit, not a logical timeout, retires uncertain I/O.
+            self._lease_owner = None
             return self.process.returncode
 
 
-def create_server(device, public_root, data_dir, port=0):
+def create_server(device, public_root, data_dir, port=0, *, leases=False):
     """Return an unstarted localhost server; caller owns shutdown and peer close."""
     root = Path(public_root).resolve()
     if not root.is_dir():
         raise ValueError('--public-root must contain the prepared browser application')
-    peer = NativePeer(device, data_dir)
+    peer = NativePeer(device, data_dir, leases=leases)
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
@@ -108,8 +171,15 @@ def create_server(device, public_root, data_dir, port=0):
                 self.reply(200, peer.descriptor.read_bytes())
             elif self.path == '/schema-header.bin':
                 self.reply(200, peer.descriptor.read_bytes()[:64])
+            elif self.path == '/demo/transport':
+                self.reply(200, json.dumps(self.server.transport).encode('ascii'), 'application/json')
             elif self.path == '/demo/state':
-                self.reply(200, peer.line('state').encode('utf8'), 'application/json')
+                try:
+                    self.reply(200, peer.line('state', diagnostic=True).encode('utf8'), 'application/json')
+                except PeerBusy:
+                    self.send_error(409, 'Native demonstration peer is busy')
+                except (RuntimeError, OSError, queue.Empty, ValueError):
+                    self.send_error(502, 'Native demonstration peer failed')
             else:
                 super().do_GET()
 
@@ -140,6 +210,8 @@ def create_server(device, public_root, data_dir, port=0):
                     self.reply(200, response)
                 else:
                     self.send_error(404, 'Unknown demonstration route')
+            except PeerBusy:
+                self.send_error(409, 'Native demonstration peer is busy')
             except (RuntimeError, OSError, queue.Empty, ValueError):
                 self.send_error(502, 'Native demonstration peer failed')
 
@@ -150,6 +222,7 @@ def create_server(device, public_root, data_dir, port=0):
         raise
     server.daemon_threads = True
     server.peer = peer
+    server.transport = {'kind': 'http'}
     server.exchange_count = 0
     # Qualification can retain replies after actual execution. No retry occurs.
     server.reply_delay_seconds = 0

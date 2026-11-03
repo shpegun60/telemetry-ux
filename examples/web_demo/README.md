@@ -44,12 +44,36 @@ and supports one demo session at a time. Static mode obtains only the observed
 The example's routes are an application transport, not a firmware HTTP server.
 No physical device, Ethernet, UART or DMA is involved.
 
+For the persistent WebSocket demonstration, use the same prepared native helper
+and browser directory. Install `websockets==15.0.1` in an application-owned Python
+environment and replace the final server command with:
+
+```sh
+/external/host-env/bin/python examples/web_demo/serve_ws.py \
+  --device /external/native-demo/telemetry_web_demo_peer \
+  --public-root /external/browser-demo --data-dir /external/demo-ws-state --port 8080
+```
+
+The HTTP listener serves the same files and header/Descriptor. Transport
+discovery selects its separate localhost WebSocket listener; the host receives
+one session greeting, then sends complete binary TEQ1 messages through the
+ordinary SDK `EncodedBackend`. There is no HTTP fallback, retry or automatic
+reconnect. The server grants one lease and does not reuse the native peer while
+an old exchange still owns it. This example exposes operations 1-4, without
+ReadMany/Batch capabilities. The [installed WebSocket gate](../../tests/websocket_transport/README.md)
+keeps actual browser/native journeys separate from carrier and lease fixtures.
+
 **Hide view** removes only the DOM/subscription; **Show view** reuses the same
 provider and client without issuing a request. **Disconnect** retires displayed
 values before closing the client. A pending mutation's checked outcome can still
 finish and remains visible; reconnect starts a new presentation owner and does
 not replay the old operation. The host controls actual transport quiescence for
 its real device connection.
+
+For WebSocket, Disconnect also closes the host-owned socket, including during
+session bootstrap or after admission became invalid. A failed Connect cleans its
+candidate socket even if no SDK client was created. The carrier only detaches
+its own listeners; socket closure is not automatic proof of remote quiescence.
 
 For your own application, import the generated `mountDevice` entry page, supply
 your admitted client and use your chosen transport. Keep user code outside the
