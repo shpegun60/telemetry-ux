@@ -132,6 +132,12 @@ a static SDK without the starter, select that option explicitly for Field editin
 older read-only generated codecs remain usable for inspection.
 The [starter test](tests/web_starter/README.md) checks this ownership wiring.
 
+The [generated QML example](examples/codegen_qml/README.md) builds its own demo
+Model, exports a Descriptor and uses the installed generator and SDK. Run it
+without a board in Encoded or RPC mode; no SDK test run or source checkout is
+needed. Its typed `DeviceApi` and portable client adapter demonstrate generated
+API use. This example does not yet supply a provider for the shared Configurator.
+
 Keep user UI code outside generated output. Regeneration and `--check` preserve
 the generator's owned-output contract. The QML target generates API and value
 adapters; use the embeddable Configurator for presentation. [Source provenance](MIGRATION.md)
