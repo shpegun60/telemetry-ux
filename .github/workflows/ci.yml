@@ -278,3 +278,95 @@ jobs:
             ${{ runner.temp }}/web-sdk-npm-pack.json
             ${{ runner.temp }}/web-sdk-prefix-gcc/share/telemetry/SDKMetadata.json
             ${{ runner.temp }}/web-sdk-prefix-clang-asan/share/telemetry/SDKMetadata.json
+
+  generated-qml:
+    name: Installed generated QML example (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SDK_EXPECTED_REVISION: 6e15220b1271139b3f1996a16d385c660f856f45
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout UX
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout exact SDK package producer
+        uses: actions/checkout@v4
+        with:
+          repository: shpegun60/telemetry-sdk
+          ref: 6e15220b1271139b3f1996a16d385c660f856f45
+          path: .ci/telemetry-sdk
+          persist-credentials: false
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt runtime, compilers and pinned wheel builders
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
+          sudo apt-get update
+          sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv \
+            qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
+            qml6-module-qtquick-window qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+          python -m venv "$RUNNER_TEMP/qml-builder"
+          "$RUNNER_TEMP/qml-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1
+      - name: Install matching core and UX generator wheels outside checkouts
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/qml-core-source" "$RUNNER_TEMP/qml-ux-source" "$RUNNER_TEMP/qml-wheels"
+          git -C .ci/telemetry-sdk archive HEAD | tar -x -C "$RUNNER_TEMP/qml-core-source"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/qml-ux-source"
+          "$RUNNER_TEMP/qml-builder/bin/python" -m pip wheel --no-deps --no-build-isolation \
+            "$RUNNER_TEMP/qml-core-source" "$RUNNER_TEMP/qml-ux-source" -w "$RUNNER_TEMP/qml-wheels" \
+            2>&1 | tee "$RUNNER_TEMP/qml-wheels-build.log"
+          python -m venv "$RUNNER_TEMP/qml-codegen"
+          "$RUNNER_TEMP/qml-codegen/bin/python" -m pip install --no-index --find-links "$RUNNER_TEMP/qml-wheels" \
+            telemetry-codegen-core==0.1.0 telemetry-ux-codegen==0.1.0 \
+            2>&1 | tee "$RUNNER_TEMP/qml-wheels-install.log"
+      - name: Install relocated headless SDKs and execute QML qualification
+        run: |
+          set -euo pipefail
+          for profile in gcc clang-asan; do
+            compiler=g++
+            flags=()
+            checks=()
+            if [ "$profile" = clang-asan ]; then
+              compiler=clang++-18
+              flags+=("-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer")
+              checks+=(--sanitize)
+            fi
+            cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/qml-sdk-build-$profile" -G Ninja \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions' \
+              -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON -DCMAKE_CXX_COMPILER="$compiler" \
+              -DCMAKE_BUILD_TYPE=Release -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
+              -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qml-sdk-stage-$profile" "${flags[@]}" \
+              2>&1 | tee "$RUNNER_TEMP/qml-sdk-configure-$profile.log"
+            cmake --build "$RUNNER_TEMP/qml-sdk-build-$profile" --target install --parallel 2 \
+              2>&1 | tee "$RUNNER_TEMP/qml-sdk-build-$profile.log"
+            mv "$RUNNER_TEMP/qml-sdk-stage-$profile" "$RUNNER_TEMP/qml-sdk-prefix-$profile"
+            python -B tests/codegen_qml/run.py --build-dir "$RUNNER_TEMP/ux-generated-qml-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+          done
+      - name: Retain generated QML and installed package evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-generated-qml-example
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ux-generated-qml-gcc/summary.json
+            ${{ runner.temp }}/ux-generated-qml-gcc/*.log
+            ${{ runner.temp }}/ux-generated-qml-gcc/probes/*.log
+            ${{ runner.temp }}/ux-generated-qml-clang-asan/summary.json
+            ${{ runner.temp }}/ux-generated-qml-clang-asan/*.log
+            ${{ runner.temp }}/ux-generated-qml-clang-asan/probes/*.log
+            ${{ runner.temp }}/qml-*.log
+            ${{ runner.temp }}/qml-sdk-prefix-gcc/share/telemetry/SDKMetadata.json
+            ${{ runner.temp }}/qml-sdk-prefix-clang-asan/share/telemetry/SDKMetadata.json

@@ -73,3 +73,20 @@ and guarded CLI publication as the QML emitters. It generates three thin entry
 files, not another form implementation. Installed-package browser tests exercise
 both actual clients against a persistent native Model and Encoded dispatcher;
 they do not establish a physical-device, Ethernet or firmware HTTP port.
+
+## Generated QML example and qualification
+
+The generated-QObject example and its QML qualification suite originate in SDK
+revision `6e15220b1271139b3f1996a16d385c660f856f45`, directories
+`examples/codegen_qml` and `tests/codegen_qml`. Their new application-owned
+`examples/codegen_qml/fixture` retains the demo DTOs and endpoint definitions from
+the SDK's codegen and structured-client fixtures, with the original MIT notices.
+The SDK's headless fixtures and codec tests remain SDK-owned.
+
+The example and tests link installed SDK targets rather than compiling SDK
+implementation files. Generation uses matching installed core and UX packages;
+the test-only Descriptor builders are fixtures, not another runtime parser.
+Encoded and RPC modes keep their existing generated client adapter and one FIFO.
+This ownership move changes build and test inputs, not transport, generated API
+semantics or wire formats. Removal of the former SDK presentation copies follows
+qualification of this separate UX consumer.
