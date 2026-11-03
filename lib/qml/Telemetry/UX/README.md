@@ -3,8 +3,9 @@
 `Telemetry.UX 1.0` supplies one presentation component, `Configurator`.
 It has no Telemetry SDK, transport, client, FIFO, Descriptor parser or snapshot
 ownership. The host owns a non-null QObject provider and its models for the
-entire view lifetime. The existing InspectorController is one dynamic provider;
-this change does not implement a typed/static provider.
+entire view lifetime. The existing InspectorController is one dynamic provider. The optional
+[StaticConfiguratorProvider](StaticConfigurator.md) borrows a generated typed
+API through a separately generated binding and implements the same view contract.
 
 ```qml
 import Telemetry.UX

@@ -54,6 +54,36 @@ installed consumer needs neither the UX source tree nor a QML plugin or manual
 engine import path. The [package test](tests/qml_package/README.md) verifies that
 path after moving the install prefix and hiding the producer source/build tree.
 
+## Generated typed QML provider
+
+For a known device schema, the optional QML starter connects the same view to
+its generated `DeviceApi` and existing `DeviceClientAdapter`:
+
+```sh
+telemetry-codegen generate Device.descriptor --output generated \
+  --targets cpp,qml --structural-metadata --ux-starter qml
+```
+
+Link the generated Qt target and installed `TelemetryUX::static_configurator`.
+The host supplies its existing API, client owner loop and connection:
+
+```cpp
+telemetry::ux::StaticConfiguratorProvider provider{
+    device_api::qml::configuratorBinding(api)};
+provider.setAllowMutations(true); // Explicit application permission.
+engine.setInitialProperties({{"deviceProvider", QVariant::fromValue(&provider)}});
+```
+
+The page passes `deviceProvider` to `Configurator` and sets
+`watchlistVisible: false`. The static provider supports Fields, Commands and
+Services; it does not advertise polling or ReadMany. Generated C++ callbacks
+validate values and encode requests. The provider borrows confirmed API caches,
+keeps a private draft and original canonical Field bytes, and preserves untouched
+NaN wire bits during edits. It creates no client, transport or Descriptor parser.
+See the [static provider contract](lib/qml/Telemetry/UX/StaticConfigurator.md) for
+lifetime, error and memory limits. The QML starter is opt-in; ordinary generated
+SDK output is unchanged.
+
 ## Browser Configurator
 
 The [browser view and providers](web/README.md) offer the same Field, Command and

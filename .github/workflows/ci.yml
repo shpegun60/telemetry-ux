@@ -319,7 +319,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: 6e15220b1271139b3f1996a16d385c660f856f45
+      SDK_EXPECTED_REVISION: fe6169d97ed84c6c4ab9c36c9b4c7d52e86c825e
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -332,7 +332,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: 6e15220b1271139b3f1996a16d385c660f856f45
+          ref: fe6169d97ed84c6c4ab9c36c9b4c7d52e86c825e
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Select Python 3.12
@@ -384,8 +384,21 @@ jobs:
             cmake --build "$RUNNER_TEMP/qml-sdk-build-$profile" --target install --parallel 2 \
               2>&1 | tee "$RUNNER_TEMP/qml-sdk-build-$profile.log"
             mv "$RUNNER_TEMP/qml-sdk-stage-$profile" "$RUNNER_TEMP/qml-sdk-prefix-$profile"
+            cmake -S . -B "$RUNNER_TEMP/static-ux-build-$profile" -G Ninja \
+              -DTELEMETRY_UX_BUILD_INSPECTOR=OFF -DTELEMETRY_UX_BUILD_CONFIGURATOR=ON \
+              -DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/static-ux-stage-$profile" "${flags[@]}" \
+              2>&1 | tee "$RUNNER_TEMP/static-ux-configure-$profile.log"
+            cmake --build "$RUNNER_TEMP/static-ux-build-$profile" --target install --parallel 2 \
+              2>&1 | tee "$RUNNER_TEMP/static-ux-build-$profile.log"
+            mv "$RUNNER_TEMP/static-ux-stage-$profile" "$RUNNER_TEMP/static-ux-prefix-$profile"
             python -B tests/codegen_qml/run.py --build-dir "$RUNNER_TEMP/ux-generated-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/static_qml_configurator/run.py --build-dir "$RUNNER_TEMP/ux-static-qml-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
@@ -405,3 +418,12 @@ jobs:
             ${{ runner.temp }}/qml-*.log
             ${{ runner.temp }}/qml-sdk-prefix-gcc/share/telemetry/SDKMetadata.json
             ${{ runner.temp }}/qml-sdk-prefix-clang-asan/share/telemetry/SDKMetadata.json
+            ${{ runner.temp }}/ux-static-qml-gcc/**/*.json
+            ${{ runner.temp }}/ux-static-qml-gcc/**/*.log
+            ${{ runner.temp }}/ux-static-qml-gcc/**/*.png
+            ${{ runner.temp }}/ux-static-qml-clang-asan/**/*.json
+            ${{ runner.temp }}/ux-static-qml-clang-asan/**/*.log
+            ${{ runner.temp }}/ux-static-qml-clang-asan/**/*.png
+            ${{ runner.temp }}/static-ux-*.log
+            ${{ runner.temp }}/static-ux-prefix-gcc/
+            ${{ runner.temp }}/static-ux-prefix-clang-asan/

@@ -7,6 +7,7 @@ import QtQuick.Layouts
 Control {
     id: configurator
     required property var provider
+    property bool watchlistVisible: true
     padding: 0
     background: Rectangle { color: configurator.palette.window }
     implicitWidth: contentItem.implicitWidth
@@ -297,6 +298,7 @@ Control {
         }
         Pane {
             objectName: "watchlistPane"
+            visible: configurator.watchlistVisible
             Layout.fillWidth: true
             Layout.preferredHeight: watchPanelExpanded.checked ? 220 : 54
             background: Rectangle { color: "#17202b"; radius: 10 }
