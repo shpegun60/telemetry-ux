@@ -122,3 +122,52 @@ jobs:
             ${{ runner.temp }}/ux-inspector-qml/
             ${{ runner.temp }}/ux-inspector-tcp/
             ${{ runner.temp }}/sdk-prefix/share/telemetry/SDKMetadata.json
+
+  widgets:
+    name: Installed SDK Widgets (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout immutable SDK input
+        uses: actions/checkout@v4
+        with:
+          repository: shpegun60/telemetry-sdk
+          ref: 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          path: .ci/telemetry-sdk
+          persist-credentials: false
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev clang-18
+      - name: Install and relocate SDK
+        run: |
+          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/sdk-widgets-build" -G Ninja \
+            '-DTELEMETRY_COMPONENTS=core;resource;resource_adapter;resource_protocol' \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk-widgets-stage" \
+            -DTELEMETRY_SOURCE_REVISION=3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          cmake --build "$RUNNER_TEMP/sdk-widgets-build" --target install --parallel 2
+          mv "$RUNNER_TEMP/sdk-widgets-stage" "$RUNNER_TEMP/sdk-widgets-prefix"
+      - name: Run actual Widgets window and facade
+        run: |
+          python3 -B tests/widgets_playground/run.py --build-dir "$RUNNER_TEMP/ux-widgets-gcc" \
+            --sdk-prefix "$RUNNER_TEMP/sdk-widgets-prefix" --qt-prefix /usr --cxx g++
+      - name: Sanitized Widgets application consumers
+        run: |
+          python3 -B tests/widgets_playground/run.py --build-dir "$RUNNER_TEMP/ux-widgets-asan" \
+            --sdk-prefix "$RUNNER_TEMP/sdk-widgets-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize
+      - name: Retain consumer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-sdk-widgets
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ux-widgets-gcc/
+            ${{ runner.temp }}/ux-widgets-asan/
+            ${{ runner.temp }}/sdk-widgets-prefix/share/telemetry/SDKMetadata.json
