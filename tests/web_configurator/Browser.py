@@ -324,6 +324,10 @@ def main():
                     page.wait_for_timeout(150)
                     check(server.exchange_count == before_exchanges,
                           'Completed Batch has no automatic retry or readback')
+                    batch_image = output / (mode + '-batch.png')
+                    page.screenshot(path=str(batch_image), full_page=True)
+                    report['screenshots'][mode + '_batch'] = dict(file=batch_image.name,
+                        sha256=hashlib.sha256(batch_image.read_bytes()).hexdigest())
                     action('clearBatch').click()
                     expect(batch_rows).to_have_count(0)
                     report[mode] = True

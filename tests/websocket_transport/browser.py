@@ -29,11 +29,12 @@ def main():
     spec.loader.exec_module(module)
     server = module.create_server(args.device, args.public_root, output/'peer')
     native_line = server.peer.line
-    wire_replies, faults = [], dict(late=None, late_sent=0, corrupt=False)
+    wire_requests, wire_replies, faults = [], [], dict(late=None, late_sent=0, corrupt=False)
 
     def controlled_line(text, owner=None, *, diagnostic=False):
         answer = native_line(text, owner, diagnostic=diagnostic)
         if owner is not None and re.fullmatch(r'(?:[0-9a-f]{2}){32,65536}', text):
+            wire_requests.append(bytes.fromhex(text))
             wire_replies.append(bytes.fromhex(answer))
             if faults['late'] is not None:
                 # Replay an opaque previously captured native reply, not a test codec.
@@ -49,7 +50,7 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     report = dict(passed=False, hardware=False, checks=0, static=False, dynamic=False,
-                  errors=[], warnings=[], modes={}, greetings={}, screenshots={})
+                  errors=[], warnings=[], modes={}, batches={}, greetings={}, screenshots={})
 
     def check(condition, message):
         report['checks'] += 1
@@ -80,6 +81,7 @@ def main():
                 for mode in ('static', 'dynamic'):
                     lease_idle()
                     server.peer.line('reset')
+                    wire_requests.clear()
                     wire_replies.clear()
                     page = browser.new_page(viewport={'width': 1360, 'height': 1000})
                     page.on('pageerror', lambda error: report['errors'].append(str(error)))
@@ -148,10 +150,12 @@ def main():
                     check('Executed' not in outcome('command').inner_text(), 'Accepted is not Executed')
                     endpoint('SetConfig')
                     edit(['gain'], '1.5')
+                    edit(['large'], '9007199254740993')
                     action('execute').click()
                     idle()
                     expect(outcome('command')).to_contain_text('Executed')
-                    check(state()['gain'] == 1.5 and state()['commands'] == 2, 'Explicit Command reaches native Model once')
+                    check(state()['gain'] == 1.5 and state()['large'] == '9007199254740993' and
+                          state()['commands'] == 2, 'Explicit Command reaches native Model once with exact U64 arguments')
                     endpoint('Echo')
                     edit(['gain'], '-1')
                     action('call').click()
@@ -165,6 +169,76 @@ def main():
                     expect(row('response', ['large'])).to_have_text('18446744073709551615')
                     expect(row('response', ['gain'])).to_have_text('2.5')
                     check(state()['services'] == 2, 'Service error and success both reach the real endpoint')
+
+                    # Exercise the real shared Batch editor/provider over the
+                    # same admitted socket, native dispatcher and client FIFO.
+                    # The native request count distinguishes one Batch from a
+                    # hidden fan-out of ordinary endpoint operations.
+                    def add_batch(name, operation):
+                        endpoint(name)
+                        action('batch-operation').select_option(operation)
+                        action('addBatch').click()
+
+                    add_batch('Accepted', 'command')
+                    add_batch('Echo', 'service')
+                    for path, text in [(['gain'], '2.5'), (['large'], '18446744073709551615')]:
+                        encoded = json.dumps(path, separators=(',', ':'))
+                        field = view.locator('input[data-source="batchDraft"][data-path='+json.dumps(encoded)+']')
+                        expect(field).to_be_visible()
+                        field.fill(text)
+                    add_batch('Wide', 'read')
+                    add_batch('Unavailable', 'read')
+                    batch_rows = view.locator('.tux-batch-table tbody tr')
+                    expect(batch_rows).to_have_count(4)
+                    before_batch, sent_before = state(), frames['sent']
+                    exchanges_before, packets_before = server.exchange_count, len(wire_requests)
+                    requests_before = len(requests)
+                    action('executeBatch').click()
+                    expect(view.locator('[data-role="batch-status"]')).to_contain_text('Batch reply received')
+                    idle()
+                    after_batch = state()
+                    check(server.exchange_count == exchanges_before+1 and
+                          len(wire_requests) == packets_before+1 and frames['sent'] == sent_before+1,
+                          'Mixed Batch uses one binary WebSocket request and one native exchange')
+                    packet = wire_requests[-1]
+                    check(packet[:4] == b'TEQ1' and packet[6] == 6,
+                          'The single native request is the production Encoded Batch operation')
+                    check(after_batch['commands'] == before_batch['commands']+1 and
+                          after_batch['services'] == before_batch['services']+1 and
+                          after_batch['reads'] == before_batch['reads']+1 and
+                          after_batch['writes'] == before_batch['writes'],
+                          'Mixed item counters prove real Command, Service and readable Field execution')
+                    expect(batch_rows.nth(0)).to_contain_text('Accepted')
+                    check('Executed' not in batch_rows.nth(0).inner_text(),
+                          'A Batch Command Accepted result does not claim application completion')
+                    expect(batch_rows.nth(1)).to_contain_text('Ok')
+                    expect(batch_rows.nth(2)).to_contain_text('Read completed')
+                    expect(batch_rows.nth(3)).to_contain_text('Unavailable')
+                    check(True, 'Each mixed item exposes its own checked status, including refusal')
+                    batch_rows.nth(1).locator('[data-action="selectBatch"]').click()
+                    expect(row('batchResponse', ['gain'])).to_have_text('2.5')
+                    expect(row('batchResponse', ['large'])).to_have_text('18446744073709551615')
+                    batch_rows.nth(2).locator('[data-action="selectBatch"]').click()
+                    expect(row('batchResponse', [])).to_have_text('9007199254740993')
+                    check(True, 'Batch Service and Field results keep exact owned U64 values')
+                    batch_rows.nth(3).locator('[data-action="selectBatch"]').click()
+                    check(not view.locator('.tux-row[data-source="batchResponse"]').count(),
+                          'An unavailable Batch Field publishes no previous successful value')
+                    check(not any('/exchange' in url or '/demo/connect' in url
+                                  for url in requests[requests_before:]),
+                          'Mixed Batch has no HTTP exchange or admission fallback')
+                    report['batches'][mode] = dict(
+                        websocket_requests=frames['sent']-sent_before,
+                        native_exchanges=server.exchange_count-exchanges_before,
+                        request_hex=packet.hex(), reply_hex=wire_replies[-1].hex(),
+                        statuses=batch_rows.all_inner_texts(),
+                        before=before_batch, after=after_batch)
+                    sent_after = frames['sent']
+                    page.wait_for_timeout(150)
+                    check(frames['sent'] == sent_after and state() == after_batch,
+                          'Completed mixed Batch causes no automatic replay or follow-up read')
+                    action('clearBatch').click()
+                    expect(batch_rows).to_have_count(0)
                     endpoint('Config')
                     action('refresh').click()
                     idle()
