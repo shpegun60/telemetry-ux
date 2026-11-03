@@ -743,6 +743,7 @@ struct StaticConfiguratorProvider::Impl {
 		const auto now = session();
 		if (now != epoch || !ready()) {
 			epoch = now;
+			allowed = false;
 			clearDraft();
 			retired = true;
 			response.clear();
@@ -978,7 +979,8 @@ bool StaticConfiguratorProvider::allowMutations() const
 
 void StaticConfiguratorProvider::setAllowMutations(bool allowed)
 {
-	if (!d->owner() || d->publishing || d->allowed == allowed)
+	if (!d->owner() || d->publishing || d->allowed == allowed ||
+	    (allowed && (!d->ready() || d->epoch != d->session())))
 		return;
 	d->allowed = allowed;
 	d->publish();

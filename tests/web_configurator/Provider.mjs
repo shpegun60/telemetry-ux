@@ -365,6 +365,51 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.snapshot().outcomes.write.valueStatus, 'Stale');
 	eq(p.snapshot().outcomes.write.historical, true);
 	eq(p.rows().rows.length, 0);
+	eq(p.snapshot().writesEnabled, false);
+	eq(p.setWritesEnabled(true), false);
+	// Reuse the same provider and real SDK client. No new presentation owner can
+	// accidentally hide a permission carried across admission.
+	async function readmit(session) {
+		const previous = client.session;
+		if (mode === 'dynamic')
+			client.invalidate();
+		else
+			client.resetSession();
+		const ack = await new Promise(resolve => {
+			waiter = resolve;
+			peer.stdin.write('session ' + session + '\n');
+		});
+		eq(JSON.parse(ack).session, session);
+		if (mode === 'dynamic') {
+			eq(client.confirmQuiescence({session : previous, txReleased : true,
+			                            oldFramesExcluded : true, remoteSessionClosed : true}), true);
+			eq(client.admit(schema, descriptor.subarray(0, 64), session), Status.Ok);
+		} else {
+			eq(client.confirmSessionClosed(previous), true);
+			eq(client.openSession(session, descriptor.subarray(0, 64)), true);
+		}
+	}
+	await readmit(18);
+	eq(p.sync(), true);
+	eq(p.snapshot().writesEnabled, false);
+	const beforePermission = frames;
+	for (const category of [1, 2, 3]) {
+		eq(p.select(p.snapshot().endpoints.find(row => row.category === category).key), true);
+		eq(p.apply(), false);
+		eq(p.execute(), false);
+		eq(p.call(), false);
+	}
+	eq(frames, beforePermission);
+	eq(p.setWritesEnabled(true), true);
+	eq(p.sync(), true);
+	eq(p.snapshot().writesEnabled, true); // Same-session sync preserves the user's opt-in.
+	await readmit(19); // Direct replacement, with no provider.invalidate() notification.
+	eq(p.setWritesEnabled(true), false);
+	eq(p.sync(), true);
+	eq(p.snapshot().writesEnabled, false);
+	eq(frames, beforePermission);
+	eq(p.setWritesEnabled(true), true); // Explicit permission in the new admission works.
+	eq(p.snapshot().outcomes.write.historical, true);
 	unsubscribe();
 	client.close();
 	peer.stdin.end();
