@@ -88,6 +88,11 @@ Model and the existing Encoded dispatcher. Its [installed consumer test](tests/w
 checks both real client modes in Chromium. This first browser version includes
 Fields, Commands and Services; the Qt Inspector also provides Watchlist controls.
 
+For low-level file inspection, the [structured payload tools](examples/structured_client/README.md)
+open Descriptor, ValuesFile and response bytes and save Service request payloads.
+They use the installed SDK codec and a separate localhost demonstration. The
+standard Configurator remains the normal interface for connected-device work.
+
 ## Optional generator
 
 The generator extension depends on the exact matching SDK code-generator
