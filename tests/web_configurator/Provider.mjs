@@ -519,6 +519,32 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.snapshot().watch.active, false);
 	eq(p.rows([], {source : 'draft'}).rows.find(row => row.name === 'gain').editable, true);
 	eq(p.tickWatch(1000), false);
+	// Navigation between polling cycles changes selection but cannot prepare
+	// request arguments while Watchlist is active. It must still publish once.
+	eq(p.startWatch(1000), true);
+	await done();
+	eq(p.snapshot().watch.running, true);
+	eq(p.snapshot().watch.pending, false);
+	const navigationFrames = frames;
+	for (const [name, category] of [['Accepted', 2], ['Echo', 3]]) {
+		const beforeEvents = events, chosen = endpoint(name, category);
+		eq(p.select(chosen.key), true);
+		eq(events, beforeEvents + 1);
+		eq(p.snapshot().selected.key, chosen.key);
+		eq(p.snapshot().hasDraft, false);
+		eq(frames, navigationFrames);
+	}
+	eq(p.stopWatch(), true);
+	for (const [name, category] of [['Accepted', 2], ['Echo', 3]]) {
+		eq(p.select(endpoint(name, category).key), true);
+		eq(p.snapshot().hasDraft, true);
+		eq(frames, navigationFrames); // Explicit navigation/initialization is local.
+	}
+	// Restore the original Field draft used by the following mutation checks.
+	eq(p.select(endpoint('Config').key), true);
+	eq(p.refresh(), true);
+	await done();
+	eq(p.beginEdit(), true);
 	eq(p.removeWatch(endpoint('Unavailable').key), true);
 	eq(p.removeWatch(endpoint('Mode').key), true);
 	eq(p.addWatch(endpoint('Unavailable').key), true);
