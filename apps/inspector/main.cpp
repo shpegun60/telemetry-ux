@@ -145,6 +145,11 @@ int main(int argc, char** argv)
 		                                        options.value(QStringLiteral("report")));
 	bool qmlWarnings = false;
 	QQmlApplicationEngine engine;
+	// The optional UART controls consume vertical space in the normal window.
+	// Smoke checks need a fixed viewport for all required delegates to be visible.
+	if (options.isSet(QStringLiteral("smoke")) || editSmoke)
+		engine.setInitialProperties({{QStringLiteral("width"), 1200},
+		                             {QStringLiteral("height"), 900}});
 	QObject::connect(&engine, &QQmlEngine::warnings, &app, [&](const QList<QQmlError>&) {
 		qmlWarnings = true;
 	});

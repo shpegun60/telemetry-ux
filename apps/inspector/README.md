@@ -369,9 +369,11 @@ that its driver has stopped reading borrowed buffers.
 The [Qt test suite](../../tests/inspector_qml/README.md) checks the actual models,
 controller and peer. `--smoke` loads the real QML window, performs a FieldRead and
 exits successfully only after a published snapshot and materialized endpoint/value
-delegates. `--smoke --screenshot FILE.png` also saves the rendered window. Windows
-offscreen qualification supplies the OS font directory explicitly; the normal
-native window uses platform fonts. Offscreen CI does not qualify every display
+delegates. `--smoke --screenshot FILE.png` also saves the rendered window.
+Smoke modes use a fixed 1200-by-900 viewport so optional UART controls leave the
+required value delegates visible; the normal application window is unchanged.
+Windows offscreen qualification supplies the OS font directory explicitly; the
+normal native window uses platform fonts. Offscreen CI does not qualify every display
 server or physical hardware.
 
 `--edit-smoke --screenshot FILE.png` exercises the actual QML Edit button,
