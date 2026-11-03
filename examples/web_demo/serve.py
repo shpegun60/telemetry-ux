@@ -63,8 +63,8 @@ class NativePeer:
             self.lock.release()
 
     def line(self, text, owner=None, *, diagnostic=False):
-        if diagnostic and text not in ('state', 'readmany'):
-            raise ValueError('Only state and ReadMany capability are read-only native diagnostics')
+        if diagnostic and text not in ('state', 'readmany', 'mixedbatch'):
+            raise ValueError('Only state and capabilities are read-only native diagnostics')
         with self._access(owner, diagnostic=diagnostic):
             if self.process.poll() is not None:
                 self.stop_admission()
@@ -180,11 +180,12 @@ def create_server(device, public_root, data_dir, port=0, *, leases=False):
                     self.send_error(409, 'Native demonstration peer is busy')
                 except (RuntimeError, OSError, queue.Empty, ValueError):
                     self.send_error(502, 'Native demonstration peer failed')
-            elif self.path == '/capabilities/read-many.bin':
+            elif self.path in ('/capabilities/read-many.bin', '/capabilities/batch.bin'):
                 try:
-                    capability = peer.line('readmany', diagnostic=True)
+                    command = 'mixedbatch' if self.path == '/capabilities/batch.bin' else 'readmany'
+                    capability = peer.line(command, diagnostic=True)
                     if not re.fullmatch(r'[0-9a-f]{48}', capability):
-                        raise ValueError('Invalid native ReadMany capability')
+                        raise ValueError('Invalid native capability')
                     self.reply(200, bytes.fromhex(capability))
                 except PeerBusy:
                     self.send_error(409, 'Native demonstration peer is busy')

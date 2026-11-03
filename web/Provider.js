@@ -1,7 +1,7 @@
 /* Explicit-provider presentation over existing Telemetry SDK clients.
  * Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
  */
-import {Status} from 'telemetry-sdk/client';
+import {Batch, Status} from 'telemetry-sdk/client';
 import {encodeValue} from 'telemetry-sdk/runtime';
 
 const names = new Map(Object.entries(Status).map(([ name, code ]) => [code, name]));
@@ -270,6 +270,21 @@ function staticAdapter({client, metadata, sdk})
 		manyResult(result) {
 		    return {operation : result, items : result.value};
 		},
+		batch(capability, items) {
+		    if (typeof client.batch !== 'function')
+			    fail('Batch is unavailable in this SDK');
+		    const requests = items.map(item => {
+			    const binding = item.endpoint.binding;
+			    return item.operation === 'read' ? Batch.read(binding)
+			           : item.operation === 'write' ? Batch.write(binding, item.request)
+			           : item.operation === 'command' ? Batch.command(binding, item.request)
+			                                         : Batch.service(binding, item.request);
+		    });
+		    return client.batch(capability, requests);
+		},
+		batchResult(result) {
+		    return {operation : result, valueStatus : result.valueStatus, items : result.items};
+		},
 		result(result) {
 		    return {
 			    operation : result,
@@ -348,7 +363,21 @@ function dynamicAdapter({client})
 			    fail(names.get(bound.status) || 'ReadMany binding refused');
 		    return client.readMany(bound.binding);
 		},
-		manyResult : result => result
+		manyResult : result => result,
+		batch(capability, items) {
+		    if (typeof client.batch !== 'function')
+			    fail('Batch is unavailable in this SDK');
+		    const operations = {read : 'FieldRead', write : 'FieldWrite',
+		                        command : 'Command', service : 'Service'};
+		    const requests = items.map(item => {
+			    const bound = client.bind(operations[item.operation], item.endpoint.id);
+			    if (bound.status !== Status.Ok)
+				    fail(names.get(bound.status) || 'Batch item binding refused');
+			    return {endpoint : bound.endpoint, value : item.request};
+		    });
+		    return client.batch(capability, requests);
+		},
+		batchResult : result => result
 	};
 }
 
@@ -366,9 +395,13 @@ function presentation(adapter, inputLimits)
 	let watched = [], watchCapability, watchRunning = false, watchCycle = false,
 	    watchPending, watchIndividual = false, watchInterval = 1000, watchDue = 0,
 	    watchRevision = 0, watchCursor = 0, watchStatus = 'Select scalar Fields to watch.';
+	let batchItems = [], batchSelected, batchCapability, batchPending, batchOutcome,
+	    batchRevision = 0, nextBatchKey = 0, batchStatus = 'Add ordered operations to the Batch.';
 	const watchItemNames = ['Ok', 'NotFound', 'UnsupportedType', 'Unavailable', 'ReadError'];
 	const watchActive = () => watchRunning || watchCycle || !!watchPending;
-	const watchEditable = () => isCurrent() && !active && !publishing && !notifying && !watchActive();
+	const watchEditable = () => isCurrent() && !active && !batchPending &&
+	                            !publishing && !notifying && !watchActive();
+	const batchEditable = watchEditable;
 
 	function isCurrent()
 	{
@@ -394,7 +427,7 @@ function presentation(adapter, inputLimits)
 
 	function snapshot()
 	{
-		const valid = isCurrent(), idle = !active && !publishing && !watchActive() && valid;
+		const valid = isCurrent(), idle = !active && !batchPending && !publishing && !watchActive() && valid;
 		const endpoint = selectedInternal();
 		const canMutate = idle && writesEnabled && !!endpoint;
 		const facts = Object.create(null);
@@ -407,7 +440,7 @@ function presentation(adapter, inputLimits)
 			session : identity?.session || 0,
 			endpoints : valid ? endpoints : empty,
 			selected : valid ? selected : null,
-			busy : !!active || !!watchPending,
+			busy : !!active || !!watchPending || !!batchPending,
 			writesEnabled,
 			revision,
 			hasValue : valid && hasValue,
@@ -427,6 +460,26 @@ function presentation(adapter, inputLimits)
 				canAdd : idle && watched.length < 32 && !!endpoint && watchScalar(endpoint) &&
 				         !watched.some(row => row.endpoint.key === endpoint.key),
 				canRefresh : idle && watched.length > 0
+			}),
+			batch : freeze({
+				items : freeze(batchItems.map(item => freeze({
+					key : item.key, endpointKey : item.endpoint.key, category : item.endpoint.category,
+					name : item.endpoint.name, catalog : String(item.endpoint.catalog),
+					operation : item.operation,
+					status : valid ? item.status : 'Historical - ' + item.status,
+					outcome : item.outcome && freeze({...item.outcome, historical : !valid ||
+					                                item.outcome.session !== identity?.session})
+				}))),
+				selectedKey : batchSelected || '', active : !!batchPending, pending : !!batchPending,
+				status : batchStatus, canAdd : idle && batchItems.length < 32 &&
+				                              batchAddOperations(endpoint).length > 0,
+				addOperations : freeze(valid ? batchAddOperations(endpoint) : []),
+				canExecute : idle && batchItems.length > 0 && !batchHasErrors() &&
+				             (writesEnabled || batchItems.every(item => item.operation === 'read')),
+				hasDraft : valid && !!selectedBatch() && selectedBatch().operation !== 'read',
+				hasResponse : valid && selectedBatch()?.hasResponse === true,
+				outcome : batchOutcome && freeze({...batchOutcome, historical : !valid ||
+				                                batchOutcome.session !== identity?.session})
 			}),
 			actions : freeze({
 				refresh : idle && endpoint?.category === 1,
@@ -484,6 +537,7 @@ function presentation(adapter, inputLimits)
 		current = false;
 		writesEnabled = false;
 		retireWatch();
+		retireBatch();
 		clearValues();
 		notify();
 	}
@@ -505,6 +559,9 @@ function presentation(adapter, inputLimits)
 		writesEnabled = false;
 		retireWatch();
 		watched = [];
+		retireBatch();
+		batchItems = [];
+		batchSelected = undefined;
 		clearValues();
 		identity = live;
 		const token = epoch;
@@ -594,7 +651,7 @@ function presentation(adapter, inputLimits)
 
 	function select(key)
 	{
-		if (active || publishing || notifying || !isCurrent() || typeof key !== 'string')
+		if (active || batchPending || publishing || notifying || !isCurrent() || typeof key !== 'string')
 			return false;
 		const endpoint = endpoints.find(row => row.key === key);
 		if (!endpoint)
@@ -613,7 +670,12 @@ function presentation(adapter, inputLimits)
 	{
 		const source = options.source ?? 'value', offset = options.offset ?? 0,
 		      limit = options.limit ?? 128;
-		const available = source === 'value'      ? hasValue
+		const item = source === 'batchDraft' || source === 'batchResponse' ? selectedBatch() : undefined;
+		const batchSource = source === 'batchDraft' || source === 'batchResponse';
+		const editableSource = source === 'draft' || source === 'batchDraft';
+		const available = source === 'batchDraft' ? !!item && item.operation !== 'read'
+		                  : source === 'batchResponse' ? item?.hasResponse === true
+		                  : source === 'value'      ? hasValue
 		                  : source === 'draft'    ? hasDraft
 		                  : source === 'response' ? hasResponse
 		                                          : false;
@@ -626,15 +688,17 @@ function presentation(adapter, inputLimits)
 			rows : freeze(result.rows)
 		});
 		if (!Array.isArray(path) || path.length > 64 ||
-		    !['value', 'draft', 'response'].includes(source) || !Number.isInteger(offset) ||
+		    !['value', 'draft', 'response', 'batchDraft', 'batchResponse'].includes(source) || !Number.isInteger(offset) ||
 		    offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 128)
 			fail('Invalid row window');
-		if (!isCurrent() || !selected)
+		if (!isCurrent() || (batchSource ? !item : !selected))
 			return output({total : 0, rows : []});
+		const id = batchSource ? batchType(item, source === 'batchResponse') : typeId(source);
 		if (!available)
-			return output({total : 0, kind : kinds[model.types[typeId(source)].kind], rows : []});
-		const root = source === 'value' ? value : source === 'draft' ? draft : response;
-		const place = location(model.types, typeId(source), root, path);
+			return output({total : 0, kind : kinds[model.types[id].kind], rows : []});
+		const root = source === 'batchDraft' ? item.request : source === 'batchResponse' ? item.response
+		           : source === 'value' ? value : source === 'draft' ? draft : response;
+		const place = location(model.types, id, root, path);
 		const aggregate = place.type.kind === 3 || place.type.kind === 4;
 		const count = place.type.kind === 3   ? place.type.members.length
 		              : place.type.kind === 4 ? place.type.elementCount
@@ -652,7 +716,7 @@ function presentation(adapter, inputLimits)
 				childValue = place.value[key];
 			}
 			const isAggregate = type.kind === 3 || type.kind === 4;
-			const override = source === 'draft' ? texts.get(pathKey(childPath)) : undefined;
+			const override = editableSource ? (item ? item.texts : texts).get(pathKey(childPath)) : undefined;
 			const scalarType = type.kind === 2 ? model.types[type.underlyingTypeId] : type;
 			result.push(freeze({
 				key : pathKey(childPath),
@@ -669,7 +733,7 @@ function presentation(adapter, inputLimits)
 				                         : text(childValue),
 				error : override?.error || '',
 				editable :
-				    source === 'draft' && !active && !publishing && !watchActive() &&
+				    editableSource && !active && !batchPending && !publishing && !watchActive() &&
 				    !isAggregate && type.kind !== 0,
 				enumEntries : type.kind === 2 ? type.entries : empty
 			}));
@@ -678,34 +742,43 @@ function presentation(adapter, inputLimits)
 		    {total : count, kind : kinds[place.type.kind], available : true, rows : result});
 	}
 
-	function setText(path, input, expectedRevision)
+	function editText(path, input, expectedRevision, item)
 	{
-		if (active || publishing || notifying || watchActive() || !isCurrent() || !hasDraft ||
+		if (active || batchPending || publishing || notifying || watchActive() || !isCurrent() ||
+		    (item ? item.operation === 'read' : !hasDraft) ||
 		    expectedRevision !== revision || typeof input !== 'string')
 			return false;
 		const token = epoch;
+		const inputTexts = item ? item.texts : texts;
 		let validPath = false;
 		publishing = true;
 		try {
-			const id = typeId('draft'), place = location(model.types, id, draft, path);
+			const id = item ? batchType(item) : typeId('draft');
+			const inputValue = item ? item.request : draft;
+			const place = location(model.types, id, inputValue, path);
 			if (place.type.kind !== 1 && place.type.kind !== 2)
 				return false;
 			validPath = true;
 			const candidate =
-			    replace(model.types, id, draft, path, parseScalar(model.types, place.type, input));
+			    replace(model.types, id, inputValue, path, parseScalar(model.types, place.type, input));
 			validate(id, candidate);
 			if (!isCurrent() || token !== epoch)
 				return false;
-			draft = candidate;
-			texts.set(pathKey(path), {text : input, error : ''});
-			dirty = true;
+			if (item) {
+				item.request = candidate;
+				item.status = 'Draft';
+			} else {
+				draft = candidate;
+				dirty = true;
+			}
+			inputTexts.set(pathKey(path), {text : input, error : ''});
 			error = '';
 			++revision;
 			return true;
 		} catch (failure) {
 			if (validPath && isCurrent() && token === epoch) {
 				const reason = String(failure.message || failure);
-				texts.set(pathKey(path), {text : input, error : reason});
+				inputTexts.set(pathKey(path), {text : input, error : reason});
 				error = reason;
 				++revision;
 			}
@@ -714,6 +787,11 @@ function presentation(adapter, inputLimits)
 			publishing = false;
 			notify();
 		}
+	}
+
+	function setText(path, input, expectedRevision)
+	{
+		return editText(path, input, expectedRevision);
 	}
 
 	function fact(operation, endpoint, result, valueStatus = 'NoValue')
@@ -886,6 +964,7 @@ function presentation(adapter, inputLimits)
 			});
 			if (kind !== 'read') {
 				clearWatchValues();
+				clearBatchResponses();
 				watchStatus = 'Stale after mutation - explicitly refresh watched Fields.';
 			}
 			if (kind === 'read' || kind === 'write') {
@@ -1068,6 +1147,185 @@ function presentation(adapter, inputLimits)
 		return launchWatch();
 	}
 
+	function selectedBatch()
+	{
+		return batchItems.find(item => item.key === batchSelected);
+	}
+
+	function batchType(item, output = false)
+	{
+		return output ? item.operation === 'read' ? item.endpoint.valueType
+		                : item.operation === 'service' ? item.endpoint.responseType : 0
+		              : item.operation === 'write' ? item.endpoint.valueType
+		                : item.operation === 'read' ? 0 : item.endpoint.requestType;
+	}
+
+	function batchAddOperations(endpoint)
+	{
+		if (!endpoint)
+			return [];
+		if (endpoint.category === 1)
+			return [...((endpoint.capabilities & 1) ? ['read'] : []),
+			        ...((endpoint.capabilities & 2) ? ['write'] : [])];
+		return [endpoint.category === 2 ? 'command' : 'service'];
+	}
+
+	function batchHasErrors()
+	{
+		return batchItems.some(item => [...item.texts.values()].some(row => row.error));
+	}
+
+	function clearBatchResponses()
+	{
+		for (const item of batchItems) {
+			item.response = undefined;
+			item.hasResponse = false;
+		}
+	}
+
+	function retireBatch()
+	{
+		batchCapability = undefined;
+		++batchRevision;
+		clearBatchResponses();
+		batchStatus = batchPending ? 'Invalidated - draining the accepted Batch.' : 'Stale';
+	}
+
+	function batchFact(operation, valueStatus)
+	{
+		return freeze({
+			status : operation.status, name : names.get(operation.status) || String(operation.status),
+			display : operation.status !== Status.Ok ? names.get(operation.status) || String(operation.status)
+			          : operation.dispatch !== 0 ? 'Dispatch: ' + (dispatchNames[operation.dispatch] || operation.dispatch)
+			          : 'Batch reply received - inspect each item outcome',
+			session : operation.session, requestId : operation.requestId,
+			succeeded : operation.succeeded === true, valueStatus
+		});
+	}
+
+	function completeBatch(record, result)
+	{
+		if (batchPending !== record)
+			return;
+		publishing = true;
+		try {
+			const decoded = adapter.batchResult(result), operation = decoded.operation;
+			const valid = record.epoch === epoch && record.revision === batchRevision && isCurrent();
+			batchOutcome = batchFact(operation, valid ? decoded.valueStatus : 'Stale');
+			batchStatus = batchOutcome.display;
+			if (record.accepted) {
+				// Preserve known per-item operation facts independently from the
+				// right to expose values using the current metadata/session.
+				const items = decoded.items;
+				if (Array.isArray(items) && items.length === record.items.length) {
+					const facts = items.map((item, index) => {
+						const target = record.items[index];
+						const expected = {read : 'FieldRead', write : 'FieldWrite', command : 'Command', service : 'Service'}[target.operation];
+						if (item.id !== target.endpoint.id || item.operation !== expected)
+							fail('Invalid Batch item identity');
+						return fact(target.operation, target.endpoint, item,
+						            valid ? item.valueStatus : 'Stale');
+					});
+					for (let index = 0; index < facts.length; ++index) {
+						record.items[index].outcome = facts[index];
+						record.items[index].status = facts[index].display;
+					}
+					if (valid && decoded.valueStatus === 'Ok') {
+						const values = items.map((item, index) => {
+							const target = record.items[index], id = batchType(target, true);
+							if (!item.succeeded || item.valueStatus !== 'Ok' || model.types[id].kind === 0)
+								return undefined;
+							const copy = copyValue(model.types, id, item.value);
+							validate(id, copy);
+							return copy;
+						});
+						if (record.epoch === epoch && record.revision === batchRevision && isCurrent())
+							for (let index = 0; index < values.length; ++index) {
+								const target = record.items[index];
+								target.response = values[index];
+								target.hasResponse = values[index] !== undefined;
+							}
+					}
+				} else {
+					// No reply does not identify any executed prefix. Never infer
+					// per-item success from a global OutcomeUnknown or timeout.
+					for (const item of record.items)
+						item.status = operation.status === Status.Ok ? 'No checked item outcome' : batchOutcome.name;
+				}
+			}
+		} catch (failure) {
+			clearBatchResponses();
+			batchStatus = 'Invalid Batch response: ' + String(failure.message || failure);
+			if (batchOutcome)
+				batchOutcome = freeze({...batchOutcome, valueStatus : 'InvalidPayload'});
+		} finally {
+			batchPending = undefined;
+			publishing = false;
+			++revision;
+			notify();
+		}
+	}
+
+	function executeBatch()
+	{
+		if (notifying || !snapshot().batch.canExecute)
+			return false;
+		const record = {epoch, revision : batchRevision, items : batchItems.slice(), accepted : false};
+		publishing = true;
+		try {
+			if (!batchCapability)
+				fail('Batch unavailable. Supply TBM1 for this admitted session.');
+			for (const item of record.items)
+				if (item.operation !== 'read')
+					validate(batchType(item), item.request);
+			if (record.epoch !== epoch || !isCurrent())
+				return false;
+			batchPending = record;
+			const request = adapter.batch(batchCapability, record.items);
+			record.accepted = request.requestId !== 0;
+			request.then(reply => completeBatch(record, reply), failure => {
+				if (batchPending !== record)
+					return;
+				batchPending = undefined;
+				clearBatchResponses();
+				batchStatus = 'Batch transport failure: ' + String(failure.message || failure);
+				notify();
+			});
+			if (!record.accepted)
+				return false; // Keep arguments and previous owned results on refusal.
+			clearBatchResponses();
+			for (const item of record.items) {
+				item.status = 'Pending';
+				item.outcome = undefined;
+			}
+			if (record.items.some(item => item.operation !== 'read')) {
+				clearValues();
+				clearWatchValues();
+				watchStatus = 'Stale after mutation - explicitly refresh watched Fields.';
+			}
+			batchOutcome = freeze({status : null, name : 'Pending', display : 'Pending',
+			                       session : request.session, requestId : request.requestId,
+			                       succeeded : false, valueStatus : 'NoValue'});
+			batchStatus = 'Pending - one ordered Batch request';
+			return true;
+		} catch (failure) {
+			batchPending = undefined;
+			batchStatus = String(failure.message || failure);
+			return false;
+		} finally {
+			publishing = false;
+			notify();
+		}
+	}
+
+	function copyCapability(input)
+	{
+		const bytes = input instanceof ArrayBuffer ? new Uint8Array(input)
+		              : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+		                                              : undefined;
+		return bytes?.byteLength === 24 ? new Uint8Array(bytes) : undefined;
+	}
+
 	const provider = freeze({
 		snapshot,
 		rows,
@@ -1076,6 +1334,110 @@ function presentation(adapter, inputLimits)
 		select,
 		setText,
 		beginEdit,
+		addBatch(operation, key = selected?.key) {
+		    if (!batchEditable() || batchItems.length >= 32 || typeof key !== 'string')
+			    return false;
+		    const endpoint = description.endpoints.find(row => row.key === key);
+		    if (!batchAddOperations(endpoint).includes(operation))
+			    return false;
+		    const token = epoch;
+		    publishing = true;
+		    try {
+			    const item = {endpoint, operation, texts : new Map(), status : 'Draft', hasResponse : false};
+			    const id = batchType(item), cost = model.preflight(id);
+			    let nodes = cost.nodes, bytes = model.types[id].wireBytes;
+			    for (const previous of batchItems) {
+				    const previousId = batchType(previous);
+				    nodes += model.preflight(previousId).nodes;
+				    bytes += model.types[previousId].wireBytes;
+			    }
+			    if (nodes > limits.nodes || bytes > limits.wireBytes)
+				    fail('Batch arguments exceed presentation limits');
+			    // This is a new complete DTO. FieldWrite is full replacement,
+			    // never a preserving edit of an earlier FieldRead payload.
+			    item.request = operation === 'read' ? undefined : copyValue(model.types, id, undefined, true);
+			    if (operation !== 'read')
+				    validate(id, item.request);
+			    if (token !== epoch || !isCurrent())
+				    return false;
+			    item.key = epoch + ':' + (++nextBatchKey);
+			    batchItems.push(item);
+			    batchSelected = item.key;
+			    ++batchRevision;
+			    ++revision;
+			    batchStatus = 'Draft - explicit Execute submits one ordered Batch';
+			    return true;
+		    } catch (failure) {
+			    batchStatus = String(failure.message || failure);
+			    return false;
+		    } finally {
+			    publishing = false;
+			    notify();
+		    }
+		},
+		removeBatch(key) {
+		    if (!batchEditable() || !batchItems.some(item => item.key === key))
+			    return false;
+		    batchItems = batchItems.filter(item => item.key !== key);
+		    if (batchSelected === key)
+			    batchSelected = undefined;
+		    ++batchRevision;
+		    ++revision;
+		    notify();
+		    return true;
+		},
+		moveBatch(key, delta) {
+		    if (!batchEditable() || (delta !== -1 && delta !== 1))
+			    return false;
+		    const index = batchItems.findIndex(item => item.key === key), next = index + delta;
+		    if (index < 0 || next < 0 || next >= batchItems.length)
+			    return false;
+		    [batchItems[index], batchItems[next]] = [batchItems[next], batchItems[index]];
+		    ++batchRevision;
+		    ++revision;
+		    notify();
+		    return true;
+		},
+		selectBatch(key) {
+		    if (!batchEditable() || !batchItems.some(item => item.key === key))
+			    return false;
+		    batchSelected = key;
+		    ++revision;
+		    notify();
+		    return true;
+		},
+		clearBatch() {
+		    if (!batchEditable())
+			    return false;
+		    batchItems = [];
+		    batchSelected = undefined;
+		    ++batchRevision;
+		    ++revision;
+		    notify();
+		    return true;
+		},
+		setBatchText(path, input, expectedRevision) {
+		    const item = selectedBatch();
+		    return !!item && editText(path, input, expectedRevision, item);
+		},
+		setBatchCapability(input) {
+		    if (!batchEditable())
+			    return false;
+		    const token = epoch;
+		    publishing = true;
+		    try {
+			    const copy = copyCapability(input);
+			    if (!copy || token !== epoch || !isCurrent())
+				    return false;
+			    batchCapability = copy;
+			    return true;
+		    } catch {
+			    return false;
+		    } finally {
+			    publishing = false;
+		    }
+		},
+		executeBatch,
 		addWatch(key = selected?.key) {
 		    if (!watchEditable() || watched.length >= 32 || typeof key !== 'string')
 			    return false;
@@ -1124,13 +1486,8 @@ function presentation(adapter, inputLimits)
 		    const token = epoch;
 		    publishing = true;
 		    try {
-			    const bytes = input instanceof ArrayBuffer ? new Uint8Array(input)
-			                  : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
-			                                                  : undefined;
-			    if (!bytes || bytes.byteLength !== 24)
-				    return false;
-			    const copy = new Uint8Array(bytes);
-			    if (token !== epoch || !isCurrent())
+			    const copy = copyCapability(input);
+			    if (!copy || token !== epoch || !isCurrent())
 				    return false;
 			    watchCapability = copy;
 			    return true;

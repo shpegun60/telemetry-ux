@@ -237,7 +237,7 @@ jobs:
               flags+=("-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer")
             fi
             cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/web-sdk-build-$profile" -G Ninja \
-              '-DTELEMETRY_COMPONENTS=core;encoded_server;resource_adapter' -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;batch_server;resource_adapter' -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON \
               -DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_BUILD_TYPE=Release \
               -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/web-sdk-stage-$profile" "${flags[@]}" \

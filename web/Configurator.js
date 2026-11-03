@@ -42,6 +42,11 @@ export function mountWatchlist(element, {provider, now = () => performance.now()
 	return mountPresentation(element, provider, 4, now);
 }
 
+export function mountBatchEditor(element, {provider, now = () => performance.now()} = {})
+{
+	return mountPresentation(element, provider, 5, now);
+}
+
 function mountPresentation(element, provider, categoryFilter, now)
 {
 	if (!element?.ownerDocument || typeof element.appendChild !== 'function')
@@ -64,6 +69,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const endpointGroups = new Map();
 	const watchRows = new Map();
 	let watchContext;
+	const batchRows = new Map();
+	let batchContext;
 
 	function node(tag, className, text)
 	{
@@ -77,12 +84,13 @@ function mountPresentation(element, provider, categoryFilter, now)
 
 	const root = node('section', 'telemetry-configurator');
 	root.dataset.role = 'configurator';
-	root.dataset.panel = ['configurator', 'field', 'command', 'service', 'watchlist'][categoryFilter];
+	root.dataset.panel = ['configurator', 'field', 'command', 'service', 'watchlist', 'batch'][categoryFilter];
 	root.setAttribute('part', 'root');
 	root.setAttribute('aria-label', 'Telemetry Configurator');
 	const header = node('header', 'tux-header');
 	header.setAttribute('part', 'header');
-	const title = node('h2', '', categoryFilter === 4 ? 'Watchlist' : 'Device Configurator');
+	const title = node('h2', '', ['Device Configurator', 'Field editor', 'Command', 'Service',
+	                            'Watchlist', 'Mixed Batch'][categoryFilter]);
 	const mode = node('span', 'tux-mode');
 	mode.dataset.role = 'mode';
 	header.append(title, mode);
@@ -148,8 +156,59 @@ function mountPresentation(element, provider, categoryFilter, now)
 	watchTable.append(watchHead, watchBody);
 	watch.append(watchActions, individualLabel, intervalLabel, intervalInput, watchStatus, watchTable);
 	const noWatch = node('p', 'tux-message', 'Watchlist is unavailable in this provider.');
+	const batch = node('section', 'tux-section tux-batch');
+	batch.hidden = true;
+	batch.setAttribute('part', 'batch');
+	batch.setAttribute('aria-label', 'Mixed Batch');
+	batch.append(node('h3', '', 'Mixed Batch'));
+	const batchActions = node('div', 'tux-actions');
+	const batchOperation = node('select');
+	batchOperation.setAttribute('aria-label', 'Batch operation for the selected endpoint');
+	batchOperation.dataset.action = 'batch-operation';
+	for (const [value, label] of [['read', 'FieldRead'], ['write', 'FieldWrite'],
+	                             ['command', 'Command'], ['service', 'Service']]) {
+		const option = node('option', '', label);
+		option.value = value;
+		batchOperation.append(option);
+	}
+	batchActions.append(batchOperation);
+	const batchButtons = new Map();
+	for (const [action, label] of [['addBatch', 'Add selected endpoint'],
+	                             ['executeBatch', 'Execute Batch'], ['clearBatch', 'Clear Batch']]) {
+		const button = node('button', '', label);
+		button.type = 'button';
+		button.dataset.action = action;
+		button.disabled = true;
+		button.addEventListener('click', () => {
+			if (!batch.hidden && !button.disabled)
+				invoke(() => action === 'addBatch' ? provider.addBatch(batchOperation.value)
+				                                  : provider[action]());
+		});
+		batchButtons.set(action, button);
+		batchActions.append(button);
+	}
+	const batchStatus = node('p', 'tux-message');
+	batchStatus.dataset.role = 'batch-status';
+	const batchError = node('p', 'tux-error');
+	batchError.dataset.role = 'batch-error';
+	batchError.setAttribute('role', 'alert');
+	const batchTable = node('table', 'tux-batch-table');
+	const batchHead = node('thead'), batchHeading = node('tr');
+	for (const label of ['Order', 'Operation', 'Endpoint', 'Result', 'Actions'])
+		batchHeading.append(node('th', '', label));
+	batchHead.append(batchHeading);
+	const batchBody = node('tbody');
+	batchTable.append(batchHead, batchBody);
+	batch.append(batchActions,
+	             node('p', 'tux-message', 'Sequential best effort. Partial results are retained. No automatic retry from this editor.'),
+	             node('p', 'tux-message', 'New request arguments start at canonical zero values, not device defaults. FieldWrite replaces the entire Field value; review every member.'),
+	             batchStatus, batchError, batchTable);
+	const batchNoArguments = node('p', 'tux-message', 'FieldRead has no request arguments.');
+	batch.append(batchNoArguments);
+	const noBatch = node('p', 'tux-message', 'Mixed Batch is unavailable in this provider.');
+	noBatch.hidden = true;
 	const layout = node('div', 'tux-layout');
-	layout.hidden = categoryFilter === 4;
+	layout.hidden = categoryFilter === 4 || categoryFilter === 5;
 	const navigation = node('nav', 'tux-navigation');
 	navigation.setAttribute('part', 'endpoints');
 	navigation.hidden = categoryFilter !== 0;
@@ -190,9 +249,12 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const sections = new Map();
 	for (const [source, label] of [[ 'value', 'Source value' ],
 	                               [ 'draft', 'Request / local draft' ],
-	                               [ 'response', 'Response' ]]) {
+	                               [ 'response', 'Response' ],
+	                               [ 'batchDraft', 'Selected Batch item arguments' ],
+	                               [ 'batchResponse', 'Selected Batch item response' ]]) {
 		const panel = node('section', 'tux-section');
-		panel.setAttribute('part', source === 'draft' ? 'request' : source);
+		panel.setAttribute('part', {draft : 'request', batchDraft : 'batch-request',
+		                           batchResponse : 'batch-response'}[source] || source);
 		panel.dataset.source = source;
 		const heading = node('h3', '', label);
 		const headingId = viewId + '-' + source;
@@ -201,7 +263,11 @@ function mountPresentation(element, provider, categoryFilter, now)
 		const rowList = node('div');
 		const empty = node('p', 'tux-message');
 		panel.append(heading, rowList, empty);
-		content.append(panel);
+		if (source.startsWith('batch')) {
+			panel.hidden = true;
+			batch.append(panel);
+		} else
+			content.append(panel);
 		sections.set(source, {panel, heading, rowList, empty, cache : new Map()});
 	}
 	const outcomes = node('section', 'tux-section');
@@ -216,7 +282,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 	status.setAttribute('part', 'status');
 	status.dataset.role = 'status';
 	status.setAttribute('role', 'status');
-	root.append(header, permission, watch, noWatch, layout, status);
+	root.append(header, permission, watch, noWatch, batch, noBatch, layout, status);
 	element.append(root);
 
 	function matchesSelection()
@@ -350,9 +416,14 @@ function mountPresentation(element, provider, categoryFilter, now)
 			input.addEventListener('input', () => {
 				if (!entry.live || entry.context !== context || !entry.editable)
 					return;
-				invoke(() => provider.setText(entry.path, input.value, entry.revision));
+				invoke(() => source === 'batchDraft'
+				    ? provider.setBatchText(entry.path, input.value, entry.revision)
+				    : provider.setText(entry.path, input.value, entry.revision));
 			});
-			input.addEventListener('blur', () => update(provider.snapshot()));
+			input.addEventListener('blur', () => {
+				if (alive && entry.live && entry.context === context)
+					update(provider.snapshot());
+			});
 			children.addEventListener('click', () => {
 				if (!alive || !entry.live || entry.context !== context)
 					return;
@@ -377,7 +448,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 		entry.value.textContent = row.text;
 		entry.value.hidden = row.editable;
 		entry.input.hidden = !row.editable;
-		entry.input.disabled = state.busy;
+		entry.input.disabled = state.busy || (source === 'batchDraft' && state.batch?.active);
 		entry.input.dataset.path = JSON.stringify(row.path);
 		entry.input.setAttribute('aria-invalid', String(Boolean(row.error)));
 		if (row.editable)
@@ -470,13 +541,13 @@ function mountPresentation(element, provider, categoryFilter, now)
 		}
 		section.empty.hidden = nodes.length !== 0;
 		section.empty.textContent =
-		    rootWindow.kind === 'void' ? source === 'response'
+		    rootWindow.kind === 'void' ? source === 'response' || source === 'batchResponse'
 		                                     ? 'Void response type / No response value expected.'
 		                                     : 'Void / No argument value.'
 		    : rootWindow.available && rootWindow.kind === 'struct' ? 'Empty structure.'
 		    : rootWindow.available && rootWindow.kind === 'array'  ? 'Empty array.'
 		    : source === 'value' ? 'No current source value. Select a Field and press Read.'
-		    : source === 'draft' ? 'No local request draft.'
+		    : source === 'draft' || source === 'batchDraft' ? 'No local request draft.'
 		                         : 'No current response value.';
 	}
 
@@ -536,6 +607,10 @@ function mountPresentation(element, provider, categoryFilter, now)
 				button.disabled = true;
 			individualInput.disabled = true;
 			intervalInput.disabled = true;
+			for (const entry of watchRows.values())
+				entry.live = false;
+			watchRows.clear();
+			watchBody.replaceChildren();
 			return;
 		}
 		const identity = state.mode + ':' + state.session;
@@ -549,10 +624,10 @@ function mountPresentation(element, provider, categoryFilter, now)
 		watchButtons.get('refreshWatch').disabled = !value.canRefresh || value.active;
 		watchButtons.get('startWatch').disabled = !value.canRefresh || value.active;
 		watchButtons.get('stopWatch').disabled = !value.active;
-		watchButtons.get('clearWatch').disabled = value.active || !value.rows.length;
+		watchButtons.get('clearWatch').disabled = !state.current || value.active || !value.rows.length;
 		individualInput.checked = value.individual;
-		individualInput.disabled = value.active;
-		intervalInput.disabled = value.active;
+		individualInput.disabled = !state.current || value.active;
+		intervalInput.disabled = !state.current || value.active;
 		if (intervalInput !== (root.getRootNode()?.activeElement || document.activeElement))
 			intervalInput.value = String(value.intervalMs);
 		watchStatus.textContent = value.status;
@@ -583,7 +658,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 			entry.text.textContent = row.text;
 			entry.text.setAttribute('part', 'watch-value');
 			entry.status.textContent = row.status;
-			entry.remove.disabled = value.active;
+			entry.remove.disabled = !state.current || value.active;
 			nodes.push(entry.element);
 		}
 		reconcile(watchBody, nodes);
@@ -592,9 +667,121 @@ function mountPresentation(element, provider, categoryFilter, now)
 				watchRows.delete(key);
 	}
 
+	function retireSection(source)
+	{
+		const section = sections.get(source);
+		for (const entry of section.cache.values())
+			entry.live = false;
+		section.cache.clear();
+		section.rowList.replaceChildren();
+		section.panel.hidden = true;
+	}
+
+	function renderBatch()
+	{
+		const value = state.batch;
+		noBatch.hidden = categoryFilter !== 5 || Boolean(value);
+		batch.hidden = !value || (categoryFilter !== 0 && categoryFilter !== 5);
+		if (batch.hidden) {
+			for (const button of batchButtons.values())
+				button.disabled = true;
+			batchOperation.disabled = true;
+			for (const entry of batchRows.values())
+				entry.live = false;
+			batchRows.clear();
+			batchBody.replaceChildren();
+			retireSection('batchDraft');
+			retireSection('batchResponse');
+			return;
+		}
+		const identity = state.mode + ':' + state.session;
+		if (batchContext !== identity) {
+			for (const entry of batchRows.values())
+				entry.live = false;
+			batchRows.clear();
+			batchContext = identity;
+		}
+		const categoryOperations = {1 : ['read', 'write'], 2 : ['command'], 3 : ['service']};
+		const allowed = value.addOperations || categoryOperations[state.selected?.category] || [];
+		for (const option of batchOperation.options) {
+			option.disabled = option.hidden = !allowed.includes(option.value);
+		}
+		if (!allowed.includes(batchOperation.value))
+			batchOperation.value = allowed[0] || '';
+		const locked = !state.current || value.active;
+		batchOperation.disabled = locked || !allowed.length;
+		batchButtons.get('addBatch').disabled = locked || !value.canAdd || !allowed.length;
+		batchButtons.get('executeBatch').disabled = locked || !value.canExecute ||
+		    (!state.writesEnabled && value.items.some(row => row.operation !== 'read'));
+		batchButtons.get('clearBatch').disabled = locked || !value.items.length;
+		batchStatus.textContent = value.status;
+		batchError.textContent = localError || value.error || '';
+		batchError.hidden = !batchError.textContent;
+		for (const entry of batchRows.values())
+			entry.live = false;
+		const nodes = [];
+		for (const [index, row] of value.items.entries()) {
+			let entry = batchRows.get(row.key);
+			if (!entry) {
+				const element = node('tr');
+				element.dataset.batch = String(row.key);
+				const order = node('td'), operation = node('td'), name = node('td'), status = node('td');
+				const controls = node('td', 'tux-batch-controls');
+				entry = {element, order, operation, name, status, controls, live : false};
+				const owner = entry;
+				for (const [action, label, method, delta] of [
+					['selectBatch', 'View / edit', 'selectBatch'],
+					['batch-up', 'Up', 'moveBatch', -1], ['batch-down', 'Down', 'moveBatch', 1],
+					['removeBatch', 'Remove', 'removeBatch']]) {
+					const button = node('button', '', label);
+					button.type = 'button';
+					button.dataset.action = action;
+					button.addEventListener('click', () => {
+						if (alive && owner.live && !batch.hidden &&
+						    batchRows.get(row.key) === owner && !button.disabled)
+							invoke(() => delta === undefined ? provider[method](row.key)
+							                                 : provider[method](row.key, delta));
+					});
+					entry[action] = button;
+					controls.append(button);
+				}
+				element.append(order, operation, name, status, controls);
+				batchRows.set(row.key, entry);
+			}
+			entry.live = true;
+			entry.order.textContent = String(index + 1);
+			entry.operation.textContent = {read : 'FieldRead', write : 'FieldWrite',
+				command : 'Command', service : 'Service'}[row.operation] || row.operation;
+			entry.name.textContent = row.catalog + ' / ' + row.name;
+			entry.status.textContent = row.status || 'NotExecuted';
+			entry.status.setAttribute('part', 'batch-result');
+			entry.element.setAttribute('aria-current', String(row.key === value.selectedKey));
+			for (const button of entry.controls.children)
+				button.disabled = locked;
+			entry['batch-up'].disabled ||= index === 0;
+			entry['batch-down'].disabled ||= index + 1 === value.items.length;
+			nodes.push(entry.element);
+		}
+		reconcile(batchBody, nodes);
+		for (const [key, entry] of batchRows)
+			if (!entry.live)
+				batchRows.delete(key);
+		const selectedItem = value.items.find(row => row.key === value.selectedKey);
+		batchNoArguments.hidden = !selectedItem || selectedItem.operation !== 'read';
+		for (const [source, available] of [['batchDraft', value.hasDraft],
+		                                 ['batchResponse', value.hasResponse]]) {
+			if (selectedItem && available) {
+				sections.get(source).panel.hidden = false;
+				renderRows(source);
+			} else
+				retireSection(source);
+		}
+	}
+
 	function render()
 	{
-		const nextContext = state.mode + ':' + state.session + ':' + (state.selected?.key || '');
+		const nextContext = state.mode + ':' + state.session + ':' + (state.selected?.key || '') +
+		                    ':' + (state.batch?.selectedKey || '');
 		if (context !== nextContext) {
 			expanded.clear();
 			pages.clear();
@@ -617,7 +804,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 		                            : 'Select an endpoint';
 		const matches = matchesSelection();
 		if (!matches)
-			selection.textContent = 'Select a ' + ['','Field','Command','Service','Field'][categoryFilter];
+			selection.textContent = 'Select a ' + ['','Field','Command','Service','Field','Field'][categoryFilter];
 		for (const [action, button] of buttons) {
 			const category = state.selected?.category;
 			button.hidden = action === 'execute'      ? category !== 2
@@ -642,7 +829,9 @@ function mountPresentation(element, provider, categoryFilter, now)
 			if (categoryFilter === 0 || categoryFilter === 3)
 				renderRows('response');
 		} else {
-			for (const section of sections.values()) {
+			for (const [source, section] of sections) {
+				if (source.startsWith('batch'))
+					continue;
 				for (const entry of section.cache.values())
 					entry.live = false;
 				section.cache.clear();
@@ -658,9 +847,11 @@ function mountPresentation(element, provider, categoryFilter, now)
 		    (categoryFilter !== 0 && categoryFilter !== 3) ||
 		    (!state.hasResponse && state.selected?.category !== 3);
 		if (!matches)
-			for (const section of sections.values())
-				section.panel.hidden = true;
+			for (const [source, section] of sections)
+				if (!source.startsWith('batch'))
+					section.panel.hidden = true;
 		renderOutcomes();
+		renderBatch();
 		status.dataset.session = String(state.session);
 		status.textContent = (state.current ? 'Connected' : 'Disconnected') +
 		                     (state.busy ? ' / Working' : ' / Idle') +

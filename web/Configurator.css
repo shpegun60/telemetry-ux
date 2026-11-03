@@ -207,6 +207,26 @@
 .telemetry-configurator .tux-watch-table td:nth-child(2) {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+.telemetry-configurator .tux-batch {
+    margin: 0.8rem 0;
+    overflow: auto;
+}
+.telemetry-configurator .tux-batch-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+.telemetry-configurator .tux-batch-table th,
+.telemetry-configurator .tux-batch-table td {
+    padding: 0.4rem;
+    border-bottom: 1px solid var(--tux-border);
+    overflow-wrap: anywhere;
+}
+.telemetry-configurator .tux-batch-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+}
 .telemetry-configurator .tux-status {
     margin-top: 0.85rem;
 }

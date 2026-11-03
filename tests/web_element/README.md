@@ -42,3 +42,9 @@ An optional Watchlist fixture checks the standalone view's exact U64 text,
 explicit owner clock, pending-state controls, Stop and retired row buttons.
 This fixture tests presentation only; actual Static and Dynamic ReadMany
 execution belongs to the native provider suite.
+
+The Batch presentation fixture covers ordered mixed items, explicit permission,
+single-submit controls, local reordering, exact U64 argument/response text,
+retired inputs including blur, `Accepted`/`NotExecuted`/`OutcomeUnknown`, and
+removal or session changes. It verifies no DTO creation or device calls on mount;
+actual SDK Batch encoding, execution and lifetime remain native-provider tests.

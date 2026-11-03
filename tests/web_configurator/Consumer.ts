@@ -21,6 +21,8 @@ void compatibleState;
 export function generatedWindow(client: DeviceClient, host: HTMLElement) {
     const page = mountDevice(host, {client});
     page.provider.snapshot();
+	page.provider.addBatch('read');
+	page.provider.addWatch();
     return page;
 }
 
@@ -32,6 +34,14 @@ export function staticWindow(client: DeviceClient, host: HTMLElement) {
     provider.addWatch();
     provider.setWatchInterval(1000);
     provider.tickWatch(1000);
+	provider.addBatch('read');
+	provider.setBatchCapability(new Uint8Array(24));
+	provider.executeBatch();
+	provider.rows([], {source: 'batchResponse'});
+	const batchCount: number = provider.snapshot().batch.items.length;
+	// @ts-expect-error operations use the checked public operation names
+	provider.addBatch('arbitrary');
+	void batchCount;
     // @ts-expect-error owner clock is an explicit finite millisecond number
     provider.startWatch('1000');
     void watchCount;

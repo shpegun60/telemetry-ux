@@ -1,6 +1,7 @@
 /* Demo-only persistent native process. SDK dispatch owns every Telemetry frame/status. MIT. */
 #include "Model.hpp"
 #include <integration/encoded/Dispatcher.hpp>
+#include <integration/encoded/BatchDispatcher.hpp>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -128,6 +129,14 @@ int main(int argc, char** argv)
 			for (const auto byte : capability)
 				std::printf("%02x", std::to_integer<unsigned>(byte));
 			std::putchar('\n');
+		} else if (std::strcmp(line.data(), "mixedbatch") == 0) {
+			std::array<std::byte, 24> capability{};
+			const auto built = telemetry::protocol::encoded::batch::writeCapability(
+			    capability, {session, web_demo::descriptor.fingerprint()});
+			if (!built) return 4;
+			for (const auto byte : capability)
+				std::printf("%02x", std::to_integer<unsigned>(byte));
+			std::putchar('\n');
 		} else {
 			if (!size || size % 2 || size / 2 > request.size())
 				return 3;
@@ -137,9 +146,14 @@ int main(int argc, char** argv)
 					return 3;
 				request[i] = std::byte((high << 4) | low);
 			}
-			const auto result = telemetry::integration::encoded::dispatchEncoded(
+			const auto input = std::span<const std::byte>{request}.first(size / 2);
+			const auto result = size / 2 >= 7 && request[6] == std::byte{6}
+			    ? telemetry::integration::encoded::dispatchEncoded(
+			        web_demo::model.view(), workspace, session, input, response,
+			        telemetry::protocol::encoded::batch::Capability{session, web_demo::descriptor.fingerprint()})
+			    : telemetry::integration::encoded::dispatchEncoded(
 			    web_demo::model.view(), workspace, session,
-			    std::span<const std::byte>{request}.first(size / 2), response,
+			    input, response,
 			    telemetry::protocol::encoded::read_many::Capability{
 			        session, web_demo::descriptor.fingerprint()});
 			if (!result)

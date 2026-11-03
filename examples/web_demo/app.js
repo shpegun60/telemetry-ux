@@ -179,7 +179,7 @@ async function connect()
 				},
 				maxFrameBytes : 65536,
 				maxBufferedBytes : 65536,
-				encodedOptions : {readMany : true}
+				encodedOptions : {readMany : true, batch : true}
 			});
 			backend = owner.port.backend;
 		} else if (transport.kind === 'http') {
@@ -198,7 +198,7 @@ async function connect()
 				if (!response.ok)
 					throw Error('The local Encoded exchange failed.');
 				return new Uint8Array(await response.arrayBuffer());
-			}, {readMany : true});
+			}, {readMany : true, batch : true});
 		} else {
 			throw Error('Unsupported demonstration transport.');
 		}
@@ -244,6 +244,16 @@ async function connect()
 				throw Error('ReadMany capability admission refused.');
 		} else if (capabilityReply.status !== 404) {
 			throw Error('ReadMany discovery failed.');
+		}
+		const batchReply = await fetch('/capabilities/batch.bin', {signal : owner.abort.signal});
+		current(owner);
+		if (batchReply.ok) {
+			const capability = new Uint8Array(await batchReply.arrayBuffer());
+			current(owner);
+			if (!owner.provider.setBatchCapability(capability))
+				throw Error('Batch capability admission refused.');
+		} else if (batchReply.status !== 404) {
+			throw Error('Batch discovery failed.');
 		}
 		owner.watchTimer = setInterval(() => {
 			if (!owner.retired)

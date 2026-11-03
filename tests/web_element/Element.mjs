@@ -1,5 +1,6 @@
 /* Actual DOM lifecycle checks, with an explicit presentation-only fixture. MIT. */
-import {defineConfiguratorElement, mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist} from 'telemetry-ux/web';
+import {defineConfiguratorElement, mountFieldEditor, mountCommandPanel, mountServicePanel,
+        mountWatchlist, mountBatchEditor} from 'telemetry-ux/web';
 
 export async function runElementChecks()
 {
@@ -27,7 +28,7 @@ export async function runElementChecks()
 
 	function fixture(name, mode = 'static', hooks = {})
 	{
-		const counters = {subscriptions : 0, unsubscriptions : 0, io : 0, lifecycle : 0};
+		const counters = {subscriptions : 0, unsubscriptions : 0, io : 0, lifecycle : 0, snapshots : 0};
 		const listeners = new Set();
 		const category = hooks.category || 1;
 		const endpoint = Object.freeze({key : category + ':0', category, id : 0, catalog : 'Host', name});
@@ -64,7 +65,7 @@ export async function runElementChecks()
 			++counters.lifecycle;
 		};
 		const provider = {
-			snapshot : () => state,
+			snapshot : () => { ++counters.snapshots; return state; },
 			subscribe(listener) {
 			    ++counters.subscriptions;
 			    listeners.add(listener);
@@ -412,6 +413,13 @@ export async function runElementChecks()
 			watchHost.querySelector('[data-action="stopWatch"]').click();
 			check(watchCalls[2].method === 'stopWatch', 'Stop delegates without dropping pending state');
 			watching.publish({watch : watchState});
+			watching.publish({current : false});
+			check(watchHost.querySelector('[data-action="clearWatch"]').disabled &&
+			          watchHost.querySelector('[data-action="removeWatch"]').disabled &&
+			          watchHost.querySelector('[data-action="watch-individual"]').disabled &&
+			          watchHost.querySelector('[data-action="watch-interval"]').disabled,
+			      'disconnected Watchlist controls match rejected provider edits');
+			watching.publish({current : true});
 			const retiredRemove = watchHost.querySelector('[data-action="removeWatch"]');
 			watching.publish({session : 18, watch : watchState});
 			retiredRemove.dispatchEvent(new Event('click'));
@@ -425,6 +433,131 @@ export async function runElementChecks()
 			check(watchCalls.length === 4 && watching.listeners.size === 0,
 			      'unmounted Watchlist controls do not send or retain subscriptions');
 		} finally { watchView.unmount(); }
+
+		const batching = fixture('Batch Field');
+		const batchCalls = [];
+		let argumentText = '0', responseText = '18446744073709551615';
+		let batchState = {
+			items : [
+				{key : 'a', endpointKey : '1:0', category : 1, operation : 'write', name : '<img src=x>', catalog : 'Device', status : 'NotExecuted'},
+				{key : 'b', endpointKey : '2:0', category : 2, operation : 'command', name : 'Run', catalog : 'Device', status : 'NotExecuted'},
+				{key : 'c', endpointKey : '3:0', category : 3, operation : 'service', name : 'Query', catalog : 'Device', status : 'NotExecuted'},
+				{key : 'd', endpointKey : '1:0', category : 1, operation : 'read', name : 'Counter', catalog : 'Device', status : 'NotExecuted'}
+			], selectedKey : 'a', active : false, pending : false, canAdd : true,
+			canExecute : true, hasDraft : true, hasResponse : false, status : 'Prepared',
+			addOperations : ['read', 'write']
+		};
+		const publishBatch = changes => {
+			batchState = {...batchState, ...changes};
+			batching.publish({batch : batchState});
+		};
+		batching.provider.rows = (path = [], {source, offset = 0} = {}) => {
+			const available = source === 'batchDraft' ? batchState.hasDraft
+			                  : source === 'batchResponse' && batchState.hasResponse;
+			return {path, offset, total : available ? 1 : 0, available, kind : available ? 'scalar' : null,
+				rows : available && !offset ? [{key : '[]', path : [], name : 'Counter', kind : 'scalar',
+					type : 'U64', children : 0, text : source === 'batchDraft' ? argumentText : responseText,
+					error : '', editable : source === 'batchDraft' && !batchState.active, enumEntries : []}] : []};
+		};
+		batching.provider.setBatchText = (path, input, revision) => {
+			if (revision !== batching.provider.snapshot().revision)
+				return false;
+			batchCalls.push({method : 'setBatchText', path, input});
+			argumentText = input;
+			publishBatch({});
+			return true;
+		};
+		batching.provider.addBatch = operation => {
+			batchCalls.push({method : 'addBatch', operation}); return true;
+		};
+		batching.provider.selectBatch = key => {
+			batchCalls.push({method : 'selectBatch', key});
+			argumentText = '0';
+			publishBatch({selectedKey : key, hasDraft : batchState.items.find(row => row.key === key)?.operation !== 'read', hasResponse : false});
+			return true;
+		};
+		batching.provider.moveBatch = (key, delta) => {
+			batchCalls.push({method : 'moveBatch', key, delta});
+			const items = [...batchState.items], from = items.findIndex(row => row.key === key);
+			const [entry] = items.splice(from, 1); items.splice(from + delta, 0, entry);
+			publishBatch({items}); return true;
+		};
+		for (const method of ['removeBatch', 'clearBatch'])
+			batching.provider[method] = key => { batchCalls.push({method, key}); return true; };
+		batching.provider.executeBatch = () => {
+			batchCalls.push({method : 'executeBatch'});
+			publishBatch({active : true, pending : true, canExecute : false, status : 'Pending'});
+			return true;
+		};
+		publishBatch({});
+		const batchHost = host('section');
+		document.body.append(batchHost);
+		const batchView = mountBatchEditor(batchHost, {provider : batching.provider});
+		try {
+			const action = name => batchHost.querySelector('[data-action="' + name + '"]');
+			const rowAction = (key, name) => batchHost.querySelector('[data-batch="' + key + '"] [data-action="' + name + '"]');
+			check(batchCalls.length === 0 && batching.counters.io === 0,
+			      'Batch mount neither sends nor selects or creates argument DTOs');
+			check(batchHost.querySelectorAll('tbody tr[data-batch]').length === 4 &&
+			          !batchHost.querySelector('img') &&
+			          batchHost.textContent.includes('canonical zero values') &&
+			          batchHost.textContent.includes('replaces the entire Field value'),
+			      'ordered mixed items are literal text with explicit full-replacement initialization');
+			check(action('executeBatch').disabled, 'mixed Batch mutations need explicit session permission');
+			batching.publish({writesEnabled : true});
+			check(!action('executeBatch').disabled, 'explicit permission enables an admitted ready Batch');
+			const operation = action('batch-operation');
+			operation.value = 'write'; action('addBatch').click();
+			check(batchCalls.at(-1).method === 'addBatch' && batchCalls.at(-1).operation === 'write',
+			      'Add delegates the explicit operation without sending');
+			const oldInput = batchHost.querySelector('input[data-source="batchDraft"]');
+			oldInput.focus(); oldInput.value = '18446744073709551615';
+			oldInput.dispatchEvent(new Event('input', {bubbles : true}));
+			check(batchCalls.at(-1).method === 'setBatchText' &&
+			          batchCalls.at(-1).input === '18446744073709551615' &&
+			          document.activeElement === oldInput && oldInput.isConnected,
+			      'Batch uses the shared exact-text editor without remounting focused input');
+			rowAction('b', 'selectBatch').click();
+			const beforeRetiredInput = batchCalls.length;
+			const snapshotsBeforeRetiredInput = batching.counters.snapshots;
+			oldInput.value = '9'; oldInput.dispatchEvent(new Event('input', {bubbles : true}));
+			oldInput.dispatchEvent(new Event('blur'));
+			check(batchCalls.length === beforeRetiredInput && !oldInput.isConnected &&
+			          batching.counters.snapshots === snapshotsBeforeRetiredInput,
+			      'retired Batch input and blur cannot query or edit a different selected item');
+			rowAction('b', 'batch-up').click();
+			check([...batchHost.querySelectorAll('tbody tr[data-batch]')].map(row => row.dataset.batch).join(',') === 'b,a,c,d',
+			      'reordering is explicit and preserves item identity');
+			action('executeBatch').click(); action('executeBatch').dispatchEvent(new Event('click'));
+			check(batchCalls.filter(row => row.method === 'executeBatch').length === 1 &&
+			          action('addBatch').disabled && action('clearBatch').disabled &&
+			          [...batchHost.querySelectorAll('[data-batch] button')].every(button => button.disabled),
+			      'one Execute delegates once and locks all item mutations until completion');
+			publishBatch({active : false, pending : false, canExecute : false,
+				status : 'OutcomeUnknown - verify device before retry', items : batchState.items.map((row, index) =>
+					({...row, status : index === 0 ? 'Accepted' : 'NotExecuted'}))});
+			check(batchHost.textContent.includes('Accepted') && batchHost.textContent.includes('NotExecuted') &&
+			          batchHost.textContent.includes('OutcomeUnknown') && action('executeBatch').disabled &&
+			          batchCalls.filter(row => row.method === 'executeBatch').length === 1,
+			      'partial ordered results preserve Accepted and NotExecuted without automatic replay');
+			rowAction('c', 'selectBatch').click();
+			publishBatch({hasResponse : true});
+			check(batchHost.querySelector('[data-source="batchResponse"] .tux-value').textContent === '18446744073709551615',
+			      'selected Batch response uses the same exact-text DTO renderer');
+			rowAction('d', 'selectBatch').click();
+			check(batchHost.querySelector('[data-source="batchDraft"]').hidden &&
+			          batchHost.textContent.includes('FieldRead has no request arguments.'),
+			      'FieldRead is not initialized as a request DTO');
+			const retiredRemove = rowAction('a', 'removeBatch');
+			batching.publish({session : 18});
+			const beforeRemove = batchCalls.length;
+			retiredRemove.dispatchEvent(new Event('click'));
+			check(batchCalls.length === beforeRemove, 'retired Batch row control cannot target a new session');
+			const lateClear = action('clearBatch');
+			batchView.unmount(); lateClear.dispatchEvent(new Event('click'));
+			check(batchCalls.length === beforeRemove && batching.listeners.size === 0,
+			      'unmount removes only the Batch subscription and makes late controls inert');
+		} finally { batchView.unmount(); }
 
 		const Shadow = defineConfiguratorElement('shadow-device-settings', {shadow : true});
 		check(defineConfiguratorElement('shadow-device-settings', {shadow : true}) === Shadow,
