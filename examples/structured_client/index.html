@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+    Host the structural descriptor editor, binary payload tools and fake-device adapter.
+    app.js owns form state; element IDs are its DOM contract and the page imports
+    the standalone codec separately from its optional HTTP demonstration.
+    Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Structured telemetry · Client example</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main>
+        <header>
+            <p class="eyebrow">Telemetry v3 · Desktop example</p>
+            <h1>Inspect native data</h1>
+            <p class="intro">A form from the device's structural descriptor. Values and requests keep their exact wire types.</p>
+        </header>
+        <section class="connection">
+            <div>
+                <button id="load-device">Load fake Device</button>
+                <label class="file">Or open descriptor.bin <input id="descriptor-file" type="file"></label>
+            </div>
+            <p id="model-info">No descriptor loaded.</p>
+            <p id="message" role="status" aria-live="polite"></p>
+        </section>
+        <div class="columns">
+            <section class="card">
+                <h2>Service request</h2>
+                <label for="service">Service</label>
+                <select id="service" disabled></select>
+                <div id="editor"></div>
+                <div class="actions">
+                    <button id="call" disabled>Call fake Device</button>
+                    <button id="download" class="secondary" disabled>Save request bytes</button>
+                </div>
+                <p class="hint">Fields start at local UI zeros. The descriptor contains no application defaults or limits.</p>
+            </section>
+            <section class="card">
+                <h2>Service response</h2>
+                <label class="file">Open response payload <input id="response-file" type="file"></label>
+                <pre id="response">No response yet.</pre>
+                <h2 class="values-title">Field values</h2>
+                <label class="file">Open values.bin <input id="values-file" type="file"></label>
+                <pre id="values">No values loaded.</pre>
+            </section>
+        </div>
+        <footer>Payload codec and example HTTP adapter are separate. This page does not repeat a timed-out operation.</footer>
+    </main>
+    <script type="importmap">
+        {"imports":{"telemetry-sdk/runtime":"/vendor/telemetry-sdk/runtime.js"}}
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

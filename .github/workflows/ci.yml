@@ -218,7 +218,7 @@ jobs:
               flags+=("-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer")
             fi
             cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/web-sdk-build-$profile" -G Ninja \
-              '-DTELEMETRY_COMPONENTS=core;encoded_server' -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;resource_adapter' -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON \
               -DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_BUILD_TYPE=Release \
               -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/web-sdk-stage-$profile" "${flags[@]}" \
@@ -255,6 +255,23 @@ jobs:
             --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
             --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
             --npm-js "$(npm root -g)/npm/bin/npm-cli.js" --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Installed Descriptor and payload-file tools in Chromium
+        run: |
+          set -euo pipefail
+          for profile in gcc clang-asan; do
+            compiler=g++
+            checks=()
+            if [ "$profile" = clang-asan ]; then
+              compiler=clang++-18
+              checks+=(--sanitize)
+            fi
+            python -B tests/structured_client/run.py --build-dir "$RUNNER_TEMP/ux-structured-tools-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+              --node "$(command -v node)" --npm-js "$(npm root -g)/npm/bin/npm-cli.js" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+          done
       - name: Public IR and thin generated-page ownership controls
         run: |
           python -B tests/web_starter/run.py --sdk-root .ci/telemetry-sdk \
@@ -274,6 +291,12 @@ jobs:
             ${{ runner.temp }}/ux-web-clang-asan/browser/
             ${{ runner.temp }}/ux-web-starter/summary.json
             ${{ runner.temp }}/ux-web-starter/node.log
+            ${{ runner.temp }}/ux-structured-tools-gcc/summary.json
+            ${{ runner.temp }}/ux-structured-tools-gcc/*.log
+            ${{ runner.temp }}/ux-structured-tools-gcc/fixtures/*.png
+            ${{ runner.temp }}/ux-structured-tools-clang-asan/summary.json
+            ${{ runner.temp }}/ux-structured-tools-clang-asan/*.log
+            ${{ runner.temp }}/ux-structured-tools-clang-asan/fixtures/*.png
             ${{ runner.temp }}/web-*.log
             ${{ runner.temp }}/web-sdk-npm-pack.json
             ${{ runner.temp }}/web-sdk-prefix-gcc/share/telemetry/SDKMetadata.json

@@ -90,3 +90,19 @@ Encoded and RPC modes keep their existing generated client adapter and one FIFO.
 This ownership move changes build and test inputs, not transport, generated API
 semantics or wire formats. Removal of the former SDK presentation copies follows
 qualification of this separate UX consumer.
+
+## Structured payload-file tools
+
+The former SDK `examples/structured_client` browser page and HTTP helper now
+belong to UX, together with their browser interaction checks. They originate in
+SDK `6e15220b1271139b3f1996a16d385c660f856f45`. The application-owned DTOs and
+native producer retain their MIT notices; portable SDK runtime and headless
+codec/native interoperability tests remain SDK-owned.
+
+The browser imports the installed `telemetry-sdk/runtime` export. The native
+helper links installed `core` and `resource_adapter` targets. The localhost
+adapter serves a fixed set of UI/runtime/fixture routes without exposing either
+source checkout. Its existing one-process-per-call demonstration contract and
+manual payload-file workflow are preserved; this tool does not create a second
+SDK client or replace the standard Configurator. SDK presentation-copy cleanup
+follows qualification of the installed UX consumer.
