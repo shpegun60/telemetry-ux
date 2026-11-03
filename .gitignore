@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 build/
 dist/
+# Qt Creator and CMake settings contain each developer's local kit and SDK paths.
+CMakeUserPresets.json
+*.user
