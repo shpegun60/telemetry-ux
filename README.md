@@ -45,8 +45,9 @@ Configurator {
 The [provider contract](lib/qml/Telemetry/UX/README.md) keeps connection controls,
 permission opt-in and device ownership in the host. The view creates no client,
 transport, polling timer or FIFO. The existing Inspector controller supplies the
-dynamic provider. A generated typed QML provider remains a later step. The
-browser starter described below generates a thin entry module for the shared
+dynamic provider. For a known schema, use the
+[generated typed QML provider](#generated-typed-qml-provider) described below.
+The browser starter generates a thin entry module for the shared
 web view; it does not generate another form implementation.
 
 The pure Qt module can be built and installed without any Telemetry SDK. An
