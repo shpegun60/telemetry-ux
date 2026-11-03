@@ -1,4 +1,6 @@
+# Keep authored text portable and preserve generated binary artifacts.
 * text=auto
-*.py text eol=lf
-*.md text eol=lf
-*.toml text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.png binary

@@ -1,0 +1,38 @@
+# QML Inspector and optional FieldWrite/Command/Service Workbench over portable components. MIT.
+cmake_minimum_required(VERSION 3.21)
+project(TelemetryInspectorQml LANGUAGES CXX)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
+option(INSPECTOR_ENABLE_SERIAL "Use the installed SDK Qt SerialPort transport" OFF)
+if(INSPECTOR_ENABLE_SERIAL)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS SerialPort)
+endif()
+qt_standard_project_setup(REQUIRES 6.4)
+set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/qml")
+set(_inspector_components inspector workbench read_many_workbench encoded_backend encoded_server core tcp_server qt_transport)
+if(INSPECTOR_ENABLE_SERIAL)
+    list(APPEND _inspector_components qt_serial_transport)
+endif()
+find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS ${_inspector_components})
+foreach(_component IN LISTS _inspector_components)
+    if(NOT TARGET Telemetry::${_component})
+        message(FATAL_ERROR "Inspector requires Telemetry::${_component}; install all selected components in the chosen SDK prefix.")
+    endif()
+endforeach()
+add_library(inspector_qml_support STATIC Models.cpp Models.hpp WatchlistModel.cpp WatchlistModel.hpp
+    InspectorController.cpp InspectorController.hpp DemoPeer.cpp DemoPeer.hpp
+    TcpTransport.cpp TcpTransport.hpp TcpDemoServer.cpp TcpDemoServer.hpp)
+target_compile_features(inspector_qml_support PUBLIC cxx_std_20)
+target_compile_definitions(inspector_qml_support PUBLIC QT_NO_KEYWORDS QT_NO_FOREACH)
+target_include_directories(inspector_qml_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(inspector_qml_support PUBLIC Qt6::Core Qt6::Network
+    Telemetry::inspector Telemetry::workbench Telemetry::read_many_workbench Telemetry::encoded_backend Telemetry::encoded_server Telemetry::core Telemetry::tcp_server Telemetry::qt_transport)
+if(INSPECTOR_ENABLE_SERIAL)
+    target_compile_definitions(inspector_qml_support PUBLIC INSPECTOR_ENABLE_SERIAL=1)
+    target_link_libraries(inspector_qml_support PUBLIC Telemetry::qt_serial_transport)
+endif()
+qt_add_executable(telemetry-inspector-qml main.cpp DeviceCheck.cpp DeviceCheck.hpp)
+qt_add_qml_module(telemetry-inspector-qml URI Telemetry.Inspector VERSION 1.0
+    RESOURCE_PREFIX /qt/qml QML_FILES Main.qml)
+target_link_libraries(telemetry-inspector-qml PRIVATE inspector_qml_support
+    Qt6::Quick Qt6::QuickControls2)
+qt_import_qml_plugins(telemetry-inspector-qml)

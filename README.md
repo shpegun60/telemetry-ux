@@ -1,8 +1,36 @@
 # Telemetry UX
 
-This checkout contains the optional Telemetry UI generator extension. It
-depends on the exact matching SDK code-generator version and provides no
-second parser, transport, FIFO or command-line entrypoint.
+Telemetry UX contains host applications and optional UI generation for
+[Telemetry SDK](https://github.com/shpegun60/telemetry-sdk). Protocols, codecs,
+clients and transport components remain in the SDK. The UX applications reuse
+one existing client/FIFO per session.
+
+## Universal Inspector
+
+The [Inspector](apps/inspector/README.md) discovers an unknown device, reads
+Fields, edits configuration, executes Commands, calls Services and polls a
+scalar Watchlist. Its existing Demo and loopback TCP modes work without a board.
+The UART mode uses the SDK's optional SerialPort transport.
+
+Install a matching Qt kit and SDK prefix, then configure, build and launch:
+
+```sh
+cmake -S apps/inspector -B /external/inspector -G Ninja \
+  -DCMAKE_PREFIX_PATH="/path/to/sdk-prefix;/path/to/qt-prefix"
+cmake --build /external/inspector --parallel 2
+/external/inspector/telemetry-inspector-qml
+```
+
+For UART, add `-DINSPECTOR_ENABLE_SERIAL=ON` and use an SDK prefix that contains
+`qt_serial_transport`. The application build needs no COBS checkout, SDK source
+tree, generated per-device DTO or Python installation. The application README
+lists the SDK components to install. The root CMake project builds the same
+application; it does not introduce another implementation.
+
+## Optional generator
+
+The generator extension depends on the exact matching SDK code-generator
+version and provides no second parser or command-line entrypoint.
 
 The `telemetry-ux-codegen` development package adds `--targets qml` to the
 SDK-owned `telemetry-codegen` command. Its Python runtime needs no Qt dependency;
@@ -28,8 +56,8 @@ supported. The existing `python -m tools.telemetry_codegen` invocation remains
 owned by the core package.
 
 Keep user UI code outside generated output. Regeneration and `--check` preserve
-the generator's owned-output contract. This migration has not yet moved the
-Inspector applications or introduced a unified Configurator. Those changes
-have separate installation and usability gates. [Source provenance](MIGRATION.md)
-records the SDK revision from which the generators were moved.
+the generator's owned-output contract. The current QML target generates API and
+value adapters, not automatic forms. A reusable Configurator and generated web
+starter have separate implementation and usability gates. [Source provenance](MIGRATION.md)
+records the SDK revisions from which the implementations were moved.
 No registry publication or new hardware qualification is implied.
