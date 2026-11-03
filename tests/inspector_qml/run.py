@@ -56,7 +56,7 @@ def python_image():
 
 def sources():
     paths = []
-    for directory in (HERE, ROOT / 'apps/inspector'):
+    for directory in (HERE, ROOT / 'apps/inspector', ROOT / 'lib/qml'):
         paths += [path for path in directory.rglob('*') if path.is_file() and
                   path.suffix in ('.py', '.cpp', '.hpp', '.h', '.qml', '.txt', '.cmake', '.pri') and
                   '__pycache__' not in path.parts]
@@ -264,6 +264,20 @@ def main():
         if not schedule_counts or int(schedule_counts[1]) < 272 or schedule_counts[2] != counts[3]:
             raise RuntimeError('Watchlist logical-cycle guards or QML controls did not execute')
         report['executions']['watchlist_scheduling_checks'] = int(schedule_counts[1])
+        embedding = build / ('telemetry_configurator_embedding_check' + suffix)
+        embedding_screenshot = output / 'embedding-window.png'
+        embedded = run('configurator-embedding', [embedding, '--screenshot', embedding_screenshot])
+        embedding_counts = re.search(r'Configurator embedding checks=(\d+) provider=explicit '
+                                     r'context=0 writes=1 normalized=10 unload=1 Qt=(\S+)', embedded)
+        if not embedding_counts or int(embedding_counts[1]) < 55 or embedding_counts[2] != counts[3]:
+            raise RuntimeError('Alternate host did not exercise the explicit provider and required dependency')
+        report['executions']['embedding_checks'] = int(embedding_counts[1])
+        report['embedding_screenshot'] = screenshot_record(embedding_screenshot)
+        missing = run('configurator-required-provider', [embedding, '--missing-provider'])
+        missing_counts = re.search(r'Configurator missing provider checks=(\d+) rejected=1 required=1', missing)
+        if not missing_counts or int(missing_counts[1]) != 3:
+            raise RuntimeError('Missing provider did not produce the specific required-property refusal')
+        report['executions']['required_provider_negative_checks'] = int(missing_counts[1])
         app = build / 'example' / ('telemetry-inspector-qml' + suffix)
         screenshot = output / 'window.png'
         smoke = run('qml-smoke', [app, '--smoke', '--screenshot', screenshot])
@@ -281,7 +295,7 @@ def main():
         report['edit_screenshot'] = screenshot_record(edit_screenshot)
         report['binary_sha256'] = {str(path.relative_to(output)): digest(path)
                                   for path in (check, physical_input, command_check, service_check,
-                                               watch_check, watch_failures, watch_scheduling, app)}
+                                               watch_check, watch_failures, watch_scheduling, embedding, app)}
         report['qt_runtime_sha256'] = {str(path.relative_to(qt)): digest(path)
                                        for path in (qt / 'bin').glob('Qt6*.dll') if path.is_file()}
         report['source_sha256_after'] = sources()

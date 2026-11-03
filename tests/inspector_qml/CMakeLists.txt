@@ -58,3 +58,12 @@ foreach(_case Failures Scheduling)
         Qt6::Quick Qt6::QuickControls2 Qt6::Test)
     qt_import_qml_plugins(telemetry_inspector_qml_watchlist_${_name}_check)
 endforeach()
+
+# Different host chrome embeds the same explicit-provider view, without a context singleton.
+qt_add_executable(telemetry_configurator_embedding_check Embedded.cpp)
+qt_add_qml_module(telemetry_configurator_embedding_check
+    URI Telemetry.EmbeddingHost VERSION 1.0 RESOURCE_PREFIX /qt/qml QML_FILES Embedded.qml)
+target_compile_features(telemetry_configurator_embedding_check PRIVATE cxx_std_20)
+target_link_libraries(telemetry_configurator_embedding_check PRIVATE inspector_qml_support
+    Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+qt_import_qml_plugins(telemetry_configurator_embedding_check)

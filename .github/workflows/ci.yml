@@ -9,6 +9,34 @@ permissions:
   contents: read
 
 jobs:
+  configurator:
+    name: Installed pure Qt Configurator (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Qt without any Telemetry SDK checkout
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+      - name: Install, relocate and embed the view in an independent host
+        run: |
+          python3 -B tests/qml_package/run.py --build-dir "$RUNNER_TEMP/ux-qml-package" \
+            --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja
+      - name: Retain package and consumer receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-pure-qt-configurator
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/ux-qml-package/
+
   installed-codegen:
     name: Installed codegen (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

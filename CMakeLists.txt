@@ -1,8 +1,12 @@
-# Optional host applications consume installed Telemetry SDK components. MIT.
+# Optional views and host applications. Only applications require Telemetry SDK. MIT.
 cmake_minimum_required(VERSION 3.21)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" TELEMETRY_UX_VERSION LIMIT_COUNT 1)
 project(TelemetryUX VERSION ${TELEMETRY_UX_VERSION} LANGUAGES CXX)
 option(TELEMETRY_UX_BUILD_INSPECTOR "Build the Universal Inspector application" ON)
+option(TELEMETRY_UX_BUILD_CONFIGURATOR "Build and install the reusable Qt/QML view" ON)
+if(TELEMETRY_UX_BUILD_CONFIGURATOR OR TELEMETRY_UX_BUILD_INSPECTOR)
+    add_subdirectory(lib/qml)
+endif()
 if(TELEMETRY_UX_BUILD_INSPECTOR)
     add_subdirectory(apps/inspector)
 endif()
