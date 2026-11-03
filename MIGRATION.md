@@ -23,5 +23,25 @@ publication remain owned by the SDK.
 The SDK and UX are separate repositories and packages. Matching exact
 development versions and emitter API/IR versions are checked at generation.
 Installed consumers must not depend on a sibling checkout or a source fallback.
-GUI applications and reusable Configurator components have a separate migration
-gate; this initial source move does not claim that they are already extracted.
+
+## Inspector application
+
+The single Inspector application and its QML/TCP suites move from SDK revision
+`3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e` to `apps/inspector` and the two
+matching `tests` directories here. The old SDK implementation is removed by its
+coordinated migration PR; no forwarding application or second controller is
+retained. The executable name, QML URI and operation/lifecycle behavior remain
+unchanged. Only the former disabled-UART diagnostic changes to name the installed
+transport component.
+
+The normal application consumes an installed SDK. QML/TCP tests record the
+actual installed headers/libraries and SDK metadata separately from their UX
+sources. SDK-side serial GUI tests remain an explicit cross-repository gate
+because their PTY peer uses the actual NUCLEO firmware Protocol and private
+COBS profile. Those firmware fixtures are not copied into UX or required by a
+normal application build. Historical hardware receipts retain their original
+paths, revisions and bytes; this move makes no new physical-board claim.
+
+Reusable Configurator components, the Widgets playground and other example UI
+consumers have separate migration gates. Moving this application does not claim
+that those later components are already implemented.

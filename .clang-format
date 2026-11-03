@@ -1,0 +1,38 @@
+# Shared formatting for authored C++ and JavaScript, inspired by the COBS
+# project. Vendor sources and historical measurement inputs stay unchanged.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: ForIndentation
+ColumnLimit: 100
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterStruct: false
+  AfterNamespace: false
+  AfterEnum: false
+  AfterControlStatement: Never
+  BeforeElse: false
+  SplitEmptyFunction: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortLambdasOnASingleLine: None
+BreakTemplateDeclarations: Yes
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortEnumsOnASingleLine: false
+IndentCaseLabels: true
+AccessModifierOffset: -4
+NamespaceIndentation: None
+PointerAlignment: Left
+ReferenceAlignment: Left
+SpaceAfterTemplateKeyword: false
+ReflowComments: false
+BreakStringLiterals: false
+SortIncludes: Never
+SortUsingDeclarations: Never
+SeparateDefinitionBlocks: Always
+BreakConstructorInitializers: BeforeColon
+ContinuationIndentWidth: 4
+IndentPPDirectives: None

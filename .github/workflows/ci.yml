@@ -1,3 +1,4 @@
+# Installed generator and application consumers, with immutable SDK inputs. MIT.
 name: Installed codegen
 
 on:
@@ -62,3 +63,62 @@ jobs:
           path: |
             ${{ runner.temp }}/telemetry-ux-codegen/summary.json
             ${{ runner.temp }}/telemetry-ux-codegen/*.log
+
+  inspector:
+    name: Installed SDK Inspector (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout qualified SDK transport components
+        uses: actions/checkout@v4
+        with:
+          repository: shpegun60/telemetry-sdk
+          ref: 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          path: .ci/telemetry-sdk
+          persist-credentials: false
+      - name: Checkout private SDK serial dependency
+        uses: actions/checkout@v4
+        with:
+          repository: shpegun60/cobs
+          ref: 2e0abf260848fcb74e4a57b37532188047759643
+          path: .ci/cobs
+          persist-credentials: false
+      - name: Install Qt host development and QML runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 cmake ninja-build qt6-base-dev qt6-declarative-dev libqt6serialport6-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+      - name: Install and relocate the SDK prefix
+        run: |
+          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = 3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e
+          cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/sdk-build" -G Ninja \
+            '-DTELEMETRY_COMPONENTS=inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_serial_transport;resource_adapter' \
+            -DCOBS_ROOT="$GITHUB_WORKSPACE/.ci/cobs" -DCMAKE_BUILD_TYPE=Release \
+            -DTELEMETRY_SOURCE_REVISION=3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk-prefix-stage"
+          cmake --build "$RUNNER_TEMP/sdk-build" --target install --parallel 2
+          mv "$RUNNER_TEMP/sdk-prefix-stage" "$RUNNER_TEMP/sdk-prefix"
+      - name: Actual Inspector models, input and QML windows
+        run: |
+          python3 -B tests/inspector_qml/run.py --build-dir "$RUNNER_TEMP/ux-inspector-qml" \
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja
+      - name: Sanitized UX TCP discovery and QML window
+        run: |
+          python3 -B tests/inspector_tcp/run.py --build-dir "$RUNNER_TEMP/ux-inspector-tcp" \
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Retain separate UX and installed SDK evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-sdk-inspector
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ux-inspector-qml/
+            ${{ runner.temp }}/ux-inspector-tcp/
+            ${{ runner.temp }}/sdk-prefix/share/telemetry/SDKMetadata.json
