@@ -120,6 +120,14 @@ int main(int argc, char** argv)
 				return 3;
 			session = admitted;
 			std::printf("{\"session\":%u}\n", session);
+		} else if (std::strcmp(line.data(), "readmany") == 0) {
+			std::array<std::byte, 24> capability{};
+			const auto built = telemetry::protocol::encoded::read_many::writeCapability(
+			    capability, {session, web_demo::descriptor.fingerprint()});
+			if (!built) return 4;
+			for (const auto byte : capability)
+				std::printf("%02x", std::to_integer<unsigned>(byte));
+			std::putchar('\n');
 		} else {
 			if (!size || size % 2 || size / 2 > request.size())
 				return 3;
@@ -131,7 +139,9 @@ int main(int argc, char** argv)
 			}
 			const auto result = telemetry::integration::encoded::dispatchEncoded(
 			    web_demo::model.view(), workspace, session,
-			    std::span<const std::byte>{request}.first(size / 2), response);
+			    std::span<const std::byte>{request}.first(size / 2), response,
+			    telemetry::protocol::encoded::read_many::Capability{
+			        session, web_demo::descriptor.fingerprint()});
 			if (!result)
 				return 4;
 			for (std::size_t i = 0; i < result.written; ++i)

@@ -34,6 +34,7 @@ function retire(owner)
 		return;
 	if (!owner.retired) {
 		owner.retired = true;
+		clearInterval(owner.watchTimer);
 		owner.abort.abort();
 		// Keep the provider/view alive for completion, including OutcomeUnknown.
 		owner.provider?.invalidate();
@@ -177,7 +178,8 @@ async function connect()
 				    controls();
 				},
 				maxFrameBytes : 65536,
-				maxBufferedBytes : 65536
+				maxBufferedBytes : 65536,
+				encodedOptions : {readMany : true}
 			});
 			backend = owner.port.backend;
 		} else if (transport.kind === 'http') {
@@ -196,7 +198,7 @@ async function connect()
 				if (!response.ok)
 					throw Error('The local Encoded exchange failed.');
 				return new Uint8Array(await response.arrayBuffer());
-			});
+			}, {readMany : true});
 		} else {
 			throw Error('Unsupported demonstration transport.');
 		}
@@ -231,6 +233,22 @@ async function connect()
 		const page = install();
 		owner.provider = page.provider;
 		owner.view = page;
+		// The application discovers capabilities for this admitted session. The
+		// provider owns no connection or timer and never assumes ReadMany support.
+		const capabilityReply = await fetch('/capabilities/read-many.bin', {signal : owner.abort.signal});
+		current(owner);
+		if (capabilityReply.ok) {
+			const capability = new Uint8Array(await capabilityReply.arrayBuffer());
+			current(owner);
+			if (!owner.provider.setReadManyCapability(capability))
+				throw Error('ReadMany capability admission refused.');
+		} else if (capabilityReply.status !== 404) {
+			throw Error('ReadMany discovery failed.');
+		}
+		owner.watchTimer = setInterval(() => {
+			if (!owner.retired)
+				owner.provider.tickWatch(performance.now());
+		}, 50);
 		current(owner);
 		old?.view?.unmount();
 		connection = owner;

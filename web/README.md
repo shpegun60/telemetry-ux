@@ -228,6 +228,35 @@ Start uses `performance.now()` by default. Applications with a different clock
 pass the same clock as `now: () => ownerTimeMs` to the mount function. Capability
 admission remains a host decision, not an automatic fallback inferred by the UI.
 
+The built-in Static and Dynamic providers implement this optional contract for
+1–32 distinct readable scalar/enum Fields (wire values at most eight bytes).
+The application enables the SDK backend's `readMany: true` option and supplies
+the remote TRM1 bytes for the admitted session:
+
+```js
+// The host already owns its admitted client and capability discovery.
+provider.setReadManyCapability(capabilityBytes);
+provider.addWatch(fieldKey);
+provider.refreshWatch(); // One SDK ReadMany request, no fan-out.
+// For periodic reads, call startWatch with the same monotonic clock as tickWatch.
+provider.startWatch(performance.now());
+// In the application's existing owner loop:
+provider.tickWatch(performance.now());
+provider.stopWatch();
+```
+
+The capability is copied and the SDK checks it before transmission. Each new
+admission clears it and the watch selection. Invalidated callbacks publish no
+values. There is one accepted read at a time; missed polling ticks are skipped.
+Stop drains an accepted read before list/mode changes are allowed. Individual
+mode must be selected explicitly with `setWatchIndividual(true)`; endpoint
+refusals retain per-item statuses and the cycle continues, while transport or
+session failure stops it. Accepted mutations mark previous watch readings Stale.
+
+Legacy custom providers remain compatible with `PresentationProvider` and may
+omit Watchlist entirely. The factories return `WatchPresentationProvider`; its
+extended state/actions are also available through exported TypeScript types.
+
 ## Shadow slots and styling
 
 The default custom element retains its existing light-DOM behavior. Register a

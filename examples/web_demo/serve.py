@@ -63,8 +63,8 @@ class NativePeer:
             self.lock.release()
 
     def line(self, text, owner=None, *, diagnostic=False):
-        if diagnostic and text != 'state':
-            raise ValueError('Only state is a read-only native diagnostic')
+        if diagnostic and text not in ('state', 'readmany'):
+            raise ValueError('Only state and ReadMany capability are read-only native diagnostics')
         with self._access(owner, diagnostic=diagnostic):
             if self.process.poll() is not None:
                 self.stop_admission()
@@ -160,7 +160,7 @@ def create_server(device, public_root, data_dir, port=0, *, leases=False):
             self.end_headers()
             try:
                 self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 # The peer may already have executed a mutation. Never repeat it.
                 pass
 
@@ -176,6 +176,16 @@ def create_server(device, public_root, data_dir, port=0, *, leases=False):
             elif self.path == '/demo/state':
                 try:
                     self.reply(200, peer.line('state', diagnostic=True).encode('utf8'), 'application/json')
+                except PeerBusy:
+                    self.send_error(409, 'Native demonstration peer is busy')
+                except (RuntimeError, OSError, queue.Empty, ValueError):
+                    self.send_error(502, 'Native demonstration peer failed')
+            elif self.path == '/capabilities/read-many.bin':
+                try:
+                    capability = peer.line('readmany', diagnostic=True)
+                    if not re.fullmatch(r'[0-9a-f]{48}', capability):
+                        raise ValueError('Invalid native ReadMany capability')
+                    self.reply(200, bytes.fromhex(capability))
                 except PeerBusy:
                     self.send_error(409, 'Native demonstration peer is busy')
                 except (RuntimeError, OSError, queue.Empty, ValueError):

@@ -78,6 +78,10 @@ struct Device {
 		return counters;
 	}
 
+	std::uint64_t wide() noexcept { ++counters.reads; return current.large; }
+	std::int64_t signedWide() noexcept { ++counters.reads; return current.negative; }
+	Mode mode() noexcept { ++counters.reads; return current.mode; }
+
 	void set(const Config& value) noexcept
 	{
 		current = value;
@@ -141,12 +145,17 @@ struct Device {
 };
 
 inline Device device{};
+inline telemetry::OwnerSlot<Device> unavailableDevice{};
 
 inline constexpr telemetry::FieldTable controlFields{
     telemetry::field<&Device::read, &Device::write>("Config", device),
     telemetry::field<&Device::read>("ReadOnly", device)};
 inline constexpr telemetry::FieldTable diagnosticFields{
-    telemetry::field<&Device::readCounters>("Counters", device)};
+    telemetry::field<&Device::readCounters>("Counters", device),
+    telemetry::field<&Device::wide>("Wide", device),
+    telemetry::field<&Device::signedWide>("Signed", device),
+    telemetry::field<&Device::mode>("Mode", device),
+    telemetry::field<&Device::wide>("Unavailable", unavailableDevice)};
 inline constexpr telemetry::CommandTable commands{
     telemetry::command<&Device::setConfig>("SetConfig", device),
     telemetry::command<&Device::accepted>("Accepted", device),

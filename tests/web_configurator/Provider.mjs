@@ -28,7 +28,7 @@ function eq(a, b)
 
 for (const mode of ['dynamic', 'static']) {
 	const peer = spawn(options['--device'], [], {stdio : [ 'pipe', 'pipe', 'pipe' ]});
-	let waiter, errors = '', frames = 0, hold, release, nextReadTransform, lastWrittenPayload;
+	let waiter, errors = '', frames = 0, hold, release, nextReadTransform, nextManyTransform, lastWrittenPayload;
 	let writes = 0;
 	peer.stderr.on('data', x => errors += x);
 	createInterface({input : peer.stdout}).on('line', line => {
@@ -60,8 +60,13 @@ for (const mode of ['dynamic', 'static']) {
 			eq(reply[28], 0);
 			transform(reply.subarray(32));
 		}
+		if (packet[6] === 5 && nextManyTransform) {
+			const transform = nextManyTransform;
+			nextManyTransform = undefined;
+			transform(reply);
+		}
 		return reply;
-	});
+	}, {readMany : true});
 	const client =
 	    mode === 'dynamic'
 	        ? new DynamicClient({backend, maxPending : 1})
@@ -89,7 +94,7 @@ for (const mode of ['dynamic', 'static']) {
 
 	eq(p.snapshot().current, true);
 	eq(p.snapshot().writesEnabled, false);
-	eq(p.snapshot().endpoints.length, 10);
+	eq(p.snapshot().endpoints.length, 14);
 	eq(p.select(endpoint('Config').key), true);
 	eq(p.refresh(), true);
 	await done();
@@ -410,6 +415,171 @@ for (const mode of ['dynamic', 'static']) {
 	eq(frames, beforePermission);
 	eq(p.setWritesEnabled(true), true); // Explicit permission in the new admission works.
 	eq(p.snapshot().outcomes.write.historical, true);
+
+	// Watchlist uses the same actual SDK client and native Encoded dispatcher.
+	// The host discovers TRM1 explicitly, drives time, and opts into fallback.
+	eq(p.snapshot().watch.rows.length, 0);
+	const watchBefore = frames;
+	eq(p.addWatch(endpoint('Config').key), false); // Aggregate DTO is not a scalar Field.
+	eq(p.addWatch(endpoint('Wide').key), true);
+	eq(p.addWatch(endpoint('Signed').key), true);
+	eq(p.addWatch(endpoint('Mode').key), true);
+	eq(p.addWatch(endpoint('Unavailable').key), true);
+	eq(p.addWatch(endpoint('Wide').key), false);
+	eq(frames, watchBefore);
+	eq(p.refreshWatch(), false); // No capability: never silently fan out.
+	eq(frames, watchBefore);
+	eq(p.snapshot().watch.active, false);
+	const capability = new Uint8Array(Buffer.from(await new Promise(resolve => {
+		waiter = resolve;
+		peer.stdin.write('readmany\n');
+	}), 'hex'));
+	eq(capability.length, 24);
+	const originalCapability = new Uint8Array(capability);
+	eq(p.setReadManyCapability(new Uint8Array(23)), false);
+	for (const invalid of [new Uint8Array(24), (() => {
+		const copy = new Uint8Array(capability);
+		new DataView(copy.buffer).setUint32(12, 18, true);
+		return copy;
+	})(), (() => {
+		const copy = new Uint8Array(capability);
+		copy[16] ^= 1;
+		return copy;
+	})()]) {
+		eq(p.setReadManyCapability(invalid), true);
+		eq(p.refreshWatch(), false); // SDK owns validation, before physical handoff.
+		eq(frames, watchBefore);
+	}
+	eq(p.setReadManyCapability(capability), true);
+	capability.fill(0); // The provider owns its immutable session-local copy.
+	eq(p.refreshWatch(), true);
+	await done();
+	eq(frames, watchBefore + 1);
+	eq(p.snapshot().watch.rows.map(row => [row.status, row.text]), [
+		['Ok', '18446744073709551615'], ['Ok', '-9223372036854775808'],
+		['Ok', '-123'], ['Unavailable', '']
+	]);
+	eq(Object.isFrozen(p.snapshot().watch), true);
+	eq(Object.isFrozen(p.snapshot().watch.rows[0]), true);
+	const knownRows = p.snapshot().watch.rows;
+	const competing = mode === 'dynamic' ? client.readField(client.bind('FieldRead', 0).endpoint)
+	                                      : client.read(sdk.control.fields.Config);
+	eq(p.refreshWatch(), false);
+	await competing;
+	await done();
+	eq(p.snapshot().watch.rows, knownRows); // QueueFull did not retire valid readings.
+	eq(p.snapshot().watch.active, false);
+	// A malformed final item must not leave an earlier value visible. The SDK
+	// validates the whole response before the provider publishes any watched row.
+	nextManyTransform = reply => reply[reply.length - 4] = 255;
+	eq(p.refreshWatch(), true);
+	await done();
+	eq(nextManyTransform, undefined);
+	eq(p.snapshot().watch.rows.every(row => row.status === 'Stale' && row.text === ''), true);
+	eq(p.setReadManyCapability(originalCapability), true);
+	eq(p.refreshWatch(), true);
+	await done();
+	eq(p.snapshot().watch.rows[0].text, '18446744073709551615');
+	eq(p.select(endpoint('Config').key), true);
+	eq(p.refresh(), true);
+	await done();
+	eq(p.beginEdit(), true);
+	eq(p.setWatchInterval(99), false);
+	eq(p.setWatchInterval(100), true);
+	eq(p.setWatchInterval(Infinity), false);
+	eq(p.startWatch(NaN), false);
+	const pollingBefore = frames;
+	hold = true;
+	release = undefined;
+	eq(p.startWatch(0), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function');
+	eq(frames, pollingBefore + 1);
+	for (const tick of [100, 200, 300, 500])
+		eq(p.tickWatch(tick), false);
+	eq(p.refreshWatch(), false);
+	eq(p.clearWatch(), false);
+	eq(p.setWatchIndividual(true), false);
+	eq(p.setWatchInterval(1000), false);
+	eq(p.removeWatch(endpoint('Wide').key), false);
+	eq(p.refresh(), false); // No foreground action races the accepted cycle.
+	eq(p.setText(['gain'], '9', p.snapshot().revision), false);
+	eq(p.rows([], {source : 'draft'}).rows.every(row => !row.editable), true);
+	eq(client.pendingCount, 1);
+	hold = false;
+	release();
+	await done();
+	eq(p.snapshot().watch.running, true);
+	eq(p.tickWatch(599), false);
+	eq(p.tickWatch(600), true);
+	await done();
+	eq(frames, pollingBefore + 2); // Missed ticks were skipped, not queued.
+	eq(p.stopWatch(), true);
+	eq(p.snapshot().watch.active, false);
+	eq(p.rows([], {source : 'draft'}).rows.find(row => row.name === 'gain').editable, true);
+	eq(p.tickWatch(1000), false);
+	eq(p.removeWatch(endpoint('Unavailable').key), true);
+	eq(p.removeWatch(endpoint('Mode').key), true);
+	eq(p.addWatch(endpoint('Unavailable').key), true);
+	eq(p.addWatch(endpoint('Mode').key), true); // Unavailable is deliberately not the last item.
+	eq(p.setWatchIndividual(true), true);
+	const individualBefore = frames;
+	eq(p.refreshWatch(), true);
+	await done();
+	eq(frames, individualBefore + 4);
+	eq(p.snapshot().watch.rows.map(row => row.text),
+	   ['18446744073709551615', '-9223372036854775808', '', '-123']);
+	eq(p.snapshot().watch.rows.map(row => row.status), ['Ok', 'Ok', 'Unavailable', 'Ok']);
+	// Any accepted foreground mutation retires watch values, even when those
+	// particular scalar getters might happen to be unchanged on this device.
+	eq(p.apply(), true);
+	eq(p.snapshot().watch.rows.every(row => row.status === 'Stale' && row.text === ''), true);
+	await done();
+	eq(p.snapshot().outcomes.write.succeeded, true);
+	// Stop cannot release the accepted transport request early. Mutation of
+	// selection membership stays forbidden until its completion has drained.
+	hold = true;
+	release = undefined;
+	eq(p.startWatch(1000), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function');
+	eq(p.stopWatch(), true);
+	eq(p.snapshot().watch.active, true);
+	eq(p.snapshot().watch.pending, true);
+	eq(p.clearWatch(), false);
+	const stoppedFrames = frames;
+	hold = false;
+	release();
+	await done();
+	eq(p.snapshot().watch.active, false);
+	eq(frames, stoppedFrames); // Stop prevents the rest of the Individual cycle.
+	// Session invalidation hides cached values immediately and rejects the old
+	// completion. It does not publish values from a borrowed late RX response.
+	hold = true;
+	release = undefined;
+	eq(p.refreshWatch(), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function');
+	p.invalidate();
+	eq(p.snapshot().watch.rows.every(row => row.status === 'Stale' && row.text === ''), true);
+	eq(p.setReadManyCapability(new Uint8Array(24)), false);
+	hold = false;
+	release();
+	await done();
+	eq(p.snapshot().watch.rows.every(row => row.text === ''), true);
+	eq(p.snapshot().watch.active, false);
+	await readmit(20);
+	eq(p.sync(), true);
+	eq(p.snapshot().watch.rows.length, 0);
+	eq(p.addWatch(endpoint('Wide').key), true);
+	eq(p.setWatchIndividual(false), true);
+	const newSessionFrames = frames;
+	eq(p.refreshWatch(), false); // TRM1 from session 19 was retired.
+	eq(frames, newSessionFrames);
+	eq(p.clearWatch(), true);
 	unsubscribe();
 	client.close();
 	peer.stdin.end();

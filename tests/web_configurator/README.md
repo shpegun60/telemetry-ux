@@ -37,6 +37,12 @@ The maintained checks cover:
 - A Write executed by the Model while its ACK is retained, followed by explicit
   Disconnect, `OutcomeUnknown`, stale-value retirement, late response and
   reconnect without replay.
+- Real Static/Dynamic ReadMany over 1–32 selected scalar Fields, session-bound
+  capabilities, exact U64/S64/open enum and per-item Unavailable. Deterministic
+  clocks test skipped ticks, pending Stop/drain, malformed replies, QueueFull,
+  stale completions and explicit Individual fallback. The native provider floor
+  is 871 checks. Chromium also selects four Fields through the actual Watchlist
+  controls and proves one batch exchange versus four explicit individual reads.
 - Pure renderer controls for 128→256→300 rows, exact 128-row windows, safe text,
   keyboard focus, unsubscribing once and preserving a host-owned sibling/client.
   Detached expand and pagination controls cannot change a new selection or an
