@@ -1,0 +1,66 @@
+name: Exact SDK and UX pair
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Select immutable release pair
+    runs-on: ubuntu-24.04
+    outputs:
+      sdk_revision: ${{ steps.pair.outputs.sdk_revision }}
+      ux_revision: ${{ steps.pair.outputs.ux_revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: pair
+        name: Record the exact pair and validate development versions
+        run: |
+          python3 -B - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          pair = json.loads(Path('.github/release-pair.json').read_text())
+          sdk = pair['sdkRevision']
+          ux = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if pair['schemaVersion'] != 1 or not all(re.fullmatch('[0-9a-f]{40}', s) for s in (sdk, ux)):
+              raise SystemExit('Require immutable full SDK and UX commits')
+          if pair['uxVersion'] != Path('VERSION').read_text().strip() or pair['sdkVersion'] != '0.1.0':
+              raise SystemExit('The release pair versions do not match this consumer contract')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'sdk_revision={sdk}\nux_revision={ux}\n')
+          Path('release-pair-inputs.json').write_text(json.dumps(dict(pair, uxRevision=ux), indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exact-release-pair
+          path: release-pair-inputs.json
+          if-no-files-found: error
+
+  integration:
+    needs: identity
+    uses: ./.github/workflows/ci.yml
+    with:
+      sdk_revision: ${{ needs.identity.outputs.sdk_revision }}
+      ux_revision: ${{ needs.identity.outputs.ux_revision }}
+
+  qualified:
+    name: Exact SDK + UX integration
+    if: always()
+    needs: [identity, integration]
+    runs-on: ubuntu-24.04
+    env:
+      IDENTITY_RESULT: ${{ needs.identity.result }}
+      INTEGRATION_RESULT: ${{ needs.integration.result }}
+    steps:
+      - name: Require every actual consumer job
+        run: |
+          test "$IDENTITY_RESULT" = success
+          test "$INTEGRATION_RESULT" = success

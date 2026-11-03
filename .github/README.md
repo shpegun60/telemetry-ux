@@ -1,0 +1,20 @@
+# Compatibility qualification
+
+`workflows/ci.yml` keeps the immutable older SDK revisions used by the supported
+consumer profiles. It also accepts full SDK/UX revisions through `workflow_call`.
+There is one implementation of each consumer suite.
+
+`workflows/release-pair.yml` calls those same six jobs with the SDK commit in
+`release-pair.json` and the exact UX PR head (or pushed main commit). This covers
+Inspector, generated/static QML, browser providers/WebSocket, Python codegen on
+Windows/Linux, and the independently installed pure Qt view. The aggregate
+**Exact SDK + UX integration** fails if any job fails, is cancelled or is skipped.
+
+The `exact-release-pair` artifact records the selected inputs, not a success
+claim. The aggregate check supplies the result; each consumer retains its own
+actual command logs, installed package identities and qualification receipts.
+
+Update `sdkRevision` by reviewed PR when choosing a new joint delivery. A moving
+SDK `main` is never silently substituted for a recorded commit. A successful old
+compatibility profile alone does not qualify the selected release pair. Add the
+aggregate check to the required checks after its first successful qualification.

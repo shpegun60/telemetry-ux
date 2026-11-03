@@ -4,9 +4,22 @@ name: Installed codegen
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      sdk_revision:
+        description: Optional exact SDK commit for the release-pair qualification
+        type: string
+        default: ''
+      ux_revision:
+        description: Exact UX commit to check out for the release-pair qualification
+        type: string
+        default: ''
 
 permissions:
   contents: read
+
+env:
+  UX_EXPECTED_REVISION: ${{ inputs.ux_revision || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   configurator:
@@ -18,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.UX_EXPECTED_REVISION }}
           persist-credentials: false
       - name: Install Qt without any Telemetry SDK checkout
         run: |
@@ -53,16 +67,18 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUTF8: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '9f0364baa039137e71b45ff59b2a3f49e94be5af' }}
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.UX_EXPECTED_REVISION }}
           persist-credentials: false
       - name: Checkout exact SDK consumer gate
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: 9f0364baa039137e71b45ff59b2a3f49e94be5af
+          ref: ${{ env.SDK_EXPECTED_REVISION }}
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Select Python 3.12
@@ -73,7 +89,7 @@ jobs:
         run: python -m pip install setuptools==80.9.0 wheel==0.45.1
       - name: Qualify installed core, UX and full distributions
         run: |
-          $expected = '9f0364baa039137e71b45ff59b2a3f49e94be5af'
+          $expected = $env:SDK_EXPECTED_REVISION
           $actual = git -C .ci/telemetry-sdk rev-parse HEAD
           if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
               throw "SDK checkout does not match the pinned qualification input"
@@ -98,15 +114,17 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '6e15220b1271139b3f1996a16d385c660f856f45' }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.UX_EXPECTED_REVISION }}
           persist-credentials: false
       - name: Checkout qualified SDK transport components
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: 6e15220b1271139b3f1996a16d385c660f856f45
+          ref: ${{ env.SDK_EXPECTED_REVISION }}
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Checkout private SDK serial dependency
@@ -124,11 +142,11 @@ jobs:
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
       - name: Install and relocate the SDK prefix
         run: |
-          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = 6e15220b1271139b3f1996a16d385c660f856f45
+          test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
           cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/sdk-build" -G Ninja \
             '-DTELEMETRY_COMPONENTS=inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_serial_transport;resource_adapter' \
             -DCOBS_ROOT="$GITHUB_WORKSPACE/.ci/cobs" -DCMAKE_BUILD_TYPE=Release \
-            -DTELEMETRY_SOURCE_REVISION=6e15220b1271139b3f1996a16d385c660f856f45 \
+            -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk-prefix-stage"
           cmake --build "$RUNNER_TEMP/sdk-build" --target install --parallel 2
           mv "$RUNNER_TEMP/sdk-prefix-stage" "$RUNNER_TEMP/sdk-prefix"
@@ -156,7 +174,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: 6e15220b1271139b3f1996a16d385c660f856f45
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '6e15220b1271139b3f1996a16d385c660f856f45' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -164,12 +182,13 @@ jobs:
       - name: Checkout UX
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.UX_EXPECTED_REVISION }}
           persist-credentials: false
       - name: Checkout exact headless SDK and starter hook
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: 6e15220b1271139b3f1996a16d385c660f856f45
+          ref: ${{ env.SDK_EXPECTED_REVISION }}
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Select Python 3.12
@@ -348,7 +367,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: fe6169d97ed84c6c4ab9c36c9b4c7d52e86c825e
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'fe6169d97ed84c6c4ab9c36c9b4c7d52e86c825e' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -356,12 +375,13 @@ jobs:
       - name: Checkout UX
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.UX_EXPECTED_REVISION }}
           persist-credentials: false
       - name: Checkout exact SDK package producer
         uses: actions/checkout@v4
         with:
           repository: shpegun60/telemetry-sdk
-          ref: fe6169d97ed84c6c4ab9c36c9b4c7d52e86c825e
+          ref: ${{ env.SDK_EXPECTED_REVISION }}
           path: .ci/telemetry-sdk
           persist-credentials: false
       - name: Select Python 3.12
