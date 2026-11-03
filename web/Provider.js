@@ -438,6 +438,7 @@ function presentation(adapter, inputLimits)
 		++epoch;
 		blockedSession = identity?.session;
 		current = false;
+		writesEnabled = false;
 		clearValues();
 		notify();
 	}
@@ -456,6 +457,7 @@ function presentation(adapter, inputLimits)
 			return true;
 		++epoch;
 		current = false;
+		writesEnabled = false;
 		clearValues();
 		identity = live;
 		const token = epoch;
@@ -879,7 +881,8 @@ function presentation(adapter, inputLimits)
 		    return () => listeners.delete(listener);
 		},
 		setWritesEnabled(enabled) {
-		    if (typeof enabled !== 'boolean' || publishing || notifying)
+		    if (typeof enabled !== 'boolean' || publishing || notifying ||
+		        (enabled && !isCurrent()))
 			    return false;
 		    writesEnabled = enabled;
 		    notify();

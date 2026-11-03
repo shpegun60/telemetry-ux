@@ -125,6 +125,14 @@ static void fields()
 		check(!p.connected() && p.values()->rowCount() == 0 &&
 		          p.writeOutcome().contains(QStringLiteral("previous session")),
 		      "disconnect retires values and labels historical Write");
+		check(!p.allowMutations(), "actual generated session reset revokes mutation opt-in");
+		p.setAllowMutations(true);
+		check(!p.allowMutations(), "disconnected provider cannot preauthorize the next session");
+		check(h.api.admitDescriptor(
+		          {reinterpret_cast<const char*>(cf::descriptorBytes.data()), 64}),
+		      "same generated API admits a fresh session");
+		events();
+		check(p.connected() && !p.allowMutations(), "reused provider requires a fresh opt-in");
 	}
 }
 

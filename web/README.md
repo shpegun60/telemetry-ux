@@ -30,6 +30,11 @@ Void and empty-structure cases. These zero arguments are initial editor values,
 not device defaults. Writes, Command and Service submission require the host to
 opt in with `setWritesEnabled(true)`; this UI setting is not an authorization
 mechanism on the device.
+This opt-in belongs to the current admission. Invalidation or a changed
+schema/session clears it; the host must ask again after `sync()` admits the new
+identity. Enabling mutations while the provider is not current is refused.
+Ordinary same-session `sync()` calls preserve the setting. Historical operation
+outcomes remain visible independently of this permission.
 
 `rows(path, {source, offset, limit})` returns direct children of a structure or
 array, or one scalar row. The maximum window is 128 rows. An expanded nested row

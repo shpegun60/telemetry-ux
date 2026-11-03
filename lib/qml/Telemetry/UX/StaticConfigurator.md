@@ -36,7 +36,10 @@ Configurator {
 ```
 
 `host` is the application's root object with a `deviceProvider` property.
-Mutations default to disabled; permission belongs to the host. The static
+Mutations default to disabled; permission belongs to the current admitted session.
+Disconnect and session replacement clear `allowMutations`; enabling it while
+disconnected is refused. The host must explicitly opt in again after admission.
+Ordinary cache notifications in the same session preserve the setting. The static
 provider supports one foreground Field/Command/Service workflow. It implements no
 polling or ReadMany, so the whole watch pane is hidden. The existing dynamic
 Inspector remains another provider of the same view.

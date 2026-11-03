@@ -292,6 +292,8 @@ static void draftAndReadback()
 	api.valid = true;
 	api.changed();
 	api.finish(true);
+	CHECK(!p.allowMutations() && !p.canEdit());
+	p.setAllowMutations(true);
 	CHECK(p.canEdit());
 	CHECK(reads == 2 && published);
 	CHECK(model->data(model->index(0, 0), role(model, "value")).toString() == "10");
@@ -305,6 +307,41 @@ static void draftAndReadback()
 	CHECK(p.editing());
 	CHECK(p.canApply());
 	CHECK(model->data(fresh, role(model, "editorText")).toString() == "11");
+}
+
+static void sessionPermission()
+{
+	for (const int category : {1, 2, 3}) {
+		Api api;
+		StaticConfiguratorProvider p(binding(api, category, category != 1));
+		p.setAllowMutations(true);
+		CHECK(p.allowMutations());
+		api.changed();
+		CHECK(p.allowMutations()); // Ordinary cache publication preserves opt-in.
+		api.invalidate();
+		CHECK(!p.allowMutations());
+		p.setAllowMutations(true);
+		CHECK(!p.allowMutations()); // Disconnected opt-in cannot arm a future session.
+		api.ready = api.valid = true;
+		++api.epoch;
+		api.changed();
+		p.selectEndpoint(endpoint(p));
+		CHECK(p.connected() && !p.allowMutations());
+		CHECK(!p.canEdit() && !p.canApply() && !p.canExecute() && !p.canCallService());
+		p.beginEdit();
+		p.apply();
+		p.executeCommand();
+		p.callService();
+		CHECK(api.calls.isEmpty());
+		p.setAllowMutations(true);
+		CHECK(p.allowMutations());
+		CHECK(category == 1 ? p.canEdit() : category == 2 ? p.canExecute() : p.canCallService());
+		++api.epoch; // Direct replacement also clears permission, without a not-ready event.
+		api.changed();
+		CHECK(!p.allowMutations());
+		CHECK(!p.canEdit() && !p.canApply() && !p.canExecute() && !p.canCallService());
+		CHECK(api.calls.isEmpty());
+	}
 }
 
 static void paging()
@@ -558,6 +595,7 @@ int main(int argc, char** argv)
 	QCoreApplication app(argc, argv);
 	actions();
 	draftAndReadback();
+	sessionPermission();
 	paging();
 	reentrantInsert();
 	destruction();
