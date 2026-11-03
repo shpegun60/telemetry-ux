@@ -48,3 +48,12 @@ single-submit controls, local reordering, exact U64 argument/response text,
 retired inputs including blur, `Accepted`/`NotExecuted`/`OutcomeUnknown`, and
 removal or session changes. It verifies no DTO creation or device calls on mount;
 actual SDK Batch encoding, execution and lifetime remain native-provider tests.
+
+The maintained floors are 139 lifecycle/standalone checks, the unchanged 16 SSR
+checks, and 13 actual workspace geometry checks. The full Configurator fixture
+adds four selected endpoints without I/O, retains search focus while publishing a
+32-item Batch, verifies desktop navigation stays beside the workspace while
+scrolling, and checks the 390-pixel mobile layout for viewport overflow and local
+horizontal Batch scrolling with readable column widths. Desktop
+and mobile screenshots are retained. Standalone panels keep their existing DOM;
+these geometry controls add no client, transport or operation guarantees.
