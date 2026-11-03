@@ -15,3 +15,9 @@ def generate_qml(schema):
     """One emission supplies source files and the legacy QML symbol receipt."""
     from . import qml
     return GeneratedTarget(qml.generate(schema), qml.symbol_mapping(schema))
+
+
+def generate_web_starter(schema):
+    """Lazily emit the optional browser entry page, without importing QML."""
+    from . import starter
+    return starter.generate_web_starter(schema)
