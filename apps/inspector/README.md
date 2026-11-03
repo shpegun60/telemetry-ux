@@ -45,6 +45,28 @@ In Qt Creator, open this directory's `CMakeLists.txt`, choose the matching kit,
 and add the SDK prefix to `CMAKE_PREFIX_PATH`. The Widgets playground is a
 separate application.
 
+### Work on the application in Qt Creator
+
+Open **`apps/inspector/CMakeLists.txt`** from your Telemetry UX checkout. This is
+the application's source project; the Windows ZIP is an optional distribution,
+not a prerequisite for editing or running it.
+
+1. Choose your Qt 6.4+ C++20 kit. Its compiler/ABI and Qt version must match the
+   installed SDK prefix, including any optional transport libraries.
+2. Choose a build directory outside the checkout. In **Projects → Build → CMake**,
+   append the SDK installation prefix to `CMAKE_PREFIX_PATH`; keep the kit's Qt
+   prefix. Enable `INSPECTOR_ENABLE_SERIAL` only if both the SDK serial component
+   and the matching Qt SerialPort module are installed.
+3. Configure, build, select the **`telemetry-inspector-qml`** run target and run it
+   with no arguments. **Demo device** works without a board. Set a breakpoint in
+   `InspectorController.cpp` or edit `Main.qml` and rebuild as usual.
+
+Qt Creator supplies the selected kit's Qt runtime. If SerialPort was installed
+in a separate prefix on Windows, also add that prefix's `bin` directory to the
+run environment's `PATH`. No `windeployqt`, ZIP extraction or Python is required
+for this development workflow. Keep kit-specific settings in a local
+`CMakeUserPresets.json` or Qt Creator `.user` file; both are Git-ignored.
+
 For later shell examples set
 `inspector_exe=/tmp/telemetry-inspector-qml/telemetry-inspector-qml`.
 On Windows, use one matching kit and put its compiler before other GCC toolchains:
