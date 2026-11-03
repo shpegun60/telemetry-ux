@@ -8,7 +8,8 @@
   "exports": {
     ".": {"types": "./web/index.d.ts", "default": "./web/index.js"},
     "./web": {"types": "./web/index.d.ts", "default": "./web/index.js"},
-    "./configurator.css": "./web/Configurator.css"
+    "./configurator.css": "./web/Configurator.css",
+    "./transports/websocket": {"types": "./web/WebSocketTransport.d.ts", "default": "./web/WebSocketTransport.js"}
   },
   "dependencies": {"telemetry-sdk": "0.1.0"},
   "files": ["VERSION", "LICENSE", "web"]

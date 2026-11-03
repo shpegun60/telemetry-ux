@@ -94,6 +94,58 @@ the static adapter is not a replacement Descriptor validator.
 Unmounting the renderer only removes presentation subscriptions and DOM. The
 host retains responsibility for every client, transport and pending operation.
 
+## Browser WebSocket carrier
+
+Use one already-open, exclusively borrowed browser socket for complete binary
+Encoded messages. Bootstrap and admission belong to the application:
+
+```js
+import {DeviceClient} from 'telemetry-sdk/client';
+import {bindWebSocket} from 'telemetry-ux/transports/websocket';
+import {matchesHeader} from './generated/js/device.js';
+
+const port = bindWebSocket(openSocket, {
+    onDisconnect() {
+        provider.invalidate();
+        client.close();
+        provider.sync();
+        openSocket.close();
+    }
+});
+const client = new DeviceClient({backend: port.backend, matchesHeader});
+// Admit the independently checked schema/header and session, then create provider.
+```
+
+The callback runs once after the carrier has ended and detached its listeners;
+the host must ensure that its client/provider exist before processing socket
+events. `port.dispose()` ends the binding and invokes that same callback. It
+does not close the borrowed socket. A socket has one carrier binding for its
+entire lifetime, including after disposal. Reconnect creates a fresh socket,
+client and presentation owner after the application's recovery requirements.
+Unmounting the Configurator does not dispose the carrier.
+
+The carrier creates one ordinary SDK `EncodedBackend`, with no additional
+request queue, timer, correlation map, retry or automatic reconnect. Only
+complete binary messages of 32..65,536 bytes are accepted. The optional
+`maxFrameBytes` limits both directions; `maxBufferedBytes` bounds the browser's
+queued sends and defaults to twice that frame limit. A malformed carrier message,
+socket error or close notifies the host; the SDK validates actual TEQ1 correlation
+and payload semantics. It remains responsible for operation deadlines.
+
+`WebSocket.send()` copies request bytes, but returning does not acknowledge
+remote execution. A send error or buffer refusal after the SDK authorized a
+mutation can conservatively produce `OutcomeUnknown`, even when the browser
+sent no frame. Logical disposal and a local socket close are not proof that a
+remote operation stopped. Keep known results and complete the required recovery
+before admitting another device session. No exactly-once guarantee is added.
+
+`encodedOptions: {readMany: true, batch: true}` only opts into local backend
+support. The application must independently verify matching remote capabilities;
+the localhost [WebSocket demo](../examples/web_demo/README.md) advertises neither.
+The adapter supports native browser WebSocket methods; it is not a generalized
+EventTarget transport. See the [installed consumer gate](../tests/websocket_transport/README.md)
+for the separate carrier, host-lease and real browser/native checks.
+
 ## Declarative HTML element
 
 With the host's normal npm/import-map resolution and the existing
