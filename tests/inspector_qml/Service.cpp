@@ -10,6 +10,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQml/QQmlExpression>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
@@ -92,6 +93,17 @@ QQuickItem* visual(QQuickItem* parent, const QString& name, const QString& scala
 	return nullptr;
 }
 
+bool clickPointExposed(QQuickWindow& window, const QQuickItem& item)
+{
+	const auto point = item.mapToScene(QPointF{item.width() / 2, item.height() / 2});
+	if (!QRectF{0, 0, qreal(window.width()), qreal(window.height())}.contains(point))
+		return false;
+	for (auto* ancestor = item.parentItem(); ancestor; ancestor = ancestor->parentItem())
+		if (ancestor->clip() && !ancestor->contains(ancestor->mapFromScene(point)))
+			return false;
+	return true;
+}
+
 QQuickItem* control(QQuickWindow& window, const QString& name, const QString& scalar = {})
 {
 	QQuickItem* result = nullptr;
@@ -99,6 +111,34 @@ QQuickItem* control(QQuickWindow& window, const QString& name, const QString& sc
 		result = visual(window.contentItem(), name, scalar);
 		return result && result->width() > 0 && result->height() > 0;
 	}));
+	// A TableView can instantiate a row beyond its clipped viewport. Visibility
+	// and positive size alone do not make the center a valid mouse target.
+	// Use the public scrolling API to reveal it before the physical mouse
+	// click. This test qualifies input/DTO behavior, not wheel kinetics.
+	if (!clickPointExposed(window, *result)) {
+		auto* viewport = result->parentItem();
+		while (viewport && viewport->objectName() != QStringLiteral("valueTree"))
+			viewport = viewport->parentItem();
+		CHECK(viewport && viewport->width() > 0 && viewport->height() > 0);
+		auto* delegate = result->parentItem();
+		while (delegate && delegate->objectName() != QStringLiteral("valueRow"))
+			delegate = delegate->parentItem();
+		CHECK(delegate && delegate->property("row").isValid());
+		const auto row = delegate->property("row").toInt();
+		QQmlExpression position{qmlContext(viewport), viewport,
+		    QStringLiteral("positionViewAtRow(%1, TableView.Contain)").arg(row)};
+		(void)position.evaluate();
+		if (position.hasError())
+			std::fprintf(stderr, "%s\n", qPrintable(position.error().toString()));
+		CHECK(!position.hasError());
+		CHECK(await([&] {
+			result = visual(window.contentItem(), name, scalar);
+			return result && result->width() > 0 && result->height() > 0 &&
+			       clickPointExposed(window, *result);
+		}));
+		std::printf("Inspector Service reveal scalar=%s row=%d exposed=1\n", qPrintable(scalar), row);
+	}
+	CHECK(clickPointExposed(window, *result));
 	return result;
 }
 
@@ -107,6 +147,7 @@ void click(QQuickWindow& window, QQuickItem& item)
 	const auto point = item.mapToScene(QPointF{item.width() / 2, item.height() / 2}).toPoint();
 	CHECK(point.x() >= 0 && point.x() < window.width() && point.y() >= 0 &&
 	      point.y() < window.height());
+	CHECK(clickPointExposed(window, item));
 	QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
 }
 
