@@ -76,8 +76,10 @@ engine.setInitialProperties({{"deviceProvider", QVariant::fromValue(&provider)}}
 ```
 
 The page passes `deviceProvider` to `Configurator` and sets
-`watchlistVisible: false`. The static provider supports Fields, Commands and
-Services; it does not advertise polling or ReadMany. Generated C++ callbacks
+`watchlistVisible: false` to hide optional polling controls. The static provider
+supports Fields, Commands, Services and an explicit Individual FieldRead
+Watchlist for up to 32 scalar/enum Fields. It does not advertise ReadMany.
+Generated C++ callbacks
 validate values and encode requests. The provider borrows confirmed API caches,
 keeps a private draft and original canonical Field bytes, and preserves untouched
 NaN wire bits during edits. It creates no client, transport or Descriptor parser.

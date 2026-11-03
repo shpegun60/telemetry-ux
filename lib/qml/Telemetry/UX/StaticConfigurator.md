@@ -31,7 +31,6 @@ import Telemetry.UX
 
 Configurator {
     provider: host.deviceProvider
-    watchlistVisible: false
 }
 ```
 
@@ -40,9 +39,38 @@ Mutations default to disabled; permission belongs to the current admitted sessio
 Disconnect and session replacement clear `allowMutations`; enabling it while
 disconnected is refused. The host must explicitly opt in again after admission.
 Ordinary cache notifications in the same session preserve the setting. The static
-provider supports one foreground Field/Command/Service workflow. It implements no
-polling or ReadMany, so the whole watch pane is hidden. The existing dynamic
-Inspector remains another provider of the same view.
+provider supports one foreground Field/Command/Service workflow and explicit
+Individual FieldRead polling. The existing dynamic Inspector remains another
+provider of the same view.
+
+## Static Watchlist
+
+Select a readable scalar Field or enum and call `addWatch()` (at most 32 distinct
+Fields). `refreshWatch()` performs one sequential cycle; `startWatch()` repeats
+cycles at `watchIntervalMs` (100–60,000 ms). `stopWatch()` stops future reads and
+drains an already accepted read. Membership and interval changes are refused
+until the cycle and accepted read have ended. A slow read or foreground operation
+causes timer ticks to be skipped; polling never accumulates another request queue.
+Selection and mounting the QML view do not submit work.
+
+This provider currently exposes `watchIndividual == true` and
+`watchReadManySupported == false`. It does not silently turn a ReadMany request
+into several reads. Actual static QML ReadMany requires separate generated API
+and adapter capability support; headless SDK ReadMany alone does not provide it.
+
+Each row projects the existing generated Field cache as exact display text, with
+its own status and session freshness. U64/S64 never pass through a QML Number;
+unknown enum codes remain decimal text. Failed reads publish an empty value and
+an error status, even when the generated API still retains an older cache value.
+The Watchlist owns no additional confirmed DTO or wire payload. Successful
+external cache notifications may update the corresponding projected value.
+
+Foreground reads serialize with the current cycle. Accepted foreground mutations
+stop polling and invalidate Watchlist presentation; restart explicitly after the
+operation. A session change immediately invalidates values and stops polling.
+Membership is retained for the same generated schema, but a later admission never
+restarts polling or publishes an old callback. The host still owns transport
+recovery and physical quiescence.
 
 ## Ownership and lifetime
 
@@ -99,4 +127,5 @@ nodes and depth 64. Arrays materialize at most 128 immediate Qt rows per fetch.
 Initialization and wire validation delegate to generated typed code; this
 provider has no Descriptor parser or hand-written payload encoder. One queued
 notification may coalesce reentrant Qt presentation changes; it never advances
-the client or schedules an SDK operation.
+the client. Individual Watchlist cycles schedule their next explicit FieldRead
+on a later owner turn, with at most one accepted read at a time.

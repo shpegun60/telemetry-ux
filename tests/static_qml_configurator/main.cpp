@@ -7,6 +7,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
+#include <QTimer>
 #include <cstdlib>
 #include <cstring>
 
@@ -280,6 +281,54 @@ static QQuickItem* visual(QQuickItem* root, const QString& name, const QString& 
 	return nullptr;
 }
 
+static void individualWatch()
+{
+	ex::device.config = ex::initial;
+	Harness h;
+	Provider p{h.binding};
+	check(!p.watchReadManySupported() && p.watchIndividual(), "Static Watchlist explicitly uses Individual FieldRead");
+	select(p, "Config");
+	check(!p.addWatch(), "aggregate Field excluded from scalar Watchlist");
+	const auto before = h.packets;
+	for (const auto* name : {"Wide", "Signed", "Mode"}) {
+		select(p, name);
+		check(p.canAddWatch() && p.addWatch(), "add real generated scalar Field");
+		check(!p.addWatch(), "duplicate watch membership refused");
+	}
+	check(p.watchCount() == 3 && h.packets == before, "selection and watch membership perform no I/O");
+	p.refreshWatch();
+	for (int attempt = 0; attempt < 30 && p.watchActive(); ++attempt) {
+		h.exchange();
+		events();
+	}
+	check(!p.watchActive() && h.packets == before + 3, "one Individual cycle uses exactly three existing FIFO requests");
+	auto* model = p.watchlist();
+	const auto text = [&](int row) { return model->data(model->index(row, 0), Qt::UserRole + 3).toString(); };
+	check(text(0) == QStringLiteral("18446744073709551615") &&
+	          text(1) == QStringLiteral("-9223372036854775808") && text(2) == QStringLiteral("-2"),
+	      "Static Watchlist projects exact U64/S64/open enum cache values");
+	p.startWatch();
+	check(p.watchActive() && p.watchPending(), "explicit Start owns one pending Individual read");
+	p.stopWatch();
+	check(p.watchActive() && p.watchPending(), "Stop retains an accepted pending request until completion");
+	const auto count = p.watchCount();
+	p.clearWatch();
+	check(p.watchCount() == count, "Stop does not unlock membership before drain");
+	h.exchange();
+	events();
+	check(!p.watchActive() && h.packets == before + 4, "Stop prevents remaining Fields from submitting");
+	const auto afterStop = h.packets;
+	auto* timer = p.findChild<QTimer*>(QStringLiteral("staticConfiguratorWatchTimer"));
+	check(timer && !timer->isActive(), "poll timer stopped explicitly");
+	QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+	events();
+	check(h.packets == afterStop && !p.busy(), "stopped timer notification cannot create work");
+	h.api.resetSession();
+	events();
+	check(text(0).isEmpty() && model->data(model->index(0, 0), Qt::UserRole + 2).toString() == QStringLiteral("Stale"),
+	      "session invalidation hides watch values before new admission");
+}
+
 static void qmlInput(const QString& image, bool standalone = false)
 {
 	ex::device.config = ex::initial;
@@ -311,6 +360,12 @@ static void qmlInput(const QString& image, bool standalone = false)
 	check(window != nullptr, "real QQuickWindow");
 	auto* pane = root->findChild<QQuickItem*>(QStringLiteral("watchlistPane"));
 	check(standalone ? pane == nullptr : pane && !pane->isVisible(), "standalone has no navigation or Watchlist pane");
+	if (!standalone) {
+		auto* watchMode = root->findChild<QObject*>(QStringLiteral("watchMode"));
+		check(watchMode && watchMode->property("count").toInt() == 1 &&
+		          watchMode->property("currentIndex").toInt() == 0,
+		      "Static QML never advertises unsupported ReadMany mode");
+	}
 	auto* input =
 	    visual(window->contentItem(), QStringLiteral("scalarEditor"), QStringLiteral("gain"));
 	check(input != nullptr, "live QML scalar editor");
@@ -424,6 +479,7 @@ int main(int argc, char** argv)
 		commandsAndServices();
 		queueRefusal();
 		unknownWrite();
+		individualWatch();
 		qmlInput(argc > 1 ? QString::fromLocal8Bit(argv[1])
 		                  : QStringLiteral("static-configurator.png"));
 		qmlInput((argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral("static-configurator.png")) + QStringLiteral(".field.png"), true);

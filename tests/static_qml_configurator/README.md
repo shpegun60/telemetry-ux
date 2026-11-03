@@ -10,7 +10,7 @@ No SDK source-tree fallback, device connection or hardware operation is used.
 The real keyboard/mouse edit test runs through both Configurator and standalone
 FieldEditor. Standalone CommandPanel and ServicePanel reject mismatched
 selections and submit only after an explicit click, through the same generated
-API/FIFO. Mounting them sends no packet. The GUI floor is 450 checks, including
+API/FIFO. Mounting them sends no packet. The GUI floor is 494 checks, including
 exact U64/S64, lifecycle and permission regressions.
 
 ```sh
@@ -33,12 +33,16 @@ The strict QML diagnostic check remains enabled; no warning is filtered.
 
 Qt 6.4.2 on Linux has a separately reproduced software scenegraph texture-cache
 leak, also present in a Qt-only Window/Controls program with no Telemetry code.
-For that exact runtime, backend and sanitized GUI profile, the runner retains
-three executions of the same binary: the unfiltered full journey must finish
-its assertions and fail with the Qt texture leak (exit 86); the sole
-`QSGRenderContext::textureForFactory` LSan rule permits the normal GUI run; and
-the same full journey with an intentional 123-byte application leak must still
-fail with that named allocation and exit 86. Ambient `LSAN_OPTIONS` are removed.
+For that exact runtime, backend and sanitized GUI profile, the runner first
+executes the full journey without suppression. A clean exit 0, completed
+assertions and no sanitizer diagnostics are accepted directly; the extracted
+panels can avoid retaining the Qt texture, so a leak is not a required result.
+Only exit 86 with the proved Qt texture allocation enables the sole
+`QSGRenderContext::textureForFactory` LSan rule for a second normal GUI run.
+Every sanitized profile also runs the same journey with an intentional 123-byte
+application leak: that named allocation must still fail with exit 86 and an
+exact 123-byte leak summary. No other exit is accepted. Ambient `LSAN_OPTIONS`
+are removed.
 The nested generated gate and `Contracts.cpp` remain unfiltered, and other Qt
 versions receive no exception. This is a bounded external Qt qualification
 exception, not an unconditional leak-free GUI claim.
@@ -50,14 +54,17 @@ also leaves the texture collections untouched. The corresponding
 [Qt 6.8.0 implementation](https://raw.githubusercontent.com/qt/qtdeclarative/v6.8.0/src/quick/scenegraph/adaptations/software/qsgsoftwarecontext.cpp)
 explicitly destroys both collections. This comparison does not establish the
 first fixed Qt release. The receipt records the actual runtime version, rule
-hash, primary sources, per-command sanitizer settings and all three outcomes.
+hash when applied, primary sources, per-command sanitizer settings and outcomes.
+The receipt distinguishes an eligible Qt profile from an actually applied rule.
 
 The native GUI executable checks confirmed Read → Edit → Apply → separate
 Readback, exact large integers/open enums, floating wire-bit preservation,
 permission opt-in, request initialization, routing/application outcomes and
 session/error handling. Real QTest keyboard input followed by a mouse Apply
-without Enter uses the shared Configurator. The unsupported Watchlist pane is
-hidden. `window.png` records the actual rendered window for visual review.
+without Enter uses the shared Configurator. Static Watchlist exercises three
+real scalar Fields through Individual FieldRead, including exact U64/S64,
+unknown enum, Stop/drain and session invalidation. Its mode selector does not
+offer ReadMany. `window.png` records the actual rendered window for visual review.
 
 `Contracts.cpp` uses an explicitly fake application API facade to isolate Qt
 presentation contracts. Its checks cover lazy 128-row fetching, stale and foreign
@@ -75,6 +82,6 @@ assertion, Qt warning or unexpected sanitizer result makes the gate fail.
 
 The current qualification floors are 340 generated-seam checks, 36 compiled
 naming endpoints, three generator unit tests with 14 sealed default-output
-hashes, 340 native/provider/QML checks with zero warnings, and 148 isolated
+hashes, 494 native/provider/QML checks with zero warnings, and 297 isolated
 presentation-contract checks. Each individual assertion remains authoritative;
 the floors also reject accidentally skipped test paths.

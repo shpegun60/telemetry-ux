@@ -139,10 +139,11 @@ Control {
                     ComboBox {
                         objectName: "watchMode"
                         Layout.preferredWidth: 210
-                        model: ["ReadMany", "Individual FieldRead"]
-                        currentIndex: configurator.provider.watchIndividual ? 1 : 0
-                        enabled: !configurator.provider.watchActive
-                        onActivated: configurator.provider.watchIndividual = currentIndex === 1
+                        readonly property bool readManySupported: configurator.provider.watchReadManySupported !== false
+                        model: readManySupported ? ["ReadMany", "Individual FieldRead"] : ["Individual FieldRead"]
+                        currentIndex: readManySupported && configurator.provider.watchIndividual ? 1 : 0
+                        enabled: !configurator.provider.watchActive && readManySupported
+                        onActivated: configurator.provider.watchIndividual = !readManySupported || currentIndex === 1
                     }
                     Label { textFormat: Text.PlainText; text: "Frequency"; color: "#99abbf" }
                     SpinBox {

@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QPersistentModelIndex>
+#include <QTimer>
 #include <cstdio>
 #include <functional>
 
@@ -37,6 +38,8 @@ struct Api final : QObject {
 	QByteArray payload = "seed17", original;
 	QString token;
 	QStringList calls;
+	QVector<QVariant> watched{QStringLiteral("18446744073709551615"),
+	                          QStringLiteral("-9223372036854775808"), QStringLiteral("-77")};
 
 	void changed()
 	{
@@ -47,12 +50,12 @@ struct Api final : QObject {
 	}
 
 	void finish(bool success, const QString& error = {}, bool accepted = false,
-	            QVariant response = {})
+	            QVariant response = {}, int dispatch = 0)
 	{
 		const auto completed = token;
 		const QVariantMap result{{"success", success}, {"accepted", accepted},
 		                         {"errorKind", error}, {"message", QString()},
-		                         {"value", response},  {"dispatchStatus", 0},
+		                         {"value", response},  {"dispatchStatus", dispatch},
 		                         {"endpointStatus", 0}};
 		const auto copy = subscriptions;
 		for (const auto& slot : copy)
@@ -590,6 +593,225 @@ static void staleCacheAfterWriteRefusal()
 	CHECK(api.calls == QStringList({"read", "write"}));
 }
 
+template<int Index>
+static QVariant watchCached(QObject* object)
+{
+	return static_cast<Api*>(object)->watched[Index];
+}
+
+template<int Index>
+static QString watchRead(QObject* object)
+{
+	return static_cast<Api*>(object)->issue(QStringLiteral("watch%1").arg(Index));
+}
+
+static StaticConfiguratorBinding watchBinding(Api& api, int count = 3)
+{
+	auto b = binding(api);
+	StaticType u64;
+	u64.id = 3;
+	u64.kind = StaticTypeKind::Scalar;
+	u64.scalarCode = 8;
+	b.types.push_back(u64);
+	StaticType s64;
+	s64.id = 4;
+	s64.kind = StaticTypeKind::Scalar;
+	s64.scalarCode = 9;
+	b.types.push_back(s64);
+	StaticType enumeration;
+	enumeration.id = 5;
+	enumeration.kind = StaticTypeKind::Enum;
+	enumeration.underlyingTypeId = 4;
+	enumeration.entries.push_back({QStringLiteral("Known"), QStringLiteral("1")});
+	b.types.push_back(enumeration);
+	const auto prototype = b.endpoints.first();
+	b.endpoints.clear();
+	for (int i = 0; i < count; ++i) {
+		auto e = prototype;
+		e.id = static_cast<quint32>(i);
+		e.name = QStringLiteral("Field%1").arg(i);
+		e.valueType = i == 0 ? 3 : i == 1 ? 4 : i == 2 ? 5 : 1;
+		if (i == 0) {
+			e.cached = watchCached<0>;
+			e.read = watchRead<0>;
+		}
+		if (i == 1) {
+			e.cached = watchCached<1>;
+			e.read = watchRead<1>;
+		}
+		if (i == 2) {
+			e.cached = watchCached<2>;
+			e.read = watchRead<2>;
+		}
+		b.endpoints.push_back(e);
+	}
+	return b;
+}
+
+static void watchEvents()
+{
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+	QCoreApplication::processEvents();
+}
+
+static void watchTick(StaticConfiguratorProvider& p)
+{
+	auto* timer = p.findChild<QTimer*>(QStringLiteral("staticConfiguratorWatchTimer"));
+	CHECK(timer != nullptr);
+	CHECK(timer && QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+}
+
+static void watchLifecycle()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api));
+	CHECK(!p.watchReadManySupported() && p.watchIndividual());
+	CHECK(!p.watchActive() && !p.watchPending() && p.watchCount() == 0);
+	p.setWatchIntervalMs(60000);
+	CHECK(p.watchIntervalMs() == 60000);
+	p.setWatchIntervalMs(99);
+	CHECK(p.watchIntervalMs() == 60000);
+	for (int i = 0; i < 3; ++i) {
+		p.selectEndpoint(endpoint(p, i));
+		CHECK(p.canAddWatch() && p.addWatch());
+		CHECK(!p.canAddWatch() && !p.addWatch());
+	}
+	CHECK(p.watchCount() == 3 && api.calls.isEmpty());
+	auto* model = p.watchlist();
+	const auto textRole = role(model, "text"), statusRole = role(model, "status");
+	p.refreshWatch();
+	CHECK(p.busy() && p.watchActive() && p.watchPending());
+	CHECK(api.calls == QStringList{"watch0"});
+	CHECK(model->data(model->index(0, 0), statusRole) == QStringLiteral("Pending"));
+	CHECK(model->data(model->index(0, 0), textRole).toString().isEmpty());
+	p.clearWatch();
+	p.removeWatch(0);
+	p.setWatchIntervalMs(100);
+	CHECK(p.watchCount() == 3 && p.watchIntervalMs() == 60000);
+	for (int tick = 0; tick < 5; ++tick)
+		watchTick(p);
+	CHECK(api.calls.size() == 1); // No pending request accumulation.
+	api.finish(true);
+	CHECK(!p.busy() && p.watchActive()); // Stable cycle before the next owner turn.
+	p.selectEndpoint(endpoint(p, 0));
+	CHECK(p.selection().endsWith("Field2"));
+	watchEvents();
+	CHECK(api.calls == QStringList({"watch0", "watch1"}) && p.watchPending());
+	CHECK(model->data(model->index(0, 0), textRole).toString() == "18446744073709551615");
+	api.finish(false, "Dispatch", false, {}, 9);
+	watchEvents();
+	CHECK(api.calls == QStringList({"watch0", "watch1", "watch2"}));
+	CHECK(model->data(model->index(1, 0), statusRole) == QStringLiteral("Unavailable"));
+	CHECK(model->data(model->index(1, 0), textRole).toString().isEmpty());
+	api.finish(true);
+	watchEvents();
+	CHECK(!p.watchActive() && !p.busy());
+	CHECK(model->data(model->index(2, 0), textRole).toString() == "-77");
+	api.watched[0] = QStringLiteral("9007199254740993");
+	api.changed();
+	CHECK(model->data(model->index(0, 0), textRole).toString() == "9007199254740993");
+	p.startWatch();
+	CHECK(p.watchActive() && p.watchPending());
+	p.stopWatch();
+	CHECK(p.watchActive() && p.watchPending()); // Stop drains, never cancels host work.
+	p.clearWatch();
+	CHECK(p.watchCount() == 3);
+	const auto issued = api.issued;
+	api.finish(true);
+	watchEvents();
+	CHECK(!p.watchActive() && api.issued == issued);
+	CHECK(p.watchStatus() == QStringLiteral("Stopped"));
+	const auto old = model->index(0, 0);
+	p.removeWatch(0);
+	CHECK(p.watchCount() == 2 && !model->data(old, textRole).isValid());
+	p.refreshWatch();
+	CHECK(api.calls.last() == "watch1");
+	api.invalidate();
+	CHECK(model->data(model->index(0, 0), textRole).toString().isEmpty());
+	CHECK(model->data(model->index(0, 0), statusRole) == QStringLiteral("Stale"));
+	api.ready = api.valid = true;
+	++api.epoch;
+	api.changed();
+	api.finish(true);
+	watchEvents();
+	CHECK(!p.busy() && !p.watchActive());
+	CHECK(model->data(model->index(0, 0), textRole).toString().isEmpty());
+	CHECK(api.issued == issued + 1); // Admission never restarts the old cycle.
+	p.refreshWatch();
+	api.finish(true);
+	watchEvents();
+	CHECK(model->data(model->index(0, 0), textRole).toString() == "-9223372036854775808");
+	api.finish(true);
+	watchEvents();
+	CHECK(!p.watchActive());
+	p.clearWatch();
+	CHECK(p.watchCount() == 0);
+	p.setWatchIndividual(false);
+	CHECK(p.watchIndividual() && p.watchStatus().contains("unavailable"));
+}
+
+static void watchBoundsAndReentrancy()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api, 33));
+	for (int i = 0; i < 32; ++i) {
+		p.selectEndpoint(endpoint(p, i));
+		CHECK(p.addWatch());
+	}
+	p.selectEndpoint(endpoint(p, 32));
+	CHECK(!p.canAddWatch() && !p.addWatch() && p.watchCount() == 32);
+	CHECK(api.calls.isEmpty());
+	p.clearWatch();
+	p.selectEndpoint(endpoint(p, 0));
+	CHECK(p.addWatch());
+	unsigned reentrant = 0;
+	QObject::connect(p.watchlist(), &QAbstractItemModel::dataChanged, &p,
+	                 [&](const QModelIndex&, const QModelIndex&, const QList<int>&) {
+		                 ++reentrant;
+		                 p.clearWatch();
+		                 p.removeWatch(0);
+		                 p.startWatch();
+		                 p.refreshWatch();
+		                 CHECK(!p.addWatch());
+	                 });
+	p.startWatch();
+	CHECK(reentrant > 0 && p.watchCount() == 1 && api.calls.size() == 1);
+	api.finish(true);
+	watchEvents();
+	CHECK(p.watchCount() == 1 && api.calls.size() == 1);
+	// Polling is paused behind a foreground operation, rather than queued.
+	p.refresh();
+	CHECK(p.busy() && api.calls.last() == "watch0");
+	const auto beforeTicks = api.issued;
+	for (int i = 0; i < 3; ++i)
+		watchTick(p);
+	CHECK(api.issued == beforeTicks);
+	api.finish(true);
+	watchEvents();
+	watchTick(p);
+	CHECK(api.issued == beforeTicks + 1 && p.watchPending());
+	p.stopWatch();
+	api.finish(false, "Timeout");
+	watchEvents();
+	CHECK(!p.watchActive() && p.watchlist()
+	                              ->data(p.watchlist()->index(0, 0), role(p.watchlist(), "text"))
+	                              .toString()
+	                              .isEmpty());
+	// Models can request deferred destruction from structural callbacks.
+	Api other;
+	QPointer<StaticConfiguratorProvider> doomed =
+	    new StaticConfiguratorProvider(watchBinding(other));
+	doomed->selectEndpoint(endpoint(*doomed));
+	QObject::connect(doomed->watchlist(), &QAbstractItemModel::modelAboutToBeReset, doomed,
+	                 [doomed] {
+		                 doomed->deleteLater();
+	                 });
+	CHECK(doomed->addWatch());
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	CHECK(!doomed);
+	other.changed();
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -602,6 +824,8 @@ int main(int argc, char** argv)
 	budgetsAndForeignIndices();
 	readRefusalsAndQueuedReset();
 	staleCacheAfterWriteRefusal();
+	watchLifecycle();
+	watchBoundsAndReentrancy();
 	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
 	return failures ? 1 : 0;
 }
