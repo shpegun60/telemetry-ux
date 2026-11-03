@@ -8,6 +8,8 @@ Control {
     id: configurator
     required property var provider
     property bool watchlistVisible: true
+    property Component headerComponent: null
+    property Component footerComponent: null
     padding: 0
     background: Rectangle { color: configurator.palette.window }
     implicitWidth: contentItem.implicitWidth
@@ -23,20 +25,9 @@ Control {
     palette.highlightedText: "#ffffff"
     palette.placeholderText: "#718297"
 
-    // Schema/provider strings are data, including tooltip details.
-    component PlainToolTip: ToolTip {
-        id: plainToolTip
-        contentItem: Label {
-            textFormat: Text.PlainText
-            text: plainToolTip.text
-            font: plainToolTip.font
-            wrapMode: Text.Wrap
-            color: plainToolTip.palette.toolTipText
-        }
-    }
-
     contentItem: ColumnLayout {
         spacing: 16
+        Loader { Layout.fillWidth: true; active: configurator.headerComponent !== null; sourceComponent: configurator.headerComponent }
         SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -96,232 +87,10 @@ Control {
                     Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
                 }
             }
-            Pane {
+            EndpointPanel {
+                provider: configurator.provider
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 360
-                background: Rectangle { color: "#17202b"; radius: 10 }
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 16
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            textFormat: Text.PlainText
-                            text: configurator.provider.selection.length ? configurator.provider.selection : "Select a Field"
-                            font.pixelSize: 21
-                            font.weight: Font.DemiBold
-                            Layout.fillWidth: true
-                            elide: Text.ElideMiddle
-                        }
-                        BusyIndicator { running: configurator.provider.busy; visible: running; implicitWidth: 30; implicitHeight: 30 }
-                        Button {
-                            objectName: "editButton"
-                            text: "Edit"
-                            visible: !configurator.provider.editing && !configurator.provider.commandSelected && !configurator.provider.serviceSelected
-                            enabled: configurator.provider.canEdit
-                            onClicked: configurator.provider.beginEdit()
-                        }
-                        Button {
-                            objectName: "cancelEditButton"
-                            text: "Cancel"
-                            visible: configurator.provider.editing
-                            enabled: !configurator.provider.busy
-                            onClicked: configurator.provider.cancelEdit()
-                        }
-                        Button {
-                            objectName: "applyButton"
-                            text: "Apply + Refresh"
-                            visible: configurator.provider.editing
-                            enabled: configurator.provider.canApply
-                            onClicked: configurator.provider.apply()
-                        }
-                        Button {
-                            objectName: "executeButton"
-                            text: "Execute once"
-                            visible: configurator.provider.commandSelected
-                            enabled: configurator.provider.canExecute
-                            onClicked: configurator.provider.executeCommand()
-                        }
-                        Button {
-                            objectName: "callServiceButton"
-                            text: "Call once"
-                            visible: configurator.provider.serviceSelected
-                            enabled: configurator.provider.canCallService
-                            onClicked: configurator.provider.callService()
-                        }
-                        Button {
-                            objectName: "refreshButton"
-                            text: "Refresh"
-                            visible: !configurator.provider.commandSelected && !configurator.provider.serviceSelected
-                            enabled: configurator.provider.canRefresh
-                            onClicked: configurator.provider.refresh()
-                        }
-                    }
-                    GridLayout {
-                        id: valueColumns
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        columns: (configurator.provider.serviceSelected || configurator.provider.serviceResponseEndpoint.length > 0) && width >= 650 ? 2 : 1
-                        TreeView {
-                            id: valueTree
-                            objectName: "valueTree"
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.minimumWidth: 280
-                            Layout.preferredWidth: valueColumns.width / valueColumns.columns
-                            clip: true
-                            model: configurator.provider.values
-                            Component.onCompleted: Qt.callLater(function() {
-                                valueTree.forceLayout()
-                                valueTree.expand(0)
-                            })
-                            columnWidthProvider: function() { return Math.max(1, valueTree.width) }
-                            onWidthChanged: Qt.callLater(function() { valueTree.forceLayout() })
-                            delegate: TreeViewDelegate {
-                                id: valueDelegate
-                                objectName: "valueRow"
-                                required property string name
-                                required property string detail
-                                required property string value
-                                required property bool isAggregate
-                                required property int childCount
-                                required property int loadedCount
-                                required property bool editable
-                                required property string editorText
-                                TableView.onReused: scalarInput.inputValid = true
-                                implicitWidth: valueTree.width
-                                implicitHeight: 40
-                                text: name
-                                PlainToolTip {
-                                    objectName: "valueToolTip"
-                                    visible: valueDelegate.hovered && valueDelegate.detail.length > 0
-                                    text: valueDelegate.detail
-                                }
-                                contentItem: RowLayout {
-                                    Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                                    Label { textFormat: Text.PlainText; visible: !editable; text: value; color: "#83e1ce"; font.family: "monospace" }
-                                    TextField {
-                                        id: scalarInput
-                                        objectName: "scalarEditor"
-                                        property string scalarName: valueDelegate.name
-                                        property bool inputValid: true
-                                        visible: valueDelegate.editable
-                                        Layout.preferredWidth: Math.min(230, Math.max(120, valueTree.width - 120))
-                                        // Keep the operator's raw text while typing (for example
-                                        // the intermediate "4." in "4.25"). Invalid text also
-                                        // survives blur until corrected or the draft is cancelled.
-                                        Binding on text {
-                                            value: valueDelegate.editorText
-                                            when: !scalarInput.activeFocus && scalarInput.inputValid
-                                            restoreMode: Binding.RestoreNone
-                                        }
-                                        font.family: "monospace"
-                                        selectByMouse: true
-                                        onTextEdited: inputValid = configurator.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
-                                        onEditingFinished: inputValid = configurator.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
-                                    }
-                                    Button {
-                                        visible: isAggregate && childCount > 128
-                                        enabled: loadedCount < childCount
-                                        text: "Load next 128 · " + loadedCount + "/" + childCount
-                                        onClicked: configurator.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, row)))
-                                    }
-                                }
-                            }
-                            ScrollBar.vertical: ScrollBar {}
-                            Label {
-                                textFormat: Text.PlainText
-                                anchors.centerIn: parent
-                                visible: valueTree.rows === 0
-                                text: configurator.provider.busy
-                                    ? configurator.provider.serviceSelected ? "Waiting for the Service result…" : configurator.provider.commandSelected ? "Waiting for the Command result…" : "Reading the selected Field…"
-                                    : configurator.provider.serviceSelected ? "No argument values to edit. Call submits one Service request."
-                                    : configurator.provider.commandSelected ? "No argument values to edit. Execute sends the Command once."
-                                    : "Select a Field, then press Refresh."
-                                color: "#99abbf"
-                            }
-                        }
-                        ColumnLayout {
-                            visible: configurator.provider.serviceSelected || configurator.provider.serviceResponseEndpoint.length > 0
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.minimumWidth: 280
-                            Layout.preferredWidth: valueColumns.width / valueColumns.columns
-                            Label {
-                                textFormat: Text.PlainText
-                                text: configurator.provider.serviceResponseEndpoint.length
-                                    ? "Last response · " + configurator.provider.serviceResponseEndpoint : "Last response"
-                                color: "#99abbf"
-                                Layout.fillWidth: true
-                                elide: Text.ElideMiddle
-                            }
-                            TreeView {
-                                id: responseTree
-                                objectName: "responseTree"
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                clip: true
-                                model: configurator.provider.responses
-                                Component.onCompleted: Qt.callLater(function() {
-                                    responseTree.forceLayout()
-                                    responseTree.expand(0)
-                                })
-                                columnWidthProvider: function() { return Math.max(1, responseTree.width) }
-                                onWidthChanged: Qt.callLater(function() { responseTree.forceLayout() })
-                                delegate: TreeViewDelegate {
-                                    id: responseDelegate
-                                    objectName: "responseRow"
-                                    required property string name
-                                    required property string detail
-                                    required property string value
-                                    required property bool isAggregate
-                                    required property int childCount
-                                    required property int loadedCount
-                                    implicitWidth: responseTree.width
-                                    implicitHeight: 40
-                                    text: name
-                                    PlainToolTip {
-                                        objectName: "responseToolTip"
-                                        visible: responseDelegate.hovered && responseDelegate.detail.length > 0
-                                        text: responseDelegate.detail
-                                    }
-                                    contentItem: RowLayout {
-                                        Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                                        Label { textFormat: Text.PlainText; text: value; color: "#83e1ce"; font.family: "monospace" }
-                                        Button {
-                                            visible: isAggregate && childCount > 128
-                                            enabled: loadedCount < childCount
-                                            text: "Load next 128 · " + loadedCount + "/" + childCount
-                                            onClicked: configurator.provider.responses.fetchMore(responseTree.modelIndex(Qt.point(0, row)))
-                                        }
-                                    }
-                                }
-                                ScrollBar.vertical: ScrollBar {}
-                                Label {
-                                    textFormat: Text.PlainText
-                                    anchors.centerIn: parent
-                                    visible: responseTree.rows === 0
-                                    text: configurator.provider.busy ? "Waiting for a response…" : "No owned response value."
-                                    color: "#99abbf"
-                                }
-                            }
-                        }
-                    }
-                    Label {
-                        textFormat: Text.PlainText
-                        text: configurator.provider.serviceSelected
-                            ? "Initial request values are zero. Call submits one request; the read-only response is owned until a new accepted mutation or session change."
-                            : configurator.provider.commandSelected
-                            ? "Initial request values are zero; device defaults may differ. Accepted does not confirm execution."
-                            : configurator.provider.editing
-                            ? "Local draft only. Edit scalar values, then Apply to write once and read the device again."
-                            : "Values belong to the last completed read. Arrays load in batches as you expand them."
-                        color: "#99abbf"
-                        font.pixelSize: 11
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                }
             }
         }
         Pane {
@@ -430,72 +199,18 @@ Control {
         }
         Label {
             textFormat: Text.PlainText
-            objectName: "writeOutcomeLabel"
-            visible: configurator.provider.writeOutcome.length > 0
-            text: configurator.provider.writeOutcome
-            color: "#e6c57b"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        Label {
-            textFormat: Text.PlainText
-            objectName: "commandOutcomeLabel"
-            visible: configurator.provider.commandOutcome.length > 0
-            text: configurator.provider.commandOutcome
-            color: "#e6c57b"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        Label {
-            textFormat: Text.PlainText
-            objectName: "serviceOutcomeLabel"
-            visible: configurator.provider.serviceOutcome.length > 0
-            text: configurator.provider.serviceOutcome
-            color: "#e6c57b"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        Label {
-            textFormat: Text.PlainText
             objectName: "statusLabel"
             text: configurator.provider.statusText
             color: configurator.provider.connected ? "#83e1ce" : "#99abbf"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
-    }
-    Connections {
-        target: configurator.provider.values
-        function onModelReset() {
-            Qt.callLater(function() {
-                valueTree.forceLayout()
-                valueTree.expand(0)
-            })
-        }
-    }
-    Connections {
-        target: configurator.provider.responses
-        function onModelReset() {
-            Qt.callLater(function() {
-                responseTree.forceLayout()
-                responseTree.expand(0)
-            })
-        }
+        Loader { Layout.fillWidth: true; active: configurator.footerComponent !== null; sourceComponent: configurator.footerComponent }
     }
     Connections {
         target: configurator.provider.endpoints
         function onModelReset() {
             Qt.callLater(function() { endpointTree.expandRecursively(0, 2) })
-        }
-    }
-    Connections {
-        target: configurator.provider
-        function onReadFinished(published) {
-            if (published)
-                Qt.callLater(function() {
-                    valueTree.forceLayout()
-                    valueTree.expand(0)
-                })
         }
     }
 }

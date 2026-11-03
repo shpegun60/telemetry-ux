@@ -3,6 +3,7 @@ import {
 	defineConfiguratorElement,
 	createStaticProvider,
 	createDynamicProvider,
+	mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist,
 	type TelemetryConfiguratorElement,
 	type PresentationProvider
 } from 'telemetry-ux/web';
@@ -18,6 +19,11 @@ const typed: TelemetryConfiguratorElement = new Constructor();
 const provider: PresentationProvider|null = typed.provider;
 const custom = new (defineConfiguratorElement('application-settings'))();
 custom.provider = staticProvider;
+const shadow = new (defineConfiguratorElement('shadow-settings', {shadow : true}))();
+shadow.provider = dynamicProvider;
+for (const mount of [mountFieldEditor, mountCommandPanel, mountServicePanel])
+	mount(document.createElement('section'), {provider : staticProvider}).unmount();
+mountWatchlist(document.createElement('section'), {provider : dynamicProvider, now : () => 1000}).unmount();
 document.body.append(custom);
 const selected = document.querySelector('telemetry-configurator');
 if (selected)
@@ -31,6 +37,8 @@ element.provider = {};
 element.provider = undefined;
 // @ts-expect-error registration takes a string tag name
 defineConfiguratorElement(17);
+// @ts-expect-error shadow mode is a boolean option
+defineConfiguratorElement('bad-shadow', {shadow : 'open'});
 // @ts-expect-error this presentation element has no client close operation
 element.close();
 void provider;

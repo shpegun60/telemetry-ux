@@ -64,7 +64,7 @@ def main():
                     dict(url=request.url, method=request.method)))
                 page.goto('http://127.0.0.1:' + str(server.server_port), wait_until='networkidle')
                 result = page.evaluate('async () => (await import("./Element.mjs")).runElementChecks()')
-                if (result.get('passed') is not True or result.get('checks', 0) < 80 or
+                if (result.get('passed') is not True or result.get('checks', 0) < 119 or
                         result.get('fixture') != 'presentation-only' or
                         result.get('actualSdkJourneys') is not False):
                     raise AssertionError('Element lifecycle checks incomplete: ' + repr(result))

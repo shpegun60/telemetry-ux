@@ -49,3 +49,8 @@ does not require building or installing this Qt module.
 The Inspector builds this same source module when configured on its own. A root
 build with Inspector enabled includes the required view even when the standalone
 view option is disabled. Disabling both options performs no Qt or SDK discovery.
+
+For a custom page, embed `FieldEditor`, `CommandPanel` or `ServicePanel` instead
+of the full Configurator. They use the same renderer and host-owned provider,
+with no endpoint browser or automatic request. All four views accept optional
+`headerComponent`/`footerComponent` extensions; see the provider contract above.

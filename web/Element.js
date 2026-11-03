@@ -5,8 +5,10 @@ import {assertPresentationProvider} from './ProviderContract.js';
 // DOM globals are deliberately consulted only by explicit registration.
 const definitions = new WeakMap();
 
-export function defineConfiguratorElement(tagName = 'telemetry-configurator')
+export function defineConfiguratorElement(tagName = 'telemetry-configurator', {shadow = false} = {})
 {
+	if (typeof shadow !== 'boolean')
+		throw new TypeError('The shadow option must be a boolean');
 	const registry = globalThis.customElements;
 	const BaseElement = globalThis.HTMLElement;
 	if (!registry || typeof registry.define !== 'function' || typeof BaseElement !== 'function')
@@ -20,8 +22,11 @@ export function defineConfiguratorElement(tagName = 'telemetry-configurator')
 	}
 	const existing = registry.get(tagName);
 	if (existing) {
-		if (known.get(tagName) === existing)
+		const definition = known.get(tagName);
+		if (definition?.constructor === existing && definition.shadow === shadow)
 			return existing;
+		if (definition?.constructor === existing)
+			throw new TypeError('The element was registered with different shadow options');
 		throw new TypeError('The custom element name is already registered: ' + tagName);
 	}
 
@@ -32,6 +37,7 @@ export function defineConfiguratorElement(tagName = 'telemetry-configurator')
 		#epoch = 0;
 		#reconciling = false;
 		#scheduled = false;
+		#mountTarget = null;
 
 		constructor()
 		{
@@ -88,6 +94,30 @@ export function defineConfiguratorElement(tagName = 'telemetry-configurator')
 			});
 		}
 
+		#surface()
+		{
+			if (!shadow)
+				return this;
+			if (this.#mountTarget)
+				return this.#mountTarget;
+			const surface = this.attachShadow({mode : 'open'});
+			const document = this.ownerDocument;
+			const stylesheet = document.createElement('link');
+			stylesheet.rel = 'stylesheet';
+			stylesheet.href = new URL('./Configurator.css', import.meta.url).href;
+			surface.append(stylesheet);
+			for (const name of ['header', 'before-content', 'after-content', 'footer']) {
+				const slot = document.createElement('slot');
+				slot.name = name;
+				surface.append(slot);
+				if (name === 'before-content') {
+					this.#mountTarget = document.createElement('div');
+					surface.append(this.#mountTarget);
+				}
+			}
+			return this.#mountTarget;
+		}
+
 		#reconcile()
 		{
 			if (this.#reconciling) {
@@ -106,7 +136,7 @@ export function defineConfiguratorElement(tagName = 'telemetry-configurator')
 				previous?.view.unmount();
 				if (epoch !== this.#epoch || !this.#connected || !this.isConnected || !provider)
 					return;
-				const candidate = mountConfigurator(this, {provider});
+				const candidate = mountConfigurator(this.#surface(), {provider});
 				if (epoch === this.#epoch && this.#connected && this.isConnected)
 					this.#view = {provider, view : candidate};
 				else
@@ -119,7 +149,7 @@ export function defineConfiguratorElement(tagName = 'telemetry-configurator')
 		}
 	}
 
-	known.set(tagName, ConfiguratorElement);
+	known.set(tagName, {constructor : ConfiguratorElement, shadow});
 	try {
 		registry.define(tagName, ConfiguratorElement);
 	} catch (failure) {

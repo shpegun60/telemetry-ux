@@ -1,5 +1,5 @@
 /* Actual DOM lifecycle checks, with an explicit presentation-only fixture. MIT. */
-import {defineConfiguratorElement} from 'telemetry-ux/web';
+import {defineConfiguratorElement, mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist} from 'telemetry-ux/web';
 
 export async function runElementChecks()
 {
@@ -29,8 +29,9 @@ export async function runElementChecks()
 	{
 		const counters = {subscriptions : 0, unsubscriptions : 0, io : 0, lifecycle : 0};
 		const listeners = new Set();
-		const endpoint = Object.freeze({key : '1:0', category : 1, id : 0, catalog : 'Host', name});
-		const state = Object.freeze({
+		const category = hooks.category || 1;
+		const endpoint = Object.freeze({key : category + ':0', category, id : 0, catalog : 'Host', name});
+		let state = Object.freeze({
 			mode,
 			current : true,
 			session : 17,
@@ -51,7 +52,8 @@ export async function runElementChecks()
 				cancelEdit : false,
 				apply : false,
 				execute : false,
-				call : false
+				call : false,
+				...hooks.actions
 			})
 		});
 		const action = () => {
@@ -89,7 +91,11 @@ export async function runElementChecks()
 			cancel : noHostLifecycle,
 			sync : noHostLifecycle
 		};
-		const result = {provider, counters, listeners};
+		const result = {provider, counters, listeners, publish(changes) {
+			state = Object.freeze({...state, ...changes, revision : state.revision + 1});
+			for (const listener of [...listeners])
+				listener(state);
+		}};
 		providers.push(result);
 		return result;
 	}
@@ -309,6 +315,172 @@ export async function runElementChecks()
 		      'same-provider reconnect epoch retires the late candidate');
 		check(early.firstChild === panel && panel.textContent === 'Application-owned panel',
 		      'all lifecycle operations preserve the application panel');
+
+		// Three independently mounted panels share one host-owned provider and selection.
+		const shared = fixture('Shared selection', 'static', {actions : {
+			refresh : true, beginEdit : true, cancelEdit : true,
+			apply : true, execute : true, call : true
+		}});
+		const knownFact = Object.freeze({status : 0, dispatch : 0, endpointStatus : 0,
+			session : 17, requestId : 1, valueStatus : 'Ok', endpointName : 'Previous',
+			name : 'Ok', display : 'Known result'});
+		shared.publish({hasResponse : true, outcomes : {read : knownFact, write : knownFact,
+			readback : knownFact, command : knownFact, service : knownFact}});
+		const panelHosts = [host('section'), host('section'), host('section')];
+		panelHosts.forEach(element => document.body.append(element));
+		const panelViews = [mountFieldEditor, mountCommandPanel, mountServicePanel]
+			.map((mount, index) => mount(panelHosts[index], {provider : shared.provider}));
+		try {
+			check(shared.counters.io === 0 && shared.counters.subscriptions === 3,
+			      'standalone panels subscribe without selecting or sending');
+			check(panelHosts.every(element => element.querySelector('nav').hidden),
+			      'standalone panels do not create a second endpoint selector');
+			check(selected(panelHosts[0]).includes('Shared selection') &&
+			          selected(panelHosts[1]) === 'Select a Command' &&
+			          selected(panelHosts[2]) === 'Select a Service',
+			      'each category panel follows only a matching host selection');
+			check(panelHosts[0].querySelectorAll('[data-role="outcome"]').length === 3 &&
+			          panelHosts[0].querySelector('[data-source="response"]').hidden &&
+			          panelHosts[1].querySelectorAll('[data-role="outcome"]').length === 0 &&
+			          panelHosts[2].querySelectorAll('[data-role="outcome"]').length === 0,
+			      'Field editor shows Field facts only and hides earlier Service response');
+			const oldRead = panelHosts[0].querySelector('[data-action="refresh"]');
+			shared.publish({selected : {key : '2:0', category : 2, catalog : 'Host', name : 'Run'}});
+			oldRead.dispatchEvent(new Event('click'));
+			check(shared.counters.io === 0 && oldRead.hidden && oldRead.disabled,
+			      'mismatched panel blocks even a synthetic click on a retained control');
+			check(panelHosts[1].querySelectorAll('[data-role="outcome"]').length === 1 &&
+			          panelHosts[1].querySelector('[data-role="outcome"]').dataset.operation === 'command' &&
+			          panelHosts[1].querySelector('[data-source="response"]').hidden,
+			      'Command panel isolates Command history and excludes Service response');
+			panelHosts[1].querySelector('[data-action="execute"]').click();
+			check(shared.counters.io === 1, 'Command panel delegates one explicit Execute');
+			shared.publish({selected : {key : '3:0', category : 3, catalog : 'Host', name : 'Query'}});
+			panelHosts[2].querySelector('[data-action="call"]').click();
+			check(shared.counters.io === 2, 'Service panel delegates one explicit Call');
+			check(panelHosts[2].querySelectorAll('[data-role="outcome"]').length === 1 &&
+			          panelHosts[2].querySelector('[data-role="outcome"]').dataset.operation === 'service' &&
+			          !panelHosts[2].querySelector('[data-source="response"]').hidden,
+			      'Service panel shows only Service history and its response');
+			shared.publish({current : false, selected : null,
+			                actions : {refresh : false, beginEdit : false, cancelEdit : false,
+			                           apply : false, execute : false, call : false}});
+			check(panelHosts.every(element => [...element.querySelectorAll('[data-action]')]
+			          .filter(button => button.tagName === 'BUTTON').every(button => button.disabled)),
+			      'invalidated selection disables all standalone actions');
+		} finally {
+			panelViews.forEach(view => view.unmount());
+		}
+		check(shared.listeners.size === 0 && shared.counters.unsubscriptions === 3,
+		      'standalone panels remove only their own subscriptions');
+
+		const watching = fixture('Watch source');
+		const watchCalls = [];
+		for (const method of ['addWatch', 'removeWatch', 'clearWatch', 'setWatchIndividual',
+		                      'setWatchInterval', 'refreshWatch', 'startWatch', 'stopWatch'])
+			watching.provider[method] = (...args) => { watchCalls.push({method, args}); return true; };
+		const watchState = Object.freeze({
+			rows : Object.freeze([{key : '1:0', id : 0, name : '<img src=x>', catalog : 'Counter',
+			                       status : 'Ok', text : '18446744073709551615'}]),
+			active : false, pending : false, running : false, individual : false,
+			intervalMs : 1000, status : 'Ready', canAdd : true, canRefresh : true
+		});
+		watching.publish({watch : watchState});
+		const watchHost = host('section');
+		document.body.append(watchHost);
+		const watchView = mountWatchlist(watchHost, {provider : watching.provider, now : () => 123.25});
+		try {
+			check(watchCalls.length === 0 && watching.counters.io === 0,
+			      'Watchlist mount starts no polling, selection or request');
+			check(watchHost.querySelector('[part="watch-value"]').textContent === '18446744073709551615' &&
+			          !watchHost.querySelector('img'),
+			      'Watchlist preserves exact U64 text and literal endpoint names');
+			check(watchHost.querySelector('.tux-layout').hidden &&
+			          watchHost.querySelector('[part="permission"]').hidden,
+			      'standalone Watchlist omits unrelated editor and write controls');
+			watchHost.querySelector('[data-action="refreshWatch"]').click();
+			watchHost.querySelector('[data-action="startWatch"]').click();
+			check(watchCalls.length === 2 && watchCalls[0].method === 'refreshWatch' &&
+			          watchCalls[1].method === 'startWatch' && watchCalls[1].args[0] === 123.25,
+			      'explicit controls delegate once using the injected owner clock');
+			watching.publish({watch : {...watchState, active : true, pending : true}});
+			check(watchHost.querySelector('[data-action="watch-individual"]').disabled &&
+			          watchHost.querySelector('[data-action="watch-interval"]').disabled &&
+			          watchHost.querySelector('[data-action="removeWatch"]').disabled &&
+			          !watchHost.querySelector('[data-action="stopWatch"]').disabled,
+			      'accepted draining batch locks edits while Stop remains available');
+			watchHost.querySelector('[data-action="stopWatch"]').click();
+			check(watchCalls[2].method === 'stopWatch', 'Stop delegates without dropping pending state');
+			watching.publish({watch : watchState});
+			const retiredRemove = watchHost.querySelector('[data-action="removeWatch"]');
+			watching.publish({session : 18, watch : watchState});
+			retiredRemove.dispatchEvent(new Event('click'));
+			check(watchCalls.length === 3, 'retired Watchlist control cannot mutate a new session');
+			watchHost.querySelector('[data-action="removeWatch"]').click();
+			check(watchCalls[3].method === 'removeWatch' && watchCalls[3].args[0] === '1:0',
+			      'current Remove delegates an exact endpoint key');
+			const lateRemove = watchHost.querySelector('[data-action="removeWatch"]');
+			watchView.unmount();
+			lateRemove.click();
+			check(watchCalls.length === 4 && watching.listeners.size === 0,
+			      'unmounted Watchlist controls do not send or retain subscriptions');
+		} finally { watchView.unmount(); }
+
+		const Shadow = defineConfiguratorElement('shadow-device-settings', {shadow : true});
+		check(defineConfiguratorElement('shadow-device-settings', {shadow : true}) === Shadow,
+		      'same shadow registration is idempotent');
+		rejects(() => defineConfiguratorElement('shadow-device-settings'),
+		        'shadow mode cannot silently change for a registered name');
+		rejects(() => defineConfiguratorElement('invalid-shadow-settings', {shadow : 'open'}),
+		        'shadow mode requires an explicit boolean');
+		const shadowHost = host('shadow-device-settings');
+		const slotted = [];
+		for (const name of ['header', 'before-content', 'after-content', 'footer']) {
+			const content = document.createElement('aside');
+			content.slot = name;
+			content.textContent = 'Host-owned ' + name;
+			shadowHost.append(content);
+			slotted.push(content);
+		}
+		const shadowFirst = fixture('Shadow first');
+		shadowHost.provider = shadowFirst.provider;
+		check(shadowHost.shadowRoot === null && shadowFirst.counters.subscriptions === 0,
+		      'shadow construction does not mount while detached');
+		document.body.append(shadowHost);
+		const shadowRoot = shadowHost.shadowRoot;
+		check(shadowRoot && views(shadowRoot).length === 1 && views(shadowHost).length === 0,
+		      'shadow mode mounts the same renderer inside one open shadow root');
+		check(slotted.every(content => content.assignedSlot?.name === content.slot),
+		      'all four extension slots retain host-owned elements');
+		const stylesheet = shadowRoot.querySelector('link[rel="stylesheet"]');
+		await new Promise((resolve, reject) => {
+			if (stylesheet.sheet) resolve();
+			else { stylesheet.addEventListener('load', resolve, {once : true});
+			       stylesheet.addEventListener('error', reject, {once : true}); }
+		});
+		const styling = document.createElement('style');
+		styling.textContent = 'shadow-device-settings::part(header) { border-top: 7px solid rgb(12, 34, 56); }';
+		document.head.append(styling);
+		try {
+			check(getComputedStyle(shadowRoot.querySelector('[part="header"]')).borderTopWidth === '7px',
+			      'host CSS can customize a documented shadow part');
+			check(getComputedStyle(shadowRoot.querySelector('[part="root"]')).backgroundColor === 'rgb(17, 25, 35)',
+			      'shadow mode loads the package-local default stylesheet');
+		} finally { styling.remove(); }
+		const shadowNext = fixture('Shadow replaced', 'dynamic');
+		const retiredShadowRead = shadowRoot.querySelector('[data-action="refresh"]');
+		shadowHost.provider = shadowNext.provider;
+		retiredShadowRead.click();
+		check(selected(shadowRoot).includes('Shadow replaced') &&
+		          shadowFirst.counters.unsubscriptions === 1 && shadowFirst.counters.io === 0,
+		      'shadow provider replacement retires controls without sending');
+		shadowHost.remove();
+		check(views(shadowRoot).length === 0 && shadowNext.counters.unsubscriptions === 1,
+		      'shadow detach unsubscribes and removes the rendered view');
+		document.body.append(shadowHost);
+		check(shadowHost.shadowRoot === shadowRoot && views(shadowRoot).length === 1 &&
+		          slotted.every(content => content.parentNode === shadowHost),
+		      'shadow reconnect reuses slots and retains host-owned content');
 	} finally {
 		for (const element of hosts)
 			element.remove();
@@ -319,8 +491,8 @@ export async function runElementChecks()
 		      'each accepted subscription is removed exactly once');
 		check(counters.lifecycle === 0, 'view lifecycle never invokes host lifecycle methods');
 	}
-	check(providers.reduce((sum, entry) => sum + entry.counters.io, 0) === 1,
-	      'only the one explicit live button click invokes an action');
+	check(providers.reduce((sum, entry) => sum + entry.counters.io, 0) === 3,
+	      'only three explicit live button clicks invoke actions');
 	return {
 		passed : true,
 		checks,

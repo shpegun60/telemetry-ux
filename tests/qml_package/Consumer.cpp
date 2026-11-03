@@ -5,11 +5,13 @@
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QStandardItemModel>
 #include <QStringListModel>
 #include <QTimer>
 
 #include <cstdio>
+#include <memory>
 #include <utility>
 
 class OwnerProvider final : public QObject {
@@ -108,7 +110,7 @@ public:
 
 	bool commandSelected() const noexcept
 	{
-		return false;
+		return category_ == 2;
 	}
 
 	bool canExecute() const noexcept
@@ -118,7 +120,7 @@ public:
 
 	bool serviceSelected() const noexcept
 	{
-		return false;
+		return category_ == 3;
 	}
 
 	bool canCallService() const noexcept
@@ -193,6 +195,12 @@ public:
 		Q_EMIT stateChanged();
 	}
 
+	void selectCategory(int category)
+	{
+		category_ = category;
+		Q_EMIT stateChanged();
+	}
+
 	Q_INVOKABLE bool selectEndpoint(const QModelIndex&)
 	{
 		return false;
@@ -262,6 +270,7 @@ Q_SIGNALS:
 	void readFinished(bool);
 
 private:
+	int category_ = 1;
 	QStandardItemModel tree_{0, 1, this};
 	QStringListModel list_{this};
 	QString status_ = QStringLiteral("Owner initial status");
@@ -317,6 +326,58 @@ int main(int argc, char** argv)
 	drainViewEvents();
 	if (!check(containsText(*view, owner.statusText())) || !check(!warnings))
 		return 4;
+	// Three installed components observe one owner. Mounting, changing selection
+	// and unmounting are presentation-only; the provider never supplies I/O.
+	QQmlComponent panels(&engine);
+	panels.setData(R"(
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Telemetry.UX
+ApplicationWindow {
+    id: host
+    required property var deviceProvider
+    visible: true; width: 1200; height: 650
+    RowLayout {
+        anchors.fill: parent
+        FieldEditor { objectName: "field"; provider: host.deviceProvider; Layout.fillWidth: true; Layout.fillHeight: true
+            headerComponent: Component { Label { text: "Owner header" } }
+            footerComponent: Component { Label { text: "Owner footer" } }
+        }
+        CommandPanel { objectName: "command"; provider: host.deviceProvider; Layout.fillWidth: true; Layout.fillHeight: true }
+        ServicePanel { objectName: "service"; provider: host.deviceProvider; Layout.fillWidth: true; Layout.fillHeight: true }
+    }
+})", QUrl(QStringLiteral("qrc:/OwnedPanels.qml")));
+	if (!check(panels.isReady())) {
+		std::fprintf(stderr, "%s\n", qPrintable(panels.errorString()));
+		return 5;
+	}
+	std::unique_ptr<QObject> independent(panels.createWithInitialProperties(
+	    {{QStringLiteral("deviceProvider"), QVariant::fromValue(&owner)}}));
+	if (!check(bool(independent)))
+		return 6;
+	drainViewEvents();
+	for (int category = 1; category <= 3; ++category) {
+		owner.selectCategory(category);
+		drainViewEvents();
+		int index = 1;
+		for (const char* name : {"field", "command", "service"}) {
+			auto* panel = independent->findChild<QObject*>(QString::fromLatin1(name));
+			if (!check(panel != nullptr) ||
+			    !check(panel->property("provider").value<QObject*>() == &owner) ||
+			    !check(panel->property("selectionMatches").toBool() == (index++ == category)))
+				return 7;
+		}
+	}
+	owner.selectCategory(1);
+	drainViewEvents();
+	if (!check(containsText(*independent, QStringLiteral("Owner header"))) ||
+	    !check(containsText(*independent, QStringLiteral("Owner footer"))))
+		return 8;
+	independent.reset();
+	drainViewEvents();
+	if (!check(!warnings))
+		return 9;
 	std::printf(
 	    "Configurator package checks=%u provider=owned sdk=0 scanner=0 plugin=0 warnings=0\n",
 	    checks);

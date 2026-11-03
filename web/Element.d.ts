@@ -12,8 +12,8 @@ export interface TelemetryConfiguratorElementConstructor {
 }
 
 /** Explicit registration; importing the module does not access DOM globals. */
-export function defineConfiguratorElement(tagName
-                                          ?: string): TelemetryConfiguratorElementConstructor;
+export function defineConfiguratorElement(
+    tagName?: string, options?: {readonly shadow?: boolean;}): TelemetryConfiguratorElementConstructor;
 
 declare global
 {
