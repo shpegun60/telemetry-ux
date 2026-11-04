@@ -191,7 +191,7 @@ print(json.dumps(result))
             '--device', device, '--descriptor', output / 'descriptor.bin',
             '--generated', public / 'generated/js'])
         provider = json.loads(provider_output.strip().splitlines()[-1])
-        check(provider.get('passed') and provider.get('checks', 0) >= 641,
+        check(provider.get('passed') and provider.get('checks', 0) >= 921,
               'Installed providers must pass the maintained native and failure controls')
         report['providers'] = provider
         run('browser-real-native-model', [tools['browser_python'], '-B', HERE / 'Browser.py',

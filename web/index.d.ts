@@ -13,6 +13,10 @@ export type {
 	PresentationRow,
 	PresentationRows,
 	PresentationLimits,
+	PresentationWatchRow,
+	PresentationWatch,
+	WatchPresentationState,
+	WatchPresentationProvider,
 	ValuePath,
 	ValueSource
 } from './Provider.js';

@@ -230,6 +230,41 @@ def main():
                     check(any('/descriptor.bin' in request for request in requests) == (mode == 'dynamic'),
                           'Static mode uses only the observed header, without downloading a Descriptor')
                     check(not report['errors'] and not report['warnings'], 'Browser console must stay clean')
+                    # Actual Watchlist buttons -> one existing SDK FIFO -> native
+                    # ReadMany. This complements deterministic provider-clock tests.
+                    for name in ('Wide', 'Signed', 'Mode', 'Unavailable'):
+                        endpoint(name)
+                        action('addWatch').click()
+                    before_exchanges = server.exchange_count
+                    action('refreshWatch').click()
+                    expect(view.locator('[data-role="watch-status"]')).to_contain_text('ReadMany complete')
+                    idle()
+                    check(server.exchange_count == before_exchanges + 1,
+                          'Four watched Fields use exactly one native exchange')
+                    watch_rows = view.locator('.tux-watch-table tbody tr')
+                    expect(watch_rows).to_have_count(4)
+                    expect(watch_rows.nth(0)).to_contain_text('18446744073709551615')
+                    expect(watch_rows.nth(1)).to_contain_text('-9223372036854775808')
+                    expect(watch_rows.nth(3)).to_contain_text('Unavailable')
+                    check('18446744073709551615' not in watch_rows.nth(3).inner_text(),
+                          'Unavailable Field publishes no stale scalar')
+                    action('watch-individual').check()
+                    before_exchanges = server.exchange_count
+                    action('refreshWatch').click()
+                    expect(view.locator('[data-role="watch-status"]')).to_contain_text('Individual FieldRead complete')
+                    idle()
+                    check(server.exchange_count == before_exchanges + 4,
+                          'Explicit Individual mode sends four separate reads')
+                    action('startWatch').click()
+                    expect(action('stopWatch')).to_be_enabled()
+                    action('stopWatch').click()
+                    expect(action('clearWatch')).to_be_enabled()
+                    before_exchanges = server.exchange_count
+                    page.wait_for_timeout(150)
+                    check(server.exchange_count == before_exchanges,
+                          'Stopped owner polling queues no further exchange')
+                    action('clearWatch').click()
+                    expect(watch_rows).to_have_count(0)
                     report[mode] = True
                     report['modes'][mode] = dict(checks=report['checks']-start_checks, native_state=state())
                     report['requests'] += requests

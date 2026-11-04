@@ -10,6 +10,14 @@ differ from the draft. It also supplies exact U64/S64, signed zero, open enum,
 nested arrays, read-only Fields, Command Accepted/Executed, Service refusal,
 Void and empty-structure responses.
 
+The diagnostics catalog also has scalar `Wide`, `Signed`, `Mode` and
+`Unavailable` Fields for the Watchlist. Add them and press Refresh to issue one
+ReadMany request with per-item statuses. Individual FieldRead fallback is an
+explicit option. Start enables periodic reads; Stop drains an accepted request
+and stops future ticks. The application owns the 50-ms tick timer and discovers
+the session-bound TRM1 bytes through its local bootstrap route on each connect.
+The provider creates no timer, client or FIFO.
+
 Prepare an installed SDK 0.1.0 prefix containing `core` and `encoded_server`,
 matching SDK/UX npm tarballs, and a generator environment containing both matching
 `telemetry-codegen-core` and `telemetry-ux-codegen` distributions. From this repo:
@@ -59,8 +67,8 @@ discovery selects its separate localhost WebSocket listener; the host receives
 one session greeting, then sends complete binary TEQ1 messages through the
 ordinary SDK `EncodedBackend`. There is no HTTP fallback, retry or automatic
 reconnect. The server grants one lease and does not reuse the native peer while
-an old exchange still owns it. This example exposes operations 1-4, without
-ReadMany/Batch capabilities. The [installed WebSocket gate](../../tests/websocket_transport/README.md)
+an old exchange still owns it. This example exposes operations 1-5, including
+ReadMany; Batch remains a separate follow-up. The [installed WebSocket gate](../../tests/websocket_transport/README.md)
 keeps actual browser/native journeys separate from carrier and lease fixtures.
 
 **Hide view** removes only the DOM/subscription; **Show view** reuses the same

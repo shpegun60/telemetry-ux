@@ -259,6 +259,17 @@ function staticAdapter({client, metadata, sdk})
 			    return client.command(endpoint.binding, value);
 		    return client.service(endpoint.binding, value);
 		},
+		readMany(capability, endpoints) {
+		    if (typeof client.bindReadMany !== 'function' || typeof client.readMany !== 'function')
+			    fail('ReadMany is unavailable in this SDK');
+		    const bound = client.bindReadMany(capability, endpoints.map(row => row.binding));
+		    if (bound.status !== Status.Ok)
+			    fail(names.get(bound.status) || 'ReadMany binding refused');
+		    return client.readMany(bound.binding);
+		},
+		manyResult(result) {
+		    return {operation : result, items : result.value};
+		},
 		result(result) {
 		    return {
 			    operation : result,
@@ -322,7 +333,22 @@ function dynamicAdapter({client})
 		    }
 		    return client[operation](bound.endpoint, value);
 		},
-		result : result => result
+		result : result => result,
+		readMany(capability, endpoints) {
+		    if (typeof client.bindReadMany !== 'function' || typeof client.readMany !== 'function')
+			    fail('ReadMany is unavailable in this SDK');
+		    const handles = endpoints.map(row => {
+			    const bound = client.bind('FieldRead', row.id);
+			    if (bound.status !== Status.Ok)
+				    fail(names.get(bound.status) || 'FieldRead binding refused');
+			    return bound.endpoint;
+		    });
+		    const bound = client.bindReadMany(capability, handles);
+		    if (bound.status !== Status.Ok)
+			    fail(names.get(bound.status) || 'ReadMany binding refused');
+		    return client.readMany(bound.binding);
+		},
+		manyResult : result => result
 	};
 }
 
@@ -337,6 +363,12 @@ function presentation(adapter, inputLimits)
 	let valuePayload, draftPayload;
 	let texts = new Map(), outcomes = Object.create(null);
 	const outcomeVersions = Object.create(null);
+	let watched = [], watchCapability, watchRunning = false, watchCycle = false,
+	    watchPending, watchIndividual = false, watchInterval = 1000, watchDue = 0,
+	    watchRevision = 0, watchCursor = 0, watchStatus = 'Select scalar Fields to watch.';
+	const watchItemNames = ['Ok', 'NotFound', 'UnsupportedType', 'Unavailable', 'ReadError'];
+	const watchActive = () => watchRunning || watchCycle || !!watchPending;
+	const watchEditable = () => isCurrent() && !active && !publishing && !notifying && !watchActive();
 
 	function isCurrent()
 	{
@@ -362,7 +394,7 @@ function presentation(adapter, inputLimits)
 
 	function snapshot()
 	{
-		const valid = isCurrent(), idle = !active && !publishing && valid;
+		const valid = isCurrent(), idle = !active && !publishing && !watchActive() && valid;
 		const endpoint = selectedInternal();
 		const canMutate = idle && writesEnabled && !!endpoint;
 		const facts = Object.create(null);
@@ -375,7 +407,7 @@ function presentation(adapter, inputLimits)
 			session : identity?.session || 0,
 			endpoints : valid ? endpoints : empty,
 			selected : valid ? selected : null,
-			busy : !!active,
+			busy : !!active || !!watchPending,
 			writesEnabled,
 			revision,
 			hasValue : valid && hasValue,
@@ -384,6 +416,18 @@ function presentation(adapter, inputLimits)
 			dirty : valid && dirty,
 			error,
 			outcomes : freeze(facts),
+			watch : freeze({
+				rows : freeze(watched.map(row => freeze({
+					key : row.endpoint.key, id : row.endpoint.id,
+					name : row.endpoint.name, catalog : String(row.endpoint.catalog),
+					status : valid ? row.status : 'Stale', text : valid ? row.text : ''
+				}))),
+				active : watchActive(), pending : !!watchPending, running : watchRunning,
+				individual : watchIndividual, intervalMs : watchInterval, status : watchStatus,
+				canAdd : idle && watched.length < 32 && !!endpoint && watchScalar(endpoint) &&
+				         !watched.some(row => row.endpoint.key === endpoint.key),
+				canRefresh : idle && watched.length > 0
+			}),
 			actions : freeze({
 				refresh : idle && endpoint?.category === 1,
 				beginEdit : idle && !!endpoint &&
@@ -439,6 +483,7 @@ function presentation(adapter, inputLimits)
 		blockedSession = identity?.session;
 		current = false;
 		writesEnabled = false;
+		retireWatch();
 		clearValues();
 		notify();
 	}
@@ -458,6 +503,8 @@ function presentation(adapter, inputLimits)
 		++epoch;
 		current = false;
 		writesEnabled = false;
+		retireWatch();
+		watched = [];
 		clearValues();
 		identity = live;
 		const token = epoch;
@@ -555,7 +602,7 @@ function presentation(adapter, inputLimits)
 		selected = endpoint;
 		clearValues();
 		error = '';
-		if (endpoint.category !== 1)
+		if (endpoint.category !== 1 && snapshot().actions.beginEdit)
 			beginEdit();
 		else
 			notify();
@@ -622,7 +669,8 @@ function presentation(adapter, inputLimits)
 				                         : text(childValue),
 				error : override?.error || '',
 				editable :
-				    source === 'draft' && !active && !publishing && !isAggregate && type.kind !== 0,
+				    source === 'draft' && !active && !publishing && !watchActive() &&
+				    !isAggregate && type.kind !== 0,
 				enumEntries : type.kind === 2 ? type.entries : empty
 			}));
 		}
@@ -632,7 +680,7 @@ function presentation(adapter, inputLimits)
 
 	function setText(path, input, expectedRevision)
 	{
-		if (active || publishing || notifying || !isCurrent() || !hasDraft ||
+		if (active || publishing || notifying || watchActive() || !isCurrent() || !hasDraft ||
 		    expectedRevision !== revision || typeof input !== 'string')
 			return false;
 		const token = epoch;
@@ -836,6 +884,10 @@ function presentation(adapter, inputLimits)
 				executed : false,
 				valueStatus : 'NoValue'
 			});
+			if (kind !== 'read') {
+				clearWatchValues();
+				watchStatus = 'Stale after mutation - explicitly refresh watched Fields.';
+			}
 			if (kind === 'read' || kind === 'write') {
 				value = undefined;
 				valuePayload = undefined;
@@ -866,6 +918,156 @@ function presentation(adapter, inputLimits)
 		}
 	}
 
+	// Polling is owner-driven through tickWatch(); this presentation creates no
+	// timer, transport, SDK client or additional execution queue.
+	function watchScalar(endpoint)
+	{
+		const type = model?.types[endpoint.valueType];
+		return endpoint.category === 1 && (endpoint.capabilities & 1) !== 0 &&
+		       (type?.kind === 1 || type?.kind === 2) && type.wireBytes <= 8;
+	}
+
+	function clearWatchValues()
+	{
+		for (const row of watched) {
+			row.status = 'Stale';
+			row.text = '';
+		}
+	}
+
+	function retireWatch()
+	{
+		watchRunning = watchCycle = false;
+		watchCapability = undefined;
+		++watchRevision;
+		clearWatchValues();
+		watchStatus = watchPending ? 'Stopping - draining the current read.' : 'Stopped';
+	}
+
+	function watchFailure(message, retireValues = true)
+	{
+		watchRunning = watchCycle = false;
+		if (retireValues)
+			clearWatchValues();
+		watchStatus = message;
+	}
+
+	function completeWatch(record, result)
+	{
+		if (watchPending !== record)
+			return;
+		watchPending = undefined;
+		if (record.epoch !== epoch || record.revision !== watchRevision || !isCurrent()) {
+			watchRunning = watchCycle = false;
+			watchStatus = 'Stopped - superseded read drained.';
+			notify();
+			return;
+		}
+		publishing = true;
+		try {
+			const decoded = record.individual ? adapter.result(result) : adapter.manyResult(result);
+			const fieldRefused = record.individual && decoded.operation.status === Status.Ok &&
+			                     decoded.operation.dispatch !== 0;
+			if (!decoded.operation.succeeded && !fieldRefused)
+				throw new Error(failureText('read', decoded.operation));
+			const items = record.individual
+			                  ? [{id : watched[record.cursor].endpoint.id,
+			                      status : !fieldRefused ? 0 : decoded.operation.dispatch === 4 ? 1
+			                             : decoded.operation.dispatch === 9 ? 3 : 4,
+			                      valueStatus : decoded.valueStatus, value : decoded.value}]
+			                  : decoded.items;
+			const count = record.individual ? 1 : watched.length;
+			if (!Array.isArray(items) || items.length !== count)
+				fail('Invalid ReadMany result');
+			const changed = items.map((item, index) => {
+				const row = watched[record.individual ? record.cursor : index];
+				if (item.id !== row.endpoint.id || !Number.isInteger(item.status) ||
+				    item.status < 0 || item.status >= watchItemNames.length)
+					fail('Invalid ReadMany item');
+				if (item.status !== 0)
+					return {row, status : watchItemNames[item.status], text : ''};
+				if (item.valueStatus !== undefined && item.valueStatus !== 'Ok')
+					fail('ReadMany value is ' + item.valueStatus);
+				validate(row.endpoint.valueType, item.value);
+				let display = text(item.value);
+				const type = model.types[row.endpoint.valueType];
+				if (type.kind === 2) {
+					const known = type.entries.find(entry => entry.code === display);
+					if (known)
+						display = known.name + ' (' + display + ')';
+				}
+				return {row, status : 'Ok', text : display};
+			});
+			if (record.epoch !== epoch || record.revision !== watchRevision || !isCurrent())
+				return;
+			for (const change of changed) {
+				change.row.status = change.status;
+				change.row.text = change.text;
+			}
+			if (!record.individual || ++watchCursor >= watched.length) {
+				watchCycle = false;
+				watchStatus = (record.individual ? 'Individual FieldRead' : 'ReadMany') +
+				              ' complete - ' + watched.length + ' Fields';
+			}
+		} catch (failure) {
+			watchFailure(String(failure.message || failure), record.accepted);
+		} finally {
+			publishing = false;
+			notify();
+		}
+		if (watchCycle && record.revision === watchRevision && isCurrent())
+			launchWatch();
+	}
+
+	function launchWatch()
+	{
+		if (active || watchPending || publishing || notifying || !isCurrent() || !watchCycle)
+			return false;
+		const record = {epoch, revision : watchRevision, cursor : watchCursor,
+		                individual : watchIndividual};
+		publishing = true;
+		try {
+			if (!watchIndividual && !watchCapability)
+				fail('ReadMany unavailable. Supply TRM1 for this session or explicitly select Individual FieldRead.');
+			watchPending = record;
+			const request = watchIndividual
+			                    ? adapter.submit(watched[watchCursor].endpoint, 'read')
+			                    : adapter.readMany(watchCapability, watched.map(row => row.endpoint));
+			record.accepted = request.requestId !== 0;
+			request.then(reply => completeWatch(record, reply), failure => {
+				if (watchPending !== record)
+					return;
+				watchPending = undefined;
+				watchFailure(String(failure.message || failure));
+				notify();
+			});
+			if (request.requestId === 0) {
+				// The core refused admission. Existing values remain until the
+				// refused completion supplies its precise operation status.
+				watchStatus = 'Watch submission refused';
+				return false;
+			}
+			watchStatus = watchIndividual ? 'Individual FieldRead pending' : 'ReadMany pending';
+			return true;
+		} catch (failure) {
+			watchPending = undefined;
+			watchFailure(String(failure.message || failure), false);
+			return false;
+		} finally {
+			publishing = false;
+			notify();
+		}
+	}
+
+	function refreshWatch()
+	{
+		if (!watchEditable() || !watched.length)
+			return false;
+		watchCycle = true;
+		watchCursor = 0;
+		return launchWatch();
+	}
+
 	const provider = freeze({
 		snapshot,
 		rows,
@@ -874,6 +1076,110 @@ function presentation(adapter, inputLimits)
 		select,
 		setText,
 		beginEdit,
+		addWatch(key = selected?.key) {
+		    if (!watchEditable() || watched.length >= 32 || typeof key !== 'string')
+			    return false;
+		    const endpoint = description.endpoints.find(row => row.key === key);
+		    if (!endpoint || !watchScalar(endpoint) || watched.some(row => row.endpoint.key === key))
+			    return false;
+		    watched.push({endpoint, status : 'NotRead', text : ''});
+		    ++watchRevision;
+		    notify();
+		    return true;
+		},
+		removeWatch(key) {
+		    if (!watchEditable() || !watched.some(row => row.endpoint.key === key))
+			    return false;
+		    watched = watched.filter(row => row.endpoint.key !== key);
+		    ++watchRevision;
+		    notify();
+		    return true;
+		},
+		clearWatch() {
+		    if (!watchEditable())
+			    return false;
+		    watched = [];
+		    ++watchRevision;
+		    notify();
+		    return true;
+		},
+		setWatchIndividual(individual) {
+		    if (!watchEditable() || typeof individual !== 'boolean')
+			    return false;
+		    watchIndividual = individual;
+		    ++watchRevision;
+		    notify();
+		    return true;
+		},
+		setWatchInterval(milliseconds) {
+		    if (!watchEditable() || !Number.isFinite(milliseconds) || milliseconds < 100 || milliseconds > 10000)
+			    return false;
+		    watchInterval = milliseconds;
+		    notify();
+		    return true;
+		},
+		setReadManyCapability(input) {
+		    if (!watchEditable())
+			    return false;
+		    const token = epoch;
+		    publishing = true;
+		    try {
+			    const bytes = input instanceof ArrayBuffer ? new Uint8Array(input)
+			                  : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+			                                                  : undefined;
+			    if (!bytes || bytes.byteLength !== 24)
+				    return false;
+			    const copy = new Uint8Array(bytes);
+			    if (token !== epoch || !isCurrent())
+				    return false;
+			    watchCapability = copy;
+			    return true;
+		    } catch {
+			    return false;
+		    } finally {
+			    publishing = false;
+		    }
+		},
+		refreshWatch,
+		startWatch(nowMs) {
+		    if (!Number.isFinite(nowMs) || nowMs < 0 || !watchEditable() || !watched.length)
+			    return false;
+		    watchDue = nowMs + watchInterval;
+		    watchRunning = true;
+		    watchCycle = true;
+		    watchCursor = 0;
+		    if (launchWatch())
+			    return true;
+		    watchRunning = false;
+		    notify();
+		    return false;
+		},
+		stopWatch() {
+		    if (publishing || notifying)
+			    return false;
+		    watchRunning = watchCycle = false;
+		    ++watchRevision;
+		    watchStatus = watchPending ? 'Stopping - draining the current read.' : 'Stopped';
+		    notify();
+		    return true;
+		},
+		tickWatch(nowMs) {
+		    if (!Number.isFinite(nowMs) || nowMs < 0 || publishing || notifying || !watchRunning)
+			    return false;
+		    if (!isCurrent()) {
+			    retireWatch();
+			    notify();
+			    return false;
+		    }
+		    if (nowMs < watchDue)
+			    return false;
+		    watchDue = nowMs + watchInterval;
+		    if (active || watchPending || watchCycle)
+			    return false; // Skip missed ticks; never accumulate requests.
+		    watchCycle = true;
+		    watchCursor = 0;
+		    return launchWatch();
+		},
 		subscribe(listener) {
 		    if (typeof listener !== 'function')
 			    fail('A state listener is required');

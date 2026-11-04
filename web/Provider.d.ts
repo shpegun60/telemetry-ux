@@ -1,5 +1,5 @@
 /* Explicit-provider presentation over Telemetry SDK. SPDX-License-Identifier: MIT. */
-import type {DeviceClient} from 'telemetry-sdk/client';
+import type {ByteInput, DeviceClient} from 'telemetry-sdk/client';
 import type {DynamicClient} from 'telemetry-sdk/dynamic';
 
 export type ValuePath = readonly(string|number)[];
@@ -49,8 +49,28 @@ export interface PresentationState {
 	readonly dirty: boolean;
 	readonly error: string;
 	readonly outcomes: Readonly<Partial<Record<OutcomeKind, PresentationOutcome>>>;
+	readonly watch?: PresentationWatch;
 	readonly actions:
 	    Readonly<Record<'refresh'|'beginEdit'|'cancelEdit'|'apply'|'execute'|'call', boolean>>;
+}
+export interface PresentationWatchRow {
+	readonly key: string;
+	readonly id: number;
+	readonly name: string;
+	readonly catalog: string;
+	readonly status: string;
+	readonly text: string;
+}
+export interface PresentationWatch {
+	readonly rows: readonly PresentationWatchRow[];
+	readonly active: boolean;
+	readonly pending: boolean;
+	readonly running: boolean;
+	readonly individual: boolean;
+	readonly intervalMs: number;
+	readonly status: string;
+	readonly canAdd: boolean;
+	readonly canRefresh: boolean;
 }
 export interface PresentationRow {
 	readonly key: string;
@@ -91,6 +111,29 @@ export interface PresentationProvider {
 	execute(): boolean;
 	call(): boolean;
 }
+// Existing host-written providers need not implement the optional Watchlist.
+export interface WatchPresentationState extends PresentationState {
+	readonly watch: PresentationWatch;
+}
+export interface WatchPresentationProvider extends PresentationProvider {
+	snapshot(): WatchPresentationState;
+	/** Add a readable scalar/enum Field, up to 32 distinct IDs. No request is sent. */
+	addWatch(key?: string): boolean;
+	removeWatch(key: string): boolean;
+	clearWatch(): boolean;
+	/** Explicit fallback; false means one ReadMany request, never implicit fan-out. */
+	setWatchIndividual(individual: boolean): boolean;
+	setWatchInterval(milliseconds: number): boolean;
+	/** Caller discovers TRM1 and resupplies it after each admission. SDK validates it. */
+	setReadManyCapability(input: ByteInput): boolean;
+	refreshWatch(): boolean;
+	/** Owner supplies a monotonic millisecond clock, also used for tickWatch(). */
+	startWatch(nowMs: number): boolean;
+	/** Stops polling; an accepted request remains pending until completion/drain. */
+	stopWatch(): boolean;
+	/** Call from the host loop. Missed ticks are skipped; no timer is created. */
+	tickWatch(nowMs: number): boolean;
+}
 
 // Compatible with the optional generated StructuralMetadata v1 module. The UX
 // receives its graph, never parses a Descriptor or owns an SDK RuntimeSchema.
@@ -123,7 +166,7 @@ export function createStaticProvider(options: {
 		readonly fingerprint : bigint; readonly codecs : object
 	};
 	readonly limits?: PresentationLimits;
-}): PresentationProvider;
+}): WatchPresentationProvider;
 export function createDynamicProvider(
     options: {readonly client: DynamicClient; readonly limits?: PresentationLimits;}):
-    PresentationProvider;
+    WatchPresentationProvider;
