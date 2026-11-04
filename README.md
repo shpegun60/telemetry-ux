@@ -118,8 +118,16 @@ registry publication is implied.
 
 The [local browser demo](examples/web_demo/README.md) uses a persistent native
 Model and the existing Encoded dispatcher. Its [installed consumer test](tests/web_configurator/README.md)
-checks both real client modes in Chromium. This first browser version includes
-Fields, Commands and Services; the Qt Inspector also provides Watchlist controls.
+checks both real client modes in Chromium. Both modes provide Fields, Commands,
+Services, bounded scalar Watchlists and explicit mixed Batch editing through the
+same SDK FIFO. The host supplies discovered TRM1/TBM1 capability bytes for each
+session; Individual FieldRead remains an explicit Watchlist mode.
+
+For device-hosted files, the [deploy exporter](tools/README.md) turns a prepared
+application and its installed runtime packages into a relocatable `vendor/`
+bundle with MIME/length/SHA-256 manifest and an optional C++17 Flash asset table.
+The target needs no Node or Python. Its HTTP/WebSocket stack and admission policy
+remain application-owned; exporting files does not supply an STM32 Ethernet port.
 
 For an existing browser WebSocket connection, the optional
 [`telemetry-ux/transports/websocket` carrier](web/README.md#browser-websocket-carrier)
