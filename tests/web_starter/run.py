@@ -68,6 +68,8 @@ def main():
             check(target == generate_web_starter(schema), 'Non-deterministic starter')
             check(target.symbol_mapping == {'namespace': schema.namespace, 'mount': 'mountDevice',
                 'provider': 'static', 'lifecycle': 'host-owned'}, 'Wrong symbol receipt')
+            check('provider: BatchPresentationProvider;' in target.files['ui/DevicePage.d.ts'],
+                  'Generated page must retain the typed Watchlist and Batch provider API')
             page = target.files['ui/DevicePage.js']
             check(all(marker in page for marker in ("'../js/device.js'",
                 "'../js/device.metadata.js'", "'telemetry-ux/web'", 'createStaticProvider',

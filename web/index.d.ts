@@ -1,5 +1,5 @@
 export {createDynamicProvider, createStaticProvider} from './Provider.js';
-export {mountConfigurator, mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist} from './Configurator.js';
+export {mountConfigurator, mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist, mountBatchEditor} from './Configurator.js';
 export {defineConfiguratorElement} from './Element.js';
 export type {
 	TelemetryConfiguratorElement,
@@ -17,6 +17,13 @@ export type {
 	PresentationWatch,
 	WatchPresentationState,
 	WatchPresentationProvider,
+	PresentationBatchOutcome,
+	PresentationBatchItem,
+	PresentationBatch,
+	BatchPresentationState,
+	BatchPresentationProvider,
+	BatchValueSource,
+	BatchOperation,
 	ValuePath,
 	ValueSource
 } from './Provider.js';

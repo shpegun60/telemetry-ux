@@ -246,7 +246,12 @@ print(json.dumps(result))
             '--device', device, '--public-root', public, '--data-dir', output / 'ws-browser'])
         browser = json.loads((output / 'ws-browser/summary.json').read_text(encoding='utf8'))
         check(browser.get('passed') and browser.get('static') and browser.get('dynamic') and
-              browser.get('checks', 0) >= 70, 'Both installed WebSocket browser journeys must pass')
+              browser.get('checks', 0) >= 88 and
+              all(browser.get('batches', {}).get(mode, {}).get('websocket_requests') == 1 and
+                  browser['batches'][mode].get('native_exchanges') == 1 and
+                  len(browser['batches'][mode].get('statuses', [])) == 4
+                  for mode in ('static', 'dynamic')),
+              'Both installed WebSocket browser journeys and real mixed Batch must pass')
         report['browser'] = browser
         run('installed-codegen-identity-after', [tools['codegen_python'], '-c', codegen_script])
         report['codegen_after'] = json.loads((output/'installed-codegen-identity-after.log').read_text())

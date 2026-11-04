@@ -112,7 +112,7 @@ def main():
         run('strict-types', [node, args.tsc, '--strict', '--noEmit', '--target', 'ES2022',
             '--module', 'NodeNext', '--moduleResolution', 'NodeNext', consumer / 'Consumer.ts'])
         ssr = json.loads(run('ssr-import', [node, consumer / 'SSR.mjs']))
-        if ssr != {'passed': True, 'checks': 15}:
+        if ssr != {'passed': True, 'checks': 16}:
             raise RuntimeError('SSR import controls incomplete')
         report['ssr'] = ssr
         (consumer / 'index.html').write_text('''<!doctype html><html><head>

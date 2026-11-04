@@ -34,12 +34,20 @@ binary identity, screenshots and separate results for each scope.
   Accepted/Executed, Service refusal/response, hide/show without I/O, lost-reply
   uncertainty and explicit reconnect without replay. Greeting faults are labeled
   test-only host transport hooks and prove candidate cleanup before admission.
+- The same actual browser UI builds a mixed Command/Service/FieldRead Batch in
+  each mode. One binary WebSocket request and one native exchange must carry the
+  production Encoded Batch operation; per-item Accepted, Ok, Read completed and
+  Unavailable results remain distinct. Exact U64 response values, absent values
+  for refused items, no HTTP exchange fallback and no automatic follow-up are
+  checked. Request/reply bytes and native counter deltas are retained in the
+  browser summary. This is an observed execution test, not an exactly-once
+  delivery guarantee.
 
 The carrier never owns a client, bootstrap, execution queue or remote closure
 assertion. The application owns Connect/Disconnect and the borrowed socket.
 
 Current maintained floors are 241 isolated carrier checks, 79 host ownership
-checks, and 70 real WebSocket browser checks across the two client modes.
+checks, and 88 real WebSocket browser checks across the two client modes.
 The unchanged HTTP browser gate also runs its own existing journey/renderer
 assertions. Every individual assertion remains authoritative.
 

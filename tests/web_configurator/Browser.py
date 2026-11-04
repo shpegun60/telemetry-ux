@@ -265,6 +265,71 @@ def main():
                           'Stopped owner polling queues no further exchange')
                     action('clearWatch').click()
                     expect(watch_rows).to_have_count(0)
+
+                    # Build a real mixed request with the same editor and FIFO.
+                    # Full replacement FieldWrite arguments are explicit; the
+                    # UI never pretends that canonical zeros are device defaults.
+                    def add_batch(name, operation):
+                        endpoint(name)
+                        action('batch-operation').select_option(operation)
+                        action('addBatch').click()
+
+                    def edit_batch(path, text):
+                        selector = json.dumps(path, separators=(',', ':'))
+                        field = view.locator(
+                            'input[data-source="batchDraft"][data-path=' + json.dumps(selector) + ']')
+                        expect(field).to_be_visible()
+                        field.fill(text)
+                        return field
+
+                    add_batch('Config', 'write')
+                    edit_batch(['gain'], '6.25')
+                    edit_batch(['large'], '9007199254740993')
+                    edit_batch(['negative'], '-9223372036854775808')
+                    add_batch('Accepted', 'command')
+                    add_batch('Echo', 'service')
+                    edit_batch(['gain'], '2.5')
+                    edit_batch(['large'], '18446744073709551615')
+                    add_batch('Wide', 'read')
+                    batch_rows = view.locator('.tux-batch-table tbody tr')
+                    expect(batch_rows).to_have_count(4)
+                    check(action('executeBatch').is_disabled(),
+                          'A reconnected session requires fresh mutation permission for Batch')
+                    action('writes').check()
+                    before = state()
+                    before_exchanges = server.exchange_count
+                    action('executeBatch').click()
+                    expect(view.locator('[data-role="batch-status"]')).to_contain_text('Batch reply received')
+                    idle()
+                    check(server.exchange_count == before_exchanges + 1,
+                          'Mixed FieldWrite/Command/Service/FieldRead uses one native exchange')
+                    after = state()
+                    check(after['writes'] == before['writes'] + 1 and
+                          after['commands'] == before['commands'] + 1 and
+                          after['services'] == before['services'] + 1 and
+                          after['reads'] == before['reads'] + 1,
+                          'Each requested mixed item reaches the native Model')
+                    check(after['gain'] == 6.25 and after['large'] == '9007199254740993',
+                          'Batch FieldWrite uses the edited full DTO without numeric precision loss')
+                    expect(batch_rows.nth(0)).to_contain_text('Applied')
+                    expect(batch_rows.nth(1)).to_contain_text('Accepted')
+                    check('Executed' not in batch_rows.nth(1).inner_text(),
+                          'Batch Command Accepted is not reported as Executed')
+                    batch_rows.nth(2).locator('[data-action="selectBatch"]').click()
+                    expect(row('batchResponse', ['gain'])).to_have_text('2.5')
+                    expect(row('batchResponse', ['large'])).to_have_text('18446744073709551615')
+                    batch_rows.nth(3).locator('[data-action="selectBatch"]').click()
+                    expect(row('batchResponse', [])).to_have_text('9007199254740993')
+                    before_exchanges = server.exchange_count
+                    page.wait_for_timeout(150)
+                    check(server.exchange_count == before_exchanges,
+                          'Completed Batch has no automatic retry or readback')
+                    batch_image = output / (mode + '-batch.png')
+                    page.screenshot(path=str(batch_image), full_page=True)
+                    report['screenshots'][mode + '_batch'] = dict(file=batch_image.name,
+                        sha256=hashlib.sha256(batch_image.read_bytes()).hexdigest())
+                    action('clearBatch').click()
+                    expect(batch_rows).to_have_count(0)
                     report[mode] = True
                     report['modes'][mode] = dict(checks=report['checks']-start_checks, native_state=state())
                     report['requests'] += requests

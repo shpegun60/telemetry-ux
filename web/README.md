@@ -145,8 +145,11 @@ remote operation stopped. Keep known results and complete the required recovery
 before admitting another device session. No exactly-once guarantee is added.
 
 `encodedOptions: {readMany: true, batch: true}` only opts into local backend
-support. The application must independently verify matching remote capabilities;
-the localhost [WebSocket demo](../examples/web_demo/README.md) advertises neither.
+support. The application must independently verify matching remote capabilities.
+The localhost [WebSocket demo](../examples/web_demo/README.md) obtains independently
+admitted, session-bound TRM1/TBM1 records through its application-owned bootstrap
+routes and exercises both operations against a native Model. This is host
+integration coverage, not qualification of a firmware HTTP/WebSocket server.
 The adapter supports native browser WebSocket methods; it is not a generalized
 EventTarget transport. See the [installed consumer gate](../tests/websocket_transport/README.md)
 for the separate carrier, host-lease and real browser/native checks.
@@ -287,3 +290,30 @@ serve that local asset with the other UX files. Public parts are `root`, `header
 replacement and detach/reconnect. The registration option is fixed for a tag;
 re-registering it with different options throws. The same underlying renderer
 and lifecycle contract apply in both modes.
+
+## Mixed Batch editor
+
+Providers with the optional Batch contract expose one ordered, editable plan in
+the full Configurator. Mount `mountBatchEditor(host, {provider})` to embed just
+that plan in an existing application. The host selects endpoints; Add appends a
+FieldRead, FieldWrite, Command or Service, while View / edit selects one item's
+arguments or response. Up, Down and Remove edit the plan locally. The editor
+uses the same lazy scalar/enum/structure/array renderer as individual operations.
+
+FieldWrite arguments are a **new full replacement DTO**, initialized to canonical
+zero values. They are not a read-modify-write copy and are not device defaults.
+Review every member before executing. FieldRead has no argument DTO. The host
+must supply the independently discovered Batch capability for the current
+session; the UI never substitutes individual operation calls.
+
+Execute Batch performs one explicit provider submission. Mutating plans require
+the session's write permission; all plan edits remain locked until the accepted
+request completes or drains. Results stay in input order and retain distinctions
+such as `Accepted`, `NotExecuted`, failure and `OutcomeUnknown`. A selected
+successful response is shown through the same DTO viewer. The editor adds no
+automatic replay, readback, atomicity or exactly-once guarantee. Reconnect and
+recovery remain the host's responsibility, as for individual mutations.
+
+Additional shadow parts are `batch`, `batch-request`, `batch-response` and
+`batch-result`. Mounting or removing a Batch view creates no client, execution
+queue, transport or operation. It only subscribes to the host-owned provider.

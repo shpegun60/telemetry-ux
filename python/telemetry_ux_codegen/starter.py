@@ -20,12 +20,12 @@ export function mountDevice(host, {client}) {
 
 DECLARATION = '''// Generated Telemetry UX starter. SPDX-License-Identifier: MIT.
 import type {DeviceClient} from 'telemetry-sdk/client';
-import type {PresentationProvider} from 'telemetry-ux/web';
+import type {BatchPresentationProvider} from 'telemetry-ux/web';
 
 export declare function mountDevice(host: HTMLElement, options: {
   readonly client: DeviceClient;
 }): Readonly<{
-  provider: PresentationProvider;
+  provider: BatchPresentationProvider;
   unmount(): void;
 }>;
 '''

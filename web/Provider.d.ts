@@ -4,6 +4,8 @@ import type {DynamicClient} from 'telemetry-sdk/dynamic';
 
 export type ValuePath = readonly(string|number)[];
 export type ValueSource = 'value'|'draft'|'response';
+export type BatchValueSource = 'batchDraft'|'batchResponse';
+export type BatchOperation = 'read'|'write'|'command'|'service';
 export interface PresentationLimits {
 	readonly nodes?: number;
 	readonly depth?: number;
@@ -50,6 +52,7 @@ export interface PresentationState {
 	readonly error: string;
 	readonly outcomes: Readonly<Partial<Record<OutcomeKind, PresentationOutcome>>>;
 	readonly watch?: PresentationWatch;
+	readonly batch?: PresentationBatch;
 	readonly actions:
 	    Readonly<Record<'refresh'|'beginEdit'|'cancelEdit'|'apply'|'execute'|'call', boolean>>;
 }
@@ -134,6 +137,58 @@ export interface WatchPresentationProvider extends PresentationProvider {
 	/** Call from the host loop. Missed ticks are skipped; no timer is created. */
 	tickWatch(nowMs: number): boolean;
 }
+export interface PresentationBatchOutcome {
+	readonly status: number|null;
+	readonly name: string;
+	readonly display: string;
+	readonly session: number;
+	readonly requestId: number;
+	readonly succeeded: boolean;
+	readonly valueStatus: string;
+	readonly historical: boolean;
+}
+export interface PresentationBatchItem {
+	readonly key: string;
+	readonly endpointKey: string;
+	readonly category: 1|2|3;
+	readonly name: string;
+	readonly catalog: string;
+	readonly operation: BatchOperation;
+	readonly status: string;
+	readonly outcome?: PresentationOutcome;
+}
+export interface PresentationBatch {
+	readonly items: readonly PresentationBatchItem[];
+	readonly selectedKey: string;
+	readonly active: boolean;
+	readonly pending: boolean;
+	readonly status: string;
+	readonly canAdd: boolean;
+	readonly addOperations: readonly BatchOperation[];
+	readonly canExecute: boolean;
+	readonly hasDraft: boolean;
+	readonly hasResponse: boolean;
+	readonly outcome?: PresentationBatchOutcome;
+}
+export interface BatchPresentationState extends WatchPresentationState {
+	readonly batch: PresentationBatch;
+}
+export interface BatchPresentationProvider extends WatchPresentationProvider {
+	snapshot(): BatchPresentationState;
+	rows(path?: ValuePath, options
+	     ?: Readonly<{source?: ValueSource|BatchValueSource; offset?: number; limit?: number}>): PresentationRows;
+	/** Initializes new full replacement DTOs with canonical zeros, not device defaults. */
+	addBatch(operation: BatchOperation, endpointKey?: string): boolean;
+	removeBatch(key: string): boolean;
+	moveBatch(key: string, delta: -1|1): boolean;
+	selectBatch(key: string): boolean;
+	clearBatch(): boolean;
+	setBatchText(path: ValuePath, text: string, revision: number): boolean;
+	/** Caller discovers TBM1 independently of TRM1 and resupplies after admission. */
+	setBatchCapability(input: ByteInput): boolean;
+	/** One SDK Batch request. No transaction, replay, automatic readback or exactly-once promise. */
+	executeBatch(): boolean;
+}
 
 // Compatible with the optional generated StructuralMetadata v1 module. The UX
 // receives its graph, never parses a Descriptor or owns an SDK RuntimeSchema.
@@ -166,7 +221,7 @@ export function createStaticProvider(options: {
 		readonly fingerprint : bigint; readonly codecs : object
 	};
 	readonly limits?: PresentationLimits;
-}): WatchPresentationProvider;
+}): BatchPresentationProvider;
 export function createDynamicProvider(
     options: {readonly client: DynamicClient; readonly limits?: PresentationLimits;}):
-    WatchPresentationProvider;
+    BatchPresentationProvider;

@@ -27,8 +27,12 @@ function eq(a, b)
 }
 
 for (const mode of ['dynamic', 'static']) {
+	let clockNow = 0;
+	// Explicit owner-driven SDK time: wall-clock/event-loop load never chooses
+	// whether a test times out before or after transport handoff.
+	const clock = {now : () => clockNow, setTimeout : () => undefined, clearTimeout : () => {}};
 	const peer = spawn(options['--device'], [], {stdio : [ 'pipe', 'pipe', 'pipe' ]});
-	let waiter, errors = '', frames = 0, hold, release, nextReadTransform, nextManyTransform, lastWrittenPayload;
+	let waiter, errors = '', frames = 0, hold, release, nextReadTransform, nextManyTransform, lastWrittenPayload, lastReply;
 	let writes = 0;
 	peer.stderr.on('data', x => errors += x);
 	createInterface({input : peer.stdout}).on('line', line => {
@@ -51,6 +55,7 @@ for (const mode of ['dynamic', 'static']) {
 		if (hold)
 			await new Promise(resolve => release = resolve);
 		const reply = new Uint8Array(Buffer.from(data, 'hex'));
+		lastReply = reply;
 		if (packet[6] === 4 && nextReadTransform) {
 			const transform = nextReadTransform;
 			nextReadTransform = undefined;
@@ -66,11 +71,11 @@ for (const mode of ['dynamic', 'static']) {
 			transform(reply);
 		}
 		return reply;
-	}, {readMany : true});
+	}, {readMany : true, batch : true});
 	const client =
 	    mode === 'dynamic'
-	        ? new DynamicClient({backend, maxPending : 1})
-	        : new DeviceClient({backend, matchesHeader : sdk.matchesHeader, maxPending : 1});
+	        ? new DynamicClient({backend, clock, timeoutMs : 1000, maxPending : 1})
+	        : new DeviceClient({backend, clock, timeoutMs : 1000, matchesHeader : sdk.matchesHeader, maxPending : 1});
 	eq(mode === 'dynamic' ? client.admit(schema, descriptor.subarray(0, 64), 17)
 	                      : client.openSession(17, descriptor.subarray(0, 64)),
 	   mode === 'dynamic' ? Status.Ok : true);
@@ -606,6 +611,226 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.refreshWatch(), false); // TRM1 from session 19 was retired.
 	eq(frames, newSessionFrames);
 	eq(p.clearWatch(), true);
+
+	// Mixed Batch is one real SDK request, not a client-side fan-out. Repeated
+	// IDs are ordered items; the UI never promises rollback or exactly once.
+	eq(p.snapshot().batch.items.length, 0);
+	eq(p.executeBatch(), false);
+	const beforeBatch = frames;
+	eq(p.select(endpoint('ReadOnly').key), true);
+	eq(p.snapshot().batch.addOperations, ['read']);
+	eq(p.addBatch('write'), false);
+	eq(p.addBatch('command'), false);
+	eq(p.addBatch('read', endpoint('Wide').key), true);
+	const wideItem = p.snapshot().batch.selectedKey;
+	eq(p.rows([], {source : 'batchDraft'}).available, false);
+	eq(p.setBatchText([], '7', p.snapshot().revision), false);
+	eq(p.addBatch('read', endpoint('Signed').key), true);
+	const signedItem = p.snapshot().batch.selectedKey;
+	eq(p.snapshot().batch.canExecute, true); // Read-only Batch needs no mutation opt-in.
+	eq(p.executeBatch(), false); // TBM1 is independent from TRM1.
+	eq(frames, beforeBatch);
+	const batchCapability = new Uint8Array(Buffer.from(await new Promise(resolve => {
+		waiter = resolve;
+		peer.stdin.write('mixedbatch\n');
+	}), 'hex'));
+	eq(batchCapability.length, 24);
+	const originalBatchCapability = new Uint8Array(batchCapability);
+	eq(p.setBatchCapability(new Uint8Array(23)), false);
+	eq(p.setBatchCapability(new Uint8Array(24)), true);
+	eq(p.executeBatch(), false);
+	await done();
+	eq(frames, beforeBatch);
+	eq(p.snapshot().batch.items.length, 2);
+	eq(p.setBatchCapability(batchCapability), true);
+	batchCapability.fill(0);
+	eq(p.executeBatch(), true);
+	await done();
+	eq(frames, beforeBatch + 1);
+	eq(p.snapshot().batch.items.map(item => item.outcome.succeeded), [true, true]);
+	eq(p.rows([], {source : 'batchResponse'}).rows[0].text, '-9223372036854775808');
+	eq(p.selectBatch(wideItem), true);
+	eq(p.rows([], {source : 'batchResponse'}).rows[0].text, '18446744073709551615');
+	const priorBatchValue = p.rows([], {source : 'batchResponse'});
+	const batchCompeting = mode === 'dynamic' ? client.readField(client.bind('FieldRead', 0).endpoint)
+	                                           : client.read(sdk.control.fields.Config);
+	eq(p.executeBatch(), false);
+	await batchCompeting;
+	await done();
+	eq(p.snapshot().batch.outcome.name, 'QueueFull');
+	eq(p.rows([], {source : 'batchResponse'}), priorBatchValue);
+	eq(p.snapshot().batch.items.map(item => item.outcome.succeeded), [true, true]);
+	eq(p.selectBatch(signedItem), true);
+	eq(p.moveBatch(signedItem, -1), true);
+	eq(p.snapshot().batch.items.map(item => item.key), [signedItem, wideItem]);
+	eq(p.moveBatch(signedItem, 1), true);
+	eq(p.moveBatch(wideItem, -1), false);
+	eq(p.clearBatch(), true);
+	eq(p.selectBatch(wideItem), false);
+	eq(p.addBatch('write', endpoint('Config').key), true);
+	const writeItem = p.snapshot().batch.selectedKey;
+	eq(p.rows([], {source : 'batchDraft'}).rows.find(row => row.name === 'large').text, '0');
+	eq(p.setBatchText(['gain'], '15', p.snapshot().revision), true);
+	eq(p.setBatchText(['large'], '18446744073709551615', p.snapshot().revision), true);
+	eq(p.setBatchText(['negative'], '-9223372036854775808', p.snapshot().revision), true);
+	eq(p.setBatchText(['mode'], '-123', p.snapshot().revision), true);
+	eq(p.setBatchText(['nested', 'matrix', 1, 1], '-15', p.snapshot().revision), true);
+	eq(p.addBatch('read', endpoint('Config').key), true);
+	const configReadItem = p.snapshot().batch.selectedKey;
+	eq(p.addBatch('command', endpoint('Accepted', 2).key), true);
+	eq(p.rows([], {source : 'batchDraft'}).kind, 'void');
+	eq(p.addBatch('service', endpoint('Echo', 3).key), true);
+	const echoItem = p.snapshot().batch.selectedKey;
+	eq(p.setBatchText(['gain'], '6.25', p.snapshot().revision), true);
+	eq(p.snapshot().batch.canExecute, false);
+	eq(p.executeBatch(), false);
+	eq(p.setWritesEnabled(true), true);
+	eq(p.selectBatch(writeItem), true);
+	const beforeInvalid = frames;
+	eq(p.setBatchText(['large'], '18446744073709551616', p.snapshot().revision), false);
+	eq(p.rows([], {source : 'batchDraft'}).rows.find(row => row.name === 'large').text,
+	   '18446744073709551616');
+	eq(p.executeBatch(), false);
+	eq(frames, beforeInvalid);
+	eq(p.setBatchText(['large'], '18446744073709551615', p.snapshot().revision), true);
+	const mixedBefore = frames;
+	hold = true;
+	release = undefined;
+	eq(p.executeBatch(), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function');
+	eq(p.snapshot().batch.pending, true);
+	eq(p.clearBatch(), false);
+	eq(p.removeBatch(writeItem), false);
+	eq(p.moveBatch(writeItem, 1), false);
+	eq(p.selectBatch(echoItem), false);
+	eq(p.setBatchText(['gain'], '7', p.snapshot().revision), false);
+	eq(p.rows([], {source : 'batchDraft'}).rows.every(row => !row.editable), true);
+	eq(p.refreshWatch(), false);
+	eq(p.executeBatch(), false);
+	eq(client.pendingCount, 1);
+	hold = false;
+	release();
+	await done();
+	eq(frames, mixedBefore + 1);
+	eq(p.snapshot().batch.items.map(item => item.status), ['Applied', 'Read completed', 'Accepted', 'Ok']);
+	eq(p.snapshot().batch.items[2].outcome.accepted, true);
+	eq(p.snapshot().batch.items[2].outcome.executed, false);
+	eq(p.selectBatch(configReadItem), true);
+	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'gain').text, '10');
+	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'large').text, '18446744073709551615');
+	eq(p.selectBatch(echoItem), true);
+	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'gain').text, '6.25');
+	lastReply.fill(0);
+	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'gain').text, '6.25');
+	eq(p.selectBatch(writeItem), true);
+	eq(p.rows([], {source : 'batchDraft'}).rows.find(row => row.name === 'gain').text, '15');
+	eq(p.rows([], {source : 'batchResponse'}).available, false);
+	eq(p.clearBatch(), true);
+	eq(p.addBatch('read', endpoint('Unavailable').key), true);
+	eq(p.addBatch('service', endpoint('Echo', 3).key), true);
+	eq(p.setBatchText(['gain'], '-1', p.snapshot().revision), true);
+	eq(p.addBatch('command', endpoint('Reset', 2).key), true);
+	eq(p.addBatch('service', endpoint('Ping', 3).key), true);
+	const pingItem = p.snapshot().batch.selectedKey;
+	eq(p.addBatch('service', endpoint('Empty', 3).key), true);
+	const emptyItem = p.snapshot().batch.selectedKey;
+	eq(p.executeBatch(), true);
+	await done();
+	eq(p.snapshot().batch.items.map(item => item.status), ['Dispatch: Unavailable', 'InvalidArgument', 'Executed', 'Ok', 'Ok']);
+	eq(p.selectBatch(pingItem), true);
+	eq(p.snapshot().batch.hasResponse, false);
+	eq(p.rows([], {source : 'batchResponse'}).kind, 'void');
+	eq(p.selectBatch(emptyItem), true);
+	eq(p.snapshot().batch.hasResponse, true);
+	eq(p.rows([], {source : 'batchResponse'}).kind, 'struct');
+	eq(p.rows([], {source : 'batchResponse'}).available, true);
+	eq(p.rows([], {source : 'batchResponse'}).total, 0);
+	// Bounded 32-item execution deliberately permits repeated IDs.
+	eq(p.clearBatch(), true);
+	for (let index = 0; index < 32; ++index)
+		eq(p.addBatch('read', endpoint('Wide').key), true);
+	eq(p.addBatch('read', endpoint('Wide').key), false);
+	const maximumBefore = frames;
+	eq(p.executeBatch(), true);
+	await done();
+	eq(frames, maximumBefore + 1);
+	eq(p.snapshot().batch.items.length, 32);
+	eq(p.snapshot().batch.items.every(item => item.outcome.succeeded), true);
+	// A stale schema cannot erase a checked operation outcome or expose values.
+	eq(p.clearBatch(), true);
+	eq(p.addBatch('command', endpoint('Accepted', 2).key), true);
+	eq(p.addBatch('service', endpoint('Inspect', 3).key), true);
+	hold = true;
+	release = undefined;
+	eq(p.executeBatch(), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function');
+	p.invalidate();
+	eq(p.snapshot().batch.pending, true);
+	eq(p.rows([], {source : 'batchResponse'}).available, false);
+	hold = false;
+	release();
+	await done();
+	eq(p.snapshot().batch.items[0].outcome.accepted, true);
+	eq(p.snapshot().batch.items[0].outcome.historical, true);
+	eq(p.snapshot().batch.items[1].outcome.valueStatus, 'Stale');
+	eq(p.snapshot().batch.outcome.historical, true);
+	eq(p.rows([], {source : 'batchResponse'}).available, false);
+	await readmit(21);
+	eq(p.sync(), true);
+	eq(p.snapshot().batch.items.length, 0);
+	eq(p.snapshot().batch.outcome.historical, true);
+	eq(p.addBatch('read', endpoint('Wide').key), true);
+	const noReplayBefore = frames;
+	eq(p.executeBatch(), false); // Old TBM1 was retired; no replay after new admission.
+	eq(frames, noReplayBefore);
+	eq(p.setBatchCapability(originalBatchCapability), true);
+	eq(p.executeBatch(), false); // SDK rejects a capability from the previous session.
+	await done();
+	eq(frames, noReplayBefore);
+	eq(p.clearBatch(), true);
+	const currentBatchCapability = new Uint8Array(Buffer.from(await new Promise(resolve => {
+		waiter = resolve;
+		peer.stdin.write('mixedbatch\n');
+	}), 'hex'));
+	eq(p.setBatchCapability(currentBatchCapability), true);
+	eq(p.addBatch('command', endpoint('Reset', 2).key), true);
+	eq(p.setWritesEnabled(true), true);
+	hold = true;
+	release = undefined;
+	const uncertainBefore = frames;
+	eq(p.executeBatch(), true);
+	for (let i = 0; !release && i < 1000; ++i)
+		await new Promise(resolve => setTimeout(resolve, 1));
+	eq(typeof release, 'function'); // Actual request handoff and peer execution occurred.
+	p.invalidate();
+	if (mode === 'dynamic') client.invalidate();
+	else client.invalidateAdmission();
+	clockNow = 999;
+	client.process();
+	await Promise.resolve();
+	eq(p.snapshot().batch.pending, true);
+	clockNow = 1000;
+	client.process();
+	await done();
+	eq(p.snapshot().batch.outcome.name, 'OutcomeUnknown');
+	eq(p.snapshot().batch.outcome.historical, true);
+	eq(p.snapshot().batch.items[0].status.includes('OutcomeUnknown'), true);
+	eq(p.snapshot().batch.items[0].outcome, undefined); // No invented executed prefix.
+	eq(p.executeBatch(), false);
+	hold = false;
+	release();
+	await new Promise(resolve => setTimeout(resolve, 0));
+	eq(frames, uncertainBefore + 1);
+	await readmit(22);
+	eq(p.sync(), true);
+	eq(p.snapshot().batch.items.length, 0);
+	eq(p.snapshot().batch.outcome.name, 'OutcomeUnknown');
+	eq(p.snapshot().batch.outcome.historical, true);
+	eq(frames, uncertainBefore + 1); // Reconnection never replays the mutation.
 	unsubscribe();
 	client.close();
 	peer.stdin.end();

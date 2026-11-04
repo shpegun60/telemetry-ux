@@ -3,7 +3,7 @@ import {
 	defineConfiguratorElement,
 	createStaticProvider,
 	createDynamicProvider,
-	mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist,
+	mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist, mountBatchEditor,
 	type TelemetryConfiguratorElement,
 	type PresentationProvider
 } from 'telemetry-ux/web';
@@ -24,6 +24,7 @@ shadow.provider = dynamicProvider;
 for (const mount of [mountFieldEditor, mountCommandPanel, mountServicePanel])
 	mount(document.createElement('section'), {provider : staticProvider}).unmount();
 mountWatchlist(document.createElement('section'), {provider : dynamicProvider, now : () => 1000}).unmount();
+mountBatchEditor(document.createElement('section'), {provider : staticProvider}).unmount();
 document.body.append(custom);
 const selected = document.querySelector('telemetry-configurator');
 if (selected)

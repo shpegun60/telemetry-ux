@@ -25,3 +25,6 @@ export function mountServicePanel(
 /** Optional provider Watchlist contract; owner-driven ticks remain with the host. */
 export function mountWatchlist(
     element: HTMLElement, options: ConfiguratorOptions): ConfiguratorView;
+/** Ordered mixed Batch with one explicit submit and the provider's shared request editor. */
+export function mountBatchEditor(
+    element: HTMLElement, options: ConfiguratorOptions): ConfiguratorView;
