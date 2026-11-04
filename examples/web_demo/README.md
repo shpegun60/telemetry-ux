@@ -18,9 +18,17 @@ and stops future ticks. The application owns the 50-ms tick timer and discovers
 the session-bound TRM1 bytes through its local bootstrap route on each connect.
 The provider creates no timer, client or FIFO.
 
-Prepare an installed SDK 0.1.0 prefix containing `core` and `encoded_server`,
-matching SDK/UX npm tarballs, and a generator environment containing both matching
-`telemetry-codegen-core` and `telemetry-ux-codegen` distributions. From this repo:
+The mixed Batch editor adds ordered FieldRead, FieldWrite, Command and Service
+items and submits one Encoded request through the same client/FIFO. It retains
+each item's outcome. The application discovers session-bound TBM1 bytes on each
+connect; mutations require explicit opt-in. Initial request DTOs contain canonical
+zeros, not device defaults, and FieldWrite replaces the entire value. There is no
+rollback, automatic replay or exactly-once guarantee.
+
+Prepare an installed SDK 0.1.0 prefix containing `core`, `encoded_server` and
+`batch_server`, matching SDK/UX npm tarballs, and a generator environment containing
+both matching `telemetry-codegen-core` and `telemetry-ux-codegen` distributions.
+From this repo:
 
 ```sh
 cmake -S examples/web_demo/native -B /external/native-demo -G Ninja \
@@ -67,8 +75,11 @@ discovery selects its separate localhost WebSocket listener; the host receives
 one session greeting, then sends complete binary TEQ1 messages through the
 ordinary SDK `EncodedBackend`. There is no HTTP fallback, retry or automatic
 reconnect. The server grants one lease and does not reuse the native peer while
-an old exchange still owns it. This example exposes operations 1-5, including
-ReadMany; Batch remains a separate follow-up. The [installed WebSocket gate](../../tests/websocket_transport/README.md)
+an old exchange still owns it. This example exposes operations 1-6, including
+ReadMany and mixed Batch. Its application-owned bootstrap routes return the
+independently admitted TRM1/TBM1 capability records for that session; this does
+not establish a firmware discovery or Ethernet implementation. The
+[installed WebSocket gate](../../tests/websocket_transport/README.md)
 keeps actual browser/native journeys separate from carrier and lease fixtures.
 
 **Hide view** removes only the DOM/subscription; **Show view** reuses the same
@@ -85,5 +96,7 @@ its own listeners; socket closure is not automatic proof of remote quiescence.
 
 For your own application, import the generated `mountDevice` entry page, supply
 your admitted client and use your chosen transport. Keep user code outside the
-generator's owned output directory. Browser watchlists and batch actions are
-separate follow-up features; this example exposes Field, Command and Service.
+generator's owned output directory. The existing Watchlist and mixed Batch views
+use the same provider and client; your host supplies the optional remote
+capabilities and drives the Watchlist clock. These host/native demonstrations
+do not qualify an STM32 HTTP/WebSocket transport.
