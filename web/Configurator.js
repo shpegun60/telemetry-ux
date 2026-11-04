@@ -277,12 +277,20 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const outcomeList = node('div');
 	outcomes.append(outcomeList);
 	content.append(outcomes);
-	layout.append(navigation, content);
+	if (categoryFilter === 0) {
+		const workspace = node('div', 'tux-workspace');
+		workspace.append(watch, noWatch, batch, noBatch, content);
+		layout.append(navigation, workspace);
+	} else
+		layout.append(navigation, content);
 	const status = node('p', 'tux-status');
 	status.setAttribute('part', 'status');
 	status.dataset.role = 'status';
 	status.setAttribute('role', 'status');
-	root.append(header, permission, watch, noWatch, batch, noBatch, layout, status);
+	if (categoryFilter === 0)
+		root.append(header, permission, layout, status);
+	else
+		root.append(header, permission, watch, noWatch, batch, noBatch, layout, status);
 	element.append(root);
 
 	function matchesSelection()

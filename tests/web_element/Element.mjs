@@ -1,5 +1,5 @@
 /* Actual DOM lifecycle checks, with an explicit presentation-only fixture. MIT. */
-import {defineConfiguratorElement, mountFieldEditor, mountCommandPanel, mountServicePanel,
+import {defineConfiguratorElement, mountConfigurator, mountFieldEditor, mountCommandPanel, mountServicePanel,
         mountWatchlist, mountBatchEditor} from 'telemetry-ux/web';
 
 export async function runElementChecks()
@@ -336,6 +336,8 @@ export async function runElementChecks()
 			      'standalone panels subscribe without selecting or sending');
 			check(panelHosts.every(element => element.querySelector('nav').hidden),
 			      'standalone panels do not create a second endpoint selector');
+			check(panelHosts.every(element => !element.querySelector('.tux-workspace')),
+			      'standalone category panels retain their independent DOM layout');
 			check(selected(panelHosts[0]).includes('Shared selection') &&
 			          selected(panelHosts[1]) === 'Select a Command' &&
 			          selected(panelHosts[2]) === 'Select a Service',
@@ -399,6 +401,8 @@ export async function runElementChecks()
 			check(watchHost.querySelector('.tux-layout').hidden &&
 			          watchHost.querySelector('[part="permission"]').hidden,
 			      'standalone Watchlist omits unrelated editor and write controls');
+			check(!watchHost.querySelector('.tux-workspace'),
+			      'standalone Watchlist is not moved into a hidden workspace');
 			watchHost.querySelector('[data-action="refreshWatch"]').click();
 			watchHost.querySelector('[data-action="startWatch"]').click();
 			check(watchCalls.length === 2 && watchCalls[0].method === 'refreshWatch' &&
@@ -498,6 +502,9 @@ export async function runElementChecks()
 			const rowAction = (key, name) => batchHost.querySelector('[data-batch="' + key + '"] [data-action="' + name + '"]');
 			check(batchCalls.length === 0 && batching.counters.io === 0,
 			      'Batch mount neither sends nor selects or creates argument DTOs');
+			check(batchHost.querySelector('.tux-layout').hidden &&
+			          !batchHost.querySelector('.tux-workspace'),
+			      'standalone Batch keeps its visible editor outside the hidden endpoint layout');
 			check(batchHost.querySelectorAll('tbody tr[data-batch]').length === 4 &&
 			          !batchHost.querySelector('img') &&
 			          batchHost.textContent.includes('canonical zero values') &&
@@ -632,5 +639,93 @@ export async function runElementChecks()
 		providers : providers.length,
 		fixture : 'presentation-only',
 		actualSdkJourneys : false
+	};
+}
+
+/** Real renderer geometry fixture; no client, transport or simulated wire codec. */
+export function mountWorkspaceFixture()
+{
+	const counters = {io : 0, lifecycle : 0, subscriptions : 0, unsubscriptions : 0, adds : 0};
+	const listeners = new Set();
+	const endpoints = Array.from({length : 40}, (_, index) => ({
+		key : '1:' + index, category : 1, id : index, catalog : 'Measurements',
+		name : 'Counter ' + String(index + 1).padStart(2, '0')
+	}));
+	const batchItems = count => Array.from({length : count}, (_, index) => ({
+		key : 'item-' + index, endpointKey : endpoints[index % endpoints.length].key,
+		category : 1, operation : 'read', catalog : 'Measurements',
+		name : endpoints[index % endpoints.length].name, status : 'Read completed'
+	}));
+	let state = {
+		mode : 'dynamic', current : true, session : 17, endpoints, selected : endpoints[0],
+		busy : false, writesEnabled : false, revision : 1, hasValue : true, hasDraft : false,
+		hasResponse : false, dirty : false, error : '', outcomes : {},
+		actions : {refresh : true, beginEdit : false, cancelEdit : false, apply : false,
+		           execute : false, call : false},
+		watch : {
+			rows : endpoints.slice(0, 4).map(endpoint => ({...endpoint,
+				text : '18446744073709551615', status : 'Ok'})),
+			active : false, pending : false, running : false, individual : false,
+			intervalMs : 1000, status : 'ReadMany complete', canAdd : true, canRefresh : true
+		},
+		batch : {items : batchItems(4), selectedKey : 'item-0', active : false, pending : false,
+		         canAdd : true, canExecute : true, hasDraft : false, hasResponse : false,
+		         status : 'Batch reply received - inspect each item outcome', addOperations : ['read']}
+	};
+	function publish(changes)
+	{
+		state = {...state, ...changes, revision : state.revision + 1};
+		for (const listener of [...listeners])
+			listener(state);
+	}
+	const provider = {
+		snapshot : () => state,
+		subscribe(listener) {
+		    ++counters.subscriptions;
+		    listeners.add(listener);
+		    return () => { ++counters.unsubscriptions; listeners.delete(listener); };
+		},
+		rows(path = [], {source, offset = 0, limit = 128} = {}) {
+		    const available = source === 'value';
+		    return {path, offset, total : available ? 24 : 0, available,
+			    kind : available ? 'struct' : null,
+			    rows : available ? Array.from({length : 24}, (_, index) => ({
+				    key : 'sample-' + index, path : ['sample-' + index], name : 'Sample ' + (index + 1),
+				    kind : 'scalar', type : 'U64', children : 0, text : '18446744073709551615',
+				    error : '', editable : false, enumEntries : []
+			    })).slice(offset, offset + limit) : []};
+		},
+		select(key) {
+		    const selected = endpoints.find(endpoint => endpoint.key === key);
+		    if (!selected) return false;
+		    publish({selected});
+		    return true;
+		},
+		addBatch(operation) {
+		    if (operation !== 'read' || state.batch.items.length >= 32) return false;
+		    ++counters.adds;
+		    const index = state.batch.items.length;
+		    const item = {key : 'item-' + index, endpointKey : state.selected.key,
+			    category : 1, operation, catalog : state.selected.catalog,
+			    name : state.selected.name, status : 'Prepared'};
+		    publish({batch : {...state.batch, items : [...state.batch.items, item]}});
+		    return true;
+		}
+	};
+	for (const name of ['refresh', 'apply', 'execute', 'call', 'executeBatch',
+	                    'refreshWatch', 'startWatch'])
+		provider[name] = () => { ++counters.io; return true; };
+	for (const name of ['close', 'invalidate', 'cancel', 'sync'])
+		provider[name] = () => { ++counters.lifecycle; };
+	const host = document.createElement('main');
+	document.body.append(host);
+	const view = mountConfigurator(host, {provider});
+	return {
+		counters,
+		resizeBatch(count) {
+		    if (!Number.isInteger(count) || count < 1 || count > 32) throw new RangeError();
+		    publish({batch : {...state.batch, items : batchItems(count), canAdd : count < 32}});
+		},
+		dispose() { view.unmount(); host.remove(); }
 	};
 }

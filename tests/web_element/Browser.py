@@ -2,11 +2,12 @@
 """Run the installed custom element in actual Chromium; no device is used. MIT."""
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
 from pathlib import Path
 import threading
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 
 def main():
@@ -56,7 +57,7 @@ def main():
             browser = playwright.chromium.launch(headless=True)
             try:
                 report['browser'] = dict(name='Chromium', version=browser.version)
-                page = browser.new_page()
+                page = browser.new_page(viewport={'width': 1360, 'height': 1000})
                 page.on('pageerror', lambda error: report['errors'].append(str(error)))
                 page.on('console', lambda message: report['warnings'].append(message.text)
                         if message.type in ('warning', 'error') else None)
@@ -64,7 +65,7 @@ def main():
                     dict(url=request.url, method=request.method)))
                 page.goto('http://127.0.0.1:' + str(server.server_port), wait_until='networkidle')
                 result = page.evaluate('async () => (await import("./Element.mjs")).runElementChecks()')
-                if (result.get('passed') is not True or result.get('checks', 0) < 136 or
+                if (result.get('passed') is not True or result.get('checks', 0) < 139 or
                         result.get('fixture') != 'presentation-only' or
                         result.get('actualSdkJourneys') is not False):
                     raise AssertionError('Element lifecycle checks incomplete: ' + repr(result))
@@ -73,6 +74,110 @@ def main():
                 if any(item['method'] != 'GET' for item in report['requests']):
                     raise AssertionError('Element lifecycle caused a non-asset request')
                 report['element'] = result
+                workspace = dict(checks=0, fixture='presentation-only', screenshots={})
+                report['workspace'] = workspace
+
+                def check(condition, message):
+                    workspace['checks'] += 1
+                    if not condition:
+                        raise AssertionError(message)
+
+                def geometry():
+                    return page.evaluate('''() => {
+                        const root = document.querySelector('[data-panel="configurator"]');
+                        const nav = root.querySelector('.tux-navigation');
+                        const work = root.querySelector('.tux-workspace');
+                        const batch = root.querySelector('.tux-batch');
+                        return {nav:nav.getBoundingClientRect().toJSON(),
+                            work:work.getBoundingClientRect().toJSON(),
+                            position:getComputedStyle(nav).position,
+                            width:innerWidth,height:innerHeight,
+                            batchClientWidth:batch.clientWidth,batchScrollWidth:batch.scrollWidth,
+                            batchLabelsUnbroken:[...batch.querySelectorAll('th,td:nth-child(-n+2)')]
+                                .every(cell=>getComputedStyle(cell).whiteSpace==='nowrap'),
+                            scrollWidth:document.documentElement.scrollWidth};
+                    }''')
+
+                def screenshot(name):
+                    path = output / (name + '.png')
+                    page.screenshot(path=str(path))
+                    workspace['screenshots'][name] = dict(path=str(path),
+                        sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+                page.evaluate('''async () => {
+                    const {mountWorkspaceFixture} = await import('./Element.mjs');
+                    window.__workspace = mountWorkspaceFixture();
+                    window.scrollTo(0, 0);
+                }''')
+                try:
+                    desktop = geometry()
+                    check(desktop['nav']['right'] <= desktop['work']['left'] and
+                          abs(desktop['nav']['top']-desktop['work']['top']) <= 1,
+                          'Desktop endpoint navigation starts beside Watchlist and Batch')
+                    check(desktop['nav']['top'] < 200 and desktop['position'] == 'sticky',
+                          'Endpoint selection is available at the beginning of the workspace')
+                    check(page.locator('.tux-workspace > .tux-watchlist').count() == 1 and
+                          page.locator('.tux-workspace > .tux-batch').count() == 1 and
+                          page.locator('.tux-workspace > .tux-content').count() == 1,
+                          'The full Configurator owns one shared right-hand workspace')
+                    for index in (6, 13, 27, 38):
+                        page.locator('nav [data-endpoint="1:'+str(index)+'"]').click()
+                        page.locator('[data-action="addBatch"]').click()
+                    expect(page.locator('.tux-batch-table tbody tr')).to_have_count(8)
+                    counters = page.evaluate('window.__workspace.counters')
+                    check(counters['adds'] == 4 and counters['io'] == 0,
+                          'Selecting four endpoints and adding arguments starts no device operation')
+                    screenshot('desktop-workspace')
+                    focused = page.evaluate('''() => {
+                        const search=document.querySelector('[data-role="endpoint-search"]');
+                        search.focus(); window.__workspace.resizeBatch(32);
+                        return document.activeElement===search && search.isConnected;
+                    }''')
+                    check(focused, 'Batch publication keeps the existing endpoint search and focus')
+                    expect(page.locator('.tux-batch-table tbody tr')).to_have_count(32)
+                    page.evaluate('''async () => {
+                        window.scrollTo(0, 700);
+                        await new Promise(requestAnimationFrame);
+                    }''')
+                    scrolled = geometry()
+                    check(abs(scrolled['nav']['top']-12) <= 1 and
+                          scrolled['nav']['height'] <= scrolled['height']-24+1,
+                          'Desktop navigation remains inside the viewport while the Batch scrolls')
+                    check(scrolled['nav']['right'] <= scrolled['work']['left'],
+                          'Sticky endpoint navigation never overlaps the request workspace')
+                    screenshot('desktop-scrolled')
+                    page.set_viewport_size({'width': 390, 'height': 844})
+                    page.evaluate('''async () => {
+                        window.scrollTo(0, 0);
+                        await new Promise(requestAnimationFrame);
+                    }''')
+                    mobile = geometry()
+                    check(mobile['position'] == 'static' and
+                          mobile['work']['top'] >= mobile['nav']['bottom'],
+                          'Mobile navigation stacks above the workspace without sticky positioning')
+                    check(mobile['nav']['height'] <= 17*16+1,
+                          'The mobile endpoint selector retains its bounded scroll area')
+                    check(mobile['scrollWidth'] <= mobile['width']+1,
+                          'A full 32-item Batch causes no horizontal mobile viewport overflow')
+                    check(mobile['batchScrollWidth'] > mobile['batchClientWidth'] and
+                          mobile['batchLabelsUnbroken'],
+                          'Mobile Batch columns retain readable widths inside their own horizontal scroller')
+                    page.evaluate('document.querySelector(".tux-batch").scrollIntoView({block:"start"})')
+                    screenshot('mobile-batch')
+                    check(page.evaluate('window.__workspace.counters.io') == 0,
+                          'Resizing, scrolling and presentation updates cause no device I/O')
+                    workspace.update(passed=True, desktop=desktop, scrolled=scrolled, mobile=mobile)
+                finally:
+                    counters = page.evaluate('''() => {
+                        window.__workspace.dispose(); return window.__workspace.counters;
+                    }''')
+                    check(counters['subscriptions'] == counters['unsubscriptions'] == 1 and
+                          counters['lifecycle'] == 0,
+                          'Workspace cleanup removes only its existing presentation subscription')
+                if report['errors'] or report['warnings']:
+                    raise AssertionError('Unexpected workspace diagnostics: ' + repr(report))
+                if any(item['method'] != 'GET' for item in report['requests']):
+                    raise AssertionError('Workspace layout caused a non-asset request')
                 report['passed'] = True
             finally:
                 browser.close()

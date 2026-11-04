@@ -116,6 +116,21 @@
     max-height: 44rem;
     overflow: auto;
 }
+.telemetry-configurator[data-panel="configurator"] .tux-navigation {
+    position: sticky;
+    top: 0.75rem;
+    max-height: min(44rem, calc(100dvh - 1.5rem));
+    align-self: start;
+}
+.telemetry-configurator .tux-workspace {
+    display: grid;
+    gap: 0.8rem;
+    min-width: 0;
+}
+.telemetry-configurator .tux-workspace > .tux-watchlist,
+.telemetry-configurator .tux-workspace > .tux-batch {
+    margin: 0;
+}
 .telemetry-configurator .tux-endpoint-group {
     display: grid;
     gap: 0.3rem;
@@ -248,6 +263,17 @@
     }
     .telemetry-configurator .tux-navigation {
         max-height: 17rem;
+    }
+    .telemetry-configurator[data-panel="configurator"] .tux-navigation {
+        position: static;
+        max-height: 17rem;
+    }
+    .telemetry-configurator[data-panel="configurator"] .tux-batch-table {
+        min-width: 42rem;
+    }
+    .telemetry-configurator[data-panel="configurator"] .tux-batch-table th,
+    .telemetry-configurator[data-panel="configurator"] .tux-batch-table td:nth-child(-n+2) {
+        white-space: nowrap;
     }
     .telemetry-configurator .tux-row {
         grid-template-columns: minmax(0, 1fr);
