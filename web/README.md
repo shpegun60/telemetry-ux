@@ -145,8 +145,11 @@ remote operation stopped. Keep known results and complete the required recovery
 before admitting another device session. No exactly-once guarantee is added.
 
 `encodedOptions: {readMany: true, batch: true}` only opts into local backend
-support. The application must independently verify matching remote capabilities;
-the localhost [WebSocket demo](../examples/web_demo/README.md) advertises neither.
+support. The application must independently verify matching remote capabilities.
+The localhost [WebSocket demo](../examples/web_demo/README.md) obtains independently
+admitted, session-bound TRM1/TBM1 records through its application-owned bootstrap
+routes and exercises both operations against a native Model. This is host
+integration coverage, not qualification of a firmware HTTP/WebSocket server.
 The adapter supports native browser WebSocket methods; it is not a generalized
 EventTarget transport. See the [installed consumer gate](../tests/websocket_transport/README.md)
 for the separate carrier, host-lease and real browser/native checks.
