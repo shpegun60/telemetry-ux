@@ -85,6 +85,9 @@ that cache without another confirmed snapshot. Editing owns a QVariant draft and
 its original canonical Field bytes. Service response presentation owns a QVariant
 copy before completion returns; it does not retain an RX view. Qt may allocate
 for its models, strings and implicitly shared values; this is a host-only module.
+The previous response is hidden while Write, Command or Service submission is
+pending. QueueFull/Busy restores it; an accepted mutation retires it even on
+failure or an unknown outcome. A successful Service publishes its new response.
 The SDK's standalone preserving C++ codec remains allocation-free and independent
 of Qt or this package.
 

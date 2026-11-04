@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "InspectorController.hpp"
+#include <integration/read_many/Workbench.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <resource/FileSystem.hpp>
@@ -93,12 +94,14 @@ struct Device {
 	telemetry::CommandResult execute() noexcept
 	{
 		++commands;
+		value = 456;
 		return telemetry::CommandResult::Executed;
 	}
 
 	telemetry::ServiceResult<void> transform() noexcept
 	{
 		++services;
+		value = 789;
 		return telemetry::ServiceResult<void>::success();
 	}
 };
@@ -392,6 +395,93 @@ void foregroundFailure(Action action, const char* name)
 	CHECK(!controller.watchRunning() && !controller.watchPending() && !fixture.warnings);
 }
 
+void mutationRetiresWatch(Action action, const char* name, bool refuse, unsigned priorPhase = 0)
+{
+	Fixture fixture{name};
+	auto& controller = fixture.controller;
+	if (action == Action::Command)
+		fixture.select("Execute", 2);
+	else if (action == Action::Service)
+		fixture.select("Transform", 3);
+	else {
+		CHECK(controller.refresh() && await([&] { return !controller.busy(); }));
+		CHECK(controller.beginEdit());
+		CHECK(controller.setScalarText(controller.values()->index(0, 0), QStringLiteral("123")));
+	}
+	QSignalSpy changed{controller.watchlist(), &QAbstractItemModel::dataChanged};
+	const auto previous = fixture.text();
+	const auto requests = fixture.peer.requests;
+	if (refuse) {
+		// This optional read API shares the same FIFO and preserves the foreground
+		// draft/selection. Do not pump: QueueFull must be observed before any TX.
+		CHECK(controller.startWatch() && controller.watchRunning() && controller.watchPending());
+		auto& owner = controller.inspector();
+		const auto field = owner.bindField(owner.fields()[0].id);
+		CHECK(field);
+		for (unsigned i = 1; i != 8; ++i)
+			CHECK(telemetry::integration::read_many::readFieldValue(
+			    owner, field.endpoint, [](const auto&) noexcept {}));
+		CHECK(owner.pending() == 8);
+	} else {
+		fixture.peer.holdNext = true;
+		if (priorPhase) {
+			CHECK(controller.refreshWatch() && controller.watchPending());
+			if (priorPhase == 2)
+				CHECK(await([&] { return !fixture.peer.held.isEmpty(); }));
+		}
+	}
+	const bool submitted = action == Action::Command ? controller.executeCommand()
+	                       : action == Action::Service ? controller.callService()
+	                                                   : controller.apply();
+	if (refuse) {
+		CHECK(!submitted && !controller.busy() && controller.inspector().pending() == 8);
+		CHECK(fixture.text() == previous && changed.count() == 0);
+		CHECK(controller.watchRunning() && controller.watchPending());
+		CHECK(controller.watchlist()->data(controller.watchlist()->index(0, 0),
+		                                   ui::WatchlistModel::StatusRole) == "Ok");
+		CHECK(fixture.peer.requests == requests);
+		controller.disconnectDevice();
+		CHECK(fixture.peer.requests == requests && !controller.connected() && !controller.busy());
+		CHECK(!fixture.warnings);
+		return;
+	}
+	CHECK(submitted && controller.busy() && controller.watchCount() == 1);
+	CHECK(!controller.watchRunning());
+	CHECK(fixture.text().isEmpty() && changed.count() > 0);
+	CHECK(controller.watchlist()->data(controller.watchlist()->index(0, 0),
+	                                   ui::WatchlistModel::StatusRole) == "Stale");
+	CHECK(await([&] { return !fixture.peer.held.isEmpty(); }));
+	if (priorPhase) {
+		CHECK(controller.watchPending() &&
+		      fixture.peer.device.value == UINT64_C(18446744073709551615));
+		// Drain the old read without publishing it or starting the remaining
+		// cycle. Hold the following mutation reply to inspect both boundaries.
+		fixture.peer.holdNext = true;
+		fixture.peer.release();
+		CHECK(await([&] { return !controller.watchPending() && !fixture.peer.held.isEmpty(); }));
+		CHECK(fixture.text().isEmpty());
+		CHECK(controller.watchlist()->data(controller.watchlist()->index(0, 0),
+		                                   ui::WatchlistModel::StatusRole) == "Stale");
+	}
+	CHECK(fixture.peer.device.value != UINT64_C(18446744073709551615));
+	CHECK(await([&] {
+		return fixture.cached && fixture.cached->property("text").toString().isEmpty() &&
+		       fixture.cached->property("status").toString() == "Stale";
+	}));
+	fixture.peer.release();
+	CHECK(await([&] { return !controller.busy(); }));
+	const auto priorRequests = unsigned(priorPhase != 0);
+	CHECK(fixture.peer.requests == requests + priorRequests + (action == Action::Apply ? 2u : 1u));
+	CHECK(fixture.text().isEmpty() && controller.watchCount() == 1);
+	CHECK(controller.watchlist()->data(controller.watchlist()->index(0, 0),
+	                                   ui::WatchlistModel::StatusRole) == "Stale");
+	// Only a new explicit read may mark this cached row current again.
+	CHECK(controller.refreshWatch() && await([&] { return !controller.watchPending(); }));
+	CHECK(fixture.text() == QString::number(fixture.peer.device.value));
+	CHECK(fixture.peer.requests == requests + priorRequests + (action == Action::Apply ? 3u : 2u));
+	CHECK(!fixture.warnings);
+}
+
 void acceptedWatchDrain(bool handedOff)
 {
 	Fixture fixture{handedOff ? "handed-watch" : "queued-watch"};
@@ -466,9 +556,18 @@ int main(int argc, char** argv)
 	      std::pair{Action::Service, "Service"}, std::pair{Action::Apply, "ApplyWrite"},
 	      std::pair{Action::Readback, "ApplyReadback"}})
 		foregroundFailure(action, name);
+	for (const auto& [action, name] :
+	     {std::pair{Action::Command, "accepted-Command"},
+	      std::pair{Action::Service, "accepted-Service"},
+	      std::pair{Action::Apply, "accepted-Apply"}}) {
+		for (unsigned priorPhase = 0; priorPhase != 3; ++priorPhase)
+			mutationRetiresWatch(action, name, false, priorPhase);
+		mutationRetiresWatch(action, name, true);
+	}
 	acceptedWatchDrain(false);
 	acceptedWatchDrain(true);
-	std::printf("Inspector Watchlist Failures checks=%u paths=5 qml=1 drain=1 failures=%u Qt=%s\n",
+	std::printf("Inspector Watchlist Failures checks=%u paths=5 qml=1 drain=1 "
+	            "acceptedMutations=9 refusedMutations=3 priorQueued=3 priorHanded=3 failures=%u Qt=%s\n",
 	            checks, failures, qVersion());
 	return failures ? 1 : 0;
 }

@@ -347,6 +347,76 @@ static void sessionPermission()
 	}
 }
 
+static void responseMutationLifetime()
+{
+	for (const int category : {1, 2, 3}) {
+		for (const auto& completion : {QString(), QStringLiteral("Endpoint"),
+		                               QStringLiteral("OutcomeUnknown")}) {
+			Api api;
+			auto b = binding(api, 3, true);
+			b.endpoints[0].name = "Inspect";
+			auto actor = binding(api, category, category != 1).endpoints[0];
+			actor.id = 1;
+			actor.name = "Actor";
+			b.endpoints.append(actor);
+			StaticConfiguratorProvider p(std::move(b));
+			p.setAllowMutations(true);
+			p.selectEndpoint(endpoint(p));
+			p.callService();
+			api.finish(true, {}, false, quint32{42});
+			auto* responses = p.responses();
+			const auto prior = responses->index(0, 0);
+			const auto responseValue = [&] {
+				return responses->data(responses->index(0, 0), role(responses, "value"))
+				    .toString();
+			};
+			CHECK(responseValue() == "42");
+			p.selectEndpoint(category == 3 ? endpoint(p, 1)
+			                              : p.endpoints()->index(0, 0, p.endpoints()->index(1, 0)));
+			if (category == 1)
+				p.beginEdit();
+			const auto submit = [&] {
+				if (category == 1)
+					p.apply();
+				else if (category == 2)
+					p.executeCommand();
+				else
+					p.callService();
+			};
+			api.refuse = true;
+			submit();
+			CHECK(!p.busy() && responseValue() == "42");
+			CHECK(!p.serviceResponseEndpoint().isEmpty());
+			api.refuse = false;
+			for (const auto& refusal : {QStringLiteral("QueueFull"), QStringLiteral("Busy")}) {
+				submit();
+				CHECK(p.busy() && responses->rowCount() == 0);
+				CHECK(responses->data(prior, role(responses, "value")).toString().isEmpty());
+				QMetaObject::invokeMethod(&api, [&api, refusal] { api.finish(false, refusal); },
+				                          Qt::QueuedConnection);
+				QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+				CHECK(!p.busy() && responseValue() == "42");
+				CHECK(!p.serviceResponseEndpoint().isEmpty());
+			}
+			submit();
+			CHECK(p.busy() && responses->rowCount() == 0);
+			api.finish(completion.isEmpty(), completion, false, quint32{99});
+			if (category == 1 && completion.isEmpty())
+				api.finish(true); // Explicit readback after confirmed Write.
+			CHECK(!p.busy());
+			if (category == 3 && completion.isEmpty()) {
+				CHECK(responseValue() == "99");
+			} else {
+				CHECK(responses->rowCount() == 0 && p.serviceResponseEndpoint().isEmpty());
+			}
+			api.invalidate();
+			CHECK(responseValue().isEmpty());
+			CHECK(!responses->data(prior, role(responses, "value")).isValid());
+			CHECK(api.issued == (category == 1 && completion.isEmpty() ? 5u : 4u));
+		}
+	}
+}
+
 static void paging()
 {
 	Api api;
@@ -818,6 +888,7 @@ int main(int argc, char** argv)
 	actions();
 	draftAndReadback();
 	sessionPermission();
+	responseMutationLifetime();
 	paging();
 	reentrantInsert();
 	destruction();

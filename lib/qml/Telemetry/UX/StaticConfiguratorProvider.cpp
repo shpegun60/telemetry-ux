@@ -674,7 +674,8 @@ struct StaticConfiguratorProvider::Impl {
 	          binding,
 	          [this] {
 		          return RootValue{responseType, response,
-		                           ready() && response.isValid() && operation != Operation::Service,
+		                           ready() && response.isValid() && operation != Operation::Write &&
+		                               operation != Operation::Command && operation != Operation::Service,
 		                           false};
 	          },
 	          [](const Path&, const QString& s) {
@@ -1139,6 +1140,14 @@ struct StaticConfiguratorProvider::Impl {
 		status = text;
 		if (current && error == QStringLiteral("OutcomeUnknown"))
 			blocked = true;
+		// A refused enqueue preserves the previous owned response. An accepted
+		// mutation retires it even when execution failed or its result is unknown.
+		if ((op == Operation::Write || op == Operation::Command || op == Operation::Service) &&
+		    (!refusal || !current)) {
+			response.clear();
+			responseType = 0;
+			responseEndpoint.clear();
+		}
 		if (op == Operation::Write) {
 			write = text;
 			writeEpoch = pendingEpoch;
@@ -1153,9 +1162,6 @@ struct StaticConfiguratorProvider::Impl {
 			service = text;
 			serviceEpoch = pendingEpoch;
 			if (!refusal || !current) {
-				response.clear();
-				responseType = 0;
-				responseEndpoint.clear();
 				const auto* e = endpoint();
 				if (success && current && e && e->responseType != 0) {
 					response = result.value(QStringLiteral("value"));

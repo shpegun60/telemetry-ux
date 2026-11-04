@@ -246,8 +246,9 @@ def main():
         watch_failures = build / ('telemetry_inspector_qml_watchlist_failures_check' + suffix)
         failed_paths = run('qml-watchlist-failures', [watch_failures])
         failed_counts = re.search(r'Inspector Watchlist Failures checks=(\d+) paths=5 qml=1 '
-                                  r'drain=1 failures=0 Qt=(\S+)', failed_paths)
-        if not failed_counts or int(failed_counts[1]) < 100 or failed_counts[2] != counts[3]:
+                                  r'drain=1 acceptedMutations=9 refusedMutations=3 '
+                                  r'priorQueued=3 priorHanded=3 failures=0 Qt=(\S+)', failed_paths)
+        if not failed_counts or int(failed_counts[1]) < 800 or failed_counts[2] != counts[3]:
             raise RuntimeError('Watchlist did not retire live QML values on all foreground failure paths')
         report['executions']['watchlist_failure_checks'] = int(failed_counts[1])
         stale_display = re.findall(r'Watchlist stale endpoint phase=(queued-watch|handed-watch) '
