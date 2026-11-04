@@ -10,7 +10,7 @@ No SDK source-tree fallback, device connection or hardware operation is used.
 The real keyboard/mouse edit test runs through both Configurator and standalone
 FieldEditor. Standalone CommandPanel and ServicePanel reject mismatched
 selections and submit only after an explicit click, through the same generated
-API/FIFO. Mounting them sends no packet. The GUI floor is 450 checks, including
+API/FIFO. Mounting them sends no packet. The GUI floor is 494 checks, including
 exact U64/S64, lifecycle and permission regressions.
 
 ```sh
@@ -61,8 +61,10 @@ The native GUI executable checks confirmed Read → Edit → Apply → separate
 Readback, exact large integers/open enums, floating wire-bit preservation,
 permission opt-in, request initialization, routing/application outcomes and
 session/error handling. Real QTest keyboard input followed by a mouse Apply
-without Enter uses the shared Configurator. The unsupported Watchlist pane is
-hidden. `window.png` records the actual rendered window for visual review.
+without Enter uses the shared Configurator. Static Watchlist exercises three
+real scalar Fields through Individual FieldRead, including exact U64/S64,
+unknown enum, Stop/drain and session invalidation. Its mode selector does not
+offer ReadMany. `window.png` records the actual rendered window for visual review.
 
 `Contracts.cpp` uses an explicitly fake application API facade to isolate Qt
 presentation contracts. Its checks cover lazy 128-row fetching, stale and foreign
@@ -80,6 +82,6 @@ assertion, Qt warning or unexpected sanitizer result makes the gate fail.
 
 The current qualification floors are 340 generated-seam checks, 36 compiled
 naming endpoints, three generator unit tests with 14 sealed default-output
-hashes, 450 native/provider/QML checks with zero warnings, and 185 isolated
+hashes, 494 native/provider/QML checks with zero warnings, and 297 isolated
 presentation-contract checks. Each individual assertion remains authoritative;
 the floors also reject accidentally skipped test paths.

@@ -2,6 +2,7 @@
 #include "StaticConfiguratorProvider.hpp"
 #include <QtCore/QSet>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -404,6 +405,104 @@ private:
 	quintptr next_ = 0;
 };
 
+// Only membership and freshness live here. Values remain in the generated Api.
+class WatchList final : public QAbstractListModel {
+public:
+	struct Row {
+		int endpoint = -1;
+		quint32 epoch = 0;
+		QString status = QStringLiteral("NotRead");
+		bool published = false;
+	};
+
+	enum Roles {
+		Name = Qt::UserRole + 1,
+		Status,
+		Text
+	};
+
+	WatchList(const StaticConfiguratorBinding& binding, QObject* parent)
+	    : QAbstractListModel(parent), binding_(binding)
+	{}
+
+	QHash<int, QByteArray> roleNames() const override
+	{
+		return {{Name, "name"}, {Status, "status"}, {Text, "text"}};
+	}
+
+	int rowCount(const QModelIndex& parent = {}) const override
+	{
+		return parent.isValid() ? 0 : static_cast<int>(rows.size());
+	}
+
+	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override
+	{
+		return parent.isValid() || column != 0 || row < 0 || row >= rows.size()
+		           ? QModelIndex{}
+		           : createIndex(row, column, revision_);
+	}
+
+	QVariant data(const QModelIndex& index, int role) const override
+	{
+		if (!index.isValid() || index.model() != this || index.column() != 0 ||
+		    index.internalId() != revision_ || index.row() < 0 || index.row() >= rows.size())
+			return {};
+		const auto& row = rows[index.row()];
+		if (row.endpoint < 0 || row.endpoint >= binding_.endpoints.size())
+			return {};
+		const auto& e = binding_.endpoints[row.endpoint];
+		if (role == Qt::DisplayRole || role == Name)
+			return e.catalog + QStringLiteral(" / ") + e.name;
+		const bool current = binding_.api && binding_.ready && binding_.ready(binding_.api) &&
+		                     binding_.session && row.epoch == binding_.session(binding_.api);
+		if (role == Status)
+			return current ? row.status : QStringLiteral("Stale");
+		if (role == Text) {
+			if (!current || !row.published || !e.cachedValid || !e.cachedValid(binding_.api) ||
+			    !e.cached)
+				return QString();
+			const auto* type = typeAt(binding_, e.valueType);
+			return type ? scalarText(*type, e.cached(binding_.api), false) : QString();
+		}
+		return {};
+	}
+
+	void replace(QVector<Row> replacement)
+	{
+		if (revision_ == std::numeric_limits<quintptr>::max())
+			qFatal("Static Watchlist index space exhausted");
+		QPointer<WatchList> alive(this);
+		beginResetModel();
+		if (!alive)
+			return;
+		++revision_;
+		rows = std::move(replacement);
+		endResetModel();
+	}
+
+	void invalidate()
+	{
+		for (auto& row : rows) {
+			row.epoch = 0;
+			row.status = QStringLiteral("Stale");
+			row.published = false;
+		}
+	}
+
+	void notify()
+	{
+		if (!rows.isEmpty())
+			Q_EMIT dataChanged(index(0, 0), index(static_cast<int>(rows.size()) - 1, 0),
+			                   {Status, Text});
+	}
+
+	QVector<Row> rows;
+
+private:
+	const StaticConfiguratorBinding& binding_;
+	quintptr revision_ = 1;
+};
+
 class EndpointTree final : public QAbstractItemModel {
 public:
 	enum Roles {
@@ -531,12 +630,18 @@ struct StaticConfiguratorProvider::Impl {
 		Write,
 		Readback,
 		Command,
-		Service
+		Service,
+		WatchRead
 	};
 	StaticConfiguratorProvider* q;
 	StaticConfiguratorBinding binding;
 	EndpointTree endpointModel;
-	ValueTree valueModel, responseModel, emptyModel;
+	ValueTree valueModel, responseModel;
+	WatchList watchModel;
+	QTimer watchTimer;
+	bool watchRunning = false, watchCycle = false, watchContinuation = false;
+	int watchCursor = 0, pendingWatchRow = -1;
+	QString watchStatus = QStringLiteral("Individual FieldRead; not started");
 	int selected = -1;
 	bool allowed = false, pending = false, publishing = false, draftActive = false, retired = false,
 	     blocked = false, supported = false, needsReset = false, resetScheduled = false,
@@ -579,19 +684,18 @@ struct StaticConfiguratorProvider::Impl {
 		          return modelMutation(entering);
 	          },
 	          owner),
-	      emptyModel(
-	          binding,
-	          [] {
-		          return RootValue{};
-	          },
-	          [](const Path&, const QString& s) {
-		          return s;
-	          },
-	          [this](bool entering) {
-		          return modelMutation(entering);
-	          },
-	          owner)
+	      watchModel(binding, owner)
 	{
+		watchTimer.setParent(owner);
+		watchTimer.setObjectName(QStringLiteral("staticConfiguratorWatchTimer"));
+		watchTimer.setInterval(1000);
+		QObject::connect(&watchTimer, &QTimer::timeout, owner, [this] {
+			if (!watchRunning || watchCycle || !idle() || draftActive)
+				return; // Slow/foreground work consumes no additional queue slots.
+			watchCycle = true;
+			watchCursor = 0;
+			nextWatch();
+		});
 		if (binding.api && binding.connect)
 			binding.connect(
 			    binding.api, owner,
@@ -633,7 +737,112 @@ struct StaticConfiguratorProvider::Impl {
 
 	bool editable() const
 	{
-		return idle() && allowed && !blocked;
+		return idle() && !watchCycle && allowed && !blocked;
+	}
+
+	bool watchActive() const
+	{
+		return watchRunning || watchCycle || (pending && operation == Operation::WatchRead);
+	}
+
+	bool watchEligible(int index) const
+	{
+		if (index < 0 || index >= binding.endpoints.size())
+			return false;
+		const auto& e = binding.endpoints[index];
+		const auto* type = typeAt(binding, e.valueType);
+		if (!type || e.category != 1 || !e.readable || !e.read || !e.cached || !e.cachedValid)
+			return false;
+		if (type->kind == StaticTypeKind::Enum)
+			type = typeAt(binding, type->underlyingTypeId);
+		return type && type->kind == StaticTypeKind::Scalar && type->scalarCode >= 1 &&
+		       type->scalarCode <= 11;
+	}
+
+	void replaceWatch(QVector<WatchList::Row> rows)
+	{
+		publishing = true;
+		QPointer<StaticConfiguratorProvider> alive(q);
+		watchModel.replace(std::move(rows));
+		if (!alive)
+			return;
+		publishing = false;
+		publish(false);
+	}
+
+	void continueWatch()
+	{
+		if (!watchCycle || watchContinuation)
+			return;
+		watchContinuation = true;
+		QMetaObject::invokeMethod(
+		    q,
+		    [this] {
+			    watchContinuation = false;
+			    if (watchCycle && !pending && !publishing)
+				    nextWatch();
+		    },
+		    Qt::QueuedConnection);
+	}
+
+	void nextWatch()
+	{
+		if (!watchCycle || !idle() || draftActive)
+			return;
+		if (watchCursor >= watchModel.rows.size()) {
+			watchCycle = false;
+			watchStatus = watchRunning ? QStringLiteral("Individual polling")
+			                           : QStringLiteral("Individual cycle completed");
+			publish(false);
+			return;
+		}
+		const auto rowIndex = watchCursor++;
+		const auto endpointIndex = watchModel.rows[rowIndex].endpoint;
+		if (!watchEligible(endpointIndex)) {
+			watchModel.rows[rowIndex].status = QStringLiteral("Unsupported");
+			watchModel.rows[rowIndex].published = false;
+			continueWatch();
+			return;
+		}
+		pending = true;
+		operation = Operation::WatchRead;
+		pendingWatchRow = rowIndex;
+		pendingEpoch = session();
+		token.clear();
+		watchStatus = QStringLiteral("Individual FieldRead %1/%2")
+		                  .arg(rowIndex + 1)
+		                  .arg(watchModel.rows.size());
+		auto& row = watchModel.rows[rowIndex];
+		row.epoch = pendingEpoch;
+		row.status = QStringLiteral("Pending");
+		row.published = false;
+		QPointer<StaticConfiguratorProvider> alive(q);
+		const auto issued = binding.endpoints[endpointIndex].read(binding.api);
+		if (!alive)
+			return;
+		if (issued.isEmpty()) {
+			pending = false;
+			operation = Operation::None;
+			pendingWatchRow = -1;
+			if (rowIndex < watchModel.rows.size())
+				watchModel.rows[rowIndex].status = QStringLiteral("SubmissionRefused");
+			continueWatch();
+		} else
+			token = issued;
+		publish(false);
+	}
+
+	void beginWatch(bool polling)
+	{
+		if (!owner() || publishing || watchActive() || !idle() || draftActive ||
+		    watchModel.rows.isEmpty())
+			return;
+		watchRunning = polling;
+		watchCycle = true;
+		watchCursor = 0;
+		if (polling)
+			watchTimer.start();
+		nextWatch();
 	}
 
 	void clearDraft()
@@ -697,6 +906,9 @@ struct StaticConfiguratorProvider::Impl {
 			if (!alive)
 				return;
 		}
+		watchModel.notify();
+		if (!alive)
+			return;
 		publishing = false;
 		if (needsReset) {
 			scheduleReset();
@@ -744,6 +956,10 @@ struct StaticConfiguratorProvider::Impl {
 		if (now != epoch || !ready()) {
 			epoch = now;
 			allowed = false;
+			watchRunning = watchCycle = false;
+			watchTimer.stop();
+			watchModel.invalidate();
+			watchStatus = QStringLiteral("Stale; start an explicit new cycle after admission");
 			clearDraft();
 			retired = true;
 			response.clear();
@@ -820,7 +1036,7 @@ struct StaticConfiguratorProvider::Impl {
 	void start(Operation op)
 	{
 		const auto* e = endpoint();
-		if (!e || !idle())
+		if (!e || !idle() || watchCycle)
 			return;
 		// Snapshot arguments before calling generated conversion code, which can
 		// run application QJS getters. No borrowed cache/draft survives reentry.
@@ -833,6 +1049,12 @@ struct StaticConfiguratorProvider::Impl {
 		pendingEpoch = session();
 		token.clear();
 		status = QStringLiteral("Pending");
+		if (op == Operation::Write || op == Operation::Command || op == Operation::Service) {
+			watchRunning = false;
+			watchTimer.stop();
+			watchModel.invalidate();
+			watchStatus = QStringLiteral("Stopped for foreground mutation; read again explicitly");
+		}
 		QPointer<StaticConfiguratorProvider> alive(q);
 		QString issued;
 		if ((op == Operation::Read || op == Operation::Readback) && e->read)
@@ -865,6 +1087,49 @@ struct StaticConfiguratorProvider::Impl {
 		const bool success = result.value(QStringLiteral("success")).toBool();
 		const bool current = ready() && pendingEpoch == session();
 		const auto error = result.value(QStringLiteral("errorKind")).toString();
+		if (op == Operation::WatchRead) {
+			const auto rowIndex = pendingWatchRow;
+			pending = false;
+			operation = Operation::None;
+			pendingWatchRow = -1;
+			token.clear();
+			if (rowIndex >= 0 && rowIndex < watchModel.rows.size()) {
+				auto& row = watchModel.rows[rowIndex];
+				row.published = success && current;
+				row.epoch = current ? pendingEpoch : 0;
+				row.status = !current  ? QStringLiteral("Stale")
+				             : success ? QStringLiteral("Ok")
+				                       : error;
+				if (row.status.isEmpty())
+					row.status = QStringLiteral("ReadFailed");
+				const auto& e = binding.endpoints[row.endpoint];
+				if (row.published && (!e.cachedValid || !e.cachedValid(binding.api))) {
+					row.published = false;
+					row.status = QStringLiteral("NoValue");
+				}
+				if (current && !success && error == QStringLiteral("Dispatch")) {
+					const auto dispatch = result.value(QStringLiteral("dispatchStatus")).toInt();
+					if (dispatch == 4)
+						row.status = QStringLiteral("NotFound");
+					if (dispatch == 9)
+						row.status = QStringLiteral("Unavailable");
+				}
+			}
+			if (!current || error == QStringLiteral("RecoveryRequired") ||
+			    error == QStringLiteral("Schema") || error == QStringLiteral("OutcomeUnknown")) {
+				watchRunning = watchCycle = false;
+				watchTimer.stop();
+				watchStatus =
+				    current ? error + QStringLiteral("; polling stopped")
+				            : QStringLiteral("Stale; start an explicit new cycle after admission");
+			} else if (!watchCycle && !watchRunning)
+				watchStatus = QStringLiteral("Stopped");
+			QPointer<StaticConfiguratorProvider> alive(q);
+			publish(false);
+			if (alive)
+				continueWatch();
+			return;
+		}
 		const bool refusal =
 		    error == QStringLiteral("QueueFull") || error == QStringLiteral("Busy");
 		const auto text = outcome(result, op);
@@ -915,6 +1180,8 @@ struct StaticConfiguratorProvider::Impl {
 		if (op == Operation::Read || op == Operation::Readback) {
 			Q_EMIT q->readFinished(success && current);
 		}
+		if (alive)
+			continueWatch();
 	}
 };
 
@@ -942,7 +1209,110 @@ QAbstractItemModel* StaticConfiguratorProvider::responses() const
 
 QAbstractItemModel* StaticConfiguratorProvider::watchlist() const
 {
-	return &d->emptyModel;
+	return &d->watchModel;
+}
+
+bool StaticConfiguratorProvider::watchActive() const
+{
+	return d->watchActive();
+}
+
+bool StaticConfiguratorProvider::watchPending() const
+{
+	return d->pending && d->operation == Impl::Operation::WatchRead;
+}
+
+bool StaticConfiguratorProvider::canAddWatch() const
+{
+	if (!d->idle() || d->watchActive() || !d->watchEligible(d->selected) ||
+	    d->watchModel.rows.size() >= 32)
+		return false;
+	for (const auto& row : d->watchModel.rows)
+		if (row.endpoint == d->selected)
+			return false;
+	return true;
+}
+
+int StaticConfiguratorProvider::watchCount() const
+{
+	return static_cast<int>(d->watchModel.rows.size());
+}
+
+QString StaticConfiguratorProvider::watchStatus() const
+{
+	return d->watchStatus;
+}
+
+int StaticConfiguratorProvider::watchIntervalMs() const
+{
+	return d->watchTimer.interval();
+}
+
+void StaticConfiguratorProvider::setWatchIndividual(bool individual)
+{
+	if (!d->owner() || d->publishing || d->watchActive() || individual)
+		return;
+	d->watchStatus =
+	    QStringLiteral("ReadMany is unavailable; choose Individual FieldRead explicitly");
+	d->publish(false);
+}
+
+void StaticConfiguratorProvider::setWatchIntervalMs(int interval)
+{
+	if (!d->owner() || d->publishing || d->watchActive() || interval < 100 || interval > 60000 ||
+	    interval == d->watchTimer.interval())
+		return;
+	d->watchTimer.setInterval(interval);
+	d->publish(false);
+}
+
+bool StaticConfiguratorProvider::addWatch()
+{
+	if (!canAddWatch())
+		return false;
+	auto rows = d->watchModel.rows;
+	rows.push_back({d->selected, d->session(), QStringLiteral("NotRead"), false});
+	d->replaceWatch(std::move(rows));
+	return true;
+}
+
+void StaticConfiguratorProvider::removeWatch(int row)
+{
+	if (!d->owner() || d->publishing || d->watchActive() || row < 0 ||
+	    row >= d->watchModel.rows.size())
+		return;
+	auto rows = d->watchModel.rows;
+	rows.removeAt(row);
+	d->replaceWatch(std::move(rows));
+}
+
+void StaticConfiguratorProvider::clearWatch()
+{
+	if (!d->owner() || d->publishing || d->watchActive() || d->watchModel.rows.isEmpty())
+		return;
+	d->replaceWatch({});
+}
+
+void StaticConfiguratorProvider::refreshWatch()
+{
+	d->beginWatch(false);
+}
+
+void StaticConfiguratorProvider::startWatch()
+{
+	d->beginWatch(true);
+}
+
+void StaticConfiguratorProvider::stopWatch()
+{
+	if (!d->owner() || d->publishing)
+		return;
+	d->watchRunning = d->watchCycle = false;
+	d->watchTimer.stop();
+	d->watchStatus = watchPending()
+	                     ? QStringLiteral("Stopping; draining the current Individual read")
+	                     : QStringLiteral("Stopped");
+	d->publish(false);
 }
 
 QString StaticConfiguratorProvider::selection() const
@@ -1003,7 +1373,7 @@ bool StaticConfiguratorProvider::canApply() const
 bool StaticConfiguratorProvider::canRefresh() const
 {
 	const auto* e = d->endpoint();
-	return d->idle() && d->supported && e && e->category == 1 && e->readable;
+	return d->idle() && !d->watchCycle && d->supported && e && e->category == 1 && e->readable;
 }
 
 bool StaticConfiguratorProvider::commandSelected() const
@@ -1050,7 +1420,7 @@ QString StaticConfiguratorProvider::statusText() const
 
 void StaticConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 {
-	if (!d->owner() || d->publishing || d->pending)
+	if (!d->owner() || d->publishing || d->pending || d->watchCycle)
 		return;
 	const auto selected = d->endpointModel.endpointIndex(index);
 	if (selected < 0 || selected == d->selected)

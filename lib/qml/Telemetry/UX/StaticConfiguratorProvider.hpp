@@ -32,13 +32,13 @@ class StaticConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString commandOutcome READ commandOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceOutcome READ serviceOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
-	// This provider has no polling implementation. Hide the shared view's entire
-	// watch pane with watchlistVisible:false rather than advertising ReadMany.
-	Q_PROPERTY(bool watchActive READ noWatch CONSTANT)
-	Q_PROPERTY(bool watchPending READ noWatch CONSTANT)
-	Q_PROPERTY(bool canAddWatch READ noWatch CONSTANT)
-	Q_PROPERTY(int watchCount READ watchCount CONSTANT)
-	Q_PROPERTY(QString watchStatus READ watchStatus CONSTANT)
+	// Explicit Individual FieldRead scheduling over the host's existing API/FIFO.
+	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported CONSTANT)
+	Q_PROPERTY(bool watchActive READ watchActive NOTIFY stateChanged)
+	Q_PROPERTY(bool watchPending READ watchPending NOTIFY stateChanged)
+	Q_PROPERTY(bool canAddWatch READ canAddWatch NOTIFY stateChanged)
+	Q_PROPERTY(int watchCount READ watchCount NOTIFY stateChanged)
+	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
 	Q_PROPERTY(
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -78,56 +78,37 @@ public:
 	Q_INVOKABLE void callService();
 	Q_INVOKABLE bool setScalarText(const QModelIndex& index, const QString& text);
 
+	// Retain the former constant property reader for source compatibility.
 	bool noWatch() const
 	{
 		return false;
 	}
 
-	int watchCount() const
+	bool watchReadManySupported() const
 	{
-		return 0;
+		return false;
 	}
 
-	QString watchStatus() const
-	{
-		return QStringLiteral("Watchlist is not available for this provider");
-	}
+	bool watchActive() const;
+	bool watchPending() const;
+	bool canAddWatch() const;
+	int watchCount() const;
+	QString watchStatus() const;
 
 	bool watchIndividual() const
 	{
 		return true;
 	}
 
-	int watchIntervalMs() const
-	{
-		return 1000;
-	}
-
-	void setWatchIndividual(bool)
-	{}
-
-	void setWatchIntervalMs(int)
-	{}
-
-	Q_INVOKABLE bool addWatch()
-	{
-		return false;
-	}
-
-	Q_INVOKABLE void removeWatch(int)
-	{}
-
-	Q_INVOKABLE void clearWatch()
-	{}
-
-	Q_INVOKABLE void refreshWatch()
-	{}
-
-	Q_INVOKABLE void startWatch()
-	{}
-
-	Q_INVOKABLE void stopWatch()
-	{}
+	int watchIntervalMs() const;
+	void setWatchIndividual(bool individual);
+	void setWatchIntervalMs(int interval);
+	Q_INVOKABLE bool addWatch();
+	Q_INVOKABLE void removeWatch(int row);
+	Q_INVOKABLE void clearWatch();
+	Q_INVOKABLE void refreshWatch();
+	Q_INVOKABLE void startWatch();
+	Q_INVOKABLE void stopWatch();
 
 Q_SIGNALS:
 	void stateChanged();

@@ -66,6 +66,9 @@ struct Device {
 	{
 		return config;
 	}
+	std::uint64_t readWide() const noexcept { return config.serial; }
+	std::int64_t readSigned() const noexcept { return config.offset; }
+	Mode readMode() const noexcept { return config.mode; }
 
 	telemetry::WriteResult writeConfig(const Config& value) noexcept
 	{
@@ -119,7 +122,10 @@ struct Device {
 inline Device device;
 inline telemetry::FunctionSlot<Response(const Request&) noexcept> offline;
 inline constexpr ts::FieldTable localFields{
-    ts::field<&Device::readConfig, &Device::writeConfig>("Config", device)};
+    ts::field<&Device::readConfig, &Device::writeConfig>("Config", device),
+    ts::field<&Device::readWide>("Wide", device),
+    ts::field<&Device::readSigned>("Signed", device),
+    ts::field<&Device::readMode>("Mode", device)};
 inline constexpr ts::CommandTable localCommands{ts::command<&Device::apply>("Apply", device),
                                                 ts::command<&Device::reset>("Reset", device)};
 inline constexpr ts::ServiceTable localServices{ts::service<&Device::inspect>("Inspect", device),

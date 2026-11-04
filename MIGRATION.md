@@ -126,5 +126,6 @@ ordinary QML, C++, JS/TS and web-starter profiles retain their defaults.
 The installed Qt package exports `TelemetryUX::static_configurator` in addition
 to its existing provider-neutral view. It borrows the application's generated
 API; the existing dynamic Inspector remains a separate provider of that same
-view. The static provider has no watchlist implementation, so its host hides
-the whole watch panel with `watchlistVisible: false`.
+view. The static provider supports an explicit Individual FieldRead Watchlist
+through the same generated API/FIFO. It exposes no ReadMany capability. Hosts
+can hide polling controls with `watchlistVisible: false`.
