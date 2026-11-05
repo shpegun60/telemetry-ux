@@ -38,7 +38,7 @@
         "ux-runtime"
       ],
       "lines": 6,
-      "sha256_lf": "5e667d59c4c4bd4eb0fb8909efc4d5b291ce8da9b24726244acbfb3a8774215a"
+      "sha256_lf": "cfc09a3ebd90ce67c6c09de62d5650ad149adfcda925a2cfc72229ec22ebf3f6"
     },
     {
       "repo": "telemetry-ux",

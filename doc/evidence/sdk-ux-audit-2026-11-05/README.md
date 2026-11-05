@@ -2,11 +2,11 @@
 
 The audit covers maintained production sources, examples, executable tests,
 build scripts and package configuration. The complete source ledger contains
-982 files / 190,981 physical lines across both repositories, including the new
+983 files / 190,997 physical lines across both repositories, including the new
 runner regression. This repository's exact subset is in [coverage.json](coverage.json).
 SHA-256 values normalize CRLF to LF so another checkout can verify the inputs.
 
-979 files were read in full. Two compiler-produced Client runtime files were
+980 files were read in full. Two compiler-produced Client runtime files were
 checked byte-for-byte against TypeScript output. One pinned Boost.PFR generated
 file (9,078 lines) was checked structurally across all 202 adapters and 20,100
 field references, with manual review of helpers and boundary cases. These are
