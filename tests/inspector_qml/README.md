@@ -87,6 +87,14 @@ and keyboard events. It types Gain=12 and clicks Apply without Enter, then edits
 Gain=4.25 and an exact U64 Counter and clicks Apply while the Counter retains
 focus. Both writes and their readbacks must finish once. This test does not set
 the editor text property or invoke editingFinished/clicked signals directly.
+After Apply it checks the actual default 1080×720 endpoint/value viewports and
+visible Gain/U64 rows. Mouse/keyboard interaction opens and closes connection
+settings, verifies unrelated notifications preserve the choice, and checks
+disconnect/admission transitions. A real unavailable-ReadMany response must
+show its complete fallback advice; a larger font at the minimum window width
+must wrap it without clipping or QML warnings. `--apply-layout-only` and
+`--watch-layout-only` isolate these checks for comparison with an earlier build;
+the ordinary test path includes both checks and both existing writes.
 
 The runner retains both read-only and edited window PNGs and their dimensions/hashes.
 `Command.cpp` uses the same QML argument controls and real keyboard/mouse events
