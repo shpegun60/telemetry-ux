@@ -2,7 +2,7 @@
 
 The audit covers maintained production sources, examples, executable tests,
 build scripts and package configuration. The complete source ledger contains
-982 files / 190,947 physical lines across both repositories, including the new
+982 files / 190,981 physical lines across both repositories, including the new
 runner regression. This repository's exact subset is in [coverage.json](coverage.json).
 SHA-256 values normalize CRLF to LF so another checkout can verify the inputs.
 
@@ -24,6 +24,7 @@ measurement data and binary assets are not new execution evidence.
 | Generator publication | A retained Windows directory differing only in case could accept generation but reject its next check. Preflight the complete final file/directory layout before staging. |
 | Windows runtime parity | Autocrlf changed checked-in compiler output while TypeScript emitted LF. Pin the two exact-output runtime files to LF; keep the strict byte gate. |
 | Async and serial test reports | Exit zero without the required counted report could be accepted. Require a single positive report, expected profile and maintained floor; exercise actual failing subprocess controls. |
+| CI dependency setup | Host-only Clang jobs downloaded unused ARM tools and an unused 2 GB C++ archive could exhaust setup budgets. Select dependencies per matrix, use bounded official-mirror downloads, keep all tests and verify actual ARM objects/link maps without the archive. |
 | Reused test receipts | Early failure could retain a previous success in ergonomics, docs or codegen. Invalidate before fallible discovery/hashing; retain legitimate supplemental evidence before invalidation. Eight regression cases exercise fixed failures and old-behavior controls. |
 | Dynamic QML watch values | A queued or handed-off watch reply could republish old values after an accepted mutation. Retire the existing cycle/revision after acceptance and retain pending ownership until completion. Enqueue refusal preserves the old cycle. |
 | Static QML response | A previous Service response survived Command/Write. Hide it while a mutation is pending, preserve it for refused enqueue, and retire it after accepted completion or uncertainty. |
