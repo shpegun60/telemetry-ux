@@ -4,7 +4,8 @@
 Configurator. It owns presentation values and editable drafts. The supplied SDK
 client owns submission, its single FIFO, payload encoding, timeouts and recovery.
 The provider does not open a connection, drive `process()`, retry an operation,
-poll, or close the client.
+start its own polling timer, or close the client. Optional Watchlist polling is
+driven explicitly by the application's `tickWatch(now)` calls, as described below.
 
 Use `createDynamicProvider({client})` with an already admitted SDK DynamicClient.
 Use `createStaticProvider({client, metadata: structuralMetadata, sdk})` with an
