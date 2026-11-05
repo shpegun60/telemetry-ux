@@ -1,0 +1,1522 @@
+{
+  "schema_version": 1,
+  "scope": "Maintained executable sources, build/test scripts and reviewed package configuration; seven historical evidence scripts excluded. Source read and generated equivalence are distinct.",
+  "audit_date": "2026-11-05",
+  "hardware_tested": false,
+  "baselines": {
+    "telemetry-sdk": "e07e82c48844564a537ad4ac38843cd319859d94",
+    "telemetry-ux": "4596102ac64d8f6d2ae363b05cadbfbe1fcc5502"
+  },
+  "excluded_historical_source_paths": [],
+  "files": [
+    {
+      "repo": "telemetry-ux",
+      "path": ".clang-format",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 38,
+      "sha256_lf": "8c5687bffc0f0c7d7136abf266f9f7112c37978126ae0820495b14abd66c55c4"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": ".gitattributes",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 6,
+      "sha256_lf": "b58a41d88fac388dde839238e27204533eee0a74bf0aee932dea3dc33ee08488"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": ".github/release-pair.json",
+      "review": "full-source-read",
+      "reviewers": [
+        "root",
+        "ux-runtime"
+      ],
+      "lines": 6,
+      "sha256_lf": "bf413552d79037dafcc5c2c28f7b531dfb9e58646ba986cff9e06520596f8f40"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": ".github/workflows/ci.yml",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 486,
+      "sha256_lf": "f3ab1413b8f6b1bbc423060cc31aafa6e74344e75bcb85c1d1741ccf11fcf209"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": ".github/workflows/release-pair.yml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 75,
+      "sha256_lf": "1c91ecde7f3f1128d7829f37f24f10a0bd4c32812a4cef67532bd7d1d4b9e911"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": ".github/workflows/windows-portable.yml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 116,
+      "sha256_lf": "588e5a0145bbca8bfc4fa68e27fdb6e47c4a33a43127ddb0e798dc37cd48aeb3"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 12,
+      "sha256_lf": "80d8b0114806b63dc10471c9339522ea031ed22fed02e5dc7d88ff0aaee831b1"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "MANIFEST.in",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 2,
+      "sha256_lf": "e54cdb68e1cb7aab939bd85d92d8777446852d8ff3becbbb9bf15cb09a3d14a7"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 42,
+      "sha256_lf": "31e85df9daaf94340c7b57d4eaf1b35add9b112fd57cc9db0e090c8e43c1d9f4"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/DemoPeer.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 487,
+      "sha256_lf": "02ee7259bb0fbacd847fcdc99d2303432bca3ff3543354846090d6ff4747c36a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/DemoPeer.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 64,
+      "sha256_lf": "05b55168d9591603a1e30a2ea1f21c8c47066f5ead0cbfe4b15e574febe81374"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/DeviceCheck.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 226,
+      "sha256_lf": "3e89c01bfac32ca9a06d06a2e23dc1fd04959f015978048c81f3259aa4c20bc5"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/DeviceCheck.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 18,
+      "sha256_lf": "6de61f763425a3ecdbda28fb2c0940577ebd6879802cc81ecfd265896096fddb"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/InspectorController.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 1826,
+      "sha256_lf": "4d4f8e736069dde3d7c8c1caa7e5499f99f4289c01f13d6fa5c4c658725a4441"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/InspectorController.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 338,
+      "sha256_lf": "b3ee735f59e4b912a3a1ea8dac1840818e13f6baa08c43f44131bd8dda9acfa9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/Main.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 155,
+      "sha256_lf": "a4b29c56a2ea98225f1f8f9529af2f9d657c16cf55abddfdd1394bf748b0db28"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/Models.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 742,
+      "sha256_lf": "c46c3e5b9f304e294e3ffea1c7c6b90ae58099f9383ce855214a85e1c71a9064"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/Models.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 108,
+      "sha256_lf": "352c46ebad58bc6c5f30edc06ad76fe839b73e2c0fecff6e923d028cebb0d81a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/TcpDemoServer.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 512,
+      "sha256_lf": "2f512dc61e658181a1d666948ca0d9778d0ae1dde8e9d6d03c7367656ba96197"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/TcpDemoServer.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 70,
+      "sha256_lf": "db054d2aa44e30eb95a1c424e72511d442211a54d834443b7259a4fd2cd39df9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/TcpTransport.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 389,
+      "sha256_lf": "f829e0a129eb111b6220d1fe75278bdb8e3f863123820ef3579432ed016e48c5"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/TcpTransport.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 39,
+      "sha256_lf": "a5cd16e2f05882209b50b8bf590a186a43a3638b40552c2f58d8e7db5258701c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/WatchlistModel.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 260,
+      "sha256_lf": "2801c410188d6b8633ecbe1593ea49a01c4588353a36c34f8761b68040184006"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/WatchlistModel.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 62,
+      "sha256_lf": "f6daa3ab582742165c0722c938712c8b60d999959a86e30a98741a77fc56adfe"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "apps/inspector/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 319,
+      "sha256_lf": "2679e56bb2cc189454b6a1de577ba7d811b6317c44ba7e0c40ad73f7240fe820"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 23,
+      "sha256_lf": "79497b79e1e956d7cd90f19b8ec2e51668206fdf25e202a8991251f321ef831d"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/Main.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 56,
+      "sha256_lf": "6e6e05685c179d31e320fc1b2c873333e6a749e9bb993a5227fa4b089f885afb"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/fixture/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 25,
+      "sha256_lf": "6e16fcc4ec081547fb726bc259216939ebdd33750c01310c14f27abdfc2fa3b9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/fixture/DemoModel.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 229,
+      "sha256_lf": "bd0ef1cdcc6d9a2f40eaaa49b83f9edfe02b929cec3cc6cc5cfeb4597c2cd94a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/fixture/Producer.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 48,
+      "sha256_lf": "d5a17d2c68845ce970131ad0cd8311e2c98a3d0c6cf75935c04e0764620b4f30"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/codegen_qml/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 237,
+      "sha256_lf": "7a599e83ed02e35762bbac42bbe57233dab3209eed5eb9aedef9d478e228a350"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 7,
+      "sha256_lf": "f3284d2b53fbcc7858a0e74cd32d6377914f6648314567576a62dbdbd1f79f50"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/Device.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 107,
+      "sha256_lf": "2cb4cee19f51f48a3345ae13e95e0905a06fd986c685667b761c7af0802c3acc"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/Device.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 144,
+      "sha256_lf": "696f340029f2c5e2ac91d2e199c7de4b9c8add737d2efbaeb8ddf3883cf391fe"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/app.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 349,
+      "sha256_lf": "b3ebebb7ac61fcdf96b606f235d166b42f90e6438787055aa4deb702cd496678"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/index.html",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 58,
+      "sha256_lf": "0f78f3ce94d719879ce6867e5437acfe19df9015c9d96bf6fa0ad71891171a61"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/serve.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 142,
+      "sha256_lf": "770fb7f4033cf2fa098b85b78a94b6c90a6484cf570fc36d6ae886e317cb35ac"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/structured_client/style.css",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 218,
+      "sha256_lf": "3cea86be4f8542ee23e11f81d839fbc6765a67f860f06ccbcf68b585fe6f2126"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/app.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 297,
+      "sha256_lf": "3be2c2682accf84601b5fd91819b3100f7356ef875cc3ad984acb7d8438fc6c1"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/index.html",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 54,
+      "sha256_lf": "69dc6d9391c62e1e8e6a1963ee0ea79feccbe0a26a6b3e70166e57dbd9b49ed3"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/native/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 7,
+      "sha256_lf": "1cf1c1b0a9933735e99064dd867be79c6a30380ec2a83427ab1b771ce3ed224a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/native/Model.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 179,
+      "sha256_lf": "b927ddd6674805cadd979f129c58def701bafc07f7a7c62fe6976fbac582aabb"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/native/Peer.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 168,
+      "sha256_lf": "ac1a86698788468661fb4475c84cd4a06e44f2cf9f37c9886045405aa1c70243"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/serve.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 264,
+      "sha256_lf": "974d0a2bfd6c1c9535b0ea070bea9d6ef2e178f45a29c8499c1be6f9b1166e73"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "examples/web_demo/serve_ws.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 218,
+      "sha256_lf": "24c1db7a3bb6ab8b02c34f622cefcb6808066be31fca54910c4eea6c3ee8b264"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 28,
+      "sha256_lf": "1a76dbf5dee144ea674cf2708fe8141802a4f8135664e125abccea30719e5c30"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 42,
+      "sha256_lf": "6d2927adb0f142fb20dde0914fe3ae6b1cb4bb0c14b0d7f9f901f817ffc9755c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/CommandPanel.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 6,
+      "sha256_lf": "d27d5c2a2077f16babd13f0b72af903bfd285cab45859e76c0e490c1a7a03337"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/Configurator.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 217,
+      "sha256_lf": "09404b359bcffecdcbeb64ce240a02e14de2cd166a1ffd99b7f4d788ea06ff28"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/EndpointPanel.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 312,
+      "sha256_lf": "2a2143cee560b5185c69fe00269b74cb78b0534993a3b09eb17fa64dc0a57cd2"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/FieldEditor.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 6,
+      "sha256_lf": "8fbdaaed581af4eb8e091244470dbb8c32bceb73da0fdf093b61592e4105b7f9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/PlainToolTip.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 14,
+      "sha256_lf": "698fb1cc48f82fe8a5741bfb3b809fbd808fa21e9645957677fe4499eae73d28"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/ServicePanel.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 6,
+      "sha256_lf": "611adae7990da1b573aa1c641948809b43d3deabf758667df7cecad2cd7ba1eb"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/StaticConfiguratorBinding.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 70,
+      "sha256_lf": "336b30be421607045da26d2d1849984bb361ba836b1d146c12438bad34c6d35f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/StaticConfiguratorProvider.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 1544,
+      "sha256_lf": "6fce8801377f65b7b30dbcc39e3d15ad0ba0f374eed39c1df06c52895446a2ce"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/Telemetry/UX/StaticConfiguratorProvider.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 122,
+      "sha256_lf": "62cfdf32851cb10faa85c1613504557ec0d278ccb94902eead3d2fdb6b870dea"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "lib/qml/TelemetryUXConfig.cmake.in",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 20,
+      "sha256_lf": "d408293045f0b06777719320a2b2b8cd74295e57a7de54d15d2e3c3aaad70b8c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "package.json",
+      "review": "full-source-read",
+      "reviewers": [
+        "root",
+        "ux-runtime"
+      ],
+      "lines": 16,
+      "sha256_lf": "101b5552078dff65b6760b150aa8d1db8686eb9efbdbe84f5d7a359922175620"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "packaging/windows/VerifyPortable.ps1",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 90,
+      "sha256_lf": "b74e1df256bb23882b5141ccc457a84976dbc138e0fcc775d437234bd21d175d"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "packaging/windows/build.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 168,
+      "sha256_lf": "cf57f223ff0806d54dc503ca02a69e1a4d1d9a49ed6e21d21f05bfb11963d1e1"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "pyproject.toml",
+      "review": "full-source-read",
+      "reviewers": [
+        "root",
+        "ux-runtime"
+      ],
+      "lines": 3,
+      "sha256_lf": "7f4d920bc75d4e2c9f5e73f3215b4a4bcc3f52f4f641de3a2a28d8b6b3d03b9f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/__init__.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 29,
+      "sha256_lf": "721469ac2a93a42c59ce2f289fe198eaa5eb08c8d9f59a467b58f821a4124553"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 628,
+      "sha256_lf": "23e25b880e6d99d7c3788e2dc56f5a3283db3cb299114df77bcadc3af275176f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_client.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 291,
+      "sha256_lf": "f6ed2ac4deaa1233e93bcf9b03143ce410dcd37e517e4458968c708d29227006"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_configurator.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 110,
+      "sha256_lf": "7c3d8194438f306f25b722631735fd10ce88e6f97c818c7b9929dca3b4db6e6a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_js.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 247,
+      "sha256_lf": "c11abca5de3b141bf9a26a7a819149f0fda6c984b32ba6e239739594a421a8f4"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_macros.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 57,
+      "sha256_lf": "ea6ca151a02dcec98e54c038e31614c725f4dfdfbea5a37e33c4f7027fcba88b"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_rpc.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 422,
+      "sha256_lf": "6610cdce9175b13c05b62554c2bc54fdc21e68e3cdbe966e529771f6f7c36164"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/qml_values.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 229,
+      "sha256_lf": "7e3e6b767ddb6e256eb2c8d5e4206a88619f842fef34af92ffebffab6b661c07"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "python/telemetry_ux_codegen/starter.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root"
+      ],
+      "lines": 74,
+      "sha256_lf": "fe5722a25644d33f538ec0cb4f7f8a72ef73d6c3f2dd880802be2b622a1cd6f0"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "setup.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 24,
+      "sha256_lf": "304b8b6447e32ba2c07c2387451ebdc6cee7a4e36fe872688f8d32373ebf97fe"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 27,
+      "sha256_lf": "e192060c7da4288de4ed04d8a98bc404c6f8a28e1f42c94637ab02902171ffe0"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/Queued.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 580,
+      "sha256_lf": "bb7853e2c8bd7e358615ea1ad7be4be25dd37d47c4fe56e8f24fc6f5721c9cf9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/Smoke.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 63,
+      "sha256_lf": "373c34ba9e31c3df15fee8e6a749d9423ad25cadbccbf0be565f776f5b76494a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 22,
+      "sha256_lf": "e1403527cd2b28e5e49323f94397921312069bc323293d76705f30c1bd3a00d3"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/Harness.hpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 136,
+      "sha256_lf": "9c1e79be2a2936cd22a8bde39087a9196acf847a326c2e01d0714db1c531d2e7"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/Naming.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 25,
+      "sha256_lf": "28e90b568560ecbdbb5b40a2ed4dec2b411f5dd51a13eb7db4b5ebc17865bef0"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 176,
+      "sha256_lf": "bb48dbeb2be796cb5c6ff8e76ddf4a155d5894d59a7cdd9bcf530c486adf6453"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 157,
+      "sha256_lf": "b1385198a52412d0f0e83d465baf5a78e02f923e9fdbd3f5c8d661f17d9eb320"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/configurator/test_generator.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 82,
+      "sha256_lf": "20c168bcbafb35e26a254f1e739991307b8cf96d52486de69c2ab4b10ff2bfdf"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/descriptor_fixture.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 86,
+      "sha256_lf": "d144d7c917146b17e5ef9b6d2f2bacb271aaad7bc58bd15d9e4dee6565cc2f2c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 1160,
+      "sha256_lf": "fd3d504e5a5964d382188ee2746d38751d2e415e826b85672075153fa6e8feba"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 48,
+      "sha256_lf": "1c18a4c81cd3f8b72bd6afc859c10ecb47e364484efd18cffe69b3e73983ee6c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/Legacy.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 55,
+      "sha256_lf": "33732b858cee66508d078706505368f71d6588b91ecb0986700d0a35ec5262ae"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/Probes.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 133,
+      "sha256_lf": "fddf70b30186444f78b38bcb1fed976f93425e2f63a94e2ffaf4df1dfb02fa77"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/Snapshot.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 116,
+      "sha256_lf": "a2b480bdc68df3e05234b364a6cd71c90d9b016f73fa697ae43e875cf379bdd1"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/fixture.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 105,
+      "sha256_lf": "c3528d3531ce3de8e2dab34ccace7d521bae61834573385d3955492019b00821"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/probes/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 144,
+      "sha256_lf": "3899e1e37d9d137e81fa243505f9e1640d1b705367350c93f022cb72d2d980d0"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 166,
+      "sha256_lf": "2bc96021fc46a3bd92ae753457f1a95ac53f9b816303be8da64e7f110b3bee97"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/support.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 87,
+      "sha256_lf": "4adaa4593d0c446f8e785ff4fba2f05e20e00604208ab57d251f72080c4634c3"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/codegen_qml/test_generator.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 181,
+      "sha256_lf": "b44aa12dd09de35a1ecfc40edaf7f2d376d98e8ac8347fff2da6abd86d58cd1a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 69,
+      "sha256_lf": "5fa6fdbaccc60d3de87d280f643046af6dc876d9a09791b5c146dd56c5b44ccd"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/Command.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 306,
+      "sha256_lf": "6c5cd88dcbe1198ec00278e65d746f91bd2672d78a0c1bbd83aa7a3365d96b72"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/Embedded.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 234,
+      "sha256_lf": "c455b03bf94d82ec740cb5f652b8676beb5255bd3023a89e587372cd5136624b"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/Embedded.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 40,
+      "sha256_lf": "6af497f07b9659d43bc6ddea37c7149c8407e9ca5bffa2fc42b11feabc88c1f2"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/QmlInput.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 186,
+      "sha256_lf": "d1b8aab870062b62fdb7588b8fdd539ea5ee867a37b6cc9dc3104741fe5331e6"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/Service.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 399,
+      "sha256_lf": "09a349cee20b4265875d2e66ea1bc6c782a891c15dd13e2e10d9aa6682b28978"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/Watchlist.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 402,
+      "sha256_lf": "13f732ab6f9ef4e242aa8a26a3e3254413bb4b4e85fdc0b78a54088974fd4a5c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/WatchlistFailures.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 573,
+      "sha256_lf": "e4b3325dd4f9a091a2e2ff9210209f605b4e4c9caba99b1bd0779fc3695860ff"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/WatchlistScheduling.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 329,
+      "sha256_lf": "e1a28030d8e24345d7fa511a47d4a21ad080795efd116e65bf4da87a15125572"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 820,
+      "sha256_lf": "bf0f7792ccece026496b22d156220a40fee81757c5d1a6031eb113c5d3425b63"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_qml/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root",
+        "ux-runtime"
+      ],
+      "lines": 318,
+      "sha256_lf": "6bc8f6496fed5e3d4a9da33d953675c330e0ae865b888544ebbe1fd724daddac"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_tcp/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 20,
+      "sha256_lf": "56ad989a00844c9f9250789c6cd5ddae440444a56b7a6afaea3327643d2f3c36"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_tcp/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 1044,
+      "sha256_lf": "d25bc4b2e9dfe79ce881bab8e15b6300e26dbe435b2b3cf44f8673497556e905"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/inspector_tcp/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 254,
+      "sha256_lf": "d70819f0c0d98994305e7632debc9c2921b392b6ece6e5a829a1bf55c662cd87"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 13,
+      "sha256_lf": "ca52b389b1bbb2e86a51009a88f278522f00776539e2fce94dce0c7856867603"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/Consumer.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 386,
+      "sha256_lf": "5667624a6532e10757b2b8b1114c7327c8d8b3d24c004dee40c6598e23c2da73"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/Literal.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 110,
+      "sha256_lf": "c753fc24853d890b3c75ff394de8eb843abade10237e93a8bf02a32f3ec87b89"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/Literal.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 85,
+      "sha256_lf": "227f5fd41001527f45bcb9ad5cac77f57230c5e09eaa872456fa6530ff418b18"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/Main.qml",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 18,
+      "sha256_lf": "d57328972b907e07274a14821bc28acbd51ae9481b439c0e785fec80b9376af9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/controls/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 20,
+      "sha256_lf": "d27b9ca05ad7ccc3858b6a81153bab3d70cecbc91fe03bd1b0279adfe9f1ff26"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/qml_package/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 260,
+      "sha256_lf": "0e21d268f91f8a0023c7c142541c22f539c327e0859f157008686350e0f694fe"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/static_qml_configurator/CMakeLists.txt",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 22,
+      "sha256_lf": "9e6f1aa5bb23915eabf7d5f647e52fe4a76110fd64d6a3448fab56f8982f37d9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/static_qml_configurator/Contracts.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 902,
+      "sha256_lf": "4e0b9bd5bd837c9f8253ac2cc9ab503d6e6f8c3c75f9da5563265a01b33c168c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/static_qml_configurator/main.cpp",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 563,
+      "sha256_lf": "cec2ff82d967832531153c3c5575c17410a4d3ef8fa584403471b20abd77c022"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/static_qml_configurator/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "root",
+        "ux-runtime"
+      ],
+      "lines": 336,
+      "sha256_lf": "03ce3ea8d5713ad972bf7b2d75b3d7094aa2690f011e6e8f15270b2339e8729d"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/structured_client/Browser.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 217,
+      "sha256_lf": "2d64901cfe0ebd23e78cd812a9a02232ebd756c535a6b8f0cb58bd9cfb5f8e40"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/structured_client/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 217,
+      "sha256_lf": "e0a62955efb486db42f3129eefbf4edd3b57c9898ba02a0a3f8716b425be732a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_assets/TestExport.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 185,
+      "sha256_lf": "2c478373312aa5dfe307585f86fe9a0935a15ffbb75310dbfbfff972868bd903"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_assets/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 139,
+      "sha256_lf": "9612947edbeca927aafcf8e7851ea45937ed14c757bdd208280e2b9174d2c2b7"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_configurator/Browser.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 382,
+      "sha256_lf": "8eeff2340428c1d9bf83ae222e8fb8d5cdcb5aaeccee96e2e8bd600ce2b4286f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_configurator/Consumer.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 73,
+      "sha256_lf": "bdf3b86fac9df6f0ca2fa760b62ebd838620dc7ba687274c574403a1a27d5b2f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_configurator/Provider.mjs",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 843,
+      "sha256_lf": "4b22bd3917f40a09234d2457abaca8cc2001e0acf5f76ac1468a423f889296c9"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_configurator/Renderer.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 263,
+      "sha256_lf": "68443e59c41940e75761586e8b43b007738bf10bcb74e61e4efcbf24f2ec8516"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_configurator/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 224,
+      "sha256_lf": "b7330485ec7dae4294dfdb129d61c26171e8dd432337bb28136dc7f988327f71"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_element/Browser.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 195,
+      "sha256_lf": "fe78a9a2c1abc2a3d9e804d85c395532259681754ec578d97707af8bb296486d"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_element/Consumer.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 45,
+      "sha256_lf": "ecd005eb03e77c2fddbbde62ae0324280295b93162211392698367713d92a5a1"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_element/Element.mjs",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 731,
+      "sha256_lf": "ddb0ae8e55a9afa2deebe940220a943b9ec203f8c89aae6a27d00d74369e4d5f"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_element/SSR.mjs",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 21,
+      "sha256_lf": "1a62f6381b905c77f7185fbdf32a23a31a1af3a9943cd01db3df05ac61d84cf5"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_element/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 154,
+      "sha256_lf": "9c8c153386cf9d1e7fb2d6710caaf0c8c3d088c4c114d47f4f0ae2fb94e9d08c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_starter/Check.mjs",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 23,
+      "sha256_lf": "eff2c6c90e6f2063cfdcf336bfc4ddbab3b3c2c1cdd40c4c05fd583302f1c8cd"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/web_starter/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 127,
+      "sha256_lf": "dd24ae693940ff72ab1c2968bbce2b437cef4b4408b306c21de33b1be6997a27"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/websocket_transport/Consumer.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 49,
+      "sha256_lf": "e12d77bd9a93a0c1164b5b8c79b8882cbd2f3e9544528cb8a7fe81a81a106035"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/websocket_transport/Port.mjs",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 400,
+      "sha256_lf": "694e981e91c76f76417fafc2b51efae9f80012c3cdfe3f53b507efbd609594fd"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/websocket_transport/browser.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 418,
+      "sha256_lf": "0711564a0aac057929ec117b655041443378aed86867329c7855c4af9c3095fc"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/websocket_transport/run.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 290,
+      "sha256_lf": "54554ae6b2706536eabc5b4f4fa26e7165022ea7560753bbbed7fc6435599f0b"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tests/websocket_transport/server_test.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 375,
+      "sha256_lf": "0eaccb18f5972cc11ebdf220e67ba29c8397acc81c8e41bd5caa8fa50f894900"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "tools/export_web_assets.py",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 331,
+      "sha256_lf": "3deb32fffad9e5d7b9ae92cd7f4dd0740efa8604f9398061f2160adda574e114"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Configurator.css",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 284,
+      "sha256_lf": "06b2a0a649b1840a75bab149b07efb74ea932660fddbf7262fcc34417aec1b95"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Configurator.d.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 30,
+      "sha256_lf": "291a3f80ad95b40bbf89fc1487568f2e7d62798e07c0a9fba8f3e868d0584a71"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Configurator.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 913,
+      "sha256_lf": "3f744a7307633104a4d4e4e69e492b961a27442fa4bf04488177d111bb648ef8"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Element.d.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 23,
+      "sha256_lf": "4544c3e50aca3c40bc10b45fa5ea4e2e0249d9a002a309493ffee83673e7a550"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Element.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 160,
+      "sha256_lf": "47ba0f20a698e3955082e12661fb9f7425af24fe3ba1d3d24762b6be1cf5ee8c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Provider.d.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 227,
+      "sha256_lf": "e4dbb45af32fa4560caf728b2056e9845cde4b989f2292cf23829559b54acf0a"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/Provider.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 1583,
+      "sha256_lf": "e2acd01eea9cdcc4c2ef87970f0e576ab28ee67345cfb57862c8a2c95310e0ec"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/ProviderContract.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 8,
+      "sha256_lf": "a1ce5003e2fe6aa11e88d77776cb711ce8ecb362a94b9c137ed44e6ba60cc57c"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/WebSocketTransport.d.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 30,
+      "sha256_lf": "aa66fac1e2c35537d3d8e938df5fd7b19a4fd7771f1e420a6bca70642a007caf"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/WebSocketTransport.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 113,
+      "sha256_lf": "d1c4616fb7d84389b04a07393cfe7fc50a28ba6b8ad471e6b75099fcd049fdcd"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/index.d.ts",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 29,
+      "sha256_lf": "70951aab46070df61b39637b9ee9732dbb46b878479585ae9713469c6a7f28f8"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "web/index.js",
+      "review": "full-source-read",
+      "reviewers": [
+        "ux-runtime"
+      ],
+      "lines": 4,
+      "sha256_lf": "c08c053909a26b0a952c39df054de7b7528ae9b9dcc8368a98a7c9e3f1a5727f"
+    }
+  ],
+  "summary": {
+    "files": 150,
+    "lines": 34367
+  }
+}
