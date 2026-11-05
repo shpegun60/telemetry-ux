@@ -97,7 +97,8 @@ Control {
             objectName: "watchlistPane"
             visible: configurator.watchlistVisible
             Layout.fillWidth: true
-            Layout.preferredHeight: watchPanelExpanded.checked ? 220 : 54
+            Layout.preferredHeight: (watchPanelExpanded.checked ? 220 : 54)
+                + (watchStatusLabel.visible ? watchStatusLabel.implicitHeight + 6 : 0)
             background: Rectangle { color: "#17202b"; radius: 10 }
             ColumnLayout {
                 anchors.fill: parent
@@ -131,7 +132,17 @@ Control {
                         enabled: configurator.provider.watchActive || (configurator.provider.connected && configurator.provider.watchCount > 0)
                         onClicked: configurator.provider.watchActive ? configurator.provider.stopWatch() : configurator.provider.startWatch()
                     }
-                    Label { textFormat: Text.PlainText; text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus; color: "#99abbf"; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: 330 }
+                    Item { Layout.fillWidth: true }
+                }
+                Label {
+                    id: watchStatusLabel
+                    objectName: "watchStatusLabel"
+                    textFormat: Text.PlainText
+                    text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus
+                    color: "#99abbf"
+                    visible: text.length > 0
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
                 }
                 RowLayout {
                     visible: watchPanelExpanded.checked

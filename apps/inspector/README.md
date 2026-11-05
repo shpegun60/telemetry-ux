@@ -15,6 +15,10 @@ discovery for the UART ReadMany firmware. **Individual FieldRead** is an explici
 fallback for older devices. Missed polling ticks are skipped; foreground
 snapshots and editing drafts keep their own state.
 
+Use **Connection settings** to show TCP, UART and Descriptor-file controls.
+They collapse after connection and reopen on disconnect, leaving room for the
+endpoint tree and values. Watchlist status messages wrap below its actions.
+
 ## Build and run
 
 Use a matching Qt 6.4-or-newer C++20 kit with Core, Gui, Qml, Quick,

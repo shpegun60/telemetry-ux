@@ -210,8 +210,8 @@ def main():
         typed = run('qml-physical-input', [physical_input])
         typed_counts = re.search(r'Inspector QML physical input checks=(\d+) writes=2 noEnter=2 '
                                  r'gain=4\.25 counter=18446744073709551614 Qt=(\S+)', typed)
-        if not typed_counts or int(typed_counts[1]) < 58 or typed_counts[2] != counts[3]:
-            raise RuntimeError('Actual keyboard/mouse input did not complete both no-Enter Apply workflows')
+        if not typed_counts or int(typed_counts[1]) < 90 or typed_counts[2] != counts[3]:
+            raise RuntimeError('Actual input did not complete both Apply workflows and layout checks')
         report['executions']['physical_input_checks'] = int(typed_counts[1])
         report['executions']['keyboard_mouse_no_enter_applies'] = 2
         command_check = build / ('telemetry_inspector_qml_command_check' + suffix)

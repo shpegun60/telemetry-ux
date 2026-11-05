@@ -24,6 +24,22 @@ ApplicationWindow {
     palette.highlight: "#215a68"
     palette.highlightedText: "#ffffff"
     palette.placeholderText: "#718297"
+    property bool connectionSettingsExpanded: false
+    property bool lastConnected: false
+
+    Component.onCompleted: {
+        lastConnected = controller.connected
+        connectionSettingsExpanded = !controller.connected
+    }
+    Connections {
+        target: controller
+        function onStateChanged() {
+            if (window.lastConnected !== controller.connected) {
+                window.lastConnected = controller.connected
+                window.connectionSettingsExpanded = !controller.connected
+            }
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -62,78 +78,91 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
         }
-        RowLayout {
-            Layout.fillWidth: true
-            TextField {
-                id: tcpHost
-                objectName: "tcpHost"
-                Layout.fillWidth: true
-                text: controller.tcpHost
-                placeholderText: "TCP host"
-                onAccepted: controller.connectTcp(text, tcpPort.value)
-            }
-            SpinBox {
-                id: tcpPort
-                objectName: "tcpPort"
-                from: 1
-                to: 65535
-                value: controller.tcpPort
-                editable: true
-            }
-            Button {
-                text: "Connect TCP"
-                enabled: tcpHost.text.length > 0 && !controller.busy
-                onClicked: controller.connectTcp(tcpHost.text, tcpPort.value)
-            }
+        ToolButton {
+            objectName: "connectionSettingsButton"
+            text: window.connectionSettingsExpanded ? "Hide connection settings" : "Connection settings"
+            checkable: true
+            checked: window.connectionSettingsExpanded
+            onClicked: window.connectionSettingsExpanded = checked
         }
-        RowLayout {
+        ColumnLayout {
+            objectName: "connectionSettings"
+            visible: window.connectionSettingsExpanded
             Layout.fillWidth: true
-            visible: controller.serialAvailable
-            ComboBox {
-                id: serialPort
-                objectName: "serialPort"
+            spacing: 8
+            RowLayout {
                 Layout.fillWidth: true
-                editable: true
-                model: controller.serialPorts()
-                editText: controller.serialPort
+                TextField {
+                    id: tcpHost
+                    objectName: "tcpHost"
+                    Layout.fillWidth: true
+                    text: controller.tcpHost
+                    placeholderText: "TCP host"
+                    onAccepted: controller.connectTcp(text, tcpPort.value)
+                }
+                SpinBox {
+                    id: tcpPort
+                    objectName: "tcpPort"
+                    from: 1
+                    to: 65535
+                    value: controller.tcpPort
+                    editable: true
+                }
+                Button {
+                    text: "Connect TCP"
+                    enabled: tcpHost.text.length > 0 && !controller.busy
+                    onClicked: controller.connectTcp(tcpHost.text, tcpPort.value)
+                }
             }
-            Button {
-                text: "Scan ports"
-                onClicked: serialPort.model = controller.serialPorts()
-            }
-            SpinBox {
-                id: serialBaud
-                from: 1200
-                to: 4000000
-                value: controller.serialBaud
-                editable: true
-            }
-            Button {
-                text: "Connect UART"
-                enabled: serialPort.editText.length > 0 && !controller.busy
-                onClicked: controller.connectSerial(serialPort.editText, serialBaud.value)
-            }
-        }
-        CheckBox {
-            objectName: "readManyDiscoveryCheck"
-            visible: controller.serialAvailable
-            text: "Discover ReadMany on the next UART connection"
-            checked: controller.readManyDiscovery
-            onToggled: controller.readManyDiscovery = checked
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            TextField {
-                id: descriptorPath
-                objectName: "descriptorPath"
+            RowLayout {
                 Layout.fillWidth: true
-                placeholderText: "Descriptor file path · metadata only"
-                onAccepted: controller.openDescriptorPath(text)
+                visible: controller.serialAvailable
+                ComboBox {
+                    id: serialPort
+                    objectName: "serialPort"
+                    Layout.fillWidth: true
+                    editable: true
+                    model: controller.serialPorts()
+                    editText: controller.serialPort
+                }
+                Button {
+                    text: "Scan ports"
+                    onClicked: serialPort.model = controller.serialPorts()
+                }
+                SpinBox {
+                    id: serialBaud
+                    from: 1200
+                    to: 4000000
+                    value: controller.serialBaud
+                    editable: true
+                }
+                Button {
+                    text: "Connect UART"
+                    enabled: serialPort.editText.length > 0 && !controller.busy
+                    onClicked: controller.connectSerial(serialPort.editText, serialBaud.value)
+                }
             }
-            Button {
-                text: "Open Descriptor"
-                enabled: descriptorPath.text.length > 0
-                onClicked: controller.openDescriptorPath(descriptorPath.text)
+            CheckBox {
+                objectName: "readManyDiscoveryCheck"
+                visible: controller.serialAvailable
+                text: "Discover ReadMany on the next UART connection"
+                checked: controller.readManyDiscovery
+                onToggled: controller.readManyDiscovery = checked
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField {
+                    id: descriptorPath
+                    objectName: "descriptorPath"
+                    Layout.fillWidth: true
+                    placeholderText: "Descriptor file path · metadata only"
+                    onAccepted: controller.openDescriptorPath(text)
+                }
+                Button {
+                    text: "Open Descriptor"
+                    enabled: descriptorPath.text.length > 0
+                    onClicked: controller.openDescriptorPath(descriptorPath.text)
+                }
             }
         }
         Configurator {
