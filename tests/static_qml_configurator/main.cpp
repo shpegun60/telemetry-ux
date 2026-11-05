@@ -201,6 +201,72 @@ static void commandsAndServices()
 	      "response survives RX and native object overwrite");
 }
 
+static void responseMutationLifetime()
+{
+	for (const bool command : {false, true}) {
+		for (const bool refuse : {false, true}) {
+			ex::device.config = ex::initial;
+			Harness h;
+			Provider p{h.binding};
+			p.setAllowMutations(true);
+			select(p, "Inspect");
+			check(p.setScalarText(value(p, "multiplier"), QStringLiteral("4")),
+			      "prepare owned response before mutation");
+			p.callService();
+			drain(h, p);
+			check(p.responses()->rowCount() == 2, "previous Service response published");
+			const auto previous = p.serviceResponseEndpoint();
+			const auto oldIndex = p.responses()->index(1, 0);
+			select(p, command ? "Reset" : "Config");
+			if (!command) {
+				p.refresh();
+				drain(h, p);
+				p.beginEdit();
+				check(p.setScalarText(value(p, "serial"), QStringLiteral("42")),
+				      "prepare Field replacement");
+			}
+			const auto packets = h.packets;
+			if (refuse) {
+				check(!h.endpoint(1, QStringLiteral("Scalars")).read(&h.api).isEmpty(),
+				      "fill FIFO read before rejected mutation");
+				check(!h.endpoint(2, QStringLiteral("Reset")).invoke(&h.api, {}).isEmpty(),
+				      "fill FIFO Command before rejected mutation");
+				check(!h.endpoint(3, QStringLiteral("Ping")).invoke(&h.api, {}).isEmpty(),
+				      "fill FIFO Service before rejected mutation");
+				events();
+			}
+			if (command)
+				p.executeCommand();
+			else
+				p.apply();
+			check(p.busy() && p.responses()->rowCount() == 0 &&
+			          !p.responses()->data(oldIndex).isValid(),
+			      "pending generated mutation hides the previous response");
+			if (refuse) {
+				events();
+				check(!p.busy() && p.responses()->rowCount() == 2 &&
+				          p.serviceResponseEndpoint() == previous && h.packets == packets,
+				      "asynchronous QueueFull preserves the previous response without I/O");
+				h.adapter.close();
+				events();
+				h.api.resetSession();
+				events();
+				check(p.responses()->rowCount() == 0 && !p.responses()->data(oldIndex).isValid(),
+				      "reset after refusal retires the restored response");
+			} else {
+				drain(h, p);
+				check(p.responses()->rowCount() == 0 && p.serviceResponseEndpoint().isEmpty(),
+				      "accepted Write or Command retires the previous Service response");
+				check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed")) :
+				                  p.writeOutcome().startsWith(QStringLiteral("Applied")),
+				      "mutation facts remain available after response retirement");
+				check(h.packets == packets + (command ? 1u : 2u),
+				      "only the explicit mutation and Field readback were sent");
+			}
+		}
+	}
+}
+
 static void queueRefusal()
 {
 	Harness h;
@@ -477,6 +543,7 @@ int main(int argc, char** argv)
 	try {
 		fields();
 		commandsAndServices();
+		responseMutationLifetime();
 		queueRefusal();
 		unknownWrite();
 		individualWatch();

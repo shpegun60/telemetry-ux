@@ -213,3 +213,5 @@ the generator's owned-output contract. The QML target generates API and value
 adapters; use the embeddable Configurator for presentation. [Source provenance](MIGRATION.md)
 records the SDK revisions from which the implementations were moved.
 No registry publication or new hardware qualification is implied.
+
+[SDK + UX source audit](doc/evidence/sdk-ux-audit-2026-11-05/README.md) records source coverage, confirmed repairs and qualification limits.

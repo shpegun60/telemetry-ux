@@ -1092,6 +1092,7 @@ bool InspectorController::apply()
 	state_->applying = true;
 	writeOutcomeSession_ = state_->inspector.session();
 	busy_ = true;
+	retireWatch(false);
 	values_.clear();
 	responses_.clear();
 	writeOutcome_ = QStringLiteral("Pending · waiting for write result and readback.");
@@ -1121,6 +1122,7 @@ bool InspectorController::executeCommand()
 	commandOutcomeSession_ = state_->inspector.session();
 	commandOutcomeEndpoint_ = selection_;
 	busy_ = true;
+	retireWatch(false);
 	values_.clear();
 	responses_.clear();
 	commandOutcome_ = QStringLiteral("Pending · waiting for the Command result.");
@@ -1150,6 +1152,7 @@ bool InspectorController::callService()
 	serviceOutcomeSession_ = state_->inspector.session();
 	serviceOutcomeEndpoint_ = selection_;
 	busy_ = true;
+	retireWatch(false);
 	values_.clear();
 	responses_.clear();
 	serviceOutcome_ = QStringLiteral("Pending · waiting for the Service result.");
