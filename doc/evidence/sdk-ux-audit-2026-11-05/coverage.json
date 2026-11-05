@@ -38,7 +38,7 @@
         "ux-runtime"
       ],
       "lines": 6,
-      "sha256_lf": "cfc09a3ebd90ce67c6c09de62d5650ad149adfcda925a2cfc72229ec22ebf3f6"
+      "sha256_lf": "b6abeadd04de23014e85a5871146bbcf23ea12e0369a5dd7f455bfc104e398c3"
     },
     {
       "repo": "telemetry-ux",
@@ -72,6 +72,16 @@
     },
     {
       "repo": "telemetry-ux",
+      "path": ".gitignore",
+      "review": "full-source-read",
+      "reviewers": [
+        "core"
+      ],
+      "lines": 10,
+      "sha256_lf": "2447195be0e7b90c37d764700048cef26c282848040c8f3a88092b1719e8ff3f"
+    },
+    {
+      "repo": "telemetry-ux",
       "path": "CMakeLists.txt",
       "review": "full-source-read",
       "reviewers": [
@@ -89,6 +99,16 @@
       ],
       "lines": 2,
       "sha256_lf": "e54cdb68e1cb7aab939bd85d92d8777446852d8ff3becbbb9bf15cb09a3d14a7"
+    },
+    {
+      "repo": "telemetry-ux",
+      "path": "VERSION",
+      "review": "full-source-read",
+      "reviewers": [
+        "core"
+      ],
+      "lines": 1,
+      "sha256_lf": "e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67"
     },
     {
       "repo": "telemetry-ux",
@@ -1165,6 +1185,16 @@
     },
     {
       "repo": "telemetry-ux",
+      "path": "tests/static_qml_configurator/qt64-software-textures.lsan",
+      "review": "full-source-read",
+      "reviewers": [
+        "core"
+      ],
+      "lines": 1,
+      "sha256_lf": "9d88f039bbadd864c44c4d0d97f7e87d9bb7aef2965cefded955b05d18ee2480"
+    },
+    {
+      "repo": "telemetry-ux",
       "path": "tests/static_qml_configurator/run.py",
       "review": "full-source-read",
       "reviewers": [
@@ -1516,7 +1546,7 @@
     }
   ],
   "summary": {
-    "files": 150,
-    "lines": 34367
+    "files": 153,
+    "lines": 34379
   }
 }
