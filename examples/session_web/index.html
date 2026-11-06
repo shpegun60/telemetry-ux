@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Telemetry Session Configurators</title>
+  <link rel="stylesheet" href="./node_modules/telemetry-ux/web/Configurator.css">
+  <script type="importmap">
+  {"imports":{
+    "telemetry-sdk":"./node_modules/telemetry-sdk/web/index.js",
+    "telemetry-sdk/client":"./node_modules/telemetry-sdk/lib/client/web/Client.js",
+    "telemetry-sdk/runtime":"./node_modules/telemetry-sdk/web/telemetry.js",
+    "telemetry-ux/web":"./node_modules/telemetry-ux/web/index.js"
+  }}
+  </script>
+  <style>
+    body { margin: 24px; font: 16px system-ui, sans-serif; background: #f5f7fa; color: #172b45; }
+    .connection { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    button, select { font: inherit; padding: 7px 12px; }
+    .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .panels > div { min-width: 0; }
+    #connection-status { overflow-wrap: anywhere; }
+    @media (max-width: 1100px) { .panels { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>One connection, independent views</h1>
+  <p>Reference Model demonstration. Each panel has its own selection and draft.</p>
+  <div class="connection">
+    <label>Client <select id="mode"><option value="dynamic">Dynamic</option><option value="static">Static</option></select></label>
+    <button id="connect" type="button">Connect</button>
+    <button id="disconnect" type="button" disabled>Disconnect</button>
+    <button id="reconnect" type="button" disabled>Reconnect</button>
+    <button id="close" type="button" disabled>Close</button>
+    <span id="connection-status" role="status">Disconnected</span>
+  </div>
+  <main class="panels"><div id="left"></div><div id="right"></div></main>
+  <script type="module" src="./SessionDemo.js"></script>
+</body>
+</html>

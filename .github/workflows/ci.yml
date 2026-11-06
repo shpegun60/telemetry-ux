@@ -70,7 +70,7 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUTF8: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '7c321955cd3fa879d7fd459a0373e31bc9e50921' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '7c321955cd3fa879d7fd459a0373e31bc9e50921' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,7 +179,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '7c321955cd3fa879d7fd459a0373e31bc9e50921' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -281,6 +281,25 @@ jobs:
             --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
             --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
             --npm-js "$(npm root -g)/npm/bin/npm-cli.js" --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Installed Session providers, independent views and WebSocket lifecycle
+        run: |
+          set -euo pipefail
+          for profile in gcc clang-asan; do
+            compiler=g++
+            checks=()
+            if [ "$profile" = clang-asan ]; then
+              compiler=clang++-18
+              checks+=(--sanitize)
+            fi
+            python -B tests/session_provider/run.py --build-dir "$RUNNER_TEMP/ux-session-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --codegen-python "$RUNNER_TEMP/web-codegen/bin/python" \
+              --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+              --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
+              --npm-js "$(npm root -g)/npm/bin/npm-cli.js" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+          done
       - name: Installed declarative element lifecycle, SSR and type consumers
         run: |
           set -euo pipefail
@@ -349,6 +368,12 @@ jobs:
             ${{ runner.temp }}/ux-web-clang-asan/summary.json
             ${{ runner.temp }}/ux-web-clang-asan/*.log
             ${{ runner.temp }}/ux-web-clang-asan/browser/
+            ${{ runner.temp }}/ux-session-gcc/summary.json
+            ${{ runner.temp }}/ux-session-gcc/*.log
+            ${{ runner.temp }}/ux-session-gcc/browser/
+            ${{ runner.temp }}/ux-session-clang-asan/summary.json
+            ${{ runner.temp }}/ux-session-clang-asan/*.log
+            ${{ runner.temp }}/ux-session-clang-asan/browser/
             ${{ runner.temp }}/ux-web-element/summary.json
             ${{ runner.temp }}/ux-web-element/*.log
             ${{ runner.temp }}/ux-web-element/browser/summary.json
@@ -382,7 +407,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '7c321955cd3fa879d7fd459a0373e31bc9e50921' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"

@@ -1,5 +1,12 @@
-export {createDynamicProvider, createStaticProvider} from './Provider.js';
-export {mountConfigurator, mountFieldEditor, mountCommandPanel, mountServicePanel, mountWatchlist, mountBatchEditor} from './Configurator.js';
+export {createDynamicProvider, createStaticProvider, createSessionProvider} from './Provider.js';
+export {
+	mountConfigurator,
+	mountFieldEditor,
+	mountCommandPanel,
+	mountServicePanel,
+	mountWatchlist,
+	mountBatchEditor
+} from './Configurator.js';
 export {defineConfiguratorElement} from './Element.js';
 export type {
 	TelemetryConfiguratorElement,
@@ -27,3 +34,16 @@ export type {
 	ValuePath,
 	ValueSource
 } from './Provider.js';
+export type {
+	SessionPresentationProvider,
+	SessionPresentationState,
+	SessionProviderOptions,
+	SessionEndpointSelector
+} from './Provider.js';
+export type {
+	ConfiguratorView,
+	ConfiguratorOptions,
+	ProviderConfiguratorOptions,
+	SessionConfiguratorOptions,
+	SessionConfiguratorView
+} from './Configurator.js';

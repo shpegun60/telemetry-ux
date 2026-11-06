@@ -275,10 +275,10 @@ function staticAdapter({client, metadata, sdk})
 			    fail('Batch is unavailable in this SDK');
 		    const requests = items.map(item => {
 			    const binding = item.endpoint.binding;
-			    return item.operation === 'read' ? Batch.read(binding)
-			           : item.operation === 'write' ? Batch.write(binding, item.request)
+			    return item.operation === 'read'      ? Batch.read(binding)
+			           : item.operation === 'write'   ? Batch.write(binding, item.request)
 			           : item.operation === 'command' ? Batch.command(binding, item.request)
-			                                         : Batch.service(binding, item.request);
+			                                          : Batch.service(binding, item.request);
 		    });
 		    return client.batch(capability, requests);
 		},
@@ -297,6 +297,27 @@ function staticAdapter({client, metadata, sdk})
 	};
 }
 
+function dynamicDescription(schema)
+{
+	const endpoints = [];
+	for (const [category, key, catalogKey] of [[ 1, 'fields', 'fieldCatalogs' ],
+	                                           [ 2, 'commands', 'commandCatalogs' ],
+	                                           [ 3, 'services', 'serviceCatalogs' ]])
+		for (const catalog of schema[catalogKey])
+			for (let index = catalog.first; index < catalog.first + catalog.count; ++index) {
+				const row = schema[key][index];
+				endpoints.push({
+					...row,
+					category,
+					catalog : catalog.name,
+					valueType : category === 1 ? row.typeId : 0,
+					requestType : category === 1 ? 0 : row.requestTypeId,
+					responseType : category === 3 ? row.responseTypeId : 0
+				});
+			}
+	return {types : schema.types, endpoints};
+}
+
 function dynamicAdapter({client})
 {
 	if (!client || typeof client.bind !== 'function')
@@ -306,26 +327,7 @@ function dynamicAdapter({client})
 		client,
 		identity : () =>
 		    ({ready : client.ready === true, session : client.session, schema : client.schema}),
-		describe(schema) {
-		    const endpoints = [];
-		    for (const [category, key, catalogKey] of [[ 1, 'fields', 'fieldCatalogs' ],
-		                                               [ 2, 'commands', 'commandCatalogs' ],
-		                                               [ 3, 'services', 'serviceCatalogs' ]])
-			    for (const catalog of schema[catalogKey])
-				    for (let index = catalog.first; index < catalog.first + catalog.count;
-				         ++index) {
-					    const row = schema[key][index];
-					    endpoints.push({
-						    ...row,
-						    category,
-						    catalog : catalog.name,
-						    valueType : category === 1 ? row.typeId : 0,
-						    requestType : category === 1 ? 0 : row.requestTypeId,
-						    responseType : category === 3 ? row.responseTypeId : 0
-					    });
-				    }
-		    return {types : schema.types, endpoints};
-		},
+		describe : dynamicDescription,
 		validate(id, value, schema) {
 		    encodeValue(schema, id, value);
 		},
@@ -367,8 +369,12 @@ function dynamicAdapter({client})
 		batch(capability, items) {
 		    if (typeof client.batch !== 'function')
 			    fail('Batch is unavailable in this SDK');
-		    const operations = {read : 'FieldRead', write : 'FieldWrite',
-		                        command : 'Command', service : 'Service'};
+		    const operations = {
+			    read : 'FieldRead',
+			    write : 'FieldWrite',
+			    command : 'Command',
+			    service : 'Service'
+		    };
 		    const requests = items.map(item => {
 			    const bound = client.bind(operations[item.operation], item.endpoint.id);
 			    if (bound.status !== Status.Ok)
@@ -381,26 +387,27 @@ function dynamicAdapter({client})
 	};
 }
 
-function presentation(adapter, inputLimits)
+function presentation(adapter, inputLimits, hooks = {})
 {
 	const limits = limitsFor(inputLimits), listeners = new Set();
 	let identity, description, model, endpoints = empty, selected = null;
 	let revision = 0, epoch = 0, blockedSession, current = false, writesEnabled = false;
+	let dataEpoch = 0, dataStale = false, draftStale = false, dataInvalidationReason = '';
 	let publishing = false, notifying = false, notifyAgain = false, active;
 	let value, draft, response, hasValue = false, hasDraft = false, hasResponse = false,
 	                            dirty = false, error = '';
 	let valuePayload, draftPayload;
 	let texts = new Map(), outcomes = Object.create(null);
 	const outcomeVersions = Object.create(null);
-	let watched = [], watchCapability, watchRunning = false, watchCycle = false,
-	    watchPending, watchIndividual = false, watchInterval = 1000, watchDue = 0,
-	    watchRevision = 0, watchCursor = 0, watchStatus = 'Select scalar Fields to watch.';
+	let watched = [], watchCapability, watchRunning = false, watchCycle = false, watchPending,
+	    watchIndividual = false, watchInterval = 1000, watchDue = 0, watchRevision = 0,
+	    watchCursor = 0, watchStatus = 'Select scalar Fields to watch.';
 	let batchItems = [], batchSelected, batchCapability, batchPending, batchOutcome,
 	    batchRevision = 0, nextBatchKey = 0, batchStatus = 'Add ordered operations to the Batch.';
-	const watchItemNames = ['Ok', 'NotFound', 'UnsupportedType', 'Unavailable', 'ReadError'];
+	const watchItemNames = [ 'Ok', 'NotFound', 'UnsupportedType', 'Unavailable', 'ReadError' ];
 	const watchActive = () => watchRunning || watchCycle || !!watchPending;
-	const watchEditable = () => isCurrent() && !active && !batchPending &&
-	                            !publishing && !notifying && !watchActive();
+	const watchEditable = () =>
+	    isCurrent() && !active && !batchPending && !publishing && !notifying && !watchActive();
 	const batchEditable = watchEditable;
 
 	function isCurrent()
@@ -418,6 +425,9 @@ function presentation(adapter, inputLimits)
 
 	function clearValues()
 	{
+		++dataEpoch;
+		dataStale = draftStale = false;
+		dataInvalidationReason = '';
 		value = draft = response = undefined;
 		valuePayload = draftPayload = undefined;
 		hasValue = hasDraft = hasResponse = dirty = false;
@@ -425,16 +435,32 @@ function presentation(adapter, inputLimits)
 		++revision;
 	}
 
+	function invalidateData(reason)
+	{
+		++dataEpoch;
+		dataStale = true;
+		draftStale = hasDraft;
+		dataInvalidationReason = reason;
+		value = response = undefined;
+		valuePayload = undefined;
+		hasValue = hasResponse = false;
+		clearWatchValues();
+		clearBatchResponses();
+		++revision;
+		notify();
+	}
+
 	function snapshot()
 	{
-		const valid = isCurrent(), idle = !active && !batchPending && !publishing && !watchActive() && valid;
+		const valid = isCurrent(),
+		      idle = !active && !batchPending && !publishing && !watchActive() && valid;
 		const endpoint = selectedInternal();
-		const canMutate = idle && writesEnabled && !!endpoint;
+		const canMutate = idle && writesEnabled && !!endpoint && !draftStale;
 		const facts = Object.create(null);
 		for (const [key, fact] of Object.entries(outcomes))
 			facts[key] =
 			    freeze({...fact, historical : !valid || fact.session !== identity.session});
-		return freeze({
+		const state = {
 			mode : adapter.mode,
 			current : valid,
 			session : identity?.session || 0,
@@ -451,39 +477,58 @@ function presentation(adapter, inputLimits)
 			outcomes : freeze(facts),
 			watch : freeze({
 				rows : freeze(watched.map(row => freeze({
-					key : row.endpoint.key, id : row.endpoint.id,
-					name : row.endpoint.name, catalog : String(row.endpoint.catalog),
-					status : valid ? row.status : 'Stale', text : valid ? row.text : ''
-				}))),
-				active : watchActive(), pending : !!watchPending, running : watchRunning,
-				individual : watchIndividual, intervalMs : watchInterval, status : watchStatus,
+					                          key : row.endpoint.key,
+					                          id : row.endpoint.id,
+					                          name : row.endpoint.name,
+					                          catalog : String(row.endpoint.catalog),
+					                          status : valid ? row.status : 'Stale',
+					                          text : valid ? row.text : ''
+				                          }))),
+				active : watchActive(),
+				pending : !!watchPending,
+				running : watchRunning,
+				individual : watchIndividual,
+				intervalMs : watchInterval,
+				status : watchStatus,
 				canAdd : idle && watched.length < 32 && !!endpoint && watchScalar(endpoint) &&
-				         !watched.some(row => row.endpoint.key === endpoint.key),
+				             !watched.some(row => row.endpoint.key === endpoint.key),
 				canRefresh : idle && watched.length > 0
 			}),
 			batch : freeze({
-				items : freeze(batchItems.map(item => freeze({
-					key : item.key, endpointKey : item.endpoint.key, category : item.endpoint.category,
-					name : item.endpoint.name, catalog : String(item.endpoint.catalog),
-					operation : item.operation,
-					status : valid ? item.status : 'Historical - ' + item.status,
-					outcome : item.outcome && freeze({...item.outcome, historical : !valid ||
-					                                item.outcome.session !== identity?.session})
-				}))),
-				selectedKey : batchSelected || '', active : !!batchPending, pending : !!batchPending,
-				status : batchStatus, canAdd : idle && batchItems.length < 32 &&
-				                              batchAddOperations(endpoint).length > 0,
+				items : freeze(batchItems.map(
+				    item => freeze({
+					    key : item.key,
+					    endpointKey : item.endpoint.key,
+					    category : item.endpoint.category,
+					    name : item.endpoint.name,
+					    catalog : String(item.endpoint.catalog),
+					    operation : item.operation,
+					    status : valid ? item.status : 'Historical - ' + item.status,
+					    outcome :
+					        item.outcome && freeze({
+						        ...item.outcome,
+						        historical : !valid || item.outcome.session !== identity?.session
+					        })
+				    }))),
+				selectedKey : batchSelected || '',
+				active : !!batchPending,
+				pending : !!batchPending,
+				status : batchStatus,
+				canAdd : idle && batchItems.length < 32 && batchAddOperations(endpoint).length > 0,
 				addOperations : freeze(valid ? batchAddOperations(endpoint) : []),
-				canExecute : idle && batchItems.length > 0 && !batchHasErrors() &&
-				             (writesEnabled || batchItems.every(item => item.operation === 'read')),
+				canExecute :
+				    idle && batchItems.length > 0 && !batchHasErrors() &&
+				        (writesEnabled || batchItems.every(item => item.operation === 'read')),
 				hasDraft : valid && !!selectedBatch() && selectedBatch().operation !== 'read',
 				hasResponse : valid && selectedBatch()?.hasResponse === true,
-				outcome : batchOutcome && freeze({...batchOutcome, historical : !valid ||
-				                                batchOutcome.session !== identity?.session})
+				outcome : batchOutcome && freeze({
+					          ...batchOutcome,
+					          historical : !valid || batchOutcome.session !== identity?.session
+				          })
 			}),
 			actions : freeze({
 				refresh : idle && endpoint?.category === 1,
-				beginEdit : idle && !!endpoint &&
+				beginEdit : idle && !!endpoint && !draftStale &&
 				                (endpoint.category !== 1 ||
 				                 (writesEnabled && endpoint.capabilities === 3 && hasValue)),
 				cancelEdit : idle && hasDraft,
@@ -492,7 +537,9 @@ function presentation(adapter, inputLimits)
 				execute : canMutate && endpoint.category === 2 && hasDraft && !hasErrors(),
 				call : canMutate && endpoint.category === 3 && hasDraft && !hasErrors()
 			})
-		});
+		};
+		return hooks.snapshot ? hooks.snapshot(state, {dataStale, dataInvalidationReason})
+		                      : freeze(state);
 	}
 
 	function notify()
@@ -624,17 +671,19 @@ function presentation(adapter, inputLimits)
 	{
 		if (notifying || !snapshot().actions.beginEdit)
 			return false;
-		const token = epoch, id = typeId('draft');
+		const token = epoch, dataToken = dataEpoch, id = typeId('draft');
 		publishing = true;
 		try {
 			model.preflight(id);
 			const candidate = copyValue(model.types, id, value, selected.category !== 1);
 			validate(id, candidate);
-			if (!isCurrent() || token !== epoch)
+			if (!isCurrent() || token !== epoch || dataToken !== dataEpoch)
 				return false;
 			draft = candidate;
 			draftPayload = selected.category === 1 ? valuePayload : undefined;
 			hasDraft = true;
+			dataStale = draftStale = false;
+			dataInvalidationReason = '';
 			dirty = selected.category !== 1;
 			texts.clear();
 			error = '';
@@ -651,7 +700,8 @@ function presentation(adapter, inputLimits)
 
 	function select(key)
 	{
-		if (active || batchPending || publishing || notifying || !isCurrent() || typeof key !== 'string')
+		if (active || batchPending || publishing || notifying || !isCurrent() ||
+		    typeof key !== 'string')
 			return false;
 		const endpoint = endpoints.find(row => row.key === key);
 		if (!endpoint)
@@ -670,15 +720,16 @@ function presentation(adapter, inputLimits)
 	{
 		const source = options.source ?? 'value', offset = options.offset ?? 0,
 		      limit = options.limit ?? 128;
-		const item = source === 'batchDraft' || source === 'batchResponse' ? selectedBatch() : undefined;
+		const item =
+		    source === 'batchDraft' || source === 'batchResponse' ? selectedBatch() : undefined;
 		const batchSource = source === 'batchDraft' || source === 'batchResponse';
 		const editableSource = source === 'draft' || source === 'batchDraft';
-		const available = source === 'batchDraft' ? !!item && item.operation !== 'read'
+		const available = source === 'batchDraft'      ? !!item && item.operation !== 'read'
 		                  : source === 'batchResponse' ? item?.hasResponse === true
-		                  : source === 'value'      ? hasValue
-		                  : source === 'draft'    ? hasDraft
-		                  : source === 'response' ? hasResponse
-		                                          : false;
+		                  : source === 'value'         ? hasValue
+		                  : source === 'draft'         ? hasDraft
+		                  : source === 'response'      ? hasResponse
+		                                               : false;
 		const output = result => freeze({
 			path : freeze([...path ]),
 			total : result.total,
@@ -688,16 +739,20 @@ function presentation(adapter, inputLimits)
 			rows : freeze(result.rows)
 		});
 		if (!Array.isArray(path) || path.length > 64 ||
-		    !['value', 'draft', 'response', 'batchDraft', 'batchResponse'].includes(source) || !Number.isInteger(offset) ||
-		    offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 128)
+		    !['value', 'draft', 'response', 'batchDraft', 'batchResponse'].includes(source) ||
+		    !Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 ||
+		    limit > 128)
 			fail('Invalid row window');
 		if (!isCurrent() || (batchSource ? !item : !selected))
 			return output({total : 0, rows : []});
 		const id = batchSource ? batchType(item, source === 'batchResponse') : typeId(source);
 		if (!available)
 			return output({total : 0, kind : kinds[model.types[id].kind], rows : []});
-		const root = source === 'batchDraft' ? item.request : source === 'batchResponse' ? item.response
-		           : source === 'value' ? value : source === 'draft' ? draft : response;
+		const root = source === 'batchDraft'      ? item.request
+		             : source === 'batchResponse' ? item.response
+		             : source === 'value'         ? value
+		             : source === 'draft'         ? draft
+		                                          : response;
 		const place = location(model.types, id, root, path);
 		const aggregate = place.type.kind === 3 || place.type.kind === 4;
 		const count = place.type.kind === 3   ? place.type.members.length
@@ -716,7 +771,8 @@ function presentation(adapter, inputLimits)
 				childValue = place.value[key];
 			}
 			const isAggregate = type.kind === 3 || type.kind === 4;
-			const override = editableSource ? (item ? item.texts : texts).get(pathKey(childPath)) : undefined;
+			const override =
+			    editableSource ? (item ? item.texts : texts).get(pathKey(childPath)) : undefined;
 			const scalarType = type.kind === 2 ? model.types[type.underlyingTypeId] : type;
 			result.push(freeze({
 				key : pathKey(childPath),
@@ -732,9 +788,9 @@ function presentation(adapter, inputLimits)
 				       : type.kind === 0 ? 'Void'
 				                         : text(childValue),
 				error : override?.error || '',
-				editable :
-				    editableSource && !active && !batchPending && !publishing && !watchActive() &&
-				    !isAggregate && type.kind !== 0,
+				editable : editableSource && !active && !batchPending && !publishing &&
+				               !watchActive() && (item || !draftStale) && !isAggregate &&
+				               type.kind !== 0,
 				enumEntries : type.kind === 2 ? type.entries : empty
 			}));
 		}
@@ -745,10 +801,10 @@ function presentation(adapter, inputLimits)
 	function editText(path, input, expectedRevision, item)
 	{
 		if (active || batchPending || publishing || notifying || watchActive() || !isCurrent() ||
-		    (item ? item.operation === 'read' : !hasDraft) ||
+		    (!item && draftStale) || (item ? item.operation === 'read' : !hasDraft) ||
 		    expectedRevision !== revision || typeof input !== 'string')
 			return false;
-		const token = epoch;
+		const token = epoch, dataToken = dataEpoch;
 		const inputTexts = item ? item.texts : texts;
 		let validPath = false;
 		publishing = true;
@@ -759,10 +815,10 @@ function presentation(adapter, inputLimits)
 			if (place.type.kind !== 1 && place.type.kind !== 2)
 				return false;
 			validPath = true;
-			const candidate =
-			    replace(model.types, id, inputValue, path, parseScalar(model.types, place.type, input));
+			const candidate = replace(model.types, id, inputValue, path,
+			                          parseScalar(model.types, place.type, input));
 			validate(id, candidate);
-			if (!isCurrent() || token !== epoch)
+			if (!isCurrent() || token !== epoch || dataToken !== dataEpoch)
 				return false;
 			if (item) {
 				item.request = candidate;
@@ -776,7 +832,7 @@ function presentation(adapter, inputLimits)
 			++revision;
 			return true;
 		} catch (failure) {
-			if (validPath && isCurrent() && token === epoch) {
+			if (validPath && isCurrent() && token === epoch && dataToken === dataEpoch) {
 				const reason = String(failure.message || failure);
 				inputTexts.set(pathKey(path), {text : input, error : reason});
 				error = reason;
@@ -835,9 +891,12 @@ function presentation(adapter, inputLimits)
 			return;
 		const decoded = adapter.result(result), operation = decoded.operation;
 		const valid = record.epoch === epoch && isCurrent();
-		outcomes[kind] =
-		    fact(kind, record.endpoint, operation, valid ? decoded.valueStatus : 'Stale');
-		if (valid && operation.succeeded &&
+		const valuesCurrent = valid && record.dataEpoch === dataEpoch;
+		outcomes[kind] = fact(kind, record.endpoint, operation,
+		                      (kind === 'write' || kind === 'command' ? valid : valuesCurrent)
+		                          ? decoded.valueStatus
+		                          : 'Stale');
+		if (valuesCurrent && operation.succeeded &&
 		    (kind === 'read' || kind === 'readback' || kind === 'service') &&
 		    decoded.valueStatus === 'Ok') {
 			publishing = true;
@@ -848,7 +907,7 @@ function presentation(adapter, inputLimits)
 				const candidate = copyValue(model.types, id, decoded.value);
 				const payload = kind === 'service' ? undefined : new Uint8Array(operation.payload);
 				validate(id, candidate);
-				if (record.epoch === epoch && isCurrent()) {
+				if (record.epoch === epoch && record.dataEpoch === dataEpoch && isCurrent()) {
 					if (kind === 'service') {
 						response = candidate;
 						hasResponse = model.types[id].kind !== 0;
@@ -857,6 +916,9 @@ function presentation(adapter, inputLimits)
 						valuePayload = payload;
 						hasValue = model.types[id].kind !== 0;
 					}
+					dataStale = draftStale;
+					if (!dataStale)
+						dataInvalidationReason = '';
 					error = '';
 					++revision;
 				}
@@ -864,11 +926,13 @@ function presentation(adapter, inputLimits)
 				error = String(failure.message || failure);
 				outcomes[kind] =
 				    fact(kind, record.endpoint, operation,
-				         record.epoch === epoch && isCurrent() ? 'InvalidPayload' : 'Stale');
+				         record.epoch === epoch && record.dataEpoch === dataEpoch && isCurrent()
+				             ? 'InvalidPayload'
+				             : 'Stale');
 			} finally {
 				publishing = false;
 			}
-			if (record.epoch !== epoch || !isCurrent())
+			if (record.epoch !== epoch || record.dataEpoch !== dataEpoch || !isCurrent())
 				outcomes[kind] = fact(kind, record.endpoint, operation, 'Stale');
 		} else if (valid && !operation.succeeded)
 			error = failureText(kind, operation);
@@ -877,6 +941,7 @@ function presentation(adapter, inputLimits)
 			// the following independent FieldRead is refused or fails.
 			try {
 				const ticket = outcomeVersions.readback = (outcomeVersions.readback || 0) + 1;
+				record.dataEpoch = dataEpoch;
 				const request = adapter.submit(record.endpoint, 'read');
 				if (request.requestId !== 0) {
 					request.then(reply => complete(record, reply, 'readback'),
@@ -920,14 +985,14 @@ function presentation(adapter, inputLimits)
 		                                    : 'call';
 		if (notifying || !snapshot().actions[action])
 			return false;
-		const record = {epoch, endpoint : selectedInternal()};
+		const record = {epoch, dataEpoch, endpoint : selectedInternal()};
 		const ticket = outcomeVersions[kind] = (outcomeVersions[kind] || 0) + 1;
 		publishing = true;
 		let request;
 		try {
 			if (kind !== 'read')
 				validate(typeId('draft'), draft);
-			if (record.epoch !== epoch || !isCurrent())
+			if (record.epoch !== epoch || record.dataEpoch !== dataEpoch || !isCurrent())
 				return false;
 			active = record;
 			request = adapter.submit(record.endpoint, kind, draft, draftPayload);
@@ -986,6 +1051,8 @@ function presentation(adapter, inputLimits)
 			++revision;
 			request.then(reply => complete(record, reply, kind),
 			             failure => failed(record, failure));
+			if (kind !== 'read')
+				hooks.acceptedMutation?.(kind);
 			return true;
 		} catch (failure) {
 			active = undefined;
@@ -1049,12 +1116,16 @@ function presentation(adapter, inputLimits)
 			                     decoded.operation.dispatch !== 0;
 			if (!decoded.operation.succeeded && !fieldRefused)
 				throw new Error(failureText('read', decoded.operation));
-			const items = record.individual
-			                  ? [{id : watched[record.cursor].endpoint.id,
-			                      status : !fieldRefused ? 0 : decoded.operation.dispatch === 4 ? 1
-			                             : decoded.operation.dispatch === 9 ? 3 : 4,
-			                      valueStatus : decoded.valueStatus, value : decoded.value}]
-			                  : decoded.items;
+			const items = record.individual ? [ {
+				id : watched[record.cursor].endpoint.id,
+				status : !fieldRefused                      ? 0
+					     : decoded.operation.dispatch === 4 ? 1
+					     : decoded.operation.dispatch === 9 ? 3
+					                                        : 4,
+				valueStatus : decoded.valueStatus,
+				value : decoded.value
+			} ]
+			                                : decoded.items;
 			const count = record.individual ? 1 : watched.length;
 			if (!Array.isArray(items) || items.length !== count)
 				fail('Invalid ReadMany result');
@@ -1102,16 +1173,17 @@ function presentation(adapter, inputLimits)
 	{
 		if (active || watchPending || publishing || notifying || !isCurrent() || !watchCycle)
 			return false;
-		const record = {epoch, revision : watchRevision, cursor : watchCursor,
-		                individual : watchIndividual};
+		const record =
+		    {epoch, revision : watchRevision, cursor : watchCursor, individual : watchIndividual};
 		publishing = true;
 		try {
 			if (!watchIndividual && !watchCapability)
-				fail('ReadMany unavailable. Supply TRM1 for this session or explicitly select Individual FieldRead.');
+				fail(
+				    'ReadMany unavailable. Supply TRM1 for this session or explicitly select Individual FieldRead.');
 			watchPending = record;
-			const request = watchIndividual
-			                    ? adapter.submit(watched[watchCursor].endpoint, 'read')
-			                    : adapter.readMany(watchCapability, watched.map(row => row.endpoint));
+			const request = watchIndividual ? adapter.submit(watched[watchCursor].endpoint, 'read')
+			                                : adapter.readMany(watchCapability,
+			                                                   watched.map(row => row.endpoint));
 			record.accepted = request.requestId !== 0;
 			request.then(reply => completeWatch(record, reply), failure => {
 				if (watchPending !== record)
@@ -1154,10 +1226,12 @@ function presentation(adapter, inputLimits)
 
 	function batchType(item, output = false)
 	{
-		return output ? item.operation === 'read' ? item.endpoint.valueType
-		                : item.operation === 'service' ? item.endpoint.responseType : 0
-		              : item.operation === 'write' ? item.endpoint.valueType
-		                : item.operation === 'read' ? 0 : item.endpoint.requestType;
+		return output ? item.operation === 'read'      ? item.endpoint.valueType
+		                : item.operation === 'service' ? item.endpoint.responseType
+		                                               : 0
+		       : item.operation === 'write' ? item.endpoint.valueType
+		       : item.operation === 'read'  ? 0
+		                                    : item.endpoint.requestType;
 	}
 
 	function batchAddOperations(endpoint)
@@ -1165,9 +1239,11 @@ function presentation(adapter, inputLimits)
 		if (!endpoint)
 			return [];
 		if (endpoint.category === 1)
-			return [...((endpoint.capabilities & 1) ? ['read'] : []),
-			        ...((endpoint.capabilities & 2) ? ['write'] : [])];
-		return [endpoint.category === 2 ? 'command' : 'service'];
+			return [
+				...((endpoint.capabilities & 1) ? [ 'read' ] : []),
+				...((endpoint.capabilities & 2) ? [ 'write' ] : [])
+			];
+		return [ endpoint.category === 2 ? 'command' : 'service' ];
 	}
 
 	function batchHasErrors()
@@ -1194,12 +1270,17 @@ function presentation(adapter, inputLimits)
 	function batchFact(operation, valueStatus)
 	{
 		return freeze({
-			status : operation.status, name : names.get(operation.status) || String(operation.status),
-			display : operation.status !== Status.Ok ? names.get(operation.status) || String(operation.status)
-			          : operation.dispatch !== 0 ? 'Dispatch: ' + (dispatchNames[operation.dispatch] || operation.dispatch)
-			          : 'Batch reply received - inspect each item outcome',
-			session : operation.session, requestId : operation.requestId,
-			succeeded : operation.succeeded === true, valueStatus
+			status : operation.status,
+			name : names.get(operation.status) || String(operation.status),
+			display : operation.status !== Status.Ok
+			              ? names.get(operation.status) || String(operation.status)
+			          : operation.dispatch !== 0
+			              ? 'Dispatch: ' + (dispatchNames[operation.dispatch] || operation.dispatch)
+			              : 'Batch reply received - inspect each item outcome',
+			session : operation.session,
+			requestId : operation.requestId,
+			succeeded : operation.succeeded === true,
+			valueStatus
 		});
 	}
 
@@ -1210,7 +1291,8 @@ function presentation(adapter, inputLimits)
 		publishing = true;
 		try {
 			const decoded = adapter.batchResult(result), operation = decoded.operation;
-			const valid = record.epoch === epoch && record.revision === batchRevision && isCurrent();
+			const valid =
+			    record.epoch === epoch && record.revision === batchRevision && isCurrent();
 			batchOutcome = batchFact(operation, valid ? decoded.valueStatus : 'Stale');
 			batchStatus = batchOutcome.display;
 			if (record.accepted) {
@@ -1220,7 +1302,12 @@ function presentation(adapter, inputLimits)
 				if (Array.isArray(items) && items.length === record.items.length) {
 					const facts = items.map((item, index) => {
 						const target = record.items[index];
-						const expected = {read : 'FieldRead', write : 'FieldWrite', command : 'Command', service : 'Service'}[target.operation];
+						const expected = {
+							read : 'FieldRead',
+							write : 'FieldWrite',
+							command : 'Command',
+							service : 'Service'
+						}[target.operation];
 						if (item.id !== target.endpoint.id || item.operation !== expected)
 							fail('Invalid Batch item identity');
 						return fact(target.operation, target.endpoint, item,
@@ -1233,13 +1320,15 @@ function presentation(adapter, inputLimits)
 					if (valid && decoded.valueStatus === 'Ok') {
 						const values = items.map((item, index) => {
 							const target = record.items[index], id = batchType(target, true);
-							if (!item.succeeded || item.valueStatus !== 'Ok' || model.types[id].kind === 0)
+							if (!item.succeeded || item.valueStatus !== 'Ok' ||
+							    model.types[id].kind === 0)
 								return undefined;
 							const copy = copyValue(model.types, id, item.value);
 							validate(id, copy);
 							return copy;
 						});
-						if (record.epoch === epoch && record.revision === batchRevision && isCurrent())
+						if (record.epoch === epoch && record.revision === batchRevision &&
+						    isCurrent())
 							for (let index = 0; index < values.length; ++index) {
 								const target = record.items[index];
 								target.response = values[index];
@@ -1250,7 +1339,8 @@ function presentation(adapter, inputLimits)
 					// No reply does not identify any executed prefix. Never infer
 					// per-item success from a global OutcomeUnknown or timeout.
 					for (const item of record.items)
-						item.status = operation.status === Status.Ok ? 'No checked item outcome' : batchOutcome.name;
+						item.status = operation.status === Status.Ok ? 'No checked item outcome'
+						                                             : batchOutcome.name;
 				}
 			}
 		} catch (failure) {
@@ -1270,7 +1360,8 @@ function presentation(adapter, inputLimits)
 	{
 		if (notifying || !snapshot().batch.canExecute)
 			return false;
-		const record = {epoch, revision : batchRevision, items : batchItems.slice(), accepted : false};
+		const record =
+		    {epoch, revision : batchRevision, items : batchItems.slice(), accepted : false};
 		publishing = true;
 		try {
 			if (!batchCapability)
@@ -1303,9 +1394,15 @@ function presentation(adapter, inputLimits)
 				clearWatchValues();
 				watchStatus = 'Stale after mutation - explicitly refresh watched Fields.';
 			}
-			batchOutcome = freeze({status : null, name : 'Pending', display : 'Pending',
-			                       session : request.session, requestId : request.requestId,
-			                       succeeded : false, valueStatus : 'NoValue'});
+			batchOutcome = freeze({
+				status : null,
+				name : 'Pending',
+				display : 'Pending',
+				session : request.session,
+				requestId : request.requestId,
+				succeeded : false,
+				valueStatus : 'NoValue'
+			});
 			batchStatus = 'Pending - one ordered Batch request';
 			return true;
 		} catch (failure) {
@@ -1321,8 +1418,9 @@ function presentation(adapter, inputLimits)
 	function copyCapability(input)
 	{
 		const bytes = input instanceof ArrayBuffer ? new Uint8Array(input)
-		              : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
-		                                              : undefined;
+		              : ArrayBuffer.isView(input)
+		                  ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+		                  : undefined;
 		return bytes?.byteLength === 24 ? new Uint8Array(bytes) : undefined;
 	}
 
@@ -1343,7 +1441,8 @@ function presentation(adapter, inputLimits)
 		    const token = epoch;
 		    publishing = true;
 		    try {
-			    const item = {endpoint, operation, texts : new Map(), status : 'Draft', hasResponse : false};
+			    const item =
+			        {endpoint, operation, texts : new Map(), status : 'Draft', hasResponse : false};
 			    const id = batchType(item), cost = model.preflight(id);
 			    let nodes = cost.nodes, bytes = model.types[id].wireBytes;
 			    for (const previous of batchItems) {
@@ -1355,7 +1454,8 @@ function presentation(adapter, inputLimits)
 				    fail('Batch arguments exceed presentation limits');
 			    // This is a new complete DTO. FieldWrite is full replacement,
 			    // never a preserving edit of an earlier FieldRead payload.
-			    item.request = operation === 'read' ? undefined : copyValue(model.types, id, undefined, true);
+			    item.request =
+			        operation === 'read' ? undefined : copyValue(model.types, id, undefined, true);
 			    if (operation !== 'read')
 				    validate(id, item.request);
 			    if (token !== epoch || !isCurrent())
@@ -1392,7 +1492,7 @@ function presentation(adapter, inputLimits)
 		    const index = batchItems.findIndex(item => item.key === key), next = index + delta;
 		    if (index < 0 || next < 0 || next >= batchItems.length)
 			    return false;
-		    [batchItems[index], batchItems[next]] = [batchItems[next], batchItems[index]];
+		    [batchItems[index], batchItems[next]] = [ batchItems[next], batchItems[index] ];
 		    ++batchRevision;
 		    ++revision;
 		    notify();
@@ -1442,7 +1542,8 @@ function presentation(adapter, inputLimits)
 		    if (!watchEditable() || watched.length >= 32 || typeof key !== 'string')
 			    return false;
 		    const endpoint = description.endpoints.find(row => row.key === key);
-		    if (!endpoint || !watchScalar(endpoint) || watched.some(row => row.endpoint.key === key))
+		    if (!endpoint || !watchScalar(endpoint) ||
+		        watched.some(row => row.endpoint.key === key))
 			    return false;
 		    watched.push({endpoint, status : 'NotRead', text : ''});
 		    ++watchRevision;
@@ -1474,7 +1575,8 @@ function presentation(adapter, inputLimits)
 		    return true;
 		},
 		setWatchInterval(milliseconds) {
-		    if (!watchEditable() || !Number.isFinite(milliseconds) || milliseconds < 100 || milliseconds > 10000)
+		    if (!watchEditable() || !Number.isFinite(milliseconds) || milliseconds < 100 ||
+		        milliseconds > 10000)
 			    return false;
 		    watchInterval = milliseconds;
 		    notify();
@@ -1557,6 +1659,8 @@ function presentation(adapter, inputLimits)
 		    draft = undefined;
 		    draftPayload = undefined;
 		    hasDraft = dirty = false;
+		    dataStale = draftStale = false;
+		    dataInvalidationReason = '';
 		    texts.clear();
 		    error = '';
 		    ++revision;
@@ -1567,6 +1671,19 @@ function presentation(adapter, inputLimits)
 		apply : () => start('write'),
 		execute : () => start('command'),
 		call : () => start('service')
+	});
+	hooks.attach?.({
+		invalidateData,
+		connectionChanged() {
+		    const token = epoch;
+		    revoke();
+		    if (token === epoch)
+			    notify(); // A later nonready connection phase still needs presentation delivery.
+		},
+		reportError(message) {
+		    error = message;
+		    notify();
+		}
 	});
 	sync();
 	return provider;
@@ -1580,4 +1697,239 @@ export function createStaticProvider(options)
 export function createDynamicProvider(options)
 {
 	return presentation(dynamicAdapter(options), options.limits);
+}
+
+// Presentation freshness only. The borrowed Session remains the sole execution owner.
+const sessionProviders = new WeakMap();
+const ordinaryMethods = [
+	'rows', 'subscribe', 'invalidate', 'select', 'setWritesEnabled', 'setText', 'refresh',
+	'beginEdit', 'cancelEdit', 'apply', 'execute', 'call'
+];
+
+function endpointSelector(input)
+{
+	if (input === undefined)
+		return undefined;
+	if (!input || typeof input !== 'object')
+		fail('An endpoint selector is required');
+	const category = input.category;
+	if ([ 1, 2, 3 ].includes(category)) {
+		const id = input.id;
+		if (!Number.isInteger(id) || id < 0 || id > 0xffffffff ||
+		    Object.keys(input).some(key => !['category', 'id'].includes(key)))
+			fail('Invalid numeric endpoint selector');
+		return freeze({category, id});
+	}
+	const number = category === 'field'     ? 1
+	               : category === 'command' ? 2
+	               : category === 'service' ? 3
+	                                        : 0;
+	const catalog = input.catalog, name = input.name;
+	if (!number || typeof catalog !== 'string' || typeof name !== 'string' ||
+	    Object.keys(input).some(key => !['category', 'catalog', 'name'].includes(key)))
+		fail('Invalid named endpoint selector');
+	return freeze({category : number, catalog, name});
+}
+
+function selectedEndpoint(selector, endpoints)
+{
+	const matches = endpoints.filter(
+	    row => row.category === selector.category &&
+	           ('id' in selector ? row.id === selector.id
+	                             : row.catalog === selector.catalog && row.name === selector.name));
+	if (matches.length !== 1)
+		fail(matches.length ? 'Endpoint selector is ambiguous' : 'Endpoint selector was not found');
+	return matches[0].key;
+}
+
+function connectionSnapshot(session)
+{
+	return freeze({
+		mode : session.mode,
+		state : session.state,
+		ready : session.ready,
+		session : session.session,
+		fingerprint : session.fingerprint,
+		recoveryRequired : session.recoveryRequired,
+		recoveryGeneration : session.recoveryGeneration,
+		lastError : session.lastError
+	});
+}
+
+/** Borrow a Session; this provider owns presentation state and no device lifecycle. */
+export function createSessionProvider({session, limits, endpoint} = {})
+{
+	if (!session || !['static', 'dynamic'].includes(session.mode) ||
+	    [ 'subscribe', 'read', 'writePreserving', 'command', 'service' ].some(
+	        name => typeof session[name] !== 'function'))
+		fail('An existing ConnectionSession with preserving Field editing is required');
+	const selector = endpointSelector(endpoint);
+	let disposed = false, queued = false, controls, unsubscribe;
+	let savedKey, savedFingerprint, selectorPending = selector !== undefined;
+	const base =
+	    session.mode === 'static'
+	        ? staticAdapter({client : session, metadata : session.metadata, sdk : session.sdk})
+	        : {
+		          mode : 'dynamic',
+		          describe : dynamicDescription,
+		          validate(id, value, schema) {
+		              encodeValue(schema, id, value);
+		          }
+	          };
+	const adapter = {
+		mode : session.mode,
+		identity : () => ({
+			ready : !disposed && session.ready === true,
+			session : session.session,
+			schema : session.mode === 'static' ? session.metadata : session.schema
+		}),
+		describe : base.describe,
+		validate : base.validate,
+		submit(row, operation, value, originalPayload) {
+		    const target = session.mode === 'static' ? row.binding : row.id;
+		    return operation === 'read'    ? session.read(target)
+		           : operation === 'write' ? session.writePreserving(target, value, originalPayload)
+		                                   : session[operation](target, value);
+		},
+		result : result =>
+		    ({operation : result.rawResult, valueStatus : result.valueStatus, value : result.value})
+	};
+	let members = sessionProviders.get(session);
+	if (!members) {
+		members = new Set();
+		sessionProviders.set(session, members);
+	}
+	const member = reason => {
+		if (!disposed)
+			controls.invalidateData(reason);
+	};
+
+	function invalidatePeers(reason, includeSelf)
+	{
+		for (const peer of [...members])
+			if ((includeSelf || peer !== member) && members.has(peer)) {
+				try {
+					peer(reason);
+				} catch { /* Presentation observers cannot change an accepted operation's ownership. */
+				}
+			}
+	}
+
+	const provider = presentation(adapter, limits, {
+		attach(value) {
+		    controls = value;
+		},
+		snapshot(state, data) {
+		    const {watch, batch, ...ordinary} = state;
+		    return freeze(
+		        {...ordinary, ...data, connection : connectionSnapshot(session), disposed});
+		},
+		acceptedMutation() {
+		    invalidatePeers('Data changed after a mutation in another view.', false);
+		}
+	});
+
+	function rememberSelection()
+	{
+		const state = provider.snapshot();
+		if (state.current && state.selected) {
+			savedKey = state.selected.key;
+			savedFingerprint = session.fingerprint;
+		}
+	}
+
+	function restoreSelection(initial = false)
+	{
+		const state = provider.snapshot();
+		if (!state.current || state.selected)
+			return;
+		if (selectorPending) {
+			try {
+				const key = selectedEndpoint(selector, state.endpoints);
+				if (provider.select(key))
+					selectorPending = false;
+			} catch (cause) {
+				selectorPending = false;
+				if (initial)
+					throw cause;
+				controls.reportError(String(cause.message || cause));
+			}
+		} else if (savedKey !== undefined && savedFingerprint === session.fingerprint) {
+			provider.select(savedKey);
+		}
+		rememberSelection();
+	}
+
+	function reconcile()
+	{
+		if (disposed)
+			return false;
+		if (!session.ready) {
+			provider.invalidate();
+			return false;
+		}
+		const current = provider.sync();
+		if (current)
+			restoreSelection();
+		return current;
+	}
+
+	function lifecycle()
+	{
+		if (disposed)
+			return;
+		if (!session.ready) {
+			controls.connectionChanged();
+			return;
+		}
+		if (queued)
+			return;
+		queued = true;
+		queueMicrotask(() => {
+			queued = false;
+			if (!disposed)
+				reconcile();
+		});
+	}
+
+	// Resolve a ready selector before registering any long-lived observers.
+	restoreSelection(true);
+	members.add(member);
+	const stopRemembering = provider.subscribe(rememberSelection);
+	try {
+		unsubscribe = session.subscribe(lifecycle);
+	} catch (cause) {
+		disposed = true;
+		members.delete(member);
+		stopRemembering();
+		provider.invalidate();
+		throw cause;
+	}
+	const publicProvider = Object.fromEntries(ordinaryMethods.map(name => [name, provider[name]]));
+	return freeze({
+		...publicProvider,
+		snapshot : provider.snapshot,
+		sync : reconcile,
+		dispose() {
+		    if (disposed)
+			    return;
+		    disposed = true;
+		    members.delete(member);
+		    stopRemembering();
+		    try {
+			    unsubscribe();
+		    } finally {
+			    controls.connectionChanged();
+		    }
+		},
+		invalidateData(
+		    reason =
+		        'Data changed outside this presentation. Cancel a stale draft or restart it.') {
+		    if (disposed)
+			    return;
+		    if (typeof reason !== 'string')
+			    fail('A data invalidation reason must be a string');
+		    invalidatePeers(reason, true);
+		}
+	});
 }
