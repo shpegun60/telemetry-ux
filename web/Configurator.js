@@ -617,6 +617,11 @@ function mountPresentation(element, provider, categoryFilter, now)
 		for (const [operation, result] of Object.entries(state.outcomes)) {
 			if (!result)
 				continue;
+			// Standalone legacy panels follow selection. A revoked Session may
+			// retain its own historical facts after that selection is cleared.
+			if (categoryFilter && !matchesSelection() &&
+			    !(state.connection && !state.current && result.historical === true))
+				continue;
 			if (categoryFilter &&
 			    (categoryFilter === 1   ? !['read', 'write', 'readback'].includes(operation)
 			     : categoryFilter === 2 ? operation !== 'command'

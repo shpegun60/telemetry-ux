@@ -633,6 +633,137 @@ export async function runElementChecks()
 	}
 	check(providers.reduce((sum, entry) => sum + entry.counters.io, 0) === 3,
 	      'only three explicit live button clicks invoke actions');
+	// Keep the original lifecycle assertions (including check 58) unchanged.
+	// A Session-only historical exception must not reveal ordinary legacy facts
+	// in a category panel whose current selection belongs elsewhere.
+	for (const sessionProvider of [false, true]) {
+		const source = fixture(sessionProvider ? 'Session categories' : 'Legacy categories');
+		const mounts = [
+			mountConfigurator, mountFieldEditor, mountCommandPanel, mountServicePanel,
+			mountWatchlist, mountBatchEditor
+		];
+		const roots = mounts.map(() => host('section'));
+		roots.forEach(element => document.body.append(element));
+		const mounted =
+		    mounts.map((mount, index) => mount(roots[index], {provider : source.provider}));
+		const operations = [ 'read', 'write', 'readback', 'command', 'service' ];
+		const own = [ operations, operations.slice(0, 3), [ 'command' ], [ 'service' ], [], [] ];
+		const phases = [
+			{label : 'current Field', current : true, category : 1, historical : false},
+			{label : 'current Command', current : true, category : 2, historical : false},
+			{label : 'current Service', current : true, category : 3, historical : false}, {
+				label : 'current mismatch with old facts',
+				current : true,
+				category : 2,
+				historical : true
+			},
+			{
+				label : 'current without selection',
+				current : true,
+				category : null,
+				historical : true
+			},
+			{
+				label : 'revoked unchecked history',
+				current : false,
+				category : null,
+				historical : false
+			},
+			{label : 'revoked missing history flag', current : false, category : null}, {
+				label : 'disconnected checked history',
+				current : false,
+				category : null,
+				historical : true
+			},
+			{
+				label : 'disconnected pending history',
+				current : false,
+				category : null,
+				historical : true,
+				pending : true
+			},
+			{
+				label : 'disposed while Session ready',
+				current : false,
+				category : null,
+				historical : true,
+				disposed : true
+			}
+		];
+		try {
+			for (const phase of phases) {
+				const outcomes =
+				    Object.fromEntries(operations.map(operation => [operation, {
+					                                      operation,
+					                                      status : phase.pending ? null : 0,
+					                                      dispatch : 0,
+					                                      endpointStatus : 0,
+					                                      session : 17,
+					                                      requestId : 1,
+					                                      valueStatus : 'Ok',
+					                                      endpointName : 'Original endpoint',
+					                                      name : phase.pending ? 'Pending' : 'Ok',
+					                                      display : phase.pending ? 'Pending' : 'Known result',
+					                                      historical : phase.historical
+				                                      }]));
+				source.publish({
+					current : phase.current,
+					disposed : Boolean(phase.disposed),
+					selected : phase.category === null ? null : {
+						key : phase.category + ':0',
+						category : phase.category,
+						id : 0,
+						catalog : 'Host',
+						name : 'Selected endpoint'
+					},
+					hasValue : false,
+					hasDraft : false,
+					hasResponse : false,
+					connection : sessionProvider ? {
+						mode : 'static',
+						session : 17,
+						state : phase.disposed || phase.current ? 'ready' : 'disconnected',
+						ready : Boolean(phase.disposed || phase.current)
+					}
+					                             : undefined,
+					outcomes,
+					actions : {
+						refresh : false,
+						beginEdit : false,
+						cancelEdit : false,
+						apply : false,
+						execute : false,
+						call : false
+					}
+				});
+				for (const [index, element] of roots.entries()) {
+					const expected =
+					    index === 0 ? operations
+					    : phase.category === index ||
+					            (!phase.current && sessionProvider && phase.historical === true)
+					        ? own[index]
+					        : [];
+					const actual = [...element.querySelectorAll('[data-role="outcome"]') ].map(
+					    line => line.dataset.operation);
+					check(JSON.stringify(actual) === JSON.stringify(expected),
+					      (sessionProvider ? 'Session ' : 'legacy ') + phase.label + ' panel ' +
+					          index + ' isolates outcomes');
+					for (const button of element.querySelectorAll('[data-action]'))
+						button.dispatchEvent(new Event('click'));
+				}
+				check(source.counters.io === 0,
+				      'history changes and retired controls never replay an operation');
+			}
+		} finally {
+			mounted.forEach(view => view.unmount());
+			roots.forEach(element => element.remove());
+		}
+		check(source.counters.subscriptions === source.counters.unsubscriptions &&
+		          source.listeners.size === 0,
+		      'outcome category matrix releases only its subscriptions');
+		check(source.counters.lifecycle === 0,
+		      'outcome category matrix never changes owner lifecycle');
+	}
 	return {
 		passed : true,
 		checks,

@@ -139,7 +139,7 @@ def main():
         run('chromium-real-websocket',[tools['browser_python'],'-B',HERE/'Browser.py','--device',device,
             '--public-root',public,'--data-dir',output/'browser'])
         browser=json.loads((output/'browser/summary.json').read_text(encoding='utf8'))
-        check(browser.get('passed') and set(browser.get('modes',{}))=={'static','dynamic'} and browser.get('checks',0)>=64,'Both browser modes and assertion floor')
+        check(browser.get('passed') and set(browser.get('modes',{}))=={'static','dynamic'} and browser.get('checks',0)>=100,'Both browser modes and assertion floor')
         report['browser']=browser
         report['source_sha256_after']=sources()
         report['installed_cpp_sha256_after']=inventory(sdk)

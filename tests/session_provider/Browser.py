@@ -109,18 +109,57 @@ def main():
                     check(snap('service')['hasResponse'],'Inspect publishes the current response')
                     # Every standalone panel keeps historical checked facts after revocation.
                     action(a,'refresh').click(); idle(a)
+                    # Own-category facts stay hidden while a ready provider's
+                    # selected endpoint belongs to another category. Switching
+                    # selection and synthetic old-control clicks submit no work.
+                    categories=(('a',a,'Accepted',2,'read'),
+                                ('command',command,'Inspect',3,'command'),
+                                ('service',service,'Config',1,'service'))
+                    before=state()
+                    for name,view,target,category,operation in categories:
+                        selected=page.evaluate('''({name,target,category})=>{
+                            const provider=suite.providers[name];
+                            const endpoint=provider.snapshot().endpoints.find(row=>row.name===target&&row.category===category);
+                            return provider.select(endpoint.key);
+                        }''',dict(name=name,target=target,category=category))
+                        check(selected and view.locator('[data-role="outcome"]').count()==0,
+                              name+' hides own history for a current category mismatch')
+                        view.locator('button[data-action]').evaluate_all(
+                            'buttons=>buttons.forEach(button=>button.dispatchEvent(new Event("click")))')
+                    check(state()==before,'Category reselection and retired controls never submit/replay work')
                     page.locator('#disconnect').click(); expect(page.locator('#status')).to_have_text('disconnected')
                     for view,operation in ((a,'read'),(command,'command'),(service,'service')):
                         expect(outcome(view,operation)).to_have_attribute('data-historical','true')
                         expect(outcome(view,operation)).to_contain_text('Historical')
+                        operations=view.locator('[data-role="outcome"]').evaluate_all(
+                            'nodes=>nodes.map(node=>node.dataset.operation)')
+                        allowed=['read','write','readback'] if operation=='read' else [operation]
+                        check(bool(operations) and all(item in allowed for item in operations),
+                              'Revoked standalone panel exposes only its own historical category')
                     check(not snap('a')['hasValue'] and not snap('service')['hasResponse'],'Revoked values and responses stay hidden')
                     check(a.locator('.tux-row[data-source="value"]').count()==0 and service.locator('.tux-row[data-source="response"]').count()==0,'Standalone DOM hides revoked values')
                     before=state(); page.locator('#reconnect').click(); expect(page.locator('#status')).to_have_text('ready')
-                    check(snap('a')['selected']['name']=='Config' and not snap('a')['hasValue'],'Same fingerprint restores selection without data')
+                    check(snap('a')['selected']['name']=='Accepted' and not snap('a')['hasValue'],'Same fingerprint restores the independently changed selection without data')
                     check(state()['reads']==before['reads'],'Reconnect causes no hidden read')
+                    for name,view,target,category,operation in categories:
+                        check(view.locator('[data-role="outcome"]').count()==0,
+                              name+' reconnect keeps old category history hidden under mismatched current selection')
+                    counts=lambda value:{key:value[key] for key in ('reads','writes','commands','services')}
+                    previous=state()
+                    for name,target,category in (('a','Config',1),('command','Accepted',2),('service','Inspect',3)):
+                        check(page.evaluate('''({name,target,category})=>{
+                            const provider=suite.providers[name];
+                            return provider.select(provider.snapshot().endpoints.find(row=>row.name===target&&row.category===category).key);
+                        }''',dict(name=name,target=target,category=category)), 'Explicit category reselect succeeds')
+                    check(counts(state())==counts(previous),'Restoring panel categories sends no read/Command/Service')
                     # Unmount during accepted work does not cancel the borrowed Session.
                     server.reply_delay_seconds=.3
                     action(command,'writes').check()
+                    page.evaluate('''async()=>{
+                        const {mountCommandPanel}=await import('telemetry-ux/web');
+                        const host=document.createElement('section');host.id='disposed-command';document.body.append(host);
+                        suite.outcomeObserver=mountCommandPanel(host,{provider:suite.providers.command});
+                    }''')
                     before=state(); action(command,'execute').click()
                     for _ in range(100):
                         if state()['commands']>before['commands']: break
@@ -130,6 +169,20 @@ def main():
                     check(page.evaluate('suite.providers.command.snapshot().disposed&&suite.session.ready'),'Unmount owns presentation only')
                     page.wait_for_function('suite.providers.command.snapshot().outcomes.command?.accepted===true')
                     check(snap('command')['outcomes']['command']['accepted'],'Pending facts finish after owned unmount')
+                    observer=page.locator('#disposed-command')
+                    expect(outcome(observer,'command')).to_have_attribute('data-historical','true')
+                    expect(outcome(observer,'command')).to_contain_text('Accepted')
+                    check(snap('command')['connection']['ready'] and not snap('command')['current'],
+                          'Disposed provider retains history while the shared Session is ready')
+                    terminal=state()
+                    page.evaluate('suite.providers.a.dispose();suite.providers.service.dispose()')
+                    for name,view,operation in (('a',a,'read'),('service',service,'service')):
+                        expect(outcome(view,operation)).to_have_attribute('data-historical','true')
+                        check(snap(name)['disposed'] and snap(name)['connection']['ready'],
+                              name+' disposed history is independent of live connection readiness')
+                    check(counts(state())==counts(terminal) and terminal['commands']==before['commands']+1 and
+                          terminal['services']==before['services'], 'History projection/disposal never repeats a Command or Service')
+                    page.evaluate('suite.outcomeObserver.unmount()')
                     server.reply_delay_seconds=0
                     page.evaluate('suite.views.borrowed.unmount()')
                     check(page.evaluate('!suite.borrowed.snapshot().disposed&&suite.session.ready'),'Explicit provider mounts borrow presentation')
