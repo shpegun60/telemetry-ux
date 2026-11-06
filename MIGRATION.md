@@ -129,3 +129,14 @@ API; the existing dynamic Inspector remains a separate provider of that same
 view. The static provider supports an explicit Individual FieldRead Watchlist
 through the same generated API/FIFO. It exposes no ReadMany capability. Hosts
 can hide polling controls with `watchlistVisible: false`.
+
+## Shared headless WebSocket carrier
+
+The borrowed WebSocket carrier now lives in the SDK under
+`telemetry-sdk/transports/websocket/carrier`. Existing
+`telemetry-ux/transports/websocket` imports re-export that implementation and its
+types. Upgrade the pinned SDK/UX pair together; a previous development tarball
+with the same `0.1.0` label may not have the new export. Browser import maps and
+deployed assets must include the SDK carrier module. The reference demo and
+assets exporter do so without pulling in the optional owned Session coordinator.
+There is no change to borrowed socket ownership, frame handling or execution.

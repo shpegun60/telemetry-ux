@@ -14,7 +14,8 @@ import stat
 from urllib.parse import unquote, urlsplit
 
 
-SDK_FILES = ('LICENSE', 'lib/client/web/Client.js', 'web/telemetry.js', 'web/DynamicClient.js')
+SDK_FILES = ('LICENSE', 'lib/client/web/Client.js', 'web/telemetry.js', 'web/DynamicClient.js',
+             'web/WebSocketTransport.js')
 UX_FILES = ('LICENSE', 'web/index.js', 'web/Provider.js', 'web/ProviderContract.js',
             'web/Configurator.js', 'web/Element.js', 'web/WebSocketTransport.js',
             'web/Configurator.css')
@@ -22,6 +23,7 @@ IMPORTS = {
     'telemetry-sdk/client': 'telemetry-sdk/lib/client/web/Client.js',
     'telemetry-sdk/runtime': 'telemetry-sdk/web/telemetry.js',
     'telemetry-sdk/dynamic': 'telemetry-sdk/web/DynamicClient.js',
+    'telemetry-sdk/transports/websocket/carrier': 'telemetry-sdk/web/WebSocketTransport.js',
     'telemetry-ux/web': 'telemetry-ux/web/index.js',
     'telemetry-ux/transports/websocket': 'telemetry-ux/web/WebSocketTransport.js',
 }
