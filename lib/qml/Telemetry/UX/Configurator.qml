@@ -48,7 +48,7 @@ Control {
                         clip: true
                         model: configurator.provider.endpoints
                         columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
-                        onWidthChanged: Qt.callLater(function() { endpointTree.forceLayout() })
+                        onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
                         delegate: TreeViewDelegate {
                             id: endpointDelegate
                             objectName: "endpointRow"
@@ -80,6 +80,7 @@ Control {
                         }
                         ScrollBar.vertical: ScrollBar {}
                         Component.onCompleted: Qt.callLater(function() {
+                            if (!endpointTree) return
                             endpointTree.forceLayout()
                             endpointTree.expandRecursively(0, 2)
                         })
@@ -93,11 +94,14 @@ Control {
                 SplitView.minimumWidth: 360
             }
         }
-        Pane {
-            objectName: "watchlistPane"
-            visible: configurator.watchlistVisible
+        Loader {
             Layout.fillWidth: true
-            Layout.preferredHeight: (watchPanelExpanded.checked ? 220 : 54)
+            Layout.preferredHeight: item ? item.implicitHeight : 0
+            active: configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
+            visible: configurator.watchlistVisible && active
+            sourceComponent: Component { Pane {
+            objectName: "watchlistPane"
+            implicitHeight: (watchPanelExpanded.checked ? 220 : 54)
                 + (watchStatusLabel.visible ? watchStatusLabel.implicitHeight + 6 : 0)
             background: Rectangle { color: "#17202b"; radius: 10 }
             ColumnLayout {
@@ -208,6 +212,7 @@ Control {
                     Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
                 }
             }
+            } }
         }
         Label {
             textFormat: Text.PlainText
@@ -222,7 +227,7 @@ Control {
     Connections {
         target: configurator.provider.endpoints
         function onModelReset() {
-            Qt.callLater(function() { endpointTree.expandRecursively(0, 2) })
+            Qt.callLater(function() { if (endpointTree) endpointTree.expandRecursively(0, 2) })
         }
     }
 }

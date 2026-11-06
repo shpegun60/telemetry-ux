@@ -9,6 +9,7 @@ endif()
 qt_standard_project_setup(REQUIRES 6.4)
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/qml")
 if(NOT TARGET TelemetryUX::configurator)
+    set(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR ON)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/qml"
                      "${CMAKE_CURRENT_BINARY_DIR}/telemetry-ux-qml")
 endif()
@@ -29,6 +30,7 @@ target_compile_features(inspector_qml_support PUBLIC cxx_std_20)
 target_compile_definitions(inspector_qml_support PUBLIC QT_NO_KEYWORDS QT_NO_FOREACH)
 target_include_directories(inspector_qml_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(inspector_qml_support PUBLIC Qt6::Core Qt6::Network TelemetryUX::configurator
+    TelemetryUX::dynamic_configurator
     Telemetry::inspector Telemetry::workbench Telemetry::read_many_workbench Telemetry::encoded_backend Telemetry::encoded_server Telemetry::core Telemetry::tcp_server Telemetry::qt_transport)
 if(INSPECTOR_ENABLE_SERIAL)
     target_compile_definitions(inspector_qml_support PUBLIC INSPECTOR_ENABLE_SERIAL=1)

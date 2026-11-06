@@ -9,6 +9,7 @@
 #pragma once
 
 #include "Models.hpp"
+#include <Telemetry/UX/DynamicConfiguratorProvider.hpp>
 #include "WatchlistModel.hpp"
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
@@ -143,6 +144,9 @@ public:
 	Q_INVOKABLE bool connectDemo();
 	Q_INVOKABLE bool connectWritableDemo();
 	Q_INVOKABLE bool connectReadManyDemo();
+	// Each returned provider has independent selection/draft/snapshot and borrows
+	// this controller's one owner/FIFO. The controller owns the QObject by default.
+	Q_INVOKABLE QObject* createConfigurator();
 	Q_INVOKABLE bool connectTcp(const QString& host, quint16 port = 5577);
 	Q_INVOKABLE bool loadDescriptor(const QUrl& path);
 	Q_INVOKABLE bool openDescriptorPath(const QString& path);
@@ -268,6 +272,7 @@ public:
 	Workbench& inspector() noexcept;
 
 Q_SIGNALS:
+	void configuratorOperationFinished(QVariantMap facts);
 	void stateChanged();
 	void readFinished(bool published);
 	void applyFinished(bool confirmed);
@@ -281,8 +286,9 @@ private:
 		std::optional<std::pair<bool, bool>> service;
 	};
 	struct State;
-	std::unique_ptr<State> state_;
-	std::unique_ptr<State> retiredState_;
+	std::shared_ptr<State> state_;
+	std::shared_ptr<State> retiredState_;
+	std::unique_ptr<telemetry::ux::DynamicConfiguratorBinding> dynamicBinding_;
 	std::unique_ptr<telemetry::integration::qt::DeviceTransport> transport_;
 	EndpointModel endpoints_;
 	ValueModel values_;

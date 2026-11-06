@@ -804,6 +804,52 @@ void writeHistoryChecks()
 	CHECK(finished.count() == 3 && !controller.busy());
 	std::puts("Inspector write history: success=1 unknown=1 reset=1 refused=1 callbacks=3");
 }
+
+void independentProviderBridgeChecks()
+{
+	ui::InspectorController controller;
+	CHECK(controller.connectWritableDemo());
+	using Provider = telemetry::ux::DynamicConfiguratorProvider;
+	auto* reader = qobject_cast<Provider*>(controller.createConfigurator());
+	auto* caller = qobject_cast<Provider*>(controller.createConfigurator());
+	CHECK(reader && caller && reader != caller);
+	auto* fields = qobject_cast<ui::EndpointModel*>(reader->endpoints());
+	auto* services = qobject_cast<ui::EndpointModel*>(caller->endpoints());
+	CHECK(fields && services && fields != services);
+	const auto oldIndex = endpoint(*fields, 1, 0);
+	CHECK(reader->selectEndpoint(oldIndex));
+	CHECK(reader->refresh());
+	caller->setAllowMutations(true);
+	CHECK(caller->selectEndpoint(endpoint(*services, 3, 0)));
+	CHECK(caller->canCallService() && caller->callService());
+	CHECK(controller.inspector().pending() == 2);
+	QSignalSpy facts{&controller, &ui::InspectorController::configuratorOperationFinished};
+	delete caller; // The accepted native request is retained by the binding.
+	for (int i = 0; i < 8; ++i)
+		controller.pump();
+	CHECK(controller.demoServiceCount() == 1 && controller.inspector().pending() == 0);
+	bool retiredService = false;
+	for (const auto& record : facts) {
+		const auto value = record[0].toMap();
+		if (value.value("operation").toUInt() == 3 && value.value("panelRetired").toBool())
+			retiredService = value.value("succeeded").toBool();
+	}
+	CHECK(retiredService && reader->connected() && !reader->busy());
+	CHECK(reader->refresh());
+	for (int i = 0; i < 4; ++i)
+		controller.pump();
+	CHECK(reader->values()->rowCount() == 1 && controller.demoServiceCount() == 1);
+	CHECK(controller.connectDemo());
+	CHECK(reader->connected() && reader->selection().isEmpty());
+	CHECK(!reader->selectEndpoint(oldIndex) && !reader->allowMutations());
+	CHECK(reader->selectEndpoint(endpoint(*fields, 1, 0)) && reader->refresh());
+	for (int i = 0; i < 4; ++i)
+		controller.pump();
+	CHECK(reader->values()->rowCount() == 1);
+	controller.disconnectDevice();
+	CHECK(!reader->connected() && !reader->values()->rowCount());
+	delete reader;
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -815,6 +861,7 @@ int main(int argc, char** argv)
 	workbenchChecks();
 	disconnectApplyChecks();
 	writeHistoryChecks();
+	independentProviderBridgeChecks();
 	std::printf("Inspector Qt checks=%u reads=%u Qt=%s\n", checks, reads, qVersion());
 	return 0;
 }

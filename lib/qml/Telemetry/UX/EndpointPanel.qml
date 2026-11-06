@@ -97,11 +97,12 @@ Pane {
                 clip: true
                 model: panel.provider.values
                 Component.onCompleted: Qt.callLater(function() {
+                    if (!valueTree) return
                     valueTree.forceLayout()
                     valueTree.expand(0)
                 })
                 columnWidthProvider: function() { return Math.max(1, valueTree.width) }
-                onWidthChanged: Qt.callLater(function() { valueTree.forceLayout() })
+                onWidthChanged: Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
                 delegate: TreeViewDelegate {
                     id: valueDelegate
                     objectName: "valueRow"
@@ -155,8 +156,13 @@ Pane {
                 }
                 ScrollBar.vertical: ScrollBar {}
                 Label {
+                    parent: valueTree
+                    objectName: "emptyValueLabel"
                     textFormat: Text.PlainText
                     anchors.centerIn: parent
+                    width: Math.max(0, parent.width - 24)
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
                     visible: valueTree.rows === 0
                     text: panel.provider.busy
                         ? panel.provider.serviceSelected ? "Waiting for the Service result…" : panel.provider.commandSelected ? "Waiting for the Command result…" : "Reading the selected Field…"
@@ -188,11 +194,12 @@ Pane {
                     clip: true
                     model: panel.provider.responses
                     Component.onCompleted: Qt.callLater(function() {
+                        if (!responseTree) return
                         responseTree.forceLayout()
                         responseTree.expand(0)
                     })
                     columnWidthProvider: function() { return Math.max(1, responseTree.width) }
-                    onWidthChanged: Qt.callLater(function() { responseTree.forceLayout() })
+                    onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
                     delegate: TreeViewDelegate {
                         id: responseDelegate
                         objectName: "responseRow"
@@ -223,8 +230,13 @@ Pane {
                     }
                     ScrollBar.vertical: ScrollBar {}
                     Label {
+                        parent: responseTree
+                        objectName: "emptyResponseLabel"
                         textFormat: Text.PlainText
                         anchors.centerIn: parent
+                        width: Math.max(0, parent.width - 24)
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                         visible: responseTree.rows === 0
                         text: panel.provider.busy ? "Waiting for a response…" : "No owned response value."
                         color: "#99abbf"
@@ -285,6 +297,7 @@ Pane {
         target: panel.provider.values
         function onModelReset() {
             Qt.callLater(function() {
+                if (!valueTree) return
                 valueTree.forceLayout()
                 valueTree.expand(0)
             })
@@ -294,6 +307,7 @@ Pane {
         target: panel.provider.responses
         function onModelReset() {
             Qt.callLater(function() {
+                if (!responseTree) return
                 responseTree.forceLayout()
                 responseTree.expand(0)
             })
@@ -304,6 +318,7 @@ Pane {
         function onReadFinished(published) {
             if (published)
                 Qt.callLater(function() {
+                    if (!valueTree) return
                     valueTree.forceLayout()
                     valueTree.expand(0)
                 })

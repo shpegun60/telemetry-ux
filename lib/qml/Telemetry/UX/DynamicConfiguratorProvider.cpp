@@ -1,0 +1,807 @@
+// Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
+#include "DynamicConfiguratorProvider.hpp"
+#include "ScalarEditor.hpp"
+#include <QtCore/QPointer>
+#include <QtCore/QSet>
+#include <QtCore/QThread>
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <optional>
+#include <vector>
+
+namespace telemetry::ux {
+namespace cl = telemetry::client;
+namespace ins = telemetry::integration::inspector;
+namespace wb = telemetry::integration::workbench;
+namespace rt = telemetry::runtime;
+
+class DynamicViewState {
+public:
+	// A provider may outlive its binding after owner retirement. Keep backing
+	// storage alive independently, and destroy it after the native view.
+	std::shared_ptr<void> storage;
+	// These are panel response bytes, not a second client/transport/FIFO.
+	std::array<std::byte, 65536> response{};
+	WorkbenchView view;
+	enum class Action {
+		None,
+		Read,
+		Apply,
+		Command,
+		Service
+	} action = Action::None;
+	std::optional<ins::ReadResult> read;
+	std::optional<wb::ApplyResult> applied;
+	std::optional<ins::OperationResult> commanded;
+	std::optional<wb::ServiceResult> serviced;
+	bool retired = false, dirty = false, staleData = false;
+	bool eventReported = true;
+	std::uint32_t endpointId = 0, submittedSession = 0;
+	std::uint64_t sequence = 0;
+
+	DynamicViewState(Workbench& owner, std::shared_ptr<void> token)
+	    : storage(std::move(token)), view(owner, response)
+	{}
+
+	void retire()
+	{
+		if (!retired) {
+			retired = true;
+			view.retire();
+			dirty = true;
+		}
+	}
+};
+
+struct DynamicConfiguratorBinding::Impl {
+	Workbench& owner;
+	std::shared_ptr<void> storage;
+	std::vector<std::shared_ptr<DynamicViewState>> views;
+	std::uint64_t admission;
+	std::uint32_t session;
+	bool retired = false, allowed = false, notifying = false;
+
+	Impl(Workbench& value, std::shared_ptr<void> token)
+	    : owner(value), storage(std::move(token)), admission(value.snapshotInfo().admission),
+	      session(value.session())
+	{}
+
+	bool current() const
+	{
+		return storage && !retired && owner.isCurrent() && owner.session() == session &&
+		       owner.snapshotInfo().admission == admission;
+	}
+};
+
+DynamicConfiguratorBinding::DynamicConfiguratorBinding(Workbench& owner,
+                                                       std::shared_ptr<void> ownerStorage,
+                                                       QObject* parent)
+    : QObject(parent), d(std::make_unique<Impl>(owner, std::move(ownerStorage)))
+{}
+
+DynamicConfiguratorBinding::~DynamicConfiguratorBinding()
+{
+	retire();
+	// The host owns progress and transport retirement. Destroying a registry
+	// cannot silently release a callback's native buffers before completion.
+	if (!drained())
+		qFatal("DynamicConfiguratorBinding must be drained before destruction");
+	poll();
+}
+
+bool DynamicConfiguratorBinding::current() const
+{
+	return d->current();
+}
+
+bool DynamicConfiguratorBinding::drained() const
+{
+	return std::all_of(d->views.begin(), d->views.end(), [](const auto& state) {
+		return state->view.drained();
+	});
+}
+
+bool DynamicConfiguratorBinding::mutationsAllowed() const
+{
+	return current() && d->allowed;
+}
+
+void DynamicConfiguratorBinding::setMutationsAllowed(bool allowed)
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	if (d->allowed == allowed)
+		return;
+	d->allowed = allowed;
+	Q_EMIT changed();
+}
+
+std::shared_ptr<DynamicViewState> DynamicConfiguratorBinding::acquire()
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	if (!current())
+		return {};
+	auto state = std::make_shared<DynamicViewState>(d->owner, d->storage);
+	if (state->view.synchronize() != cl::Status::Ok)
+		return {};
+	d->views.push_back(state);
+	return state;
+}
+
+void DynamicConfiguratorBinding::retire()
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	if (d->retired)
+		return;
+	d->retired = true;
+	d->allowed = false;
+	for (const auto& state : d->views)
+		state->retire();
+}
+
+void DynamicConfiguratorBinding::poll()
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	if (d->notifying)
+		return;
+	if (!current())
+		retire();
+	const bool dirty = std::any_of(d->views.begin(), d->views.end(), [](const auto& state) {
+		return state->dirty;
+	});
+	std::vector<QVariantMap> completed;
+	for (const auto& state : d->views) {
+		if (state->eventReported)
+			continue;
+		const ins::OperationResult* operation = nullptr;
+		if (state->read)
+			operation = &state->read->operation;
+		else if (state->applied)
+			operation = &state->applied->write;
+		else if (state->commanded)
+			operation = &*state->commanded;
+		else if (state->serviced)
+			operation = &state->serviced->operation;
+		if (!operation)
+			continue;
+		QVariantMap facts{
+		    {QStringLiteral("operation"), static_cast<unsigned>(operation->operation)},
+		    {QStringLiteral("status"), static_cast<unsigned>(operation->status)},
+		    {QStringLiteral("dispatch"), operation->dispatch},
+		    {QStringLiteral("endpointStatus"), operation->endpointStatus},
+		    {QStringLiteral("succeeded"), operation->succeeded()},
+		    {QStringLiteral("accepted"), operation->accepted()},
+		    {QStringLiteral("executed"), operation->executed()},
+		    {QStringLiteral("session"), state->submittedSession},
+		    {QStringLiteral("endpointId"), state->endpointId},
+		    {QStringLiteral("sequence"), QString::number(state->sequence)},
+		    {QStringLiteral("panelRetired"), state->retired}};
+		if (state->applied) {
+			facts.insert(QStringLiteral("refreshAttempted"), state->applied->refreshAttempted);
+			facts.insert(QStringLiteral("refreshPublished"), state->applied->refresh.published);
+		}
+		if (state->serviced) {
+			facts.insert(QStringLiteral("published"), state->serviced->published);
+			facts.insert(QStringLiteral("valueStatus"),
+			             static_cast<unsigned>(state->serviced->valueStatus));
+		}
+		state->eventReported = true;
+		completed.push_back(std::move(facts));
+	}
+	// Reclamation occurs after the native completion/publication stack returned.
+	std::erase_if(d->views, [](const auto& state) {
+		return state->retired && state->view.drained() && state.use_count() == 1;
+	});
+	if (dirty || !completed.empty()) {
+		d->notifying = true;
+		QPointer<DynamicConfiguratorBinding> alive(this);
+		for (const auto& facts : completed) {
+			Q_EMIT operationFinished(facts);
+			if (!alive)
+				return;
+		}
+		Q_EMIT changed();
+		if (alive)
+			d->notifying = false;
+	}
+}
+
+void DynamicConfiguratorBinding::mutationAccepted(const std::shared_ptr<DynamicViewState>& origin)
+{
+	QPointer<DynamicConfiguratorBinding> alive(this);
+	for (const auto& state : d->views) {
+		if (state == origin || state->retired)
+			continue;
+		state->view.invalidateData();
+		state->staleData = state->dirty = true;
+	}
+	if (origin)
+		Q_EMIT managedMutationAccepted();
+	if (alive)
+		poll();
+}
+
+void DynamicConfiguratorBinding::invalidateData()
+{
+	mutationAccepted({});
+}
+
+namespace {
+QString operationText(const ins::OperationResult& result)
+{
+	if (result.status == cl::Status::OutcomeUnknown)
+		return QStringLiteral("OutcomeUnknown - may have executed; no automatic retry");
+	if (result.accepted())
+		return QStringLiteral("Accepted - execution is not confirmed");
+	if (result.executed())
+		return QStringLiteral("Executed");
+	return QStringLiteral("Status %1 - dispatch %2 - endpoint %3")
+	    .arg(static_cast<unsigned>(result.status))
+	    .arg(result.dispatch)
+	    .arg(result.endpointStatus);
+}
+
+} // namespace
+
+struct DynamicConfiguratorProvider::Impl {
+	QPointer<DynamicConfiguratorProvider> q;
+	QPointer<DynamicConfiguratorBinding> binding, desired;
+	std::shared_ptr<DynamicViewState> state;
+	EndpointModel endpoints;
+	ValueModel values, responses;
+	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
+	                                     service;
+	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
+	int category = 0;
+	bool allowed = false, updating = false;
+	QSet<quintptr> invalid;
+	QMetaObject::Connection changed, destroyed;
+
+	explicit Impl(DynamicConfiguratorProvider* owner) : q(owner)
+	{}
+
+	bool current() const
+	{
+		return binding && binding->current() && state && !state->retired && state->view.isCurrent();
+	}
+
+	bool busy() const
+	{
+		return state && state->action != DynamicViewState::Action::None;
+	}
+
+	bool idle() const
+	{
+		return current() && !busy() && !updating && !endpoints.changing() && !values.changing() &&
+		       !responses.changing();
+	}
+
+	bool mutate() const
+	{
+		return idle() && allowed && binding->mutationsAllowed() && !state->staleData;
+	}
+
+	QString history(const QString& value, std::uint32_t origin) const
+	{
+		return !value.isEmpty() && (!current() || origin != state->view.session())
+		           ? value + QStringLiteral(" - previous session")
+		           : value;
+	}
+
+	void notify()
+	{
+		if (q)
+			Q_EMIT q->stateChanged();
+	}
+
+	void sync()
+	{
+		if (updating)
+			return;
+		// The host must first receive its durable completion record. A permission
+		// notification between native progress and poll cannot consume that record.
+		if (state && !state->eventReported &&
+		    (state->read || state->applied || state->commanded || state->serviced))
+			return;
+		updating = true;
+		std::optional<bool> readDone, applyDone;
+		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
+		if (state) {
+			if (state->read) {
+				const auto result = *state->read;
+				state->read.reset();
+				state->action = DynamicViewState::Action::None;
+				const auto snapshot = state->view.snapshotInfo();
+				readDone = current() && !state->staleData && result.published && snapshot.ready &&
+				           snapshot.revision == result.revision;
+				status =
+				    *readDone ? QStringLiteral("Read complete") : operationText(result.operation);
+			}
+			if (state->applied) {
+				const auto result = *state->applied;
+				state->applied.reset();
+				state->action = DynamicViewState::Action::None;
+				applyDone = result.writeCompleted && result.write.succeeded() &&
+				            result.refreshCompleted && result.refresh.operation.succeeded() &&
+				            result.refresh.published;
+				write = *applyDone ? QStringLiteral("Applied - confirmed by fresh Field read")
+				        : result.writeCompleted && result.write.succeeded()
+				            ? QStringLiteral("Applied - readback unconfirmed")
+				            : operationText(result.write);
+				status = write;
+			}
+			if (state->commanded) {
+				const auto result = *state->commanded;
+				state->commanded.reset();
+				state->action = DynamicViewState::Action::None;
+				command = status = operationText(result);
+				commandDone = {result.executed(), result.accepted()};
+			}
+			if (state->serviced) {
+				const auto result = *state->serviced;
+				state->serviced.reset();
+				state->action = DynamicViewState::Action::None;
+				serviceDone = {result.operation.succeeded(), result.published};
+				service = status = result.operation.succeeded()
+				                       ? result.published
+				                             ? QStringLiteral("Completed - response published")
+				                             : QStringLiteral("Completed - value status %1")
+				                                   .arg(static_cast<unsigned>(result.valueStatus))
+				                       : operationText(result.operation);
+			}
+			if (!current()) {
+				allowed = false;
+				category = 0;
+				selection.clear();
+				responseEndpoint.clear();
+				invalid.clear();
+				values.clear();
+				responses.clear();
+				endpoints.clear();
+			} else if (state->dirty) {
+				if (state->staleData) {
+					values.clear();
+					responses.clear();
+					invalid.clear();
+					status = QStringLiteral(
+					    "Data changed in another panel - read or prepare arguments again");
+				} else {
+					values.resetSnapshot(state->view);
+					responses.resetServiceResponse(state->view);
+				}
+			}
+			state->dirty = false;
+		}
+		updating = false;
+		QPointer<DynamicConfiguratorProvider> alive = q;
+		notify();
+		if (alive && readDone)
+			Q_EMIT alive->readFinished(*readDone);
+		if (alive && applyDone)
+			Q_EMIT alive->applyFinished(*applyDone);
+		if (alive && commandDone)
+			Q_EMIT alive->commandFinished(commandDone->first, commandDone->second);
+		if (alive && serviceDone)
+			Q_EMIT alive->serviceFinished(serviceDone->first, serviceDone->second);
+	}
+};
+
+DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBinding* binding,
+                                                         QObject* parent)
+    : QObject(parent), d(std::make_shared<Impl>(this))
+{
+	setBinding(binding);
+}
+
+DynamicConfiguratorProvider::~DynamicConfiguratorProvider()
+{
+	if (d->state)
+		d->state->retire();
+	QObject::disconnect(d->changed);
+	QObject::disconnect(d->destroyed);
+}
+
+void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding)
+{
+	auto p = d;
+	QPointer<DynamicConfiguratorProvider> alive(this);
+	QPointer<DynamicConfiguratorBinding> target(binding);
+	if (p->updating || (binding == p->binding && (!p->state || !p->state->retired)))
+		return;
+	if (binding && binding->thread() != thread())
+		return;
+	// Host replacement settles the old owner first. Never move accepted work to
+	// a different binding. A caller may retry attachment after the old completion.
+	if (p->busy()) {
+		p->desired = binding;
+		if (p->state)
+			p->state->retire();
+		return;
+	}
+	if (p->state)
+		p->state->retire();
+	QObject::disconnect(p->changed);
+	QObject::disconnect(p->destroyed);
+	p->updating = true;
+	p->values.clear();
+	p->responses.clear();
+	p->endpoints.clear();
+	if (!alive)
+		return;
+	p->state.reset();
+	p->binding = target;
+	p->desired = target;
+	p->allowed = false;
+	p->category = 0;
+	p->selection.clear();
+	p->responseEndpoint.clear();
+	p->invalid.clear();
+	if (target) {
+		p->state = target->acquire();
+		std::weak_ptr<Impl> weak = p;
+		p->changed = connect(target, &DynamicConfiguratorBinding::changed, alive, [weak] {
+			if (auto state = weak.lock()) {
+				state->sync();
+				if (state->q && !state->busy() &&
+				    (state->desired != state->binding ||
+				     (state->state && state->state->retired && state->binding &&
+				      state->binding->current())))
+					state->q->setBinding(state->desired);
+			}
+		});
+		p->destroyed = connect(target, &QObject::destroyed, alive, [weak] {
+			if (auto state = weak.lock())
+				state->sync();
+		});
+		if (p->state)
+			p->endpoints.rebuild(p->state->view);
+	}
+	p->status =
+	    p->current() ? QStringLiteral("Select an endpoint") : QStringLiteral("Not connected");
+	p->updating = false;
+	p->notify();
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::endpoints() const
+{
+	return &d->endpoints;
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::values() const
+{
+	return &d->values;
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::responses() const
+{
+	return &d->responses;
+}
+
+QString DynamicConfiguratorProvider::selection() const
+{
+	return d->selection;
+}
+
+QString DynamicConfiguratorProvider::serviceResponseEndpoint() const
+{
+	return d->current() && d->responses.rowCount() ? d->responseEndpoint : QString{};
+}
+
+bool DynamicConfiguratorProvider::connected() const
+{
+	return d->current();
+}
+
+bool DynamicConfiguratorProvider::busy() const
+{
+	return d->busy();
+}
+
+bool DynamicConfiguratorProvider::editing() const
+{
+	return d->current() && d->state->view.editing();
+}
+
+bool DynamicConfiguratorProvider::allowMutations() const
+{
+	return d->allowed && d->binding && d->binding->mutationsAllowed();
+}
+
+void DynamicConfiguratorProvider::setAllowMutations(bool allowed)
+{
+	auto p = d;
+	if (p->updating)
+		return;
+	p->allowed = allowed && p->current() && p->binding->mutationsAllowed();
+	p->notify();
+}
+
+bool DynamicConfiguratorProvider::canEdit() const
+{
+	return d->mutate() && d->state->view.canEdit();
+}
+
+bool DynamicConfiguratorProvider::canApply() const
+{
+	return d->mutate() && d->state->view.canApply() && d->invalid.isEmpty();
+}
+
+bool DynamicConfiguratorProvider::canRefresh() const
+{
+	return d->idle() && d->category == 1;
+}
+
+bool DynamicConfiguratorProvider::commandSelected() const
+{
+	return d->current() && d->category == 2;
+}
+
+bool DynamicConfiguratorProvider::canExecute() const
+{
+	return d->mutate() && d->state->view.canExecute() && d->invalid.isEmpty();
+}
+
+bool DynamicConfiguratorProvider::serviceSelected() const
+{
+	return d->current() && d->category == 3;
+}
+
+bool DynamicConfiguratorProvider::canCallService() const
+{
+	return d->mutate() && d->state->view.canCallService() && d->invalid.isEmpty();
+}
+
+QString DynamicConfiguratorProvider::writeOutcome() const
+{
+	return d->history(d->write, d->writeSession);
+}
+
+QString DynamicConfiguratorProvider::commandOutcome() const
+{
+	return d->history(d->command, d->commandSession);
+}
+
+QString DynamicConfiguratorProvider::serviceOutcome() const
+{
+	return d->history(d->service, d->serviceSession);
+}
+
+QString DynamicConfiguratorProvider::statusText() const
+{
+	return d->status;
+}
+
+bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
+{
+	auto p = d;
+	if (!p->idle())
+		return false;
+	const auto endpoint = p->endpoints.endpoint(index);
+	if (endpoint.isEmpty())
+		return false;
+	const auto id = endpoint.value(QStringLiteral("id")).toUInt();
+	const auto category = endpoint.value(QStringLiteral("category")).toInt();
+	cl::Status status = cl::Status::InvalidArgument;
+	if (category == 1) {
+		const auto field = p->state->view.bindField(id);
+		if (field)
+			status = p->state->view.selectField(field.endpoint);
+	} else if (category == 2) {
+		const auto endpoint = p->state->view.bindCommand(id);
+		if (endpoint)
+			status = p->state->view.selectCommand(endpoint.endpoint);
+	} else if (category == 3) {
+		const auto endpoint = p->state->view.bindService(id);
+		if (endpoint)
+			status = p->state->view.selectService(endpoint.endpoint);
+	}
+	if (status != cl::Status::Ok) {
+		p->status = QStringLiteral("Selection refused: %1").arg(static_cast<unsigned>(status));
+		p->notify();
+		return false;
+	}
+	p->updating = true;
+	p->selection = endpoint.value(QStringLiteral("path")).toString();
+	p->category = category;
+	p->state->endpointId = id;
+	p->invalid.clear();
+	p->state->staleData = false;
+	p->values.resetSnapshot(p->state->view);
+	p->responses.clear();
+	p->status = category == 1
+	                ? QStringLiteral("Press Refresh to read")
+	                : QStringLiteral("Arguments start at canonical zero; no request sent");
+	p->updating = false;
+	p->notify();
+	return true;
+}
+
+bool DynamicConfiguratorProvider::refresh()
+{
+	auto p = d;
+	if (!canRefresh())
+		return false;
+	auto state = p->state;
+	const auto submitted = state->view.refresh([state](const ins::ReadResult& value) noexcept {
+		state->read = value;
+		state->dirty = true;
+	});
+	if (!submitted) {
+		p->status = QStringLiteral("Read refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->notify();
+		return false;
+	}
+	state->action = DynamicViewState::Action::Read;
+	state->staleData = false;
+	state->submittedSession = state->view.session();
+	state->sequence = submitted.handle.sequence;
+	state->eventReported = false;
+	p->updating = true;
+	p->values.clear();
+	p->updating = false;
+	p->status = QStringLiteral("Read pending");
+	p->notify();
+	return true;
+}
+
+bool DynamicConfiguratorProvider::beginEdit()
+{
+	auto p = d;
+	if (!canEdit())
+		return false;
+	if (p->state->view.beginEdit() != rt::Status::Ok)
+		return false;
+	p->updating = true;
+	p->invalid.clear();
+	p->values.resetSnapshot(p->state->view);
+	p->updating = false;
+	p->notify();
+	return true;
+}
+
+void DynamicConfiguratorProvider::cancelEdit()
+{
+	auto p = d;
+	if (!p->idle())
+		return;
+	p->state->view.cancelEdit();
+	p->state->staleData = false;
+	p->invalid.clear();
+	p->updating = true;
+	p->values.resetSnapshot(p->state->view);
+	p->updating = false;
+	p->notify();
+}
+
+bool DynamicConfiguratorProvider::apply()
+{
+	auto p = d;
+	if (!canApply())
+		return false;
+	auto state = p->state;
+	const auto submitted = state->view.apply([state](const wb::ApplyResult& value) noexcept {
+		state->applied = value;
+		state->dirty = true;
+	});
+	if (!submitted) {
+		p->status =
+		    QStringLiteral("Write refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->notify();
+		return false;
+	}
+	state->action = DynamicViewState::Action::Apply;
+	p->writeSession = state->view.session();
+	state->submittedSession = state->view.session();
+	state->sequence = submitted.handle.sequence;
+	state->eventReported = false;
+	p->write = p->status = QStringLiteral("Write pending");
+	p->updating = true;
+	p->values.clear();
+	p->responses.clear();
+	p->updating = false;
+	if (p->binding)
+		p->binding->mutationAccepted(state);
+	p->notify();
+	return true;
+}
+
+bool DynamicConfiguratorProvider::executeCommand()
+{
+	auto p = d;
+	if (!canExecute())
+		return false;
+	auto state = p->state;
+	const auto submitted = state->view.execute([state](const ins::OperationResult& value) noexcept {
+		state->commanded = value;
+		state->dirty = true;
+	});
+	if (!submitted) {
+		p->status =
+		    QStringLiteral("Command refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->notify();
+		return false;
+	}
+	state->action = DynamicViewState::Action::Command;
+	p->commandSession = state->view.session();
+	state->submittedSession = state->view.session();
+	state->sequence = submitted.handle.sequence;
+	state->eventReported = false;
+	p->command = p->status = QStringLiteral("Command pending");
+	p->updating = true;
+	p->values.clear();
+	p->responses.clear();
+	p->updating = false;
+	if (p->binding)
+		p->binding->mutationAccepted(state);
+	p->notify();
+	return true;
+}
+
+bool DynamicConfiguratorProvider::callService()
+{
+	auto p = d;
+	if (!canCallService())
+		return false;
+	auto state = p->state;
+	const auto submitted =
+	    state->view.callService([state](const wb::ServiceResult& value) noexcept {
+		    state->serviced = value;
+		    state->dirty = true;
+	    });
+	if (!submitted) {
+		p->status =
+		    QStringLiteral("Service refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->notify();
+		return false;
+	}
+	state->action = DynamicViewState::Action::Service;
+	p->serviceSession = state->view.session();
+	p->responseEndpoint = p->selection;
+	state->submittedSession = state->view.session();
+	state->sequence = submitted.handle.sequence;
+	state->eventReported = false;
+	p->service = p->status = QStringLiteral("Service pending");
+	p->updating = true;
+	p->values.clear();
+	p->responses.clear();
+	p->updating = false;
+	if (p->binding)
+		p->binding->mutationAccepted(state);
+	p->notify();
+	return true;
+}
+
+bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const QString& value)
+{
+	auto p = d;
+	if (!p->mutate() || (!editing() && !commandSelected() && !serviceSelected()))
+		return false;
+	const auto node = p->values.node(index);
+	if (!node)
+		return false;
+	if (value == p->values.data(index, ValueModel::EditorTextRole).toString()) {
+		p->invalid.remove(index.internalId());
+		p->notify();
+		return true;
+	}
+	const auto info = commandSelected() || serviceSelected() ? p->state->view.editorInfo(node.value)
+	                                                         : p->state->view.info(node.value);
+	if (!info)
+		return false;
+	bool parsed = false;
+	const auto status =
+	    detail::setScalarText(p->state->view, node.value, info.value.code, value, parsed);
+	const bool valid = parsed && status == rt::Status::Ok;
+	if (valid) {
+		p->invalid.remove(index.internalId());
+		p->updating = true;
+		p->values.updateScalar(index);
+		p->updating = false;
+	} else
+		p->invalid.insert(index.internalId());
+	p->status = valid ? QStringLiteral("Local draft updated")
+	                  : QStringLiteral("Invalid exact scalar value - draft unchanged");
+	p->notify();
+	return valid;
+}
+} // namespace telemetry::ux

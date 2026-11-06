@@ -40,3 +40,29 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
 install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
+
+# Runtime providers are a separate optional export. Pure Qt/static consumers
+# must not start discovering the native SDK or transport components.
+if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
+    find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS workbench)
+    add_library(telemetry_ux_dynamic_configurator STATIC
+        DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
+        DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp)
+    add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
+    set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
+        EXPORT_NAME dynamic_configurator AUTOMOC ON)
+    target_compile_features(telemetry_ux_dynamic_configurator PUBLIC cxx_std_20)
+    target_include_directories(telemetry_ux_dynamic_configurator PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+    target_link_libraries(telemetry_ux_dynamic_configurator PUBLIC
+        TelemetryUX::configurator Telemetry::workbench)
+    install(TARGETS telemetry_ux_dynamic_configurator EXPORT TelemetryUXDynamicTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    install(EXPORT TelemetryUXDynamicTargets NAMESPACE TelemetryUX::
+        DESTINATION "${_telemetry_ux_package_dir}")
+    install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
+endif()
