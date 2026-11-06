@@ -16,10 +16,12 @@ from urllib.parse import unquote, urlsplit
 
 SDK_FILES = ('LICENSE', 'lib/client/web/Client.js', 'web/telemetry.js', 'web/DynamicClient.js',
              'web/WebSocketTransport.js')
+SESSION_SDK_FILES = ('web/index.js', 'web/Session.js', 'web/WebSocketConnection.js')
 UX_FILES = ('LICENSE', 'web/index.js', 'web/Provider.js', 'web/ProviderContract.js',
             'web/Configurator.js', 'web/Element.js', 'web/WebSocketTransport.js',
             'web/Configurator.css')
 IMPORTS = {
+    'telemetry-sdk': 'telemetry-sdk/web/index.js',
     'telemetry-sdk/client': 'telemetry-sdk/lib/client/web/Client.js',
     'telemetry-sdk/runtime': 'telemetry-sdk/web/telemetry.js',
     'telemetry-sdk/dynamic': 'telemetry-sdk/web/DynamicClient.js',
@@ -209,17 +211,6 @@ def export_assets(public_root, output, assets, *, cpp=False, max_bytes=4 * 1024 
         raise ValueError('Application assets cannot occupy reserved deploy paths')
     if any(PurePosixPath(name).suffix.lower() not in MIME for name in names):
         raise ValueError('Application assets must have an explicitly supported web MIME type')
-    planned = names + ['vendor/' + package + '/' + name
-                       for package, paths in (('telemetry-sdk', SDK_FILES), ('telemetry-ux', UX_FILES))
-                       for name in paths] + ['assets.json'] + (['telemetry_web_assets.hpp'] if cpp else [])
-    lowered = {name.casefold() for name in planned}
-    if len(lowered) != len(planned):
-        raise ValueError('Planned deploy paths have a duplicate or case alias')
-    if any(str(parent).casefold() in lowered for name in planned
-           for parent in PurePosixPath(name).parents if str(parent) != '.'):
-        raise ValueError('A file cannot also be an exported directory')
-    if len(planned) - 1 - int(cpp) > max_files:
-        raise ValueError('Total deployed file budget exceeded')
     files = {}
     total = 0
 
@@ -231,17 +222,6 @@ def export_assets(public_root, output, assets, *, cpp=False, max_bytes=4 * 1024 
 
     for name in names:
         append_file(name, source, name)
-    packages = {}
-    for package, required in (('telemetry-sdk', SDK_FILES), ('telemetry-ux', UX_FILES)):
-        root = source / 'node_modules' / package
-        metadata_bytes = read_file(root, 'package.json', min(max_bytes, 65536))
-        metadata = json.loads(metadata_bytes)
-        if (metadata.get('name') != package or metadata.get('type') != 'module' or
-                not isinstance(metadata.get('version'), str) or not metadata['version']):
-            raise ValueError('Require the actual installed ESM ' + package + ' package')
-        packages[package] = dict(version=metadata['version'], packageJsonSha256=digest(metadata_bytes))
-        for name in required:
-            append_file('vendor/' + package + '/' + name, root, name)
 
     html = files['index.html'].decode('utf8')
     maps = list(MAP.finditer(html))
@@ -255,6 +235,37 @@ def export_assets(public_root, output, assets, *, cpp=False, max_bytes=4 * 1024 
                                               '/node_modules/' + IMPORTS[key]):
             raise ValueError('Unsupported installed package import-map entry: ' + key)
         mapping['imports'][key] = './vendor/' + IMPORTS[key]
+    # The legacy client/carrier closure remains unchanged. Only an explicit
+    # root import opts into the fixed, optional connection coordinator graph.
+    sdk_files = SDK_FILES + (SESSION_SDK_FILES if 'telemetry-sdk' in mapping['imports'] else ())
+    if 'telemetry-sdk' in mapping['imports']:
+        # The preserved UX carrier wrapper has this fixed bare re-export even
+        # when the Session application itself does not import that wrapper.
+        carrier = 'telemetry-sdk/transports/websocket/carrier'
+        mapping['imports'].setdefault(carrier, './vendor/' + IMPORTS[carrier])
+    planned = names + ['vendor/' + package + '/' + name
+                       for package, paths in (('telemetry-sdk', sdk_files), ('telemetry-ux', UX_FILES))
+                       for name in paths] + ['assets.json'] + (['telemetry_web_assets.hpp'] if cpp else [])
+    lowered = {name.casefold() for name in planned}
+    if len(lowered) != len(planned):
+        raise ValueError('Planned deploy paths have a duplicate or case alias')
+    if any(str(parent).casefold() in lowered for name in planned
+           for parent in PurePosixPath(name).parents if str(parent) != '.'):
+        raise ValueError('A file cannot also be an exported directory')
+    if len(planned) - 1 - int(cpp) > max_files:
+        raise ValueError('Total deployed file budget exceeded')
+    packages = {}
+    for package, required in (('telemetry-sdk', sdk_files), ('telemetry-ux', UX_FILES)):
+        root = source / 'node_modules' / package
+        metadata_bytes = read_file(root, 'package.json', min(max_bytes, 65536))
+        metadata = json.loads(metadata_bytes)
+        if (metadata.get('name') != package or metadata.get('type') != 'module' or
+                not isinstance(metadata.get('version'), str) or not metadata['version']):
+            raise ValueError('Require the actual installed ESM ' + package + ' package')
+        packages[package] = dict(version=metadata['version'], packageJsonSha256=digest(metadata_bytes))
+        for name in required:
+            append_file('vendor/' + package + '/' + name, root, name)
+
     html = html[:maps[0].start(2)] + '\n' + json.dumps(mapping, sort_keys=True, indent=2) + '\n' + html[maps[0].end(2):]
     html = html.replace('./node_modules/telemetry-ux/web/Configurator.css',
                         './vendor/telemetry-ux/web/Configurator.css')

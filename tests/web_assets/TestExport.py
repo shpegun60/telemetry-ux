@@ -29,7 +29,8 @@ class ExportTests(unittest.TestCase):
                 file.write_text('/* installed runtime */\n' if path.endswith('.js') else '', encoding='utf8')
         self.html = ('<!doctype html><html><head><link rel="stylesheet" href="./node_modules/'
             'telemetry-ux/web/Configurator.css"><script type="importmap">' + json.dumps({'imports':
-                {key: './node_modules/' + value for key, value in tool.IMPORTS.items()}}) +
+                {key: './node_modules/' + value for key, value in tool.IMPORTS.items()
+                 if key != 'telemetry-sdk'}}) +
             '</script></head><body><script type="module" src="./app.js"></script></body></html>')
         self.write('index.html', self.html)
         self.write('app.js', "import {DeviceClient} from 'telemetry-sdk/client';\n")
@@ -91,6 +92,115 @@ class ExportTests(unittest.TestCase):
     def test_missing_borrowed_carrier_refused_before_output(self):
         (self.public / 'node_modules/telemetry-sdk/web/WebSocketTransport.js').unlink()
         self.refused()
+
+    def session_modules(self):
+        # A fixed ESM graph: the integration runner also exercises the actual
+        # installed emitted modules, not these small dependency fixtures.
+        self.write('node_modules/telemetry-sdk/web/index.js',
+                   "export * from '../lib/client/web/Client.js';\n"
+                   "export * from './Session.js';\n"
+                   "export {demoWebSocket} from './WebSocketConnection.js';\n")
+        self.write('node_modules/telemetry-sdk/web/Session.js',
+                   "import {DeviceClient} from '../lib/client/web/Client.js';\n"
+                   "import {DynamicClient} from './DynamicClient.js';\n"
+                   "import {parseDescriptor} from './telemetry.js';\n"
+                   'export const connectStatic=()=>DeviceClient;\n')
+        self.write('node_modules/telemetry-sdk/web/WebSocketConnection.js',
+                   "import {connectStatic} from './Session.js';\n"
+                   "import {bindWebSocket} from './WebSocketTransport.js';\n"
+                   'export const demoWebSocket=()=>connectStatic;\n')
+
+    def enable_session(self):
+        mapping = json.loads(tool.MAP.search(self.html)[2])
+        mapping['imports']['telemetry-sdk'] = './node_modules/telemetry-sdk/web/index.js'
+        self.write('index.html', tool.MAP.sub(
+            lambda match: match[1] + json.dumps(mapping) + match[3], self.html))
+        self.write('app.js', "import {connectStatic,demoWebSocket} from 'telemetry-sdk';\n")
+
+    def test_legacy_closure_unchanged_when_session_modules_installed(self):
+        self.session_modules()
+        paths = {asset['path'] for asset in self.export()['assets']
+                 if asset['path'].startswith('/vendor/telemetry-sdk/')}
+        self.assertEqual(paths, {
+            '/vendor/telemetry-sdk/LICENSE',
+            '/vendor/telemetry-sdk/lib/client/web/Client.js',
+            '/vendor/telemetry-sdk/web/telemetry.js',
+            '/vendor/telemetry-sdk/web/DynamicClient.js',
+            '/vendor/telemetry-sdk/web/WebSocketTransport.js'})
+
+    def test_explicit_sdk_root_adds_only_session_closure(self):
+        self.session_modules()
+        self.enable_session()
+        manifest = self.export(cpp=True)
+        paths = {asset['path'] for asset in manifest['assets']
+                 if asset['path'].startswith('/vendor/telemetry-sdk/')}
+        self.assertEqual(paths, {
+            '/vendor/telemetry-sdk/LICENSE',
+            '/vendor/telemetry-sdk/lib/client/web/Client.js',
+            '/vendor/telemetry-sdk/web/telemetry.js',
+            '/vendor/telemetry-sdk/web/DynamicClient.js',
+            '/vendor/telemetry-sdk/web/WebSocketTransport.js',
+            '/vendor/telemetry-sdk/web/index.js',
+            '/vendor/telemetry-sdk/web/Session.js',
+            '/vendor/telemetry-sdk/web/WebSocketConnection.js'})
+        mapping = json.loads(tool.MAP.search((self.output / 'index.html').read_text())[2])
+        self.assertEqual(mapping['imports']['telemetry-sdk'], './vendor/telemetry-sdk/web/index.js')
+        for path in ('web/index.js', 'web/Session.js', 'web/WebSocketConnection.js'):
+            self.assertEqual((self.output / 'vendor/telemetry-sdk' / path).read_bytes(),
+                             (self.public / 'node_modules/telemetry-sdk' / path).read_bytes())
+
+    def test_each_missing_session_module_refused_before_output(self):
+        self.session_modules()
+        self.enable_session()
+        for name in ('index.js', 'Session.js', 'WebSocketConnection.js'):
+            with self.subTest(name=name):
+                path = self.public / 'node_modules/telemetry-sdk/web' / name
+                previous = path.read_bytes()
+                path.unlink()
+                self.refused()
+                path.write_bytes(previous)
+
+    def test_session_demo_map_supplies_preserved_carrier_dependency(self):
+        self.session_modules()
+        # Match the shipped Session demo's minimal map. The exporter also
+        # preserves the old UX wrapper file, whose bare re-export needs mapping.
+        mapping = {'imports': {key: './node_modules/' + tool.IMPORTS[key] for key in
+                   ('telemetry-sdk', 'telemetry-sdk/client', 'telemetry-sdk/runtime', 'telemetry-ux/web')}}
+        self.write('index.html', tool.MAP.sub(
+            lambda match: match[1] + json.dumps(mapping) + match[3], self.html))
+        wrapper = Path(__file__).resolve().parents[2] / 'web/WebSocketTransport.js'
+        (self.public / 'node_modules/telemetry-ux/web/WebSocketTransport.js').write_bytes(wrapper.read_bytes())
+        self.write('app.js', "import {connectStatic} from 'telemetry-sdk';\n")
+        self.export()
+        deployed = json.loads(tool.MAP.search((self.output / 'index.html').read_text())[2])
+        self.assertEqual(deployed['imports']['telemetry-sdk/transports/websocket/carrier'],
+                         './vendor/telemetry-sdk/web/WebSocketTransport.js')
+
+    def test_session_closure_obeys_file_and_byte_budgets(self):
+        self.session_modules()
+        self.enable_session()
+        # The ordinary two-asset fixture uses 15 files; opting into the root
+        # adds three real files, all counted before output creation.
+        self.refused(max_files=17)
+        self.refused(max_bytes=1024)
+
+    def test_session_module_reference_checked_before_output(self):
+        self.session_modules()
+        self.enable_session()
+        self.write('node_modules/telemetry-sdk/web/Session.js', "import './missing.js';\n")
+        self.refused()
+
+    def test_session_root_and_carrier_maps_require_exact_local_values(self):
+        self.session_modules()
+        for key in ('telemetry-sdk', 'telemetry-sdk/transports/websocket/carrier'):
+            for value in ('https://remote.invalid/module.js', './node_modules/telemetry-sdk/web/other.js'):
+                with self.subTest(key=key, value=value):
+                    self.enable_session()
+                    mapping = json.loads(tool.MAP.search((self.public / 'index.html').read_text())[2])
+                    mapping['imports'][key] = value
+                    self.write('index.html', tool.MAP.sub(
+                        lambda match: match[1] + json.dumps(mapping) + match[3], self.html))
+                    self.refused()
 
     def test_existing_destination_is_never_reused(self):
         self.output.mkdir()

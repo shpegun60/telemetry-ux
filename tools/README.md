@@ -31,6 +31,16 @@ and Configurator stylesheet URL in `index.html`. There is no CDN dependency or
 the documented installed-package paths from `examples/web_demo/index.html`.
 This is a deploy copier for that ESM layout, not a JavaScript bundler.
 
+The prepared [Session demo](../examples/session_web/README.md) is also supported.
+Select `index.html`, `SessionDemo.js`, `generated/js/device.js` and
+`generated/js/device.metadata.js` as application assets. Its explicit
+`telemetry-sdk` root import-map entry opts into the fixed SDK `web/index.js`,
+`web/Session.js` and `web/WebSocketConnection.js` files. Without that root entry,
+the existing client/carrier export closure stays unchanged and includes none of
+those Session files. The same preflight, byte/file limits and reference checks
+apply before any output is created. Session export also supplies the fixed local
+SDK carrier import-map entry needed by the preserved UX carrier wrapper.
+
 `assets.json` contains sorted URL paths, MIME types, lengths, SHA-256 values and
 installed package metadata identities. It has no build time or absolute source
 path. `--cpp` additionally emits `telemetry_web_assets.hpp`: C++17 immutable byte
@@ -84,6 +94,12 @@ python tests/web_assets/run.py --public-root C:/build/telemetry/public `
   --browser-python C:/build/browser-venv/Scripts/python.exe `
   --device C:/build/native/telemetry_web_demo_peer.exe
 ```
+
+Add `--session-demo` when the prepared directory contains the Session demo.
+Its relocated browser journey exercises two independent views, exact integer
+editing, stale sibling drafts, historical outcomes and explicit reconnect over
+the existing native WebSocket server. The default runner retains the original
+client/carrier demonstration and its existing closure.
 
 The runner checks refusal paths, two deterministic relocated exports from actual
 installed packages, every manifest hash, and unchanged input hashes. Optional

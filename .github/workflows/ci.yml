@@ -334,6 +334,20 @@ jobs:
             --public-root "$RUNNER_TEMP/ux-web-gcc/public" --cxx g++ \
             --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
             --device "$RUNNER_TEMP/ux-web-gcc/native/telemetry_web_demo_peer"
+      # Session bundles are tested separately from the unchanged low-level closure.
+      - name: Export the Session example and exercise its relocated WebSocket UI
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/ux-session-export-public"
+          cp -r "$RUNNER_TEMP/ux-session-gcc/public/node_modules" \
+            "$RUNNER_TEMP/ux-session-gcc/public/generated" "$RUNNER_TEMP/ux-session-export-public/"
+          cp examples/session_web/index.html examples/session_web/SessionDemo.js \
+            "$RUNNER_TEMP/ux-session-export-public/"
+          python -B tests/web_assets/run.py --session-demo \
+            --public-root "$RUNNER_TEMP/ux-session-export-public" \
+            --build-dir "$RUNNER_TEMP/ux-session-assets" --cxx g++ \
+            --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+            --device "$RUNNER_TEMP/ux-session-gcc/native/telemetry_web_demo_peer"
       - name: Installed Descriptor and payload-file tools in Chromium
         run: |
           set -euo pipefail
@@ -389,6 +403,7 @@ jobs:
             ${{ runner.temp }}/ux-websocket-clang-asan/http-browser/
             ${{ runner.temp }}/ux-websocket-clang-asan/ws-browser/
             ${{ runner.temp }}/ux-web-assets/
+            ${{ runner.temp }}/ux-session-assets/
             ${{ runner.temp }}/ux-web-starter/summary.json
             ${{ runner.temp }}/ux-web-starter/node.log
             ${{ runner.temp }}/ux-structured-tools-gcc/summary.json

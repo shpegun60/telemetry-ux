@@ -22,6 +22,7 @@ For Static mode, pass generated context once when connecting:
 
 ```js
 import {connectStatic, demoWebSocket} from 'telemetry-sdk';
+import {mountConfigurator} from 'telemetry-ux/web';
 import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
 
@@ -90,11 +91,13 @@ This first adapter exposes the four ordinary operations. It deliberately hides
 Watchlist and Mixed Batch until tracked high-level Session operations are added.
 Existing explicit providers retain those capabilities. There is no hidden fan-out.
 
-An accepted mutation through a Session provider makes sibling providers' cached
+A FIFO-admitted mutation through a Session provider makes sibling providers' cached
 values and responses stale. Dirty draft text remains visible for review, but it
 cannot be edited or submitted until discarded and prepared again. The view shows
 the reason; it does not silently overwrite another panel's draft. A refused
-submission does not invalidate sibling state. Pending checked operation facts
+submission such as `QueueFull` does not invalidate sibling state. A later device
+refusal does not restore invalidated data; this policy is deliberately conservative.
+Pending checked operation facts
 remain available, and an older read cannot republish its stale value.
 
 This is a local presentation policy, not server-side compare-and-write or an
