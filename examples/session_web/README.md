@@ -16,7 +16,8 @@ npm install --prefix /external/session-demo --offline --ignore-scripts \
 telemetry-codegen generate /external/descriptor.bin --targets js \
   --structural-metadata --wire-editing --output /external/session-demo/generated
 cp examples/session_web/index.html examples/session_web/SessionDemo.js /external/session-demo/
-python examples/web_demo/serve_ws.py --device /external/native-demo/telemetry_web_demo_peer \
+/external/host-env/bin/python -m pip install websockets==15.0.1
+/external/host-env/bin/python examples/web_demo/serve_ws.py --device /external/native-demo/telemetry_web_demo_peer \
   --public-root /external/session-demo --data-dir /external/session-state --port 8080
 ```
 
@@ -25,6 +26,10 @@ endpoints in the two views; reads and mutations use the same FIFO. A write in on
 view marks the other view's data stale. Disconnect leaves historical operation
 outcomes visible. Reconnect is explicit and never replays a mutation. Close ends
 that Session; a new connection uses the same profile and requires a fresh lease.
+
+Use the Python environment prepared in the linked demo, not an unrelated system
+interpreter. On Windows its executable is `/external/host-env/Scripts/python.exe`;
+use Windows paths and the native helper's `.exe` suffix accordingly.
 
 The server checks browser Origin, so load this page from its HTTP origin. It is a
 localhost reference application, not STM32 firmware or a production authentication

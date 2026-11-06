@@ -60,8 +60,10 @@ const field = mountFieldEditor(document.querySelector('#config'), {
 ```
 
 The catalog/name above belongs to the reference Model. Use your own names or an
-explicit `{category: 1, id: fieldId}` selector. Ambiguous or absent selectors fail
-before mounting. An initial selection can be restored after reconnect only for
+explicit `{category: 1, id: fieldId}` selector. Omitting `endpoint` leaves selection
+to the user. An explicit unmatched or ambiguous selector fails before mounting a
+ready Session; when mounted while disconnected, it resolves on readiness and
+reports a mismatch through provider state. An initial selection is restored only for
 an unchanged schema fingerprint; changed schemas require explicit selection.
 Mounting never reads, writes or executes automatically.
 
