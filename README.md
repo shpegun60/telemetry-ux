@@ -44,8 +44,10 @@ Configurator {
 
 The [provider contract](lib/qml/Telemetry/UX/README.md) keeps connection controls,
 permission opt-in and device ownership in the host. The view creates no client,
-transport, polling timer or FIFO. The existing Inspector controller supplies the
-dynamic provider. For a known schema, use the
+transport, polling timer or FIFO. Use the installed
+[Dynamic QML provider](doc/DynamicConfigurator.md) for independent panels over an
+existing native Workbench owner. The Inspector uses those same installed models
+and can create independent providers through `createConfigurator()`. For a known schema, use the
 [generated typed QML provider](#generated-typed-qml-provider) described below.
 The browser starter generates a thin entry module for the shared
 web view; it does not generate another form implementation.
@@ -88,6 +90,11 @@ lifetime, error and memory limits. The QML starter is opt-in; ordinary generated
 SDK output is unchanged.
 
 ## Browser Configurator
+
+Start with the [own-device application](examples/web_device_starter/README.md) to
+change one small Model and run a complete connection, editing and recovery flow.
+It uses the installed SDK dispatcher, shared reference HTTP/WebSocket server and
+the same Configurator below. Dynamic needs no generator; Static is an explicit option.
 
 The [browser view and providers](web/README.md) offer the same Field, Command and
 Service workflow with an explicitly selected static or dynamic connection.

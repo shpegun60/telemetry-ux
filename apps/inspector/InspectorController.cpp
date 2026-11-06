@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "InspectorController.hpp"
+#include <Telemetry/UX/ScalarEditor.hpp>
 #include "DemoPeer.hpp"
 #include "TcpTransport.hpp"
 #ifdef INSPECTOR_ENABLE_SERIAL
@@ -130,24 +131,6 @@ QString serviceStatusName(std::uint8_t status)
 	return QStringLiteral("Unknown endpoint status %1").arg(status);
 }
 
-template<class T>
-bool parseScalar(const QString& text, T& value)
-{
-	const auto input = text.trimmed().toUtf8();
-	if constexpr (std::is_same_v<T, bool>) {
-		if (input == "true" || input == "1")
-			value = true;
-		else if (input == "false" || input == "0")
-			value = false;
-		else
-			return false;
-		return true;
-	} else {
-		const auto parsed =
-		    std::from_chars(input.constData(), input.constData() + input.size(), value);
-		return parsed.ec == std::errc{} && parsed.ptr == input.constData() + input.size();
-	}
-}
 } // namespace
 
 struct InspectorController::State {
@@ -287,6 +270,8 @@ InspectorController::~InspectorController()
 
 InspectorController::Completion InspectorController::retire()
 {
+	if (dynamicBinding_)
+		dynamicBinding_->retire();
 	++epoch_;
 	retireWatch(true);
 	values_.clear();
@@ -307,6 +292,8 @@ InspectorController::Completion InspectorController::retire()
 	Completion completion;
 	if (state_) {
 		state_->closeAndDrain();
+		if (dynamicBinding_)
+			dynamicBinding_->poll();
 		watchPending_ = false;
 		completion.applied = consumeApply(*state_, false);
 		completion.command = consumeCommand(*state_, false);
@@ -326,6 +313,7 @@ InspectorController::Completion InspectorController::retire()
 			retiredState_ = std::move(state_);
 		}
 	}
+	dynamicBinding_.reset();
 	state_.reset();
 	return completion;
 }
@@ -512,7 +500,7 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	}
 	// Validate into a separate generation first. A malformed file does not destroy
 	// the current peer, selected field or published snapshot.
-	auto candidate = std::make_unique<State>(std::move(bytes), demo, writableDemo, readManyDemo);
+	auto candidate = std::make_shared<State>(std::move(bytes), demo, writableDemo, readManyDemo);
 	candidate->remote = remote;
 	candidate->serial = remote && serial_;
 	const auto error = candidate->initialize(session_ + 1, !remote);
@@ -600,6 +588,8 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	}
 	updating_ = true;
 	Completion retiredApply;
+	if (dynamicBinding_)
+		dynamicBinding_->retire();
 	if (remote) {
 		retireWatch(true);
 		values_.clear();
@@ -608,6 +598,8 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 		selection_.clear();
 		if (state_) {
 			state_->closeAndDrain();
+			if (dynamicBinding_)
+				dynamicBinding_->poll();
 			retiredApply.applied = consumeApply(*state_, false);
 			retiredApply.command = consumeCommand(*state_, false);
 			retiredApply.service = consumeService(*state_, false);
@@ -616,6 +608,7 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	} else {
 		retiredApply = retire();
 	}
+	dynamicBinding_.reset();
 	++session_;
 	state_ = std::move(candidate);
 	// Any previous State has completed closeAndDrain before replacement.
@@ -624,6 +617,25 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	endpoints_.rebuild(state_->inspector);
 	connected_ = demo || remote;
 	writesEnabled_ = demo && writableDemo;
+	dynamicBinding_ =
+	    std::make_unique<telemetry::ux::DynamicConfiguratorBinding>(state_->inspector, state_);
+	dynamicBinding_->setMutationsAllowed(writesEnabled_);
+	connect(dynamicBinding_.get(), &telemetry::ux::DynamicConfiguratorBinding::operationFinished,
+	        this, &InspectorController::configuratorOperationFinished);
+	connect(dynamicBinding_.get(),
+	        &telemetry::ux::DynamicConfiguratorBinding::managedMutationAccepted, this, [this] {
+		        if (!state_ || updating_)
+			        return;
+		        updating_ = true;
+		        state_->inspector.invalidateData();
+		        retireWatch(false);
+		        values_.clear();
+		        responses_.clear();
+		        invalidEditors_.clear();
+		        status_ = QStringLiteral("Another panel changed device data - refresh explicitly");
+		        updating_ = false;
+		        Q_EMIT stateChanged();
+	        });
 	connecting_ = false;
 	status_ =
 	    remote && serial_
@@ -644,6 +656,15 @@ QByteArray InspectorController::demoDescriptor() const
 	DemoPeer peer;
 	const auto bytes = peer.descriptor();
 	return {reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())};
+}
+
+QObject* InspectorController::createConfigurator()
+{
+	auto* provider = new telemetry::ux::DynamicConfiguratorProvider(dynamicBinding_.get(), this);
+	connect(this, &InspectorController::stateChanged, provider, [this, provider] {
+		provider->setBinding(dynamicBinding_.get());
+	});
+	return provider;
 }
 
 bool InspectorController::connectDemo()
@@ -949,6 +970,8 @@ void InspectorController::setWritesEnabled(bool enabled)
 		values_.resetSnapshot(state_->inspector);
 	}
 	writesEnabled_ = enabled;
+	if (dynamicBinding_)
+		dynamicBinding_->setMutationsAllowed(enabled);
 	updating_ = false;
 	Q_EMIT stateChanged();
 }
@@ -1012,49 +1035,9 @@ bool InspectorController::setScalarText(const QModelIndex& index, const QString&
 		Q_EMIT stateChanged();
 		return true;
 	}
-	rt::Status status = rt::Status::TypeMismatch;
 	bool parsed = false;
-	const auto set = [&]<class T>() {
-		T number{};
-		if ((parsed = parseScalar(text, number)))
-			status = state_->inspector.setScalar(node.value, number);
-	};
-	using Code = telemetry::ScalarCode;
-	switch (info.value.code) {
-		case Code::Bool:
-			set.template operator()<bool>();
-			break;
-		case Code::U8:
-			set.template operator()<std::uint8_t>();
-			break;
-		case Code::S8:
-			set.template operator()<std::int8_t>();
-			break;
-		case Code::U16:
-			set.template operator()<std::uint16_t>();
-			break;
-		case Code::S16:
-			set.template operator()<std::int16_t>();
-			break;
-		case Code::U32:
-			set.template operator()<std::uint32_t>();
-			break;
-		case Code::S32:
-			set.template operator()<std::int32_t>();
-			break;
-		case Code::U64:
-			set.template operator()<std::uint64_t>();
-			break;
-		case Code::S64:
-			set.template operator()<std::int64_t>();
-			break;
-		case Code::F32:
-			set.template operator()<float>();
-			break;
-		case Code::F64:
-			set.template operator()<double>();
-			break;
-	}
+	const auto status = telemetry::ux::detail::setScalarText(state_->inspector, node.value,
+	                                                         info.value.code, text, parsed);
 	if (!parsed || status != rt::Status::Ok) {
 		invalidEditors_.insert(index.internalId());
 		status_ =
@@ -1090,6 +1073,8 @@ bool InspectorController::apply()
 	}
 	updating_ = true;
 	state_->applying = true;
+	if (dynamicBinding_)
+		dynamicBinding_->invalidateData();
 	writeOutcomeSession_ = state_->inspector.session();
 	busy_ = true;
 	retireWatch(false);
@@ -1119,6 +1104,8 @@ bool InspectorController::executeCommand()
 	}
 	updating_ = true;
 	state_->executing = true;
+	if (dynamicBinding_)
+		dynamicBinding_->invalidateData();
 	commandOutcomeSession_ = state_->inspector.session();
 	commandOutcomeEndpoint_ = selection_;
 	busy_ = true;
@@ -1149,6 +1136,8 @@ bool InspectorController::callService()
 	}
 	updating_ = true;
 	state_->calling = true;
+	if (dynamicBinding_)
+		dynamicBinding_->invalidateData();
 	serviceOutcomeSession_ = state_->inspector.session();
 	serviceOutcomeEndpoint_ = selection_;
 	busy_ = true;
@@ -1736,6 +1725,11 @@ void InspectorController::pump()
 	notify = notify || applied.has_value() || commanded.has_value() || serviced.has_value();
 	// All backend calls have returned before application signals can run slots.
 	updating_ = false;
+	QPointer<InspectorController> alive(this);
+	if (dynamicBinding_)
+		dynamicBinding_->poll();
+	if (!alive)
+		return;
 	if (notify)
 		notifyState({applied, commanded, serviced},
 		            completion ? std::optional<bool>{published} : std::nullopt);

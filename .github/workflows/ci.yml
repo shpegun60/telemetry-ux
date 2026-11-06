@@ -70,7 +70,7 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUTF8: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,7 +179,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -450,7 +450,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'e02dc4d471793dbb97cec5e69505e73314fb89f1' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -510,7 +510,7 @@ jobs:
               checks+=(--sanitize)
             fi
             cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/qml-sdk-build-$profile" -G Ninja \
-              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions' \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions;workbench' \
               -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON -DCMAKE_CXX_COMPILER="$compiler" \
               -DCMAKE_BUILD_TYPE=Release -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qml-sdk-stage-$profile" "${flags[@]}" \
@@ -520,6 +520,9 @@ jobs:
             mv "$RUNNER_TEMP/qml-sdk-stage-$profile" "$RUNNER_TEMP/qml-sdk-prefix-$profile"
             cmake -S . -B "$RUNNER_TEMP/static-ux-build-$profile" -G Ninja \
               -DTELEMETRY_UX_BUILD_INSPECTOR=OFF -DTELEMETRY_UX_BUILD_CONFIGURATOR=ON \
+              -DTELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR=ON \
+              -DTelemetry_DIR="$RUNNER_TEMP/qml-sdk-prefix-$profile/lib/cmake/Telemetry" \
+              '-DCMAKE_CXX_FLAGS=-Wall -Wextra -Werror' \
               -DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/static-ux-stage-$profile" "${flags[@]}" \
               2>&1 | tee "$RUNNER_TEMP/static-ux-configure-$profile.log"
@@ -534,6 +537,10 @@ jobs:
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/dynamic_qml_configurator/run.py --build-dir "$RUNNER_TEMP/ux-dynamic-qml-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
       - name: Retain generated QML and installed package evidence
@@ -561,3 +568,9 @@ jobs:
             ${{ runner.temp }}/static-ux-*.log
             ${{ runner.temp }}/static-ux-prefix-gcc/
             ${{ runner.temp }}/static-ux-prefix-clang-asan/
+            ${{ runner.temp }}/ux-dynamic-qml-gcc/*.json
+            ${{ runner.temp }}/ux-dynamic-qml-gcc/*.log
+            ${{ runner.temp }}/ux-dynamic-qml-gcc/*.png
+            ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.json
+            ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.log
+            ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.png
