@@ -126,7 +126,7 @@ def main():
             '--build-dir', output / 'browser'])
         browser = json.loads((output / 'browser/summary.json').read_text(encoding='utf8'))
         if (browser.get('passed') is not True or
-                browser.get('element', {}).get('checks', 0) < 139 or
+                browser.get('element', {}).get('checks', 0) < 283 or
                 browser.get('workspace', {}).get('passed') is not True or
                 browser.get('workspace', {}).get('checks', 0) < 13):
             raise RuntimeError('Browser lifecycle controls failed')

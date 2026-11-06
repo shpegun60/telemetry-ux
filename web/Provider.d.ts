@@ -1,6 +1,9 @@
 /* Explicit-provider presentation over Telemetry SDK. SPDX-License-Identifier: MIT. */
 import type {ByteInput, DeviceClient} from 'telemetry-sdk/client';
 import type {DynamicClient} from 'telemetry-sdk/dynamic';
+import type {
+	StaticConnectionSession, DynamicConnectionSession, SessionSnapshot} from
+	'telemetry-sdk/session';
 
 export type ValuePath = readonly(string|number)[];
 export type ValueSource = 'value'|'draft'|'response';
@@ -176,7 +179,8 @@ export interface BatchPresentationState extends WatchPresentationState {
 export interface BatchPresentationProvider extends WatchPresentationProvider {
 	snapshot(): BatchPresentationState;
 	rows(path?: ValuePath, options
-	     ?: Readonly<{source?: ValueSource|BatchValueSource; offset?: number; limit?: number}>): PresentationRows;
+	     ?: Readonly<{source?: ValueSource | BatchValueSource; offset?: number; limit?: number}>):
+	    PresentationRows;
 	/** Initializes new full replacement DTOs with canonical zeros, not device defaults. */
 	addBatch(operation: BatchOperation, endpointKey?: string): boolean;
 	removeBatch(key: string): boolean;
@@ -225,3 +229,36 @@ export function createStaticProvider(options: {
 export function createDynamicProvider(
     options: {readonly client: DynamicClient; readonly limits?: PresentationLimits;}):
     BatchPresentationProvider;
+
+export type SessionEndpointSelector =
+    Readonly < {category : 'field' | 'command' | 'service'; catalog : string; name : string}|
+{
+	category: 1|2|3;
+	id: number
+}
+> ;
+export interface SessionProviderOptions {
+	readonly session: StaticConnectionSession|DynamicConnectionSession;
+	readonly limits?: PresentationLimits;
+	/** Resolve one endpoint without I/O. Reconnect restores selection only for an unchanged fingerprint. */
+	readonly endpoint?: SessionEndpointSelector;
+}
+export interface SessionPresentationState extends PresentationState {
+	readonly connection: SessionSnapshot;
+	readonly disposed: boolean;
+	/** Peer or explicit invalidation hides values but preserves stale draft text until cancel/restart. */
+	readonly dataStale: boolean;
+	readonly dataInvalidationReason: string;
+	readonly watch?: never;
+	readonly batch?: never;
+}
+export interface SessionPresentationProvider extends PresentationProvider {
+	snapshot(): SessionPresentationState;
+	subscribe(listener: (state: SessionPresentationState) => void): () => void;
+	/** Retire this presentation. Accepted requests retain their outcomes; the borrowed Session stays owned by the host. */
+	dispose(): void;
+	/** Invalidate data in every live provider borrowing this Session after direct/headless operations. */
+	invalidateData(reason?: string): void;
+}
+/** One local presentation over a borrowed Session. No Watchlist/Batch, transport, execution queue or lifecycle ownership. */
+export function createSessionProvider(options: SessionProviderOptions): SessionPresentationProvider;

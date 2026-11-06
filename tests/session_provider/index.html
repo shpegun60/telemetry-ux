@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Session provider acceptance</title><link rel="icon" href="data:,">
+<link rel="stylesheet" href="./node_modules/telemetry-ux/web/Configurator.css">
+<style>body{font:16px system-ui;margin:20px;background:#17202c;color:#eef}section{margin:20px 0;padding:12px;border:1px solid #678}button{padding:8px}</style>
+<script type="importmap">{"imports":{
+"telemetry-sdk":"./node_modules/telemetry-sdk/web/index.js",
+"telemetry-sdk/session":"./node_modules/telemetry-sdk/web/Session.js",
+"telemetry-sdk/client":"./node_modules/telemetry-sdk/lib/client/web/Client.js",
+"telemetry-sdk/runtime":"./node_modules/telemetry-sdk/web/telemetry.js",
+"telemetry-sdk/dynamic":"./node_modules/telemetry-sdk/web/DynamicClient.js",
+"telemetry-sdk/transports/websocket":"./node_modules/telemetry-sdk/web/WebSocketConnection.js",
+"telemetry-ux/web":"./node_modules/telemetry-ux/web/index.js"}}</script>
+</head><body><h1>Session-owned connection, independent views</h1>
+<p id="status">Connecting</p><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button>
+<section id="full"></section><section id="field-a"></section><section id="field-b"></section>
+<section id="command"></section><section id="service"></section><section id="borrowed"></section>
+<script type="module" src="./App.js"></script></body></html>

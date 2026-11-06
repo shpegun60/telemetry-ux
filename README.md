@@ -90,9 +90,28 @@ SDK output is unchanged.
 ## Browser Configurator
 
 The [browser view and providers](web/README.md) offer the same Field, Command and
-Service workflow with an explicitly selected static or dynamic client. Install
-the matching local `telemetry-sdk` and `telemetry-ux` npm tarballs in your host
-application, then supply its existing admitted client:
+Service workflow with an explicitly selected static or dynamic connection.
+Install matching local `telemetry-sdk` and `telemetry-ux` npm tarballs, then pass
+the SDK Session directly to the view:
+
+```js
+import {connectDynamic, demoWebSocket} from 'telemetry-sdk';
+import {mountConfigurator} from 'telemetry-ux/web';
+
+const session = await connectDynamic({transport: demoWebSocket(location.origin)});
+const view = mountConfigurator(document.querySelector('#device'), {session});
+// When the host is done: view.unmount(); await session.close();
+```
+
+The [Session adapter](doc/SessionProvider.md) follows lifecycle automatically.
+Multiple views borrow one Session/FIFO and own separate selection and drafts;
+unmounting a view leaves connection ownership with the host. Its initial scope is
+Fields, Commands and Services; Watchlist/Batch still use the explicit capable
+providers below. The [two-view example](examples/session_web/README.md) runs with
+the existing reference server. `demoWebSocket` describes that server's bootstrap;
+it is not a generic production server profile.
+
+For advanced hosts that already own an admitted low-level client:
 
 ```js
 import {createDynamicProvider, mountConfigurator} from 'telemetry-ux/web';

@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 APP = ['index.html', 'app.js', 'generated/js/device.js', 'generated/js/device.metadata.js',
        'generated/ui/DevicePage.js']
+SESSION_APP = ['index.html', 'SessionDemo.js', 'generated/js/device.js', 'generated/js/device.metadata.js']
 
 
 def sha(data):
@@ -25,6 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--public-root', type=Path, required=True)
     parser.add_argument('--build-dir', type=Path, required=True)
+    parser.add_argument('--session-demo', action='store_true',
+                        help='Export the prepared examples/session_web app using its explicit SDK root import')
     parser.add_argument('--cxx', help='Optional host C++17 compiler; builds and executes table probe')
     parser.add_argument('--arm-cxx', help='Optional actual ARM C++ compiler; object-only table probe')
     parser.add_argument('--browser-python', type=Path,
@@ -41,17 +44,21 @@ def main():
     spec = importlib.util.spec_from_file_location('asset_export', ROOT / 'tools/export_web_assets.py')
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
+    app = SESSION_APP if args.session_demo else APP
+    sdk_files = tool.SDK_FILES + (tool.SESSION_SDK_FILES if args.session_demo else ())
+    browser_script = HERE / 'SessionBrowser.py' if args.session_demo else ROOT / 'tests/websocket_transport/browser.py'
     sources = [ROOT / 'tools/export_web_assets.py', HERE / 'TestExport.py', HERE / 'run.py']
-    sources += [public / name for name in APP]
+    sources += [public / name for name in app]
     if args.browser_python:
-        sources += [ROOT / 'tests/websocket_transport/browser.py',
+        sources += [browser_script,
                     ROOT / 'examples/web_demo/serve.py', ROOT / 'examples/web_demo/serve_ws.py',
                     args.device.resolve()]
-    for name, paths in (('telemetry-sdk', tool.SDK_FILES), ('telemetry-ux', tool.UX_FILES)):
+    for name, paths in (('telemetry-sdk', sdk_files), ('telemetry-ux', tool.UX_FILES)):
         sources += [public / 'node_modules' / name / file for file in (*paths, 'package.json')]
     before = {str(path): sha(path.read_bytes()) for path in sources}
     report = dict(passed=False, hardware=False, started_utc=datetime.now(timezone.utc).isoformat(),
-                  source_sha256_before=before, commands=[])
+                  source_sha256_before=before, commands=[], session_demo=args.session_demo)
+    (output / 'summary.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf8')
 
     def command(label, argv, cwd=output, env=None):
         result = subprocess.run([str(arg) for arg in argv], cwd=cwd, env=env, text=True,
@@ -66,8 +73,8 @@ def main():
     try:
         command('unit', [sys.executable, HERE / 'TestExport.py', '-v'])
         a, b = output / 'export-a', output / 'relocated' / 'www'
-        first = tool.export_assets(public, a, APP, cpp=True)
-        second = tool.export_assets(public, b, list(reversed(APP)), cpp=True)
+        first = tool.export_assets(public, a, app, cpp=True)
+        second = tool.export_assets(public, b, list(reversed(app)), cpp=True)
         inventory = lambda directory: {path.relative_to(directory).as_posix(): sha(path.read_bytes())
                                       for path in directory.rglob('*') if path.is_file()}
         if first != second or inventory(a) != inventory(b):
@@ -78,6 +85,11 @@ def main():
                 raise RuntimeError('Manifest content mismatch')
         if any('node_modules' in name or name.endswith(('.d.ts', '.ts')) for name in inventory(b)):
             raise RuntimeError('A development/package-manager path escaped into deploy output')
+        extra_sdk_paths = {'vendor/telemetry-sdk/web/' + name for name in
+                           ('index.js', 'Session.js', 'WebSocketConnection.js')}
+        deployed_session_paths = extra_sdk_paths.intersection(inventory(b))
+        if deployed_session_paths != (extra_sdk_paths if args.session_demo else set()):
+            raise RuntimeError('Session modules must be exported only for the explicit SDK root layout')
         report.update(assets=len(first['assets']), bytes=first['totalBytes'],
                       exported_sha256=inventory(b), packages=first['packages'])
         (output / 'probe.cpp').write_text('#include "telemetry_web_assets.hpp"\n'
@@ -107,11 +119,11 @@ def main():
             # Use only shipped runtime assets. The separate Renderer.js test
             # fixture is deliberately absent from a firmware deployment.
             command('deployed-browser', [args.browser_python.absolute(), '-B',
-                    ROOT / 'tests/websocket_transport/browser.py', '--device', args.device.resolve(),
+                    browser_script, '--device', args.device.resolve(),
                     '--public-root', b, '--data-dir', output / 'browser'])
             browser = json.loads((output / 'browser/summary.json').read_text(encoding='utf8'))
             if (not browser.get('passed') or not browser.get('static') or
-                    not browser.get('dynamic') or browser.get('checks', 0) < 88 or
+                    not browser.get('dynamic') or browser.get('checks', 0) < (38 if args.session_demo else 88) or
                     browser.get('errors') or browser.get('warnings') or
                     browser.get('native_exit') != 0 or browser.get('native_stderr')):
                 raise RuntimeError('Relocated runtime did not pass actual warning-free browser journeys')

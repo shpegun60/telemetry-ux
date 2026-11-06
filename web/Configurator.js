@@ -1,5 +1,6 @@
 /* Provider-neutral browser view. Authors: Ruslan Kovtun, codexAi. MIT. */
 import {assertPresentationProvider} from './ProviderContract.js';
+import {createSessionProvider} from './Provider.js';
 
 let nextViewId = 0;
 const pageSize = 128;
@@ -11,40 +12,78 @@ const categoryNames = {
 const valueLabels = {
 	Ok : 'Value available',
 	NoValue : 'No response value',
-	Stale : 'Values are stale; refresh after reconnect',
+	Stale : 'Value is stale; refresh before using it',
 	InvalidPayload : 'Invalid value payload'
 };
 
-/** Mount presentation only. The host continues to own its provider and client. */
-export function mountConfigurator(element, {provider, now = () => performance.now()} = {})
+/** Borrow a provider, or own presentation over a borrowed Session. */
+export function mountConfigurator(element, options)
 {
-	return mountPresentation(element, provider, 0, now);
+	return mount(element, options, 0);
 }
 
 /** Standalone panels use the host's current selection and the same renderer. */
-export function mountFieldEditor(element, {provider, now = () => performance.now()} = {})
+export function mountFieldEditor(element, options)
 {
-	return mountPresentation(element, provider, 1, now);
+	return mount(element, options, 1);
 }
 
-export function mountCommandPanel(element, {provider, now = () => performance.now()} = {})
+export function mountCommandPanel(element, options)
 {
-	return mountPresentation(element, provider, 2, now);
+	return mount(element, options, 2);
 }
 
-export function mountServicePanel(element, {provider, now = () => performance.now()} = {})
+export function mountServicePanel(element, options)
 {
-	return mountPresentation(element, provider, 3, now);
+	return mount(element, options, 3);
 }
 
-export function mountWatchlist(element, {provider, now = () => performance.now()} = {})
+export function mountWatchlist(element, options)
 {
-	return mountPresentation(element, provider, 4, now);
+	return mount(element, options, 4);
 }
 
-export function mountBatchEditor(element, {provider, now = () => performance.now()} = {})
+export function mountBatchEditor(element, options)
 {
-	return mountPresentation(element, provider, 5, now);
+	return mount(element, options, 5);
+}
+
+function mount(element, options = {}, categoryFilter)
+{
+	if (!element?.ownerDocument || typeof element.appendChild !== 'function')
+		throw new TypeError('mountConfigurator requires a host element');
+	const {provider, session, now = () => performance.now(), limits, endpoint} = options;
+	if ((provider === undefined) === (session === undefined))
+		throw new TypeError('Supply exactly one provider or Session');
+	if (typeof now !== 'function')
+		throw new TypeError('The Watchlist clock must be a function');
+	// Optional operations are deliberately unavailable through this first Session adapter.
+	if (session !== undefined && categoryFilter >= 4)
+		throw new TypeError('Watchlist and Batch require an explicit capable provider');
+	const owned =
+	    session === undefined ? undefined : createSessionProvider({session, limits, endpoint});
+	const selected = owned ?? provider;
+	let view;
+	try {
+		view = mountPresentation(element, selected, categoryFilter, now);
+	} catch (error) {
+		owned?.dispose();
+		throw error;
+	}
+	let alive = true;
+	return Object.freeze({
+		provider : selected,
+		unmount() {
+		    if (!alive)
+			    return;
+		    alive = false;
+		    try {
+			    view.unmount();
+		    } finally {
+			    owned?.dispose();
+		    }
+		}
+	});
 }
 
 function mountPresentation(element, provider, categoryFilter, now)
@@ -84,13 +123,15 @@ function mountPresentation(element, provider, categoryFilter, now)
 
 	const root = node('section', 'telemetry-configurator');
 	root.dataset.role = 'configurator';
-	root.dataset.panel = ['configurator', 'field', 'command', 'service', 'watchlist', 'batch'][categoryFilter];
+	root.dataset.panel =
+	    [ 'configurator', 'field', 'command', 'service', 'watchlist', 'batch' ][categoryFilter];
 	root.setAttribute('part', 'root');
 	root.setAttribute('aria-label', 'Telemetry Configurator');
 	const header = node('header', 'tux-header');
 	header.setAttribute('part', 'header');
-	const title = node('h2', '', ['Device Configurator', 'Field editor', 'Command', 'Service',
-	                            'Watchlist', 'Mixed Batch'][categoryFilter]);
+	const title = node('h2', '', [
+		'Device Configurator', 'Field editor', 'Command', 'Service', 'Watchlist', 'Mixed Batch'
+	][categoryFilter]);
 	const mode = node('span', 'tux-mode');
 	mode.dataset.role = 'mode';
 	header.append(title, mode);
@@ -108,16 +149,17 @@ function mountPresentation(element, provider, categoryFilter, now)
 	watch.append(node('h3', '', 'Watchlist'));
 	const watchActions = node('div', 'tux-actions');
 	const watchButtons = new Map();
-	for (const [action, text] of [['addWatch', 'Add selected Field'], ['refreshWatch', 'Refresh'],
-	                             ['startWatch', 'Start'], ['stopWatch', 'Stop'],
-	                             ['clearWatch', 'Clear']]) {
+	for (const [action, text] of [[ 'addWatch', 'Add selected Field' ],
+	                              [ 'refreshWatch', 'Refresh' ], [ 'startWatch', 'Start' ],
+	                              [ 'stopWatch', 'Stop' ], [ 'clearWatch', 'Clear' ]]) {
 		const button = node('button', '', text);
 		button.type = 'button';
 		button.dataset.action = action;
 		button.disabled = true;
 		button.addEventListener('click', () => {
 			if (!watch.hidden && !button.disabled)
-				invoke(() => action === 'startWatch' ? provider.startWatch(now()) : provider[action]());
+				invoke(() => action === 'startWatch' ? provider.startWatch(now())
+				                                     : provider[action]());
 		});
 		watchButtons.set(action, button);
 		watchActions.append(button);
@@ -126,7 +168,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const individualInput = node('input');
 	individualInput.type = 'checkbox';
 	individualInput.dataset.action = 'watch-individual';
-	individualLabel.append(individualInput, document.createTextNode('Individual FieldRead fallback'));
+	individualLabel.append(individualInput,
+	                       document.createTextNode('Individual FieldRead fallback'));
 	individualInput.addEventListener('change', () => {
 		if (!individualInput.disabled)
 			invoke(() => provider.setWatchIndividual(individualInput.checked));
@@ -154,7 +197,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 	watchHead.append(watchHeading);
 	const watchBody = node('tbody');
 	watchTable.append(watchHead, watchBody);
-	watch.append(watchActions, individualLabel, intervalLabel, intervalInput, watchStatus, watchTable);
+	watch.append(watchActions, individualLabel, intervalLabel, intervalInput, watchStatus,
+	             watchTable);
 	const noWatch = node('p', 'tux-message', 'Watchlist is unavailable in this provider.');
 	const batch = node('section', 'tux-section tux-batch');
 	batch.hidden = true;
@@ -165,16 +209,17 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const batchOperation = node('select');
 	batchOperation.setAttribute('aria-label', 'Batch operation for the selected endpoint');
 	batchOperation.dataset.action = 'batch-operation';
-	for (const [value, label] of [['read', 'FieldRead'], ['write', 'FieldWrite'],
-	                             ['command', 'Command'], ['service', 'Service']]) {
+	for (const [value, label] of [[ 'read', 'FieldRead' ], [ 'write', 'FieldWrite' ],
+	                              [ 'command', 'Command' ], [ 'service', 'Service' ]]) {
 		const option = node('option', '', label);
 		option.value = value;
 		batchOperation.append(option);
 	}
 	batchActions.append(batchOperation);
 	const batchButtons = new Map();
-	for (const [action, label] of [['addBatch', 'Add selected endpoint'],
-	                             ['executeBatch', 'Execute Batch'], ['clearBatch', 'Clear Batch']]) {
+	for (const [action, label] of [[ 'addBatch', 'Add selected endpoint' ],
+	                               [ 'executeBatch', 'Execute Batch' ],
+	                               [ 'clearBatch', 'Clear Batch' ]]) {
 		const button = node('button', '', label);
 		button.type = 'button';
 		button.dataset.action = action;
@@ -182,7 +227,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 		button.addEventListener('click', () => {
 			if (!batch.hidden && !button.disabled)
 				invoke(() => action === 'addBatch' ? provider.addBatch(batchOperation.value)
-				                                  : provider[action]());
+				                                   : provider[action]());
 		});
 		batchButtons.set(action, button);
 		batchActions.append(button);
@@ -199,10 +244,15 @@ function mountPresentation(element, provider, categoryFilter, now)
 	batchHead.append(batchHeading);
 	const batchBody = node('tbody');
 	batchTable.append(batchHead, batchBody);
-	batch.append(batchActions,
-	             node('p', 'tux-message', 'Sequential best effort. Partial results are retained. No automatic retry from this editor.'),
-	             node('p', 'tux-message', 'New request arguments start at canonical zero values, not device defaults. FieldWrite replaces the entire Field value; review every member.'),
-	             batchStatus, batchError, batchTable);
+	batch.append(
+	    batchActions,
+	    node(
+	        'p', 'tux-message',
+	        'Sequential best effort. Partial results are retained. No automatic retry from this editor.'),
+	    node(
+	        'p', 'tux-message',
+	        'New request arguments start at canonical zero values, not device defaults. FieldWrite replaces the entire Field value; review every member.'),
+	    batchStatus, batchError, batchTable);
 	const batchNoArguments = node('p', 'tux-message', 'FieldRead has no request arguments.');
 	batch.append(batchNoArguments);
 	const noBatch = node('p', 'tux-message', 'Mixed Batch is unavailable in this provider.');
@@ -248,13 +298,15 @@ function mountPresentation(element, provider, categoryFilter, now)
 	content.append(selection, actions, error);
 	const sections = new Map();
 	for (const [source, label] of [[ 'value', 'Source value' ],
-	                               [ 'draft', 'Request / local draft' ],
-	                               [ 'response', 'Response' ],
+	                               [ 'draft', 'Request / local draft' ], [ 'response', 'Response' ],
 	                               [ 'batchDraft', 'Selected Batch item arguments' ],
 	                               [ 'batchResponse', 'Selected Batch item response' ]]) {
 		const panel = node('section', 'tux-section');
-		panel.setAttribute('part', {draft : 'request', batchDraft : 'batch-request',
-		                           batchResponse : 'batch-response'}[source] || source);
+		panel.setAttribute('part', {
+			draft : 'request',
+			batchDraft : 'batch-request',
+			batchResponse : 'batch-response'
+		}[source] || source);
 		panel.dataset.source = source;
 		const heading = node('h3', '', label);
 		const headingId = viewId + '-' + source;
@@ -425,8 +477,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 				if (!entry.live || entry.context !== context || !entry.editable)
 					return;
 				invoke(() => source === 'batchDraft'
-				    ? provider.setBatchText(entry.path, input.value, entry.revision)
-				    : provider.setText(entry.path, input.value, entry.revision));
+				                 ? provider.setBatchText(entry.path, input.value, entry.revision)
+				                 : provider.setText(entry.path, input.value, entry.revision));
 			});
 			input.addEventListener('blur', () => {
 				if (alive && entry.live && entry.context === context)
@@ -556,7 +608,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 		    : rootWindow.available && rootWindow.kind === 'array'  ? 'Empty array.'
 		    : source === 'value' ? 'No current source value. Select a Field and press Read.'
 		    : source === 'draft' || source === 'batchDraft' ? 'No local request draft.'
-		                         : 'No current response value.';
+		                                                    : 'No current response value.';
 	}
 
 	function renderOutcomes()
@@ -565,10 +617,16 @@ function mountPresentation(element, provider, categoryFilter, now)
 		for (const [operation, result] of Object.entries(state.outcomes)) {
 			if (!result)
 				continue;
-			if (categoryFilter && (!matchesSelection() ||
-			    (categoryFilter === 1 ? !['read', 'write', 'readback'].includes(operation)
+			// Standalone legacy panels follow selection. A revoked Session may
+			// retain its own historical facts after that selection is cleared.
+			if (categoryFilter && !matchesSelection() &&
+			    !(state.connection && !state.current && result.historical === true))
+				continue;
+			if (categoryFilter &&
+			    (categoryFilter === 1   ? !['read', 'write', 'readback'].includes(operation)
 			     : categoryFilter === 2 ? operation !== 'command'
-			     : categoryFilter === 3 ? operation !== 'service' : true)))
+			     : categoryFilter === 3 ? operation !== 'service'
+			                            : true))
 				continue;
 			const line = node('p', 'tux-outcome');
 			line.dataset.role = 'outcome';
@@ -632,7 +690,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 		watchButtons.get('refreshWatch').disabled = !value.canRefresh || value.active;
 		watchButtons.get('startWatch').disabled = !value.canRefresh || value.active;
 		watchButtons.get('stopWatch').disabled = !value.active;
-		watchButtons.get('clearWatch').disabled = !state.current || value.active || !value.rows.length;
+		watchButtons.get('clearWatch').disabled =
+		    !state.current || value.active || !value.rows.length;
 		individualInput.checked = value.individual;
 		individualInput.disabled = !state.current || value.active;
 		intervalInput.disabled = !state.current || value.active;
@@ -647,7 +706,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 			if (!entry) {
 				const element = node('tr');
 				element.dataset.watch = row.key;
-				const name = node('td'), text = node('td'), status = node('td'), action = node('td');
+				const name = node('td'), text = node('td'), status = node('td'),
+				      action = node('td');
 				const remove = node('button', '', 'Remove');
 				remove.type = 'button';
 				remove.dataset.action = 'removeWatch';
@@ -709,7 +769,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 			batchRows.clear();
 			batchContext = identity;
 		}
-		const categoryOperations = {1 : ['read', 'write'], 2 : ['command'], 3 : ['service']};
+		const categoryOperations = {1 : [ 'read', 'write' ], 2 : [ 'command' ], 3 : [ 'service' ]};
 		const allowed = value.addOperations || categoryOperations[state.selected?.category] || [];
 		for (const option of batchOperation.options) {
 			option.disabled = option.hidden = !allowed.includes(option.value);
@@ -719,7 +779,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 		const locked = !state.current || value.active;
 		batchOperation.disabled = locked || !allowed.length;
 		batchButtons.get('addBatch').disabled = locked || !value.canAdd || !allowed.length;
-		batchButtons.get('executeBatch').disabled = locked || !value.canExecute ||
+		batchButtons.get('executeBatch').disabled =
+		    locked || !value.canExecute ||
 		    (!state.writesEnabled && value.items.some(row => row.operation !== 'read'));
 		batchButtons.get('clearBatch').disabled = locked || !value.items.length;
 		batchStatus.textContent = value.status;
@@ -733,14 +794,16 @@ function mountPresentation(element, provider, categoryFilter, now)
 			if (!entry) {
 				const element = node('tr');
 				element.dataset.batch = String(row.key);
-				const order = node('td'), operation = node('td'), name = node('td'), status = node('td');
+				const order = node('td'), operation = node('td'), name = node('td'),
+				      status = node('td');
 				const controls = node('td', 'tux-batch-controls');
 				entry = {element, order, operation, name, status, controls, live : false};
 				const owner = entry;
-				for (const [action, label, method, delta] of [
-					['selectBatch', 'View / edit', 'selectBatch'],
-					['batch-up', 'Up', 'moveBatch', -1], ['batch-down', 'Down', 'moveBatch', 1],
-					['removeBatch', 'Remove', 'removeBatch']]) {
+				for (const [action, label, method,
+				            delta] of [[ 'selectBatch', 'View / edit', 'selectBatch' ],
+				                       [ 'batch-up', 'Up', 'moveBatch', -1 ],
+				                       [ 'batch-down', 'Down', 'moveBatch', 1 ],
+				                       [ 'removeBatch', 'Remove', 'removeBatch' ]]) {
 					const button = node('button', '', label);
 					button.type = 'button';
 					button.dataset.action = action;
@@ -758,8 +821,12 @@ function mountPresentation(element, provider, categoryFilter, now)
 			}
 			entry.live = true;
 			entry.order.textContent = String(index + 1);
-			entry.operation.textContent = {read : 'FieldRead', write : 'FieldWrite',
-				command : 'Command', service : 'Service'}[row.operation] || row.operation;
+			entry.operation.textContent = {
+				read : 'FieldRead',
+				write : 'FieldWrite',
+				command : 'Command',
+				service : 'Service'
+			}[row.operation] || row.operation;
 			entry.name.textContent = row.catalog + ' / ' + row.name;
 			entry.status.textContent = row.status || 'NotExecuted';
 			entry.status.setAttribute('part', 'batch-result');
@@ -776,8 +843,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 				batchRows.delete(key);
 		const selectedItem = value.items.find(row => row.key === value.selectedKey);
 		batchNoArguments.hidden = !selectedItem || selectedItem.operation !== 'read';
-		for (const [source, available] of [['batchDraft', value.hasDraft],
-		                                 ['batchResponse', value.hasResponse]]) {
+		for (const [source, available] of [[ 'batchDraft', value.hasDraft ],
+		                                   [ 'batchResponse', value.hasResponse ]]) {
 			if (selectedItem && available) {
 				sections.get(source).panel.hidden = false;
 				renderRows(source);
@@ -812,7 +879,9 @@ function mountPresentation(element, provider, categoryFilter, now)
 		                            : 'Select an endpoint';
 		const matches = matchesSelection();
 		if (!matches)
-			selection.textContent = 'Select a ' + ['','Field','Command','Service','Field','Field'][categoryFilter];
+			selection.textContent =
+			    'Select a ' +
+			    [ '', 'Field', 'Command', 'Service', 'Field', 'Field' ][categoryFilter];
 		for (const [action, button] of buttons) {
 			const category = state.selected?.category;
 			button.hidden = action === 'execute'      ? category !== 2
@@ -826,7 +895,10 @@ function mountPresentation(element, provider, categoryFilter, now)
 			button.hidden ||= !matches;
 			button.disabled = !matches || !state.actions[action];
 		}
-		error.textContent = localError || state.error;
+		const connectionError = !state.current && state.connection?.lastError;
+		error.textContent =
+		    localError || state.error || (state.dataStale && state.dataInvalidationReason) ||
+		    (connectionError && `${connectionError.code}: ${connectionError.message}`) || '';
 		error.hidden = !error.textContent;
 		if (!categoryFilter)
 			renderEndpoints();
@@ -861,9 +933,18 @@ function mountPresentation(element, provider, categoryFilter, now)
 		renderOutcomes();
 		renderBatch();
 		status.dataset.session = String(state.session);
-		status.textContent = (state.current ? 'Connected' : 'Disconnected') +
-		                     (state.busy ? ' / Working' : ' / Idle') +
-		                     (state.dirty ? ' / Unsaved draft' : '');
+		const connectionLabels = {
+			connecting : 'Connecting',
+			bootstrapping : 'Loading schema',
+			disconnecting : 'Disconnecting',
+			disconnected : 'Disconnected',
+			'recovery-required' : 'Recovery required',
+			closed : 'Closed'
+		};
+		status.textContent =
+		    (state.current ? 'Connected'
+		                   : connectionLabels[state.connection?.state] || 'Disconnected') +
+		    (state.busy ? ' / Working' : ' / Idle') + (state.dirty ? ' / Unsaved draft' : '');
 	}
 
 	function update(snapshot)

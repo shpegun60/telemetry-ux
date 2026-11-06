@@ -1,5 +1,14 @@
 # Web presentation provider
 
+For a ready SDK connection, start with
+[`mountConfigurator(element, {session})`](../doc/SessionProvider.md). It owns one
+local presentation and follows Session lifecycle automatically. Static Sessions
+also supply generated structural metadata and wire-editing codecs. Independent
+views share the Session's existing FIFO; unmounting does not close or cancel it.
+Accepted peer mutations invalidate cached values and lock stale drafts until an
+explicit cancel/restart. This initial Session path has no Watchlist/Batch API.
+
+The advanced APIs below remain available for a host-owned low-level client.
 `Provider.js` adapts one host-owned Telemetry SDK client to the reusable web
 Configurator. It owns presentation values and editable drafts. The supplied SDK
 client owns submission, its single FIFO, payload encoding, timeouts and recovery.
