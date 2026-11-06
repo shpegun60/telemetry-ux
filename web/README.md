@@ -102,6 +102,14 @@ host retains responsibility for every client, transport and pending operation.
 
 ## Browser WebSocket carrier
 
+The implementation belongs to the headless SDK. The existing
+`telemetry-ux/transports/websocket` path re-exports
+`telemetry-sdk/transports/websocket/carrier`; use the matching SDK/UX package pair.
+That borrowed-only entry point does not load the optional connection coordinator.
+Browser hosts using an import map must map the SDK carrier subpath as shown in the
+[reference demo](../examples/web_demo/index.html). The assets exporter includes
+that same bounded module graph automatically.
+
 Use one already-open, exclusively borrowed browser socket for complete binary
 Encoded messages. Bootstrap and admission belong to the application:
 

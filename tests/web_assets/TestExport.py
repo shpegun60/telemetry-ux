@@ -64,6 +64,34 @@ class ExportTests(unittest.TestCase):
         self.assertTrue(all(asset['path'].startswith('/') for asset in first['assets']))
         self.assertNotIn('new DeviceClient', (self.output / 'telemetry_web_assets.hpp').read_text())
 
+    def test_borrowed_carrier_wrapper_module_closure(self):
+        # Exercise the production UX wrapper and the installed SDK carrier's
+        # import edges. The fixture supplies no Session/coordinator modules.
+        wrapper = Path(__file__).resolve().parents[2] / 'web/WebSocketTransport.js'
+        installed_wrapper = self.public / 'node_modules/telemetry-ux/web/WebSocketTransport.js'
+        installed_wrapper.write_bytes(wrapper.read_bytes())
+        self.write('node_modules/telemetry-sdk/web/WebSocketTransport.js',
+                   "import {EncodedBackend} from '../lib/client/web/Client.js';\n"
+                   'export function bindWebSocket() { return EncodedBackend; }\n')
+        self.write('app.js',
+                   "import {bindWebSocket} from 'telemetry-ux/transports/websocket';\n")
+        manifest = self.export()
+        paths = {asset['path'] for asset in manifest['assets']}
+        self.assertIn('/vendor/telemetry-ux/web/WebSocketTransport.js', paths)
+        self.assertIn('/vendor/telemetry-sdk/web/WebSocketTransport.js', paths)
+        self.assertIn('/vendor/telemetry-sdk/lib/client/web/Client.js', paths)
+        self.assertNotIn('/vendor/telemetry-sdk/web/Session.js', paths)
+        self.assertNotIn('/vendor/telemetry-sdk/web/WebSocketConnection.js', paths)
+        exported = (self.output / 'vendor/telemetry-ux/web/WebSocketTransport.js').read_bytes()
+        self.assertEqual(exported, wrapper.read_bytes())
+        mapping = json.loads(tool.MAP.search((self.output / 'index.html').read_text())[2])
+        self.assertEqual(mapping['imports']['telemetry-sdk/transports/websocket/carrier'],
+                         './vendor/telemetry-sdk/web/WebSocketTransport.js')
+
+    def test_missing_borrowed_carrier_refused_before_output(self):
+        (self.public / 'node_modules/telemetry-sdk/web/WebSocketTransport.js').unlink()
+        self.refused()
+
     def test_existing_destination_is_never_reused(self):
         self.output.mkdir()
         marker = self.output / 'mine'
