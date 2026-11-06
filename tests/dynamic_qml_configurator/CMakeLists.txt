@@ -8,5 +8,7 @@ qt_standard_project_setup(REQUIRES 6.4)
 qt_add_executable(telemetry_dynamic_qml_provider main.cpp Fixture.hpp)
 target_compile_features(telemetry_dynamic_qml_provider PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_dynamic_qml_provider PRIVATE QT_NO_KEYWORDS)
+target_compile_definitions(telemetry_dynamic_qml_provider PRIVATE
+    DYNAMIC_QML_EXAMPLE_MAIN="${CMAKE_CURRENT_SOURCE_DIR}/../../examples/dynamic_qml/Main.qml")
 target_link_libraries(telemetry_dynamic_qml_provider PRIVATE TelemetryUX::dynamic_configurator
     Telemetry::core Telemetry::encoded_server Telemetry::encoded_backend Qt6::Test)

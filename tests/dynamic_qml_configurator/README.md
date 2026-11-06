@@ -20,7 +20,7 @@ It records exact source/prefix/tool/executable/log hashes and rejects source dri
 or reuse of nonempty output. All generated files remain outside the checkouts.
 The same runner independently configures and builds the installed-only
 [two-panel application](../../examples/dynamic_qml/README.md), then runs its real
-QML smoke journey. It requires at least 657 provider checks and no QML warnings.
+QML smoke journey. It requires at least 787 provider checks and no QML warnings.
 
 The C++ fixture uses the real Model, Descriptor, RuntimeSchema, Workbench owner,
 EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage:
@@ -31,6 +31,12 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   Service, retained owner operation fact and remaining panels continuing normally.
 - A provider without Watchlist support creates no Watchlist pane, even if its
   Configurator's `watchlistVisible` is explicitly enabled.
+- The actual example `Main.qml`, with per-panel opt-in checked by real mouse
+  input, Refresh/Edit/Apply controls and typed input without Enter. Server Write
+  and separate normalized readback are checked, as are sibling invalidation and
+  empty-value/response labels fitting their viewports. At 1400 x 820 the
+  configuration panel must retain at least 800 pixels of width and the field
+  panel 480-520 pixels; actual input controls must fit their own panel and window.
 - Session retirement, checked quiescence, fresh admission with the same endpoint
   IDs, stale QModelIndex refusal, no implicit refresh or mutation replay.
 - Provider/target-binding deletion during model reset, provider deletion from a

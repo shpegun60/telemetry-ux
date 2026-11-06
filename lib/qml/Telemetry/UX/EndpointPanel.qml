@@ -156,8 +156,13 @@ Pane {
                 }
                 ScrollBar.vertical: ScrollBar {}
                 Label {
+                    parent: valueTree
+                    objectName: "emptyValueLabel"
                     textFormat: Text.PlainText
                     anchors.centerIn: parent
+                    width: Math.max(0, parent.width - 24)
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
                     visible: valueTree.rows === 0
                     text: panel.provider.busy
                         ? panel.provider.serviceSelected ? "Waiting for the Service result…" : panel.provider.commandSelected ? "Waiting for the Command result…" : "Reading the selected Field…"
@@ -225,8 +230,13 @@ Pane {
                     }
                     ScrollBar.vertical: ScrollBar {}
                     Label {
+                        parent: responseTree
+                        objectName: "emptyResponseLabel"
                         textFormat: Text.PlainText
                         anchors.centerIn: parent
+                        width: Math.max(0, parent.width - 24)
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                         visible: responseTree.rows === 0
                         text: panel.provider.busy ? "Waiting for a response…" : "No owned response value."
                         color: "#99abbf"

@@ -142,9 +142,14 @@ def main():
         executable = build / ('telemetry_dynamic_qml_provider.exe' if os.name == 'nt' else 'telemetry_dynamic_qml_provider')
         log = run('runtime', [executable])
         count = re.search(r'Dynamic QML provider checks=(\d+) warnings=(\d+)', log)
-        if not count or int(count[1]) < 657 or int(count[2]) != 0:
+        if not count or int(count[1]) < 787 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
+        if 'Dynamic QML actual example optIn=isolated writes=1 readbacks=1 geometry=valid warnings=0' not in log:
+            raise RuntimeError('Actual shipped example did not complete its real input and readback journey')
         report.update(checks=int(count[1]), warnings=int(count[2]), executable_sha256=digest(executable))
+        report['actual_example_input'] = dict(independent_opt_in=True, writes=1, readbacks=1,
+                                            controls_within_panels_and_window=True,
+                                            placeholders_within_viewports=True, warnings=0)
         if args.sanitize:
             negative = run('application-leak-negative-control', [executable, '--application-leak-control'], expected=86)
             if '123 byte(s)' not in negative or 'injectedApplicationLeak' not in negative:

@@ -6,6 +6,7 @@
 #include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlEngine>
+#include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QSignalSpy>
@@ -247,6 +248,170 @@ Window {
 }
 )qml";
 
+template<class Predicate>
+static bool until(Predicate predicate)
+{
+	QElapsedTimer elapsed;
+	elapsed.start();
+	while (!predicate() && elapsed.elapsed() < 5000) {
+		events();
+		QTest::qWait(1);
+	}
+	return predicate();
+}
+
+static QQuickItem* visibleItem(QQuickItem* root, const QString& name,
+                               const QString& scalarName = {})
+{
+	if (root->isVisible() && root->objectName() == name &&
+	    (scalarName.isEmpty() || root->property("scalarName").toString() == scalarName))
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* found = visibleItem(child, name, scalarName))
+			return found;
+	return nullptr;
+}
+
+static QQuickItem* control(QQuickItem* scope, const char* name, const char* scalarName = "")
+{
+	QQuickItem* result = nullptr;
+	CHECK(until([&] {
+		result = visibleItem(scope, QString::fromLatin1(name), QString::fromLatin1(scalarName));
+		return result && result->width() > 0 && result->height() > 0;
+	}));
+	return result;
+}
+
+static bool inside(QQuickItem& item, QQuickItem& scope)
+{
+	const auto bounds = item.mapRectToItem(&scope, QRectF{0, 0, item.width(), item.height()});
+	return bounds.left() >= -0.5 && bounds.top() >= -0.5 && bounds.right() <= scope.width() + 0.5 &&
+	       bounds.bottom() <= scope.height() + 0.5;
+}
+
+static void click(QQuickWindow& window, QQuickItem& item, QQuickItem* scope = nullptr)
+{
+	CHECK(item.isVisible() && item.isEnabled());
+	events();
+	CHECK(inside(item, *window.contentItem()));
+	auto* owner = scope ? scope : item.parentItem();
+	CHECK(owner && inside(item, *owner));
+	const auto point = item.mapToScene(QPointF{item.width() / 2, item.height() / 2}).toPoint();
+	CHECK(point.x() >= 0 && point.x() < window.width() && point.y() >= 0 &&
+	      point.y() < window.height());
+	QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
+	events();
+}
+
+static void placeholderGeometry(QQuickItem* scope, const char* name, const char* treeName)
+{
+	auto* label = control(scope, name);
+	auto* viewport = label->parentItem();
+	CHECK(viewport && viewport->objectName() == QString::fromLatin1(treeName));
+	CHECK(!label->property("text").toString().isEmpty());
+	QRectF bounds;
+	const bool within = until([&] {
+		bounds = label->mapRectToItem(viewport, QRectF{0, 0, label->width(), label->height()});
+		return viewport->width() > 0 && viewport->height() > 0 && bounds.left() >= -0.5 &&
+		       bounds.top() >= -0.5 && bounds.right() <= viewport->width() + 0.5 &&
+		       bounds.bottom() <= viewport->height() + 0.5;
+	});
+	std::fprintf(stderr, "Dynamic QML example %s: viewport=%.1fx%.1f label=%.1f,%.1f %.1fx%.1f\n",
+	             name, double(viewport->width()), double(viewport->height()), double(bounds.x()),
+	             double(bounds.y()), double(bounds.width()), double(bounds.height()));
+	CHECK(within);
+}
+
+static void actualExampleInputJourney()
+{
+	Harness h;
+	Provider config{h.binding.get()}, value{h.binding.get()};
+	select(config, "Config");
+	select(value, "Config");
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("configProvider"), &config);
+	engine.rootContext()->setContextProperty(QStringLiteral("valueProvider"), &value);
+	QQmlComponent component{&engine, QUrl::fromLocalFile(QStringLiteral(DYNAMIC_QML_EXAMPLE_MAIN))};
+	if (component.isError())
+		std::fprintf(stderr, "%s\n", qPrintable(component.errorString()));
+	std::unique_ptr<QObject> root{component.create()};
+	CHECK(root);
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	CHECK(window);
+	CHECK(window->width() == 1400 && window->height() == 820);
+	auto* configPanel = control(window->contentItem(), "configPanel");
+	auto* valuePanel = control(window->contentItem(), "valuePanel");
+	CHECK(until([&] {
+		return configPanel->width() >= 800 && valuePanel->width() >= 480 &&
+		       valuePanel->width() <= 520.5;
+	}));
+	auto* configPermission = control(window->contentItem(), "configMutationsCheck");
+	auto* valuePermission = control(window->contentItem(), "valueMutationsCheck");
+	CHECK(!config.allowMutations() && !value.allowMutations());
+	CHECK(!configPermission->property("checked").toBool() &&
+	      !valuePermission->property("checked").toBool());
+	CHECK(h.storage->owner.pending() == 0 && device.reads == 0);
+	placeholderGeometry(configPanel, "emptyValueLabel", "valueTree");
+	placeholderGeometry(valuePanel, "emptyValueLabel", "valueTree");
+	click(*window, *configPermission);
+	CHECK(config.allowMutations() && !value.allowMutations());
+	CHECK(configPermission->property("checked").toBool() &&
+	      !valuePermission->property("checked").toBool());
+	click(*window, *control(valuePanel, "refreshButton"), valuePanel);
+	h.pump();
+	CHECK(value.values()->rowCount() == 1 && !value.canEdit());
+	click(*window, *control(configPanel, "refreshButton"), configPanel);
+	h.pump();
+	std::fprintf(
+	    stderr,
+	    "Dynamic QML actual input afterRefresh: allowed=%u canEdit=%u rows=%d peerRows=%d reads=%u status=%s\n",
+	    config.allowMutations(), config.canEdit(), config.values()->rowCount(),
+	    value.values()->rowCount(), device.reads, qPrintable(config.statusText()));
+	CHECK(config.canEdit() && value.values()->rowCount() == 1);
+	click(*window, *control(configPanel, "editButton"), configPanel);
+	CHECK(config.editing() && !value.editing());
+	auto* editor = control(configPanel, "scalarEditor", "limit");
+	click(*window, *editor, configPanel);
+	CHECK(until([&] {
+		return editor->hasActiveFocus();
+	}));
+	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+	QTest::keyClick(window, Qt::Key_Backspace);
+	for (const char letter : QByteArray{"101"})
+		QTest::keyClick(window, letter);
+	CHECK(editor->property("text").toString() == QStringLiteral("101"));
+	CHECK(editor->hasActiveFocus() && config.canApply()); // No Enter or signal invocation.
+	const auto packets = h.storage->packets, reads = device.reads, writes = device.writes;
+	QSignalSpy completion(&config, SIGNAL(applyFinished(bool)));
+	CHECK(completion.isValid());
+	click(*window, *control(configPanel, "applyButton"), configPanel);
+	CHECK(config.busy() && value.values()->rowCount() == 0 && !value.canEdit());
+	h.pump();
+	CHECK(device.writes == writes + 1 && device.reads == reads + 1);
+	CHECK(h.storage->packets == packets + 2 && device.config.limit == 100);
+	CHECK(scalar(config.values(), "limit") == QStringLiteral("100"));
+	CHECK(config.writeOutcome().contains(QStringLiteral("confirmed")));
+	CHECK(completion.size() == 1 && completion.front().front().toBool());
+	CHECK(value.values()->rowCount() == 0 && !value.allowMutations());
+	click(*window, *configPermission);
+	CHECK(!config.allowMutations() && !config.canEdit());
+	click(*window, *valuePermission);
+	CHECK(value.allowMutations() && !config.allowMutations());
+	click(*window, *control(valuePanel, "refreshButton"), valuePanel);
+	h.pump();
+	CHECK(value.canEdit() && value.values()->rowCount() == 1);
+	select(config, "Ping");
+	events();
+	placeholderGeometry(configPanel, "emptyValueLabel", "valueTree");
+	placeholderGeometry(configPanel, "emptyResponseLabel", "responseTree");
+	CHECK(!config.canCallService());
+	root.reset();
+	events();
+	CHECK(warnings == 0);
+	std::printf(
+	    "Dynamic QML actual example optIn=isolated writes=1 readbacks=1 geometry=valid warnings=0\n");
+}
+
 static void threePanelsRetirementAndReconnect()
 {
 	Harness h;
@@ -437,6 +602,8 @@ int main(int argc, char** argv)
 		modelNotificationDeletion();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("panels"))
 		threePanelsRetirementAndReconnect();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("example"))
+		actualExampleInputJourney();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("unknown"))
 		uncertainCommandFacts();
 	CHECK(warnings == 0);

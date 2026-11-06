@@ -43,7 +43,10 @@ Row {
 ```
 
 Change the DTOs and tables in `Device.hpp`. Both panels discover the resulting
-schema without another UI class. Both initially select Config; each has its own
+schema without another UI class. Both initially select Config and start read-only.
+Press Refresh, then enable the corresponding **Allow changes** checkbox before
+Edit/Apply or Command/Service submission. Each checkbox controls only its own
+panel; the host must also permit mutations. Each panel has its own
 Refresh/Edit/Apply state. A managed mutation invalidates the other panel's cached
 data; press Refresh explicitly to obtain the actual device value. Host policy and
 the panel's user opt-in both control mutation permission.
@@ -63,4 +66,5 @@ panels. Physical TX release and remote-session recovery remain owner responsibil
 `--smoke` creates both actual QML panels, submits two reads through the one FIFO,
 checks both snapshots and exits. The installed
 [Dynamic-provider test](../../tests/dynamic_qml_configurator/README.md) covers
-longer lifetime/error/reconnect scenarios and sanitizer qualification.
+real checkbox/button/keyboard editing, normalized Write/Refresh, placeholder
+geometry, longer lifetime/error/reconnect scenarios and sanitizer qualification.
