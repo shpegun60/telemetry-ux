@@ -70,7 +70,7 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUTF8: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'f6f029e7a672271354e3e609ab36833c39689477' }}
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'f6f029e7a672271354e3e609ab36833c39689477' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,7 +179,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'f6f029e7a672271354e3e609ab36833c39689477' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -450,7 +450,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '5ab68c3635e875e93ef4d2bb3e1f8843344b3615' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'f6f029e7a672271354e3e609ab36833c39689477' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
