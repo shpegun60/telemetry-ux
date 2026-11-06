@@ -369,6 +369,30 @@ jobs:
         run: |
           python -B tests/web_starter/run.py --sdk-root .ci/telemetry-sdk \
             --build-dir "$RUNNER_TEMP/ux-web-starter" --node "$(command -v node)"
+      - name: Own-device starter over installed packages and actual HTTP WebSocket
+        run: |
+          set -euo pipefail
+          npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/web-dist" \
+            --cache "$RUNNER_TEMP/own-device-npm-cache" > "$RUNNER_TEMP/own-device-npm-pack.json"
+          for profile in gcc clang-asan; do
+            compiler=g++
+            checks=()
+            if [ "$profile" = clang-asan ]; then
+              compiler=clang++-18
+              checks+=(--sanitize)
+            fi
+            python -B examples/web_device_starter/prepare.py \
+              --output "$RUNNER_TEMP/ux-own-device-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --ux-package "$RUNNER_TEMP/web-dist/telemetry-ux-0.1.0.tgz" \
+              --node "$(command -v node)" --npm-cli "$(npm root -g)/npm/bin/npm-cli.js" \
+              --codegen-python "$RUNNER_TEMP/web-codegen/bin/python" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            "$RUNNER_TEMP/web-builder/bin/python" -B tests/web_device_starter/run.py \
+              --prepared "$RUNNER_TEMP/ux-own-device-$profile" \
+              --output "$RUNNER_TEMP/ux-own-device-browser-$profile"
+          done
       - name: Retain installed browser, native and package receipts
         if: always()
         uses: actions/upload-artifact@v4
@@ -416,6 +440,10 @@ jobs:
             ${{ runner.temp }}/web-sdk-npm-pack.json
             ${{ runner.temp }}/web-sdk-prefix-gcc/share/telemetry/SDKMetadata.json
             ${{ runner.temp }}/web-sdk-prefix-clang-asan/share/telemetry/SDKMetadata.json
+            ${{ runner.temp }}/ux-own-device-*/*.json
+            ${{ runner.temp }}/ux-own-device-*/*.log
+            ${{ runner.temp }}/ux-own-device-browser-*/*.png
+            ${{ runner.temp }}/own-device-npm-pack.json
 
   generated-qml:
     name: Installed generated QML example (Linux)
