@@ -270,9 +270,16 @@ static void threePanelsRetirementAndReconnect()
 	CHECK(window);
 	events();
 	QTest::qWait(50);
-	CHECK(window->findChild<QObject*>(QStringLiteral("panelA")));
+	auto* panelA = window->findChild<QObject*>(QStringLiteral("panelA"));
+	CHECK(panelA);
 	CHECK(window->findChild<QObject*>(QStringLiteral("panelB")));
 	CHECK(window->findChild<QObject*>(QStringLiteral("panelC")));
+	CHECK(!window->findChild<QObject*>(QStringLiteral("watchlistPane")));
+	CHECK(panelA->setProperty("watchlistVisible", true));
+	events();
+	QTest::qWait(20);
+	CHECK(!window->findChild<QObject*>(QStringLiteral("watchlistPane")));
+	CHECK(panelA->setProperty("watchlistVisible", false));
 	QSignalSpy facts(h.binding.get(), SIGNAL(operationFinished(QVariantMap)));
 	CHECK(facts.isValid());
 	select(a, "Config");

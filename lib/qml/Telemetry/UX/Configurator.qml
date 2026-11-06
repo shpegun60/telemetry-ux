@@ -97,8 +97,8 @@ Control {
         Loader {
             Layout.fillWidth: true
             Layout.preferredHeight: item ? item.implicitHeight : 0
-            active: configurator.watchlistVisible && configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
-            visible: active
+            active: configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
+            visible: configurator.watchlistVisible && active
             sourceComponent: Component { Pane {
             objectName: "watchlistPane"
             implicitHeight: (watchPanelExpanded.checked ? 220 : 54)

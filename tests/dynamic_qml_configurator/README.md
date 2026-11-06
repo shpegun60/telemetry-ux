@@ -20,7 +20,7 @@ It records exact source/prefix/tool/executable/log hashes and rejects source dri
 or reuse of nonempty output. All generated files remain outside the checkouts.
 The same runner independently configures and builds the installed-only
 [two-panel application](../../examples/dynamic_qml/README.md), then runs its real
-QML smoke journey. It requires at least 585 provider checks and no QML warnings.
+QML smoke journey. It requires at least 657 provider checks and no QML warnings.
 
 The C++ fixture uses the real Model, Descriptor, RuntimeSchema, Workbench owner,
 EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage:
@@ -29,6 +29,8 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   over one owner FIFO; `QueueFull` preserves draft and confirmed state.
 - Three real QML panels, parallel accepted work, middle panel removed during a
   Service, retained owner operation fact and remaining panels continuing normally.
+- A provider without Watchlist support creates no Watchlist pane, even if its
+  Configurator's `watchlistVisible` is explicitly enabled.
 - Session retirement, checked quiescence, fresh admission with the same endpoint
   IDs, stale QModelIndex refusal, no implicit refresh or mutation replay.
 - Provider/target-binding deletion during model reset, provider deletion from a
