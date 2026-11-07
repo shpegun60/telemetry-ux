@@ -10,7 +10,7 @@ No SDK source-tree fallback, device connection or hardware operation is used.
 The real keyboard/mouse edit test runs through both Configurator and standalone
 FieldEditor. Standalone CommandPanel and ServicePanel reject mismatched
 selections and submit only after an explicit click, through the same generated
-API/FIFO. Mounting them sends no packet. The GUI floor is 494 checks, including
+API/FIFO. Mounting them sends no packet. The GUI floor is 590 checks, including
 exact U64/S64, lifecycle and permission regressions.
 
 ```sh
@@ -82,6 +82,18 @@ assertion, Qt warning or unexpected sanitizer result makes the gate fail.
 
 The current qualification floors are 340 generated-seam checks, 36 compiled
 naming endpoints, three generator unit tests with 14 sealed default-output
-hashes, 494 native/provider/QML checks with zero warnings, and 297 isolated
+hashes, 590 native/provider/QML checks with zero warnings, and 1339 isolated
 presentation-contract checks. Each individual assertion remains authoritative;
 the floors also reject accidentally skipped test paths.
+
+The isolated Watchlist contracts also register 65 distinct metadata endpoints and
+complete their Individual reads in order. Repeated injected timer ticks while a
+read is pending add no requests. A requested 1-ms interval uses Qt's precise timer;
+0 and values above 60,000 ms are refused. Stop retains the one accepted read until
+completion and prevents another cycle. These deterministic scheduling checks do
+not measure a transport's achievable sampling rate or add ReadMany support to the
+static provider. Membership follows available validated metadata and Qt row
+capacity; it has no artificial 32-Field list limit.
+The actual QML window additionally types `1` into its editable millisecond
+interval control with QTest mouse/keyboard events and verifies the provider
+receives 1 ms without issuing endpoint work.

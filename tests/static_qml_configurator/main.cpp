@@ -129,9 +129,9 @@ static void fields()
 		check(!p.allowMutations(), "actual generated session reset revokes mutation opt-in");
 		p.setAllowMutations(true);
 		check(!p.allowMutations(), "disconnected provider cannot preauthorize the next session");
-		check(h.api.admitDescriptor(
-		          {reinterpret_cast<const char*>(cf::descriptorBytes.data()), 64}),
-		      "same generated API admits a fresh session");
+		check(
+		    h.api.admitDescriptor({reinterpret_cast<const char*>(cf::descriptorBytes.data()), 64}),
+		    "same generated API admits a fresh session");
 		events();
 		check(p.connected() && !p.allowMutations(), "reused provider requires a fresh opt-in");
 	}
@@ -257,8 +257,8 @@ static void responseMutationLifetime()
 				drain(h, p);
 				check(p.responses()->rowCount() == 0 && p.serviceResponseEndpoint().isEmpty(),
 				      "accepted Write or Command retires the previous Service response");
-				check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed")) :
-				                  p.writeOutcome().startsWith(QStringLiteral("Applied")),
+				check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed"))
+				              : p.writeOutcome().startsWith(QStringLiteral("Applied")),
 				      "mutation facts remain available after response retirement");
 				check(h.packets == packets + (command ? 1u : 2u),
 				      "only the explicit mutation and Field readback were sent");
@@ -352,7 +352,8 @@ static void individualWatch()
 	ex::device.config = ex::initial;
 	Harness h;
 	Provider p{h.binding};
-	check(!p.watchReadManySupported() && p.watchIndividual(), "Static Watchlist explicitly uses Individual FieldRead");
+	check(!p.watchReadManySupported() && p.watchIndividual(),
+	      "Static Watchlist explicitly uses Individual FieldRead");
 	select(p, "Config");
 	check(!p.addWatch(), "aggregate Field excluded from scalar Watchlist");
 	const auto before = h.packets;
@@ -361,28 +362,34 @@ static void individualWatch()
 		check(p.canAddWatch() && p.addWatch(), "add real generated scalar Field");
 		check(!p.addWatch(), "duplicate watch membership refused");
 	}
-	check(p.watchCount() == 3 && h.packets == before, "selection and watch membership perform no I/O");
+	check(p.watchCount() == 3 && h.packets == before,
+	      "selection and watch membership perform no I/O");
 	p.refreshWatch();
 	for (int attempt = 0; attempt < 30 && p.watchActive(); ++attempt) {
 		h.exchange();
 		events();
 	}
-	check(!p.watchActive() && h.packets == before + 3, "one Individual cycle uses exactly three existing FIFO requests");
+	check(!p.watchActive() && h.packets == before + 3,
+	      "one Individual cycle uses exactly three existing FIFO requests");
 	auto* model = p.watchlist();
-	const auto text = [&](int row) { return model->data(model->index(row, 0), Qt::UserRole + 3).toString(); };
+	const auto text = [&](int row) {
+		return model->data(model->index(row, 0), Qt::UserRole + 3).toString();
+	};
 	check(text(0) == QStringLiteral("18446744073709551615") &&
 	          text(1) == QStringLiteral("-9223372036854775808") && text(2) == QStringLiteral("-2"),
 	      "Static Watchlist projects exact U64/S64/open enum cache values");
 	p.startWatch();
 	check(p.watchActive() && p.watchPending(), "explicit Start owns one pending Individual read");
 	p.stopWatch();
-	check(p.watchActive() && p.watchPending(), "Stop retains an accepted pending request until completion");
+	check(p.watchActive() && p.watchPending(),
+	      "Stop retains an accepted pending request until completion");
 	const auto count = p.watchCount();
 	p.clearWatch();
 	check(p.watchCount() == count, "Stop does not unlock membership before drain");
 	h.exchange();
 	events();
-	check(!p.watchActive() && h.packets == before + 4, "Stop prevents remaining Fields from submitting");
+	check(!p.watchActive() && h.packets == before + 4,
+	      "Stop prevents remaining Fields from submitting");
 	const auto afterStop = h.packets;
 	auto* timer = p.findChild<QTimer*>(QStringLiteral("staticConfiguratorWatchTimer"));
 	check(timer && !timer->isActive(), "poll timer stopped explicitly");
@@ -391,7 +398,8 @@ static void individualWatch()
 	check(h.packets == afterStop && !p.busy(), "stopped timer notification cannot create work");
 	h.api.resetSession();
 	events();
-	check(text(0).isEmpty() && model->data(model->index(0, 0), Qt::UserRole + 2).toString() == QStringLiteral("Stale"),
+	check(text(0).isEmpty() && model->data(model->index(0, 0), Qt::UserRole + 2).toString() ==
+	                               QStringLiteral("Stale"),
 	      "session invalidation hides watch values before new admission");
 }
 
@@ -407,10 +415,14 @@ static void qmlInput(const QString& image, bool standalone = false)
 	p.beginEdit();
 	QQmlEngine engine;
 	QQmlComponent component(&engine);
-	const auto form = standalone ? QByteArrayLiteral("FieldEditor") : QByteArrayLiteral("Configurator");
+	const auto form =
+	    standalone ? QByteArrayLiteral("FieldEditor") : QByteArrayLiteral("Configurator");
 	const auto options = standalone ? QByteArray{} : QByteArrayLiteral(";watchlistVisible:false");
 	component.setData(
-	    "import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1200;height:900;visible:true; " + form + " { anchors.fill:parent; provider:host.deviceProvider" + options + " } }",
+	    "import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1200;height:900;visible:true; " +
+	        form +
+	        " { objectName: \"staticTestView\"; anchors.fill:parent; provider:host.deviceProvider" +
+	        options + " } }",
 	    QUrl(QStringLiteral("qrc:/StaticWindow.qml")));
 	for (unsigned attempt = 0; component.isLoading() && attempt < 100; ++attempt) {
 		events();
@@ -425,12 +437,46 @@ static void qmlInput(const QString& image, bool standalone = false)
 	auto* window = qobject_cast<QQuickWindow*>(root.get());
 	check(window != nullptr, "real QQuickWindow");
 	auto* pane = root->findChild<QQuickItem*>(QStringLiteral("watchlistPane"));
-	check(standalone ? pane == nullptr : pane && !pane->isVisible(), "standalone has no navigation or Watchlist pane");
+	check(standalone ? pane == nullptr : pane && !pane->isVisible(),
+	      "standalone has no navigation or Watchlist pane");
 	if (!standalone) {
 		auto* watchMode = root->findChild<QObject*>(QStringLiteral("watchMode"));
 		check(watchMode && watchMode->property("count").toInt() == 1 &&
 		          watchMode->property("currentIndex").toInt() == 0,
 		      "Static QML never advertises unsupported ReadMany mode");
+		auto* frequency = root->findChild<QQuickItem*>(QStringLiteral("watchFrequency"));
+		check(frequency && frequency->property("from").toInt() == 1 &&
+		          frequency->property("to").toInt() == 60000 &&
+		          frequency->property("stepSize").toInt() == 1 &&
+		          frequency->property("editable").toBool(),
+		      "Watch interval uses editable integer milliseconds rather than a fixed Hz range");
+		auto* view = root->findChild<QObject*>(QStringLiteral("staticTestView"));
+		auto* expanded = root->findChild<QObject*>(QStringLiteral("watchlistExpanded"));
+		check(view && expanded, "watch controls retain stable object identities");
+		view->setProperty("watchlistVisible", true);
+		expanded->setProperty("checked", true);
+		events();
+		QTest::qWait(20);
+		auto* intervalInput = frequency->property("contentItem").value<QQuickItem*>();
+		check(intervalInput && intervalInput->isVisible(),
+		      "millisecond interval has a visible text editor");
+		const auto packetsBeforeInterval = h.packets;
+		QTest::mouseClick(
+		    window, Qt::LeftButton, Qt::NoModifier,
+		    intervalInput
+		        ->mapToScene(QPointF(intervalInput->width() / 2, intervalInput->height() / 2))
+		        .toPoint());
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		QTest::keyClick(window, Qt::Key_1);
+		QTest::keyClick(window, Qt::Key_Return);
+		events();
+		check(p.watchIntervalMs() == 1 && frequency->property("value").toInt() == 1,
+		      "real keyboard interval input reaches the provider as one millisecond");
+		check(h.packets == packetsBeforeInterval,
+		      "editing the polling interval submits no endpoint work");
+		p.setWatchIntervalMs(1000);
+		view->setProperty("watchlistVisible", false);
+		events();
 	}
 	auto* input =
 	    visual(window->contentItem(), QStringLiteral("scalarEditor"), QStringLiteral("gain"));
@@ -456,7 +502,8 @@ static void qmlInput(const QString& image, bool standalone = false)
 	select(p, "Good");
 	p.callService();
 	drain(h, p);
-	check(!p.serviceResponseEndpoint().isEmpty(), "successful Service retains its owned response history");
+	check(!p.serviceResponseEndpoint().isEmpty(),
+	      "successful Service retains its owned response history");
 	select(p, "Config");
 	events();
 	QTest::qWait(30);
@@ -489,7 +536,10 @@ static void qmlActionPanels()
 		QQmlEngine engine;
 		QQmlComponent component(&engine);
 		component.setData(
-		    QByteArrayLiteral("import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1000;height:700;visible:true; ") + type + " { objectName: \"standalone\"; anchors.fill:parent; provider:host.deviceProvider } }",
+		    QByteArrayLiteral(
+		        "import QtQuick\nimport QtQuick.Controls\nimport Telemetry.UX\nApplicationWindow { id:host; required property var deviceProvider; width:1000;height:700;visible:true; ") +
+		        type +
+		        " { objectName: \"standalone\"; anchors.fill:parent; provider:host.deviceProvider } }",
 		    QUrl(QStringLiteral("qrc:/ActionPanel.qml")));
 		check(component.isReady(), qPrintable(component.errorString()));
 		std::unique_ptr<QObject> root(component.createWithInitialProperties(
@@ -500,7 +550,8 @@ static void qmlActionPanels()
 		auto* window = qobject_cast<QQuickWindow*>(root.get());
 		check(window != nullptr, "standalone action uses real window");
 		auto* panel = root->findChild<QObject*>(QStringLiteral("standalone"));
-		check(panel && !panel->property("selectionMatches").toBool(), "wrong endpoint category hidden");
+		check(panel && !panel->property("selectionMatches").toBool(),
+		      "wrong endpoint category hidden");
 		check(!visual(window->contentItem(), QStringLiteral("applyButton")) &&
 		          !visual(window->contentItem(), QStringLiteral("executeButton")) &&
 		          !visual(window->contentItem(), QStringLiteral("callServiceButton")),
@@ -509,14 +560,16 @@ static void qmlActionPanels()
 		select(p, command ? "Reset" : "Ping");
 		events();
 		QTest::qWait(50);
-		auto* button = visual(window->contentItem(), command ? QStringLiteral("executeButton") : QStringLiteral("callServiceButton"));
+		auto* button = visual(window->contentItem(), command ? QStringLiteral("executeButton")
+		                                                     : QStringLiteral("callServiceButton"));
 		check(button && button->isEnabled(), "selected category enables its explicit action");
-		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
-		                  button->mapToScene(QPointF(button->width()/2, button->height()/2)).toPoint());
+		QTest::mouseClick(
+		    window, Qt::LeftButton, Qt::NoModifier,
+		    button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint());
 		drain(h, p);
 		check(h.packets == before + 1, "one explicit click uses existing FIFO exactly once");
-		check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed")) :
-		                  p.serviceOutcome().contains(QStringLiteral("no response value")),
+		check(command ? p.commandOutcome().startsWith(QStringLiteral("Executed"))
+		              : p.serviceOutcome().contains(QStringLiteral("no response value")),
 		      "standalone action publishes actual endpoint result");
 		window->close();
 		root.reset();
@@ -549,7 +602,10 @@ int main(int argc, char** argv)
 		individualWatch();
 		qmlInput(argc > 1 ? QString::fromLocal8Bit(argv[1])
 		                  : QStringLiteral("static-configurator.png"));
-		qmlInput((argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral("static-configurator.png")) + QStringLiteral(".field.png"), true);
+		qmlInput((argc > 1 ? QString::fromLocal8Bit(argv[1])
+		                   : QStringLiteral("static-configurator.png")) +
+		             QStringLiteral(".field.png"),
+		         true);
 		qmlActionPanels();
 		if (argc == 3 && std::strcmp(argv[2], "--inject-nonqt-leak") == 0)
 			injectedNonQtLeak();

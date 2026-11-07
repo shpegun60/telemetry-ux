@@ -52,11 +52,20 @@ function mount(element, options = {}, categoryFilter)
 {
 	if (!element?.ownerDocument || typeof element.appendChild !== 'function')
 		throw new TypeError('mountConfigurator requires a host element');
-	const {provider, session, now = () => performance.now(), limits, endpoint} = options;
+	const {
+		provider,
+		session,
+		now = () => performance.now(),
+		limits,
+		endpoint,
+		autoPoll = session !== undefined
+	} = options;
 	if ((provider === undefined) === (session === undefined))
 		throw new TypeError('Supply exactly one provider or Session');
 	if (typeof now !== 'function')
 		throw new TypeError('The Watchlist clock must be a function');
+	if (typeof autoPoll !== 'boolean')
+		throw new TypeError('autoPoll must be a boolean');
 	const owned =
 	    session === undefined ? undefined : createSessionProvider({session, limits, endpoint});
 	const selected = owned ?? provider;
@@ -67,13 +76,64 @@ function mount(element, options = {}, categoryFilter)
 		owned?.dispose();
 		throw error;
 	}
-	let alive = true;
+	let alive = true, timer, stopPolling;
+	const timerHost = element.ownerDocument.defaultView ?? globalThis;
+
+	function cancelTimer()
+	{
+		if (timer !== undefined) {
+			timerHost.clearTimeout(timer);
+			timer = undefined;
+		}
+	}
+
+	function schedule(state)
+	{
+		if (!alive || !state.current || !state.watch?.running || state.watch.pending ||
+		    state.busy) {
+			cancelTimer();
+			return;
+		}
+		if (timer !== undefined)
+			return;
+		timer = timerHost.setTimeout(() => {
+			timer = undefined;
+			if (!alive)
+				return;
+			try {
+				const time = now();
+				if (!Number.isFinite(time) || time < 0)
+					selected.stopWatch();
+				else
+					selected.tickWatch(time);
+			} catch {
+				selected.stopWatch();
+			}
+			schedule(selected.snapshot());
+		}, Math.max(1, state.watch.intervalMs));
+	}
+
+	if (autoPoll) {
+		try {
+			stopPolling = selected.subscribe(schedule);
+			schedule(selected.snapshot());
+		} catch (failure) {
+			alive = false;
+			cancelTimer();
+			stopPolling?.();
+			view.unmount();
+			owned?.dispose();
+			throw failure;
+		}
+	}
 	return Object.freeze({
 		provider : selected,
 		unmount() {
 		    if (!alive)
 			    return;
 		    alive = false;
+		    cancelTimer();
+		    stopPolling?.();
 		    try {
 			    view.unmount();
 		    } finally {
@@ -174,9 +234,9 @@ function mountPresentation(element, provider, categoryFilter, now)
 	const intervalLabel = node('label', '', 'Poll interval (ms)');
 	const intervalInput = node('input');
 	intervalInput.type = 'number';
-	intervalInput.min = '100';
-	intervalInput.max = '10000';
-	intervalInput.step = '100';
+	intervalInput.min = '1';
+	intervalInput.max = '60000';
+	intervalInput.step = '1';
 	intervalInput.id = viewId + '-watch-interval';
 	intervalInput.dataset.action = 'watch-interval';
 	intervalLabel.htmlFor = intervalInput.id;
@@ -194,8 +254,14 @@ function mountPresentation(element, provider, categoryFilter, now)
 	watchHead.append(watchHeading);
 	const watchBody = node('tbody');
 	watchTable.append(watchHead, watchBody);
+	const watchValues = node('div', 'tux-watch-values');
+	watchValues.tabIndex = 0;
+	watchValues.setAttribute('role', 'region');
+	watchValues.setAttribute('aria-label', 'Watched Field values');
+	watchValues.setAttribute('part', 'watch-values');
+	watchValues.append(watchTable);
 	watch.append(watchActions, individualLabel, intervalLabel, intervalInput, watchStatus,
-	             watchTable);
+	             watchValues);
 	const noWatch = node('p', 'tux-message', 'Watchlist is unavailable in this provider.');
 	const batch = node('section', 'tux-section tux-batch');
 	batch.hidden = true;

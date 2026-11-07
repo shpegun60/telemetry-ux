@@ -1,7 +1,7 @@
 /* Explicit-provider presentation over existing Telemetry SDK clients.
  * Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
  */
-import {Batch, Status} from 'telemetry-sdk/client';
+import {Batch, Status, inspectReadManyCapability} from 'telemetry-sdk/client';
 import {encodeValue} from 'telemetry-sdk/runtime';
 
 const names = new Map(Object.entries(Status).map(([ name, code ]) => [code, name]));
@@ -497,7 +497,7 @@ function presentation(adapter, inputLimits, hooks = {})
 				individual : watchIndividual,
 				intervalMs : watchInterval,
 				status : watchStatus,
-				canAdd : idle && watched.length < 32 && !!endpoint && watchScalar(endpoint) &&
+				canAdd : idle && !!endpoint && watchScalar(endpoint) &&
 				             !watched.some(row => row.endpoint.key === endpoint.key),
 				canRefresh : idle && watched.length > 0
 			}),
@@ -1138,11 +1138,11 @@ function presentation(adapter, inputLimits, hooks = {})
 				value : decoded.value
 			} ]
 			                                : decoded.items;
-			const count = record.individual ? 1 : watched.length;
+			const count = record.count;
 			if (!Array.isArray(items) || items.length !== count)
 				fail('Invalid ReadMany result');
 			const changed = items.map((item, index) => {
-				const row = watched[record.individual ? record.cursor : index];
+				const row = watched[record.cursor + index];
 				if (item.id !== row.endpoint.id || !Number.isInteger(item.status) ||
 				    item.status < 0 || item.status >= watchItemNames.length)
 					fail('Invalid ReadMany item');
@@ -1166,10 +1166,14 @@ function presentation(adapter, inputLimits, hooks = {})
 				change.row.status = change.status;
 				change.row.text = change.text;
 			}
-			if (!record.individual || ++watchCursor >= watched.length) {
+			watchCursor = record.cursor + count;
+			if (watchCursor >= watched.length) {
 				watchCycle = false;
 				watchStatus = (record.individual ? 'Individual FieldRead' : 'ReadMany') +
 				              ' complete - ' + watched.length + ' Fields';
+			} else {
+				watchStatus = (record.individual ? 'Individual FieldRead' : 'ReadMany') +
+				              ' progress - ' + watchCursor + ' / ' + watched.length + ' Fields';
 			}
 		} catch (failure) {
 			watchFailure(String(failure.message || failure), record.accepted);
@@ -1185,17 +1189,43 @@ function presentation(adapter, inputLimits, hooks = {})
 	{
 		if (active || watchPending || publishing || notifying || !isCurrent() || !watchCycle)
 			return false;
-		const record =
-		    {epoch, revision : watchRevision, cursor : watchCursor, individual : watchIndividual};
+		const record = {
+			epoch,
+			revision : watchRevision,
+			cursor : watchCursor,
+			count : 1,
+			individual : watchIndividual
+		};
 		publishing = true;
 		try {
-			if (!watchIndividual && !watchCapability)
-				fail(
-				    'ReadMany unavailable. Supply TRM1 for this session or explicitly select Individual FieldRead.');
+			if (!watchIndividual) {
+				const capacity = watchCapability && inspectReadManyCapability(watchCapability);
+				if (!capacity)
+					fail(
+					    'ReadMany unavailable. Supply valid TRM1 for this session or explicitly select Individual FieldRead.');
+				let replyBytes = 2;
+				record.count = 0;
+				while (record.cursor + record.count < watched.length &&
+				       record.count < capacity.itemLimit &&
+				       2 + 4 * (record.count + 1) <= capacity.requestLimit) {
+					const endpoint = watched[record.cursor + record.count].endpoint;
+					const bytes = 8 + model.types[endpoint.valueType].wireBytes;
+					if (replyBytes + bytes > capacity.replyLimit)
+						break;
+					replyBytes += bytes;
+					++record.count;
+				}
+				if (!record.count)
+					fail(
+					    'The next Field exceeds the advertised ReadMany byte budget. Select Individual FieldRead explicitly.');
+			}
 			watchPending = record;
-			const request = watchIndividual ? adapter.submit(watched[watchCursor].endpoint, 'read')
-			                                : adapter.readMany(watchCapability,
-			                                                   watched.map(row => row.endpoint));
+			const request =
+			    watchIndividual
+			        ? adapter.submit(watched[watchCursor].endpoint, 'read')
+			        : adapter.readMany(watchCapability,
+			                           watched.slice(record.cursor, record.cursor + record.count)
+			                               .map(row => row.endpoint));
 			record.accepted = request.requestId !== 0;
 			request.then(reply => completeWatch(record, reply), failure => {
 				if (watchPending !== record)
@@ -1553,7 +1583,7 @@ function presentation(adapter, inputLimits, hooks = {})
 		},
 		executeBatch,
 		addWatch(key = selected?.key) {
-		    if (!watchEditable() || watched.length >= 32 || typeof key !== 'string')
+		    if (!watchEditable() || typeof key !== 'string')
 			    return false;
 		    const endpoint = description.endpoints.find(row => row.key === key);
 		    if (!endpoint || !watchScalar(endpoint) ||
@@ -1589,8 +1619,8 @@ function presentation(adapter, inputLimits, hooks = {})
 		    return true;
 		},
 		setWatchInterval(milliseconds) {
-		    if (!watchEditable() || !Number.isFinite(milliseconds) || milliseconds < 100 ||
-		        milliseconds > 10000)
+		    if (!watchEditable() || !Number.isInteger(milliseconds) || milliseconds < 1 ||
+		        milliseconds > 60000)
 			    return false;
 		    watchInterval = milliseconds;
 		    notify();

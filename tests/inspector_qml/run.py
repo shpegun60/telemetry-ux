@@ -237,9 +237,9 @@ def main():
         watch_check = build / ('telemetry_inspector_qml_watchlist_check' + suffix)
         watch_screenshot = output / 'watchlist-window.png'
         watched = run('qml-watchlist', [watch_check, '--screenshot', watch_screenshot])
-        watch_counts = re.search(r'Inspector Watchlist checks=(\d+) limit=32 exact=1 '
+        watch_counts = re.search(r'Inspector Watchlist checks=(\d+) fields=65 packetLimit=32 exact=1 '
                                  r'skippedTicks=1 fallback=1 qml=1 Qt=(\S+)', watched)
-        if not watch_counts or int(watch_counts[1]) < 100 or watch_counts[2] != counts[3]:
+        if not watch_counts or int(watch_counts[1]) < 1000 or watch_counts[2] != counts[3]:
             raise RuntimeError('Watchlist did not prove bounded polling, exact values and explicit fallback')
         report['executions']['watchlist_checks'] = int(watch_counts[1])
         report['watchlist_screenshot'] = screenshot_record(watch_screenshot)

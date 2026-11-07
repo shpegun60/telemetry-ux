@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchlistModel.hpp"
+#include <array>
+#include <algorithm>
 #include <charconv>
 #include <limits>
 #include <type_traits>
@@ -83,9 +85,14 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 	for (int row = 0; row < count_; ++row)
 		if (rows_[row].id == endpoint)
 			return false;
+	if (rows_.size() == rows_.capacity())
+		rows_.reserve(rows_.capacity() >= maxRows / 2
+		                  ? qsizetype(maxRows)
+		                  : std::max(qsizetype(4), rows_.capacity() * 2));
 	Mutation mutation{changing_};
 	beginInsertRows({}, count_, count_);
-	rows_[count_++] = {endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}};
+	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}});
+	++count_;
 	endInsertRows();
 	return true;
 }
@@ -96,9 +103,8 @@ bool WatchlistModel::remove(int row)
 		return false;
 	Mutation mutation{changing_};
 	beginRemoveRows({}, row, row);
-	for (int next = row + 1; next < count_; ++next)
-		rows_[next - 1] = std::move(rows_[next]);
-	rows_[--count_] = {};
+	rows_.removeAt(row);
+	--count_;
 	endRemoveRows();
 	return true;
 }
@@ -115,8 +121,7 @@ void WatchlistModel::clear()
 	}
 	Mutation mutation{changing_};
 	beginResetModel();
-	for (int row = 0; row < count_; ++row)
-		rows_[row] = {};
+	rows_.clear();
 	count_ = 0;
 	endResetModel();
 	owner_ = nullptr;

@@ -45,13 +45,19 @@ provider of the same view.
 
 ## Static Watchlist
 
-Select a readable scalar Field or enum and call `addWatch()` (at most 32 distinct
-Fields). `refreshWatch()` performs one sequential cycle; `startWatch()` repeats
-cycles at `watchIntervalMs` (100–60,000 ms). `stopWatch()` stops future reads and
+Select a readable scalar Field or enum and call `addWatch()`. Membership is limited
+by distinct Fields in the validated generated metadata and Qt's integer row
+capacity, not by a 32-item wire-operation budget. `refreshWatch()` performs one
+sequential cycle; `startWatch()` requests cycles at `watchIntervalMs` (1–60,000 ms).
+This is a nominal scheduling interval, not a guaranteed per-Field sample rate:
+the transport, owner loop, getters and whole-cycle duration determine throughput.
+`stopWatch()` stops future reads and
 drains an already accepted read. Membership and interval changes are refused
 until the cycle and accepted read have ended. A slow read or foreground operation
 causes timer ticks to be skipped; polling never accumulates another request queue.
 Selection and mounting the QML view do not submit work.
+One cycle submits each selected Field in order with at most one pending read.
+No ReadMany wire limit, endpoint operation or protocol version changes.
 
 This provider currently exposes `watchIndividual == true` and
 `watchReadManySupported == false`. It does not silently turn a ReadMany request

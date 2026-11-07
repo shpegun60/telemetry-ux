@@ -299,6 +299,13 @@ jobs:
               --node "$(command -v node)" --tsc "$RUNNER_TEMP/web-tools/node_modules/typescript/bin/tsc" \
               --npm-js "$(npm root -g)/npm/bin/npm-cli.js" \
               --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/watchlist_scaling/run.py --build-dir "$RUNNER_TEMP/ux-watch-scaling-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --codegen-python "$RUNNER_TEMP/web-codegen/bin/python" \
+              --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+              --node "$(command -v node)" --npm-js "$(npm root -g)/npm/bin/npm-cli.js" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
       - name: Installed declarative element lifecycle, SSR and type consumers
         run: |
@@ -407,6 +414,9 @@ jobs:
           name: installed-web-configurator
           if-no-files-found: warn
           path: |
+            ${{ runner.temp }}/ux-watch-scaling-*/summary.json
+            ${{ runner.temp }}/ux-watch-scaling-*/*.log
+            ${{ runner.temp }}/ux-watch-scaling-*/browser/
             ${{ runner.temp }}/ux-web-gcc/summary.json
             ${{ runner.temp }}/ux-web-gcc/*.log
             ${{ runner.temp }}/ux-web-gcc/browser/

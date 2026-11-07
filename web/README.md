@@ -18,7 +18,8 @@ Configurator. It owns presentation values and editable drafts. The supplied SDK
 client owns submission, its single FIFO, payload encoding, timeouts and recovery.
 The provider does not open a connection, drive `process()`, retry an operation,
 start its own polling timer, or close the client. Optional Watchlist polling is
-driven explicitly by the application's `tickWatch(now)` calls, as described below.
+driven by the mounted Session view's timer after Start, or explicitly by the
+application's `tickWatch(now)` calls for advanced providers, as described below.
 
 Use `createDynamicProvider({client})` with an already admitted SDK DynamicClient.
 Use `createStaticProvider({client, metadata: structuralMetadata, sdk})` with an
@@ -247,14 +248,25 @@ optional Watchlist contract. Use `mountWatchlist(host, {provider})` for a separa
 read-only table. Add the host-selected Field, choose ReadMany or the explicit
 Individual fallback, then Refresh once or Start polling. The table keeps exact
 integer text and per-item statuses; an accepted cycle locks edits until it is
-finished, including after Stop. The renderer starts no timer and performs no
-request on mount. The application's owner loop drives `provider.tickWatch(now)`;
-Start uses `performance.now()` by default. Applications with a different clock
+finished, including after Stop. Mounting performs no request. A `{session}` mount
+automatically polls after Start; an advanced `{provider}` mount leaves polling
+with the application's `provider.tickWatch(now)` loop by default. The optional
+`autoPoll` boolean overrides that default. Stop, unmount and session revocation
+remove the view's timer. Start uses `performance.now()` by default. Applications with a different clock
 pass the same clock as `now: () => ownerTimeMs` to the mount function. Capability
 admission remains a host decision, not an automatic fallback inferred by the UI.
 
 The built-in Static and Dynamic providers implement this optional contract for
-1–32 distinct readable scalar/enum Fields (wire values at most eight bytes).
+distinct readable scalar/enum Fields (wire values at most eight bytes), without
+an artificial 32-row host limit. ReadMany splits a full cycle into ordered chunks
+that respect the remote item/request/reply budgets, with at most 32 Fields in a
+single wire operation. Each result is published for its completed chunk; the full
+list is not an atomic snapshot. One pending request prevents backlog. Integer
+intervals from 1 to 60,000 ms are nominal; a busy cycle skips missed ticks and the
+device, transport and event loop determine achievable throughput.
+Long lists scroll inside a keyboard-focusable pane with fixed column headings,
+so Start/Stop remain outside the values scroller. Set `--tux-watch-height` on the
+host to override its default viewport-relative height.
 The application enables the SDK backend's `readMany: true` option and supplies
 the remote TRM1 bytes for the admitted session:
 
@@ -262,7 +274,7 @@ the remote TRM1 bytes for the admitted session:
 // The host already owns its admitted client and capability discovery.
 provider.setReadManyCapability(capabilityBytes);
 provider.addWatch(fieldKey);
-provider.refreshWatch(); // One SDK ReadMany request, no fan-out.
+provider.refreshWatch(); // One cycle of ordered bounded ReadMany requests.
 // For periodic reads, call startWatch with the same monotonic clock as tickWatch.
 provider.startWatch(performance.now());
 // In the application's existing owner loop:

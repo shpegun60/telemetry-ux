@@ -7,6 +7,7 @@
 #include "InspectorController.hpp"
 #include "DemoPeer.hpp"
 #include <wire/EncodedWire.hpp>
+#include <wire/ReadManyWire.hpp>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPersistentModelIndex>
 #include <QtGui/QGuiApplication>
@@ -92,12 +93,12 @@ void modelChecks()
 	CHECK(resultGuard && model.data(model.index(0, 0), ui::WatchlistModel::StatusRole) == "Stale");
 	CHECK(model.data(model.index(0, 0), ui::WatchlistModel::TextRole).toString().isEmpty());
 	QObject::disconnect(notification);
-	for (int row = 1; row < 32; ++row)
+	for (int row = 1; row < 65; ++row)
 		CHECK(model.add(quint32(row), QString::number(row)));
-	CHECK(model.count() == 32 && !model.add(100, "overflow"));
+	CHECK(model.count() == 65 && !model.add(64, "duplicate"));
 	const auto stale = model.index(0, 0);
 	QPersistentModelIndex next{model.index(1, 0)};
-	CHECK(model.remove(0) && model.count() == 31 && model.id(0) == 1);
+	CHECK(model.remove(0) && model.count() == 64 && model.id(0) == 1);
 	CHECK(!model.data(stale).isValid() && next.isValid() && next.row() == 0);
 	CHECK(model.data(next, ui::WatchlistModel::EndpointIdRole).toUInt() == 1);
 	CHECK(!model.index(0, 1).isValid() && model.rowCount(model.index(0, 0)) == 0);
@@ -245,11 +246,11 @@ void controllerChecks()
 		}
 	CHECK(controller.watchCount() == 32);
 	select(controller, "Counter");
-	CHECK(!controller.canAddWatch() && !controller.addWatch());
+	CHECK(controller.canAddWatch() && controller.addWatch() && controller.watchCount() == 33);
 	CHECK(controller.refreshWatch() && await([&] {
-		      return !controller.watchPending();
+		      return !controller.watchActive();
 	      }));
-	CHECK(controller.removeWatch(31) && controller.watchCount() == 31);
+	CHECK(controller.removeWatch(32) && controller.watchCount() == 32);
 	CHECK(!watchText(controller, 0).isEmpty());
 	controller.inspector().invalidate();
 	// No event-loop pump may be needed to hide cached values of a revoked
@@ -294,6 +295,114 @@ void controllerChecks()
 	CHECK(controller.watchCount() == 0 && !controller.canAddWatch() && !controller.refreshWatch());
 	CHECK(controller.editing() && controller.demoWriteCount() == 0);
 	controller.cancelEdit();
+	controller.disconnectDevice();
+}
+
+void largeControllerChecks()
+{
+	ui::InspectorController controller;
+	CHECK(controller.connectReadManyDemo(true));
+	controller.setWatchIntervalMs(1);
+	CHECK(controller.watchIntervalMs() == 1);
+	controller.setWatchIntervalMs(0);
+	CHECK(controller.watchIntervalMs() == 1);
+	controller.setWatchIntervalMs(60001);
+	CHECK(controller.watchIntervalMs() == 1);
+	controller.setWatchIntervalMs(60000);
+	CHECK(controller.watchIntervalMs() == 60000);
+	const auto fill = [&](int count) {
+		controller.clearWatch();
+		CHECK(controller.watchCount() == 0);
+		for (int row = 0; row < count; ++row) {
+			select(controller, QStringLiteral("Value_%1").arg(row));
+			CHECK(controller.addWatch());
+		}
+		CHECK(controller.watchCount() == count);
+	};
+	const auto packet = [&](int cursor, int count, bool individual = false) {
+		const auto offered = controller.inspector().nextPacket();
+		const auto parsed = ew::parse(offered.bytes);
+		CHECK(offered && parsed && controller.inspector().pending() == 1);
+		if (individual) {
+			CHECK(parsed.header.operation == ew::Operation::FieldRead);
+			CHECK(parsed.header.endpoint == controller.watchlist()
+			                                    ->data(controller.watchlist()->index(cursor, 0),
+			                                           ui::WatchlistModel::EndpointIdRole)
+			                                    .toUInt());
+		} else {
+			CHECK(parsed.header.operation == ew::Operation::ReadMany);
+			const auto ids = ew::read_many::parseRequest(parsed.payload);
+			CHECK(ids && ids.count == count);
+			for (int row = 0; row < count; ++row)
+				CHECK(ids.ids[row] == controller.watchlist()
+				                          ->data(controller.watchlist()->index(cursor + row, 0),
+				                                 ui::WatchlistModel::EndpointIdRole)
+				                          .toUInt());
+		}
+		return offered;
+	};
+	for (const auto count : {1, 32, 33, 65}) {
+		fill(count);
+		CHECK(controller.refreshWatch());
+		for (int cursor = 0; cursor < count; cursor += 32) {
+			packet(cursor, std::min(32, count - cursor));
+			CHECK(!controller.removeWatch(0));
+			controller.pump();
+		}
+		CHECK(!controller.watchActive() && controller.inspector().pending() == 0);
+		CHECK(controller.watchStatus().startsWith("ReadMany complete"));
+		for (int row = 0; row < count; ++row)
+			CHECK(watchText(controller, row) == QString::number(UINT64_MAX - row));
+	}
+	// The next packet is already accepted and prepared before Stop. Its real
+	// Encoded reply must drain without publishing or issuing the final chunk.
+	CHECK(controller.refreshWatch());
+	controller.pump();
+	const auto second = packet(32, 32);
+	CHECK(controller.inspector().prepareHandoff(second.session, second.requestId));
+	CHECK(controller.inspector().onSendAccepted(second.session, second.requestId));
+	ui::DemoPeer peer{false, true, true};
+	std::array<std::byte, 1024> reply{};
+	const auto written = peer.dispatch(second.bytes, reply, second.session);
+	CHECK(written != 0);
+	QSignalSpy changed{controller.watchlist(), &QAbstractItemModel::dataChanged};
+	controller.stopWatch();
+	CHECK(controller.watchPending() && !controller.removeWatch(0));
+	CHECK(controller.inspector().onReply(std::span<const std::byte>{reply}.first(written),
+	                                     second.session, second.requestId));
+	controller.pump();
+	CHECK(!controller.watchActive() && controller.inspector().pending() == 0);
+	CHECK(changed.count() == 0 && !controller.inspector().nextPacket());
+	CHECK(!controller.inspector().recoveryRequired());
+	// An explicit Individual cycle traverses the same complete host list.
+	controller.setWatchIndividual(true);
+	CHECK(controller.refreshWatch());
+	for (int row = 0; row < 65; ++row) {
+		packet(row, 1, true);
+		controller.pump();
+	}
+	CHECK(!controller.watchActive() && controller.inspector().pending() == 0);
+	CHECK(watchText(controller, 64) == QString::number(UINT64_MAX - 64));
+	// A malformed middle chunk retires the earlier successful prefix and never
+	// issues the final packet. No wall clock or event-loop race selects this phase.
+	controller.setWatchIndividual(false);
+	CHECK(controller.refreshWatch());
+	controller.pump();
+	const auto broken = packet(32, 32);
+	CHECK(controller.inspector().prepareHandoff(broken.session, broken.requestId));
+	CHECK(controller.inspector().onSendAccepted(broken.session, broken.requestId));
+	const auto malformed = peer.dispatch(broken.bytes, reply, broken.session);
+	CHECK(malformed > 34);
+	reply[32] = std::byte{0};
+	reply[33] = std::byte{0};
+	CHECK(controller.inspector().onReply(std::span<const std::byte>{reply}.first(malformed),
+	                                     broken.session, broken.requestId));
+	controller.pump();
+	CHECK(!controller.watchActive() && controller.inspector().pending() == 0);
+	for (int row = 0; row < 65; ++row)
+		CHECK(watchText(controller, row).isEmpty());
+	CHECK(!controller.inspector().nextPacket() &&
+	      !controller.watchStatus().contains("OutcomeUnknown"));
 	controller.disconnectDevice();
 }
 
@@ -352,6 +461,18 @@ void qmlChecks(const QString& screenshot)
 	window->requestActivate();
 	click(*window, *control(*window, "readManyDemoButton"));
 	CHECK(controller.connected());
+	click(*window, *control(*window, "watchlistExpanded"));
+	auto* interval = control(*window, "watchFrequency");
+	CHECK(interval->property("from") == 1 && interval->property("to") == 60000 &&
+	      interval->property("stepSize") == 1);
+	auto* editor = qobject_cast<QQuickItem*>(interval->property("contentItem").value<QObject*>());
+	CHECK(editor);
+	click(*window, *editor);
+	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+	QTest::keyClick(window, Qt::Key_1);
+	QTest::keyClick(window, Qt::Key_Return);
+	CHECK(controller.watchIntervalMs() == 1);
+	controller.setWatchIntervalMs(1000);
 	select(controller, "U64_0");
 	click(*window, *control(*window, "addWatchButton"));
 	CHECK(controller.watchCount() == 1);
@@ -392,11 +513,12 @@ int main(int argc, char** argv)
 	modelChecks();
 	formattingChecks();
 	controllerChecks();
+	largeControllerChecks();
 	const auto arguments = app.arguments();
 	const auto position = arguments.indexOf("--screenshot");
 	qmlChecks(position >= 0 && position + 1 < arguments.size() ? arguments[position + 1]
 	                                                           : QString{});
 	std::printf(
-	    "Inspector Watchlist checks=%u limit=32 exact=1 skippedTicks=1 fallback=1 qml=1 Qt=%s\n",
+	    "Inspector Watchlist checks=%u fields=65 packetLimit=32 exact=1 skippedTicks=1 fallback=1 qml=1 Qt=%s\n",
 	    checks, qVersion());
 }

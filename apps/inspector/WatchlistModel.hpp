@@ -11,7 +11,8 @@
 #include "Models.hpp"
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <QtCore/QAbstractListModel>
-#include <array>
+#include <QtCore/QVector>
+#include <limits>
 
 namespace inspector_qml {
 class WatchlistModel final : public QAbstractListModel {
@@ -24,7 +25,7 @@ public:
 		TextRole
 	};
 	Q_ENUM(Role)
-	static constexpr int maxRows = 32;
+	static constexpr int maxRows = std::numeric_limits<int>::max();
 	explicit WatchlistModel(QObject* parent = nullptr);
 	void bind(const Workbench& owner) noexcept;
 	bool add(quint32 id, QString name);
@@ -50,7 +51,7 @@ private:
 		QString name, status, text;
 	};
 
-	std::array<Row, maxRows> rows_{};
+	QVector<Row> rows_;
 	int count_ = 0;
 	quintptr nextToken_ = 1;
 	bool changing_ = false;

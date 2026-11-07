@@ -675,7 +675,8 @@ struct StaticConfiguratorProvider::Impl {
 	          [this] {
 		          return RootValue{responseType, response,
 		                           ready() && response.isValid() && operation != Operation::Write &&
-		                               operation != Operation::Command && operation != Operation::Service,
+		                               operation != Operation::Command &&
+		                               operation != Operation::Service,
 		                           false};
 	          },
 	          [](const Path&, const QString& s) {
@@ -690,6 +691,7 @@ struct StaticConfiguratorProvider::Impl {
 		watchTimer.setParent(owner);
 		watchTimer.setObjectName(QStringLiteral("staticConfiguratorWatchTimer"));
 		watchTimer.setInterval(1000);
+		watchTimer.setTimerType(Qt::PreciseTimer);
 		QObject::connect(&watchTimer, &QTimer::timeout, owner, [this] {
 			if (!watchRunning || watchCycle || !idle() || draftActive)
 				return; // Slow/foreground work consumes no additional queue slots.
@@ -1231,7 +1233,7 @@ bool StaticConfiguratorProvider::watchPending() const
 bool StaticConfiguratorProvider::canAddWatch() const
 {
 	if (!d->idle() || d->watchActive() || !d->watchEligible(d->selected) ||
-	    d->watchModel.rows.size() >= 32)
+	    d->watchModel.rows.size() >= std::numeric_limits<int>::max())
 		return false;
 	for (const auto& row : d->watchModel.rows)
 		if (row.endpoint == d->selected)
@@ -1265,7 +1267,7 @@ void StaticConfiguratorProvider::setWatchIndividual(bool individual)
 
 void StaticConfiguratorProvider::setWatchIntervalMs(int interval)
 {
-	if (!d->owner() || d->publishing || d->watchActive() || interval < 100 || interval > 60000 ||
+	if (!d->owner() || d->publishing || d->watchActive() || interval < 1 || interval > 60000 ||
 	    interval == d->watchTimer.interval())
 		return;
 	d->watchTimer.setInterval(interval);

@@ -123,12 +123,13 @@ export interface WatchPresentationState extends PresentationState {
 }
 export interface WatchPresentationProvider extends PresentationProvider {
 	snapshot(): WatchPresentationState;
-	/** Add a readable scalar/enum Field, up to 32 distinct IDs. No request is sent. */
+	/** Add a readable scalar/enum Field. One cycle reads ordered chunks of at most 32 IDs. */
 	addWatch(key?: string): boolean;
 	removeWatch(key: string): boolean;
 	clearWatch(): boolean;
 	/** Explicit fallback; false means one ReadMany request, never implicit fan-out. */
 	setWatchIndividual(individual: boolean): boolean;
+	/** Nominal whole milliseconds, 1..60000. Actual cadence depends on transport/owner scheduling. */
 	setWatchInterval(milliseconds: number): boolean;
 	/** Caller discovers TRM1 and resupplies it after each admission. SDK validates it. */
 	setReadManyCapability(input: ByteInput): boolean;

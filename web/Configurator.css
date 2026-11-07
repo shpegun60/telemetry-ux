@@ -213,6 +213,15 @@
     border-collapse: collapse;
     text-align: left;
 }
+.telemetry-configurator .tux-watch-values {
+    max-block-size: var(--tux-watch-height, min(60vh, 32rem));
+    overflow: auto;
+}
+.telemetry-configurator .tux-watch-values thead {
+    position: sticky;
+    top: 0;
+    background: var(--tux-panel);
+}
 .telemetry-configurator .tux-watch-table th,
 .telemetry-configurator .tux-watch-table td {
     padding: 0.4rem;

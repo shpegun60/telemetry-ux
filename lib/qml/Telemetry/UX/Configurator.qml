@@ -112,7 +112,7 @@ Control {
                     CheckBox {
                         id: watchPanelExpanded
                         objectName: "watchlistExpanded"
-                        text: "Watchlist " + configurator.provider.watchCount + "/32"
+                        text: "Watchlist " + configurator.provider.watchCount
                         checked: false
                     }
                     Button {
@@ -160,16 +160,18 @@ Control {
                         enabled: !configurator.provider.watchActive && readManySupported
                         onActivated: configurator.provider.watchIndividual = !readManySupported || currentIndex === 1
                     }
-                    Label { textFormat: Text.PlainText; text: "Frequency"; color: "#99abbf" }
+                    Label { textFormat: Text.PlainText; text: "Interval (ms)"; color: "#99abbf" }
                     SpinBox {
                         objectName: "watchFrequency"
                         from: 1
-                        to: 10
-                        value: Math.max(1, Math.min(10, Math.round(1000 / configurator.provider.watchIntervalMs)))
+                        to: 60000
+                        stepSize: 1
+                        editable: true
+                        value: configurator.provider.watchIntervalMs
                         enabled: !configurator.provider.watchActive
-                        onValueModified: configurator.provider.watchIntervalMs = Math.round(1000 / value)
+                        onValueModified: configurator.provider.watchIntervalMs = value
                     }
-                    Label { textFormat: Text.PlainText; text: "Hz · scalar Fields only · sequential samples"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                    Label { textFormat: Text.PlainText; text: "Nominal interval · sequential scalar reads"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
                     Button {
                         objectName: "clearWatchButton"
                         text: "Clear"

@@ -489,7 +489,11 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.refresh(), true);
 	await done();
 	eq(p.beginEdit(), true);
-	eq(p.setWatchInterval(99), false);
+	eq(p.setWatchInterval(0), false);
+	eq(p.setWatchInterval(0.5), false);
+	eq(p.setWatchInterval(60001), false);
+	eq(p.setWatchInterval(1), true);
+	eq(p.setWatchInterval(99), true);
 	eq(p.setWatchInterval(100), true);
 	eq(p.setWatchInterval(Infinity), false);
 	eq(p.startWatch(NaN), false);

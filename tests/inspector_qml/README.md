@@ -4,10 +4,16 @@ This suite builds the [runtime Inspector example](../../apps/inspector/README.md
 against Qt 6.4 or newer. It uses the actual `EndpointModel`, `ValueModel`,
 `InspectorController` and native Encoded demo peer, without generated SDK files.
 
-The maintained Watchlist executable exercises 32 bounded rows, owned exact
-scalar/enum text, real ReadMany dispatch, explicit individual-read fallback,
-missed polling ticks, stop/drain, immediate admission invalidation and actual
-QML mouse/keyboard controls. The runner saves a separate Watchlist screenshot.
+The maintained Watchlist executable exercises dynamically owned rows, exact
+scalar/enum text and real ReadMany dispatch. It reads 1/32/33/65 distinct Fields,
+checks ordered 32/32/1 packets for 65 rows and 65 sequential explicit Individual
+reads, and verifies that no second request accumulates. Deterministic phases
+cover a prepared middle chunk followed by Stop/late reply, and a malformed
+middle reply invalidating an already published prefix. The larger DemoPeer
+profile is opt-in; existing shipped demo Descriptors remain unchanged.
+Actual QML mouse/keyboard input checks the integer 1–60,000 ms interval control.
+This nominal interval is not a hardware-throughput guarantee. The runner saves
+a separate Watchlist screenshot and requires at least 1,000 Watchlist checks.
 
 `WatchlistFailures.cpp` uses a real loopback TCP peer and the shipped QML
 delegates. It checks that foreground FieldRead, Command, Service, Apply Write
@@ -18,7 +24,7 @@ Both drain phases explicitly refresh the invalid DisplayRole of a live endpoint
 delegate before the owner resets its tree. Every QML warning remains a test
 failure, with the queued or handed-off phase included in its diagnostics.
 `WatchlistScheduling.cpp` pauses Individual cycles behind foreground reads and
-checks that list/mode/frequency changes and new cycles cannot disturb the
+checks that list/mode/interval changes and new cycles cannot disturb the
 remaining Field ID order. Stop remains available. Actual QML buttons reject
 Read once, Clear and Remove between polling ticks.
 

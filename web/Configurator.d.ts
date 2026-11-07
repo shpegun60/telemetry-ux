@@ -13,11 +13,15 @@ export interface ProviderConfiguratorOptions {
 	readonly session?: never;
 	/** Same monotonic millisecond clock used by the host's tickWatch owner loop. */
 	readonly now?: () => number;
+	/** Explicit presentation timer; default false for a borrowed advanced provider. */
+	readonly autoPoll?: boolean;
 }
 
 export interface SessionConfiguratorOptions extends SessionProviderOptions {
 	readonly provider?: never;
 	readonly now?: () => number;
+	/** Defaults to true. Set false when an existing host loop calls provider.tickWatch(). */
+	readonly autoPoll?: boolean;
 }
 
 export type ConfiguratorOptions = ProviderConfiguratorOptions|SessionConfiguratorOptions;
@@ -44,7 +48,7 @@ export function mountServicePanel(element: HTMLElement,
                                   options: SessionConfiguratorOptions): SessionConfiguratorView;
 export function mountServicePanel(element: HTMLElement,
                                   options: ConfiguratorOptions): ConfiguratorView;
-/** Optional provider Watchlist contract; owner-driven ticks remain with the host. */
+/** Session views auto-poll after Start; advanced providers default to host-driven ticks. */
 export function mountWatchlist(element: HTMLElement,
                                options: SessionConfiguratorOptions): SessionConfiguratorView;
 export function mountWatchlist(element: HTMLElement,

@@ -143,7 +143,7 @@ struct InspectorController::State : telemetry::integration::qt::ConnectionStorag
 		quint64 revision = 0;
 		cl::Status status = cl::Status::Ok;
 		std::array<Row, 32> rows{};
-		int count = 0;
+		int cursor = 0, expected = 0, count = 0;
 	};
 
 	DemoPeer peer;
@@ -161,8 +161,10 @@ struct InspectorController::State : telemetry::integration::qt::ConnectionStorag
 	bool serial = false;
 	bool remote = false, tcpManaged = false;
 
-	State(QByteArray bytes, bool isDemo, bool writableDemo = false, bool readManyDemo = false)
-	    : ConnectionStorage(std::move(bytes)), peer(writableDemo, readManyDemo), demo(isDemo)
+	State(QByteArray bytes, bool isDemo, bool writableDemo = false, bool readManyDemo = false,
+	      bool extendedDemo = false)
+	    : ConnectionStorage(std::move(bytes)), peer(writableDemo, readManyDemo, extendedDemo),
+	      demo(isDemo)
 	{}
 
 	~State()
@@ -197,6 +199,7 @@ InspectorController::InspectorController(QObject* parent) : QObject(parent)
 		Q_EMIT stateChanged();
 	});
 	timer_.setInterval(5);
+	timer_.setTimerType(Qt::PreciseTimer);
 	connect(&timer_, &QTimer::timeout, this, &InspectorController::pump);
 	timer_.start();
 }
@@ -475,7 +478,7 @@ void InspectorController::notifyState(Completion completion, std::optional<bool>
 }
 
 bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool remote,
-                                            bool writableDemo, bool readManyDemo)
+                                            bool writableDemo, bool readManyDemo, bool extendedDemo)
 {
 	if (updating_ || values_.changing() || responses_.changing() || endpoints_.changing())
 		return false;
@@ -486,7 +489,8 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	}
 	// Validate into a separate generation first. A malformed file does not destroy
 	// the current peer, selected field or published snapshot.
-	auto candidate = std::make_shared<State>(std::move(bytes), demo, writableDemo, readManyDemo);
+	auto candidate =
+	    std::make_shared<State>(std::move(bytes), demo, writableDemo, readManyDemo, extendedDemo);
 	candidate->remote = remote;
 	candidate->serial = remote && serial_;
 	const auto error = candidate->initialize(session_ + 1, !remote);
@@ -674,11 +678,16 @@ bool InspectorController::connectWritableDemo()
 
 bool InspectorController::connectReadManyDemo()
 {
-	DemoPeer peer{false, true};
+	return connectReadManyDemo(false);
+}
+
+bool InspectorController::connectReadManyDemo(bool extended)
+{
+	DemoPeer peer{false, true, extended};
 	const auto bytes = peer.descriptor();
 	return replaceDescriptor(
 	    {reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())}, true,
-	    false, false, true);
+	    false, false, true, extended);
 }
 
 bool InspectorController::connectTcp(const QString& host, quint16 port)
@@ -1287,7 +1296,7 @@ bool InspectorController::refresh()
 bool InspectorController::canAddWatch() const noexcept
 {
 	if (updating_ || watchActive() || !connected_ || !state_ || !state_->inspector.isCurrent() ||
-	    watchlist_.count() >= 32 || commandSelected() || serviceSelected())
+	    watchlist_.count() >= WatchlistModel::maxRows || commandSelected() || serviceSelected())
 		return false;
 	const auto selected = state_->inspector.snapshotInfo();
 	const auto* type = selected.selected ? state_->schema.type(selected.type) : nullptr;
@@ -1369,9 +1378,11 @@ void InspectorController::invalidateSession(State& state)
 
 void InspectorController::setWatchIntervalMs(int milliseconds)
 {
-	if (updating_ || watchlist_.changing() || watchActive())
+	if (updating_ || watchlist_.changing() || watchActive() || milliseconds < 1 ||
+	    milliseconds > 60000)
 		return;
-	watchIntervalMs_ = std::clamp(milliseconds, 100, 10000);
+	watchIntervalMs_ = milliseconds;
+	timer_.setInterval(std::min(5, milliseconds));
 	if (state_)
 		watchDue_ = state_->now() + quint32(watchIntervalMs_);
 	Q_EMIT stateChanged();
@@ -1442,24 +1453,45 @@ bool InspectorController::refreshWatch()
 
 bool InspectorController::submitWatch()
 {
-	if (!state_ || !connected_ || watchPending_ || busy_ || watchlist_.count() == 0)
+	if (!state_ || !connected_ || watchPending_ || busy_ || watchCursor_ < 0 ||
+	    watchCursor_ >= watchlist_.count())
 		return false;
 	auto& state = *state_;
 	const auto revision = watchRevision_;
+	const auto cursor = watchCursor_;
 	auto timeout = quint32(readTimeout_);
 	cl::Submission submitted;
 	if (!watchIndividual_) {
-		if (!state.capability) {
+		if (!state.capability || !rm::wire::valid(*state.capability)) {
 			watchStatus_ = QStringLiteral(
 			    "ReadMany unavailable. Explicitly select Individual FieldRead, or reconnect with TRM1 discovery.");
 			return false;
 		}
 		std::array<std::uint32_t, 32> ids{};
-		for (int row = 0; row < watchlist_.count(); ++row)
-			ids[row] = watchlist_.id(row);
-		const auto binding =
-		    rm::bindReadMany(state.inspector, state.backend, *state.capability,
-		                     std::span<const std::uint32_t>{ids}.first(watchlist_.count()));
+		int count = 0;
+		std::size_t replyBytes = 2;
+		const auto& capability = *state.capability;
+		while (cursor + count < watchlist_.count() && count < capability.itemLimit &&
+		       2u + 4u * (count + 1u) <= capability.requestLimit) {
+			const auto field = state.inspector.bindField(watchlist_.id(cursor + count));
+			if (!field) {
+				watchStatus_ =
+				    QStringLiteral("FieldRead refused: %1").arg(statusName(field.status));
+				return false;
+			}
+			const auto bytes = field.endpoint.responseBytes();
+			if (replyBytes + 8u + bytes > capability.replyLimit)
+				break;
+			replyBytes += 8u + bytes;
+			ids[count++] = field.endpoint.id();
+		}
+		if (count == 0) {
+			watchStatus_ = QStringLiteral(
+			    "The next Field exceeds the advertised ReadMany byte budget. Select Individual FieldRead explicitly.");
+			return false;
+		}
+		const auto binding = rm::bindReadMany(state.inspector, state.backend, *state.capability,
+		                                      std::span<const std::uint32_t>{ids}.first(count));
 		if (!binding) {
 			watchStatus_ = QStringLiteral("ReadMany refused: %1").arg(statusName(binding.status));
 			return false;
@@ -1467,20 +1499,27 @@ bool InspectorController::submitWatch()
 #ifdef INSPECTOR_ENABLE_SERIAL
 		if (state.serial && !readTimeoutExplicit_)
 			timeout = telemetry::integration::qt::SerialTransport::exchangeTimeoutMs(
-			    34u + 4u * watchlist_.count(), 32u + binding.binding.responseBytes(),
-			    quint32(serialBaud_), 3000);
+			    34u + 4u * count, 32u + binding.binding.responseBytes(), quint32(serialBaud_),
+			    3000);
 #endif
 		submitted = rm::readMany(
 		    state.inspector, binding.binding,
-		    [owner = &state, revision](const rm::ReadManyResult& result) noexcept {
+		    [owner = &state, revision, cursor, count](const rm::ReadManyResult& result) noexcept {
 			    State::WatchCompletion completion;
 			    completion.revision = revision;
+			    completion.cursor = cursor;
+			    completion.expected = count;
 			    completion.status = result.operation.status;
 			    if (result.operation.succeeded() && result.valueStatus != rm::ValueStatus::Ok)
 				    completion.status = cl::Status::CodecError;
 			    else if (result.operation.status == cl::Status::Ok && !result.operation.succeeded())
 				    completion.status = cl::Status::CodecError;
 			    completion.count = result.count;
+			    if (completion.count > int(completion.rows.size()) ||
+			        (completion.status == cl::Status::Ok && completion.count != count)) {
+				    completion.status = cl::Status::CodecError;
+				    completion.count = 0;
+			    }
 			    for (int row = 0; row < completion.count; ++row) {
 				    const auto& item = result.items[row];
 				    auto& out = completion.rows[row];
@@ -1524,10 +1563,12 @@ bool InspectorController::submitWatch()
 #endif
 		submitted = rm::readFieldValue(
 		    state.inspector, binding.endpoint,
-		    [owner = &state, revision,
+		    [owner = &state, revision, cursor,
 		     id](const telemetry::integration::dynamic::DynamicResult& result) noexcept {
 			    State::WatchCompletion completion;
 			    completion.revision = revision;
+			    completion.cursor = cursor;
+			    completion.expected = 1;
 			    completion.status = result.operation.status;
 			    completion.count = 1;
 			    if (result.operation.succeeded() && !result.hasValue())
@@ -1554,11 +1595,12 @@ bool InspectorController::submitWatch()
 		return false;
 	}
 	watchPending_ = true;
-	watchStatus_ = watchIndividual_
-	                   ? QStringLiteral("Reading individual Field %1 of %2...")
-	                         .arg(watchCursor_ + 1)
-	                         .arg(watchlist_.count())
-	                   : QStringLiteral("ReadMany pending - %1 Fields").arg(watchlist_.count());
+	watchStatus_ = watchIndividual_ ? QStringLiteral("Reading individual Field %1 of %2...")
+	                                      .arg(watchCursor_ + 1)
+	                                      .arg(watchlist_.count())
+	                                : QStringLiteral("ReadMany pending - starting Field %1 of %2")
+	                                      .arg(cursor + 1)
+	                                      .arg(watchlist_.count());
 	return true;
 }
 
@@ -1566,29 +1608,40 @@ bool InspectorController::consumeWatch(State& state)
 {
 	if (!state.watched)
 		return false;
-	const auto completion = std::move(*state.watched);
+	auto completion = std::move(*state.watched);
 	state.watched.reset();
 	watchPending_ = false;
 	if (!state.inspector.isCurrent() || completion.revision != watchRevision_) {
 		watchCycle_ = false;
 		watchStatus_ = QStringLiteral("Stopped - superseded read drained.");
-	} else if (completion.status != cl::Status::Ok) {
-		watchRunning_ = watchCycle_ = false;
-		watchlist_.invalidateValues();
-		watchStatus_ = QStringLiteral("Watch read: %1").arg(statusName(completion.status));
 	} else {
-		for (int item = 0; item < completion.count; ++item)
-			for (int row = 0; row < watchlist_.count(); ++row)
-				if (watchlist_.id(row) == completion.rows[item].id)
-					watchlist_.setResult(row, completion.rows[item].status,
-					                     completion.rows[item].text);
-		if (!watchIndividual_ || ++watchCursor_ >= watchlist_.count()) {
-			watchCycle_ = false;
-			watchStatus_ = QStringLiteral("%1 complete - %2 Fields - session %3")
-			                   .arg(watchIndividual_ ? QStringLiteral("Individual FieldRead cycle")
-			                                         : QStringLiteral("ReadMany"))
-			                   .arg(watchlist_.count())
-			                   .arg(state.inspector.session());
+		if (completion.status == cl::Status::Ok &&
+		    (completion.cursor != watchCursor_ || completion.expected < 1 ||
+		     completion.count != completion.expected ||
+		     completion.count > int(completion.rows.size()) ||
+		     completion.count > watchlist_.count() - watchCursor_))
+			completion.status = cl::Status::CodecError;
+		for (int item = 0; completion.status == cl::Status::Ok && item < completion.count; ++item)
+			if (watchlist_.id(watchCursor_ + item) != completion.rows[item].id)
+				completion.status = cl::Status::CodecError;
+		if (completion.status != cl::Status::Ok) {
+			watchRunning_ = watchCycle_ = false;
+			watchlist_.invalidateValues();
+			watchStatus_ = QStringLiteral("Watch read: %1").arg(statusName(completion.status));
+		} else {
+			for (int item = 0; item < completion.count; ++item)
+				watchlist_.setResult(watchCursor_ + item, completion.rows[item].status,
+				                     completion.rows[item].text);
+			watchCursor_ += completion.count;
+			if (watchCursor_ >= watchlist_.count()) {
+				watchCycle_ = false;
+				watchStatus_ =
+				    QStringLiteral("%1 complete - %2 Fields - session %3")
+				        .arg(watchIndividual_ ? QStringLiteral("Individual FieldRead cycle")
+				                              : QStringLiteral("ReadMany"))
+				        .arg(watchlist_.count())
+				        .arg(state.inspector.session());
+			}
 		}
 	}
 	const bool fatal = completion.status == cl::Status::TransportError ||
@@ -1685,7 +1738,7 @@ void InspectorController::pump()
 		if (submitWatch())
 			notify = true;
 		else {
-			watchCycle_ = false;
+			watchRunning_ = watchCycle_ = false;
 			notify = true;
 		}
 	}

@@ -6,8 +6,10 @@
 #include <QEvent>
 #include <QPersistentModelIndex>
 #include <QTimer>
+#include <array>
 #include <cstdio>
 #include <functional>
+#include <utility>
 
 using namespace telemetry::ux;
 static unsigned checks = 0, failures = 0, initializations = 0;
@@ -350,8 +352,8 @@ static void sessionPermission()
 static void responseMutationLifetime()
 {
 	for (const int category : {1, 2, 3}) {
-		for (const auto& completion : {QString(), QStringLiteral("Endpoint"),
-		                               QStringLiteral("OutcomeUnknown")}) {
+		for (const auto& completion :
+		     {QString(), QStringLiteral("Endpoint"), QStringLiteral("OutcomeUnknown")}) {
 			Api api;
 			auto b = binding(api, 3, true);
 			b.endpoints[0].name = "Inspect";
@@ -367,12 +369,12 @@ static void responseMutationLifetime()
 			auto* responses = p.responses();
 			const auto prior = responses->index(0, 0);
 			const auto responseValue = [&] {
-				return responses->data(responses->index(0, 0), role(responses, "value"))
-				    .toString();
+				return responses->data(responses->index(0, 0), role(responses, "value")).toString();
 			};
 			CHECK(responseValue() == "42");
-			p.selectEndpoint(category == 3 ? endpoint(p, 1)
-			                              : p.endpoints()->index(0, 0, p.endpoints()->index(1, 0)));
+			p.selectEndpoint(category == 3
+			                     ? endpoint(p, 1)
+			                     : p.endpoints()->index(0, 0, p.endpoints()->index(1, 0)));
 			if (category == 1)
 				p.beginEdit();
 			const auto submit = [&] {
@@ -392,8 +394,12 @@ static void responseMutationLifetime()
 				submit();
 				CHECK(p.busy() && responses->rowCount() == 0);
 				CHECK(responses->data(prior, role(responses, "value")).toString().isEmpty());
-				QMetaObject::invokeMethod(&api, [&api, refusal] { api.finish(false, refusal); },
-				                          Qt::QueuedConnection);
+				QMetaObject::invokeMethod(
+				    &api,
+				    [&api, refusal] {
+					    api.finish(false, refusal);
+				    },
+				    Qt::QueuedConnection);
 				QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 				CHECK(!p.busy() && responseValue() == "42");
 				CHECK(!p.serviceResponseEndpoint().isEmpty());
@@ -675,6 +681,12 @@ static QString watchRead(QObject* object)
 	return static_cast<Api*>(object)->issue(QStringLiteral("watch%1").arg(Index));
 }
 
+template<std::size_t... Indices>
+static constexpr auto watchReaders(std::index_sequence<Indices...>)
+{
+	return std::array{&watchRead<static_cast<int>(Indices)>...};
+}
+
 static StaticConfiguratorBinding watchBinding(Api& api, int count = 3)
 {
 	auto b = binding(api);
@@ -695,6 +707,7 @@ static StaticConfiguratorBinding watchBinding(Api& api, int count = 3)
 	enumeration.entries.push_back({QStringLiteral("Known"), QStringLiteral("1")});
 	b.types.push_back(enumeration);
 	const auto prototype = b.endpoints.first();
+	static constexpr auto readers = watchReaders(std::make_index_sequence<65>{});
 	b.endpoints.clear();
 	for (int i = 0; i < count; ++i) {
 		auto e = prototype;
@@ -703,16 +716,15 @@ static StaticConfiguratorBinding watchBinding(Api& api, int count = 3)
 		e.valueType = i == 0 ? 3 : i == 1 ? 4 : i == 2 ? 5 : 1;
 		if (i == 0) {
 			e.cached = watchCached<0>;
-			e.read = watchRead<0>;
 		}
 		if (i == 1) {
 			e.cached = watchCached<1>;
-			e.read = watchRead<1>;
 		}
 		if (i == 2) {
 			e.cached = watchCached<2>;
-			e.read = watchRead<2>;
 		}
+		if (i < static_cast<int>(readers.size()))
+			e.read = readers[static_cast<std::size_t>(i)];
 		b.endpoints.push_back(e);
 	}
 	return b;
@@ -739,7 +751,14 @@ static void watchLifecycle()
 	CHECK(!p.watchActive() && !p.watchPending() && p.watchCount() == 0);
 	p.setWatchIntervalMs(60000);
 	CHECK(p.watchIntervalMs() == 60000);
+	p.setWatchIntervalMs(1);
+	CHECK(p.watchIntervalMs() == 1);
+	p.setWatchIntervalMs(0);
+	p.setWatchIntervalMs(60001);
+	CHECK(p.watchIntervalMs() == 1);
 	p.setWatchIntervalMs(99);
+	CHECK(p.watchIntervalMs() == 99);
+	p.setWatchIntervalMs(60000);
 	CHECK(p.watchIntervalMs() == 60000);
 	for (int i = 0; i < 3; ++i) {
 		p.selectEndpoint(endpoint(p, i));
@@ -823,13 +842,12 @@ static void watchLifecycle()
 static void watchBoundsAndReentrancy()
 {
 	Api api;
-	StaticConfiguratorProvider p(watchBinding(api, 33));
-	for (int i = 0; i < 32; ++i) {
+	StaticConfiguratorProvider p(watchBinding(api, 65));
+	for (int i = 0; i < 65; ++i) {
 		p.selectEndpoint(endpoint(p, i));
 		CHECK(p.addWatch());
 	}
-	p.selectEndpoint(endpoint(p, 32));
-	CHECK(!p.canAddWatch() && !p.addWatch() && p.watchCount() == 32);
+	CHECK(!p.canAddWatch() && !p.addWatch() && p.watchCount() == 65);
 	CHECK(api.calls.isEmpty());
 	p.clearWatch();
 	p.selectEndpoint(endpoint(p, 0));
@@ -882,6 +900,49 @@ static void watchBoundsAndReentrancy()
 	other.changed();
 }
 
+static void largeWatchCycle()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api, 65));
+	for (int i = 0; i < 65; ++i) {
+		p.selectEndpoint(endpoint(p, i));
+		CHECK(p.addWatch());
+	}
+	p.setWatchIntervalMs(1);
+	auto* timer = p.findChild<QTimer*>(QStringLiteral("staticConfiguratorWatchTimer"));
+	CHECK(timer && timer->interval() == 1 && timer->timerType() == Qt::PreciseTimer);
+	CHECK(p.watchCount() == 65 && api.calls.isEmpty());
+	p.startWatch();
+	for (int row = 0; row < 65; ++row) {
+		CHECK(p.watchPending() && p.watchActive());
+		CHECK(api.issued == static_cast<unsigned>(row + 1));
+		CHECK(api.calls.last() == QStringLiteral("watch%1").arg(row));
+		for (int tick = 0; tick < 3; ++tick)
+			watchTick(p);
+		CHECK(api.issued == static_cast<unsigned>(row + 1));
+		api.finish(true);
+		CHECK(!p.watchPending() && p.watchActive());
+		if (row == 64)
+			p.stopWatch(); // Stop before the final queued continuation can start another cycle.
+		watchEvents();
+	}
+	CHECK(!p.watchActive() && !p.busy() && api.issued == 65);
+	CHECK(p.watchCount() == 65);
+	for (int row = 0; row < 65; ++row)
+		CHECK(p.watchlist()->data(p.watchlist()->index(row, 0), role(p.watchlist(), "status")) ==
+		      QStringLiteral("Ok"));
+	p.startWatch();
+	CHECK(p.watchPending() && api.issued == 66);
+	p.stopWatch();
+	p.clearWatch();
+	CHECK(p.watchCount() == 65 && p.watchActive());
+	api.finish(true);
+	watchEvents();
+	CHECK(api.issued == 66 && !p.watchActive());
+	p.clearWatch();
+	CHECK(p.watchCount() == 0);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -897,6 +958,7 @@ int main(int argc, char** argv)
 	staleCacheAfterWriteRefusal();
 	watchLifecycle();
 	watchBoundsAndReentrancy();
+	largeWatchCycle();
 	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
 	return failures ? 1 : 0;
 }
