@@ -200,8 +200,8 @@ Connect to your matching device, or start an existing Telemetry Inspector binary
 with `telemetry-inspector-qml --serve-demo 5577` in another terminal. That local
 demo is read-only; installing this starter does not install a server or firmware.
 Enter its host/port and press Connect. The initial address is 127.0.0.1:5577.
-The left Configurator and
-right FieldEditor share one ConnectionSession, DynamicClient and FIFO, while
+Both Configurator panels expose their own endpoint navigation and share one
+ConnectionSession, DynamicClient and FIFO, while
 keeping independent selection, draft, snapshot and response state. There is no
 application-owned transport pump, Descriptor indexing or second connection.
 Change Main.qml to compose your own panels; call presentation.createProvider()

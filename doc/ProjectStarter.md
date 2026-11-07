@@ -27,7 +27,7 @@ read-only reference device. The creator does not install a server or firmware.
 The three copied public application files create one `ConnectionSession`, one
 `QtConnectionBinding` and two independent providers. The SDK owns connection,
 Descriptor indexing, progress, native buffers and the one FIFO; your application
-composes the ready Configurator and FieldEditor in `Main.qml`. Another panel
+composes two ready Configurators with independent navigation in `Main.qml`. Another panel
 requires another `presentation.createProvider()`, not another client or pump.
 No generated DTO or private Inspector source is copied.
 
