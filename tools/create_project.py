@@ -75,6 +75,8 @@ def package(path, expected):
             raise ValueError('Package requires one bounded package/package.json')
         with archive.extractfile(entries[0]) as stream:
             metadata = json.load(stream)
+        if not isinstance(metadata, dict):
+            raise ValueError('Package metadata must be a JSON object')
         if metadata.get('name') != expected or metadata.get('version') != '0.1.0':
             raise ValueError('Expected matching ' + expected + '@0.1.0 package')
     return sha(path.read_bytes())

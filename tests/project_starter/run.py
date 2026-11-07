@@ -166,6 +166,20 @@ def main():
         creator('refuse-package-identity', output / 'wrong-package', '--sdk-prefix', fake_sdk,
                 '--sdk-package', bad_package, '--ux-package', bad_package, refused=True, target='web-device')
         check(not (output / 'wrong-package').exists(), 'Wrong package is refused before destination creation')
+        for label, metadata in (('list', []), ('null', None)):
+            invalid_package = output / ('metadata-' + label + '.tgz')
+            with tarfile.open(invalid_package, 'w:gz') as archive:
+                contents = json.dumps(metadata).encode('utf8')
+                entry = tarfile.TarInfo('package/package.json')
+                entry.size = len(contents)
+                archive.addfile(entry, io.BytesIO(contents))
+            destination = output / ('metadata-' + label)
+            answer = creator('refuse-metadata-' + label, destination, '--sdk-prefix', fake_sdk,
+                '--sdk-package', invalid_package, '--ux-package', invalid_package,
+                refused=True, target='web-device')
+            check('Package metadata must be a JSON object' in answer and 'Traceback' not in answer,
+                  'Invalid package metadata gets an actionable diagnostic')
+            check(not destination.exists(), 'Invalid package metadata creates no output')
 
         # Generate configured projects before hiding their only producer templates.
         configured_qml = output / 'qml-installed'
