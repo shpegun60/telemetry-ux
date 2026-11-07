@@ -24,7 +24,8 @@ def inventory(root):
 
 
 def sources():
-    paths=[ROOT/'package.json', ROOT/'tests/web_configurator/Provider.mjs']
+    paths=[ROOT/'package.json', ROOT/'tests/web_configurator/Provider.mjs',
+           ROOT/'tests/helpers/Publication.mjs', ROOT/'tests/helpers/PublicationControls.mjs']
     for directory in (ROOT/'web', ROOT/'examples/web_demo', ROOT/'examples/session_web', HERE):
         paths.extend(p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts)
     return {p.relative_to(ROOT).as_posix():digest(p) for p in sorted(paths) if p.is_file()}
@@ -123,11 +124,17 @@ def main():
         report['installed_npm_sha256_before']={name:inventory(public/'node_modules'/name) for name in ('telemetry-sdk','telemetry-ux')}
         for name in ('Consumer.ts','Provider.mjs','App.js','index.html'):
             shutil.copy2(HERE/name,public/name)
+        for name in ('Publication.mjs','PublicationControls.mjs'):
+            shutil.copy2(ROOT/'tests/helpers'/name,public/name)
         shutil.copy2(ROOT/'examples/session_web/index.html',public/'demo.html')
         shutil.copy2(ROOT/'examples/session_web/SessionDemo.js',public/'SessionDemo.js')
         shutil.copy2(output/'descriptor.bin',public/'descriptor.bin')
         run('strict-installed-types',[tools['node'],args.tsc,'--strict','--noEmit','--target','ES2022',
             '--module','NodeNext','--moduleResolution','NodeNext',public/'Consumer.ts'])
+        barriers=json.loads(run('publication-barrier-controls',[tools['node'],public/'PublicationControls.mjs']).strip().splitlines()[-1])
+        check(barriers.get('passed') and barriers.get('checks',0)>=74 and barriers.get('scenarios',0)>=13,
+              'Controlled publication barriers and bounded driver cleanup')
+        report['publication_barriers']=barriers
         provider=json.loads(run('installed-session-providers',[tools['node'],public/'Provider.mjs',device]).strip().splitlines()[-1])
         check(provider.get('passed') and provider.get('checks',0)>=697 and provider.get('scenarios',0)>=33,'Provider assertion floor')
         report['providers']=provider
@@ -149,7 +156,7 @@ def main():
         check(report['installed_npm_sha256_before']==report['installed_npm_sha256_after'],'Installed npm input drift')
         for name,path in [('sdk',sdk_package),('ux',ux_package)]: check(digest(path)==report['packages'][name]['sha256'],'Package input drift')
         report['device']=dict(path=str(device),sha256=digest(device))
-        report['checks']+=provider['checks']+browser['checks']+legacy['checks']
+        report['checks']+=provider['checks']+browser['checks']+legacy['checks']+barriers['checks']
         report['passed']=True
     except Exception as error:
         report['error']=str(error)

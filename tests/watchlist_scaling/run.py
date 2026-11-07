@@ -25,7 +25,7 @@ def inventory(root):
 
 
 def sources():
-    files = [ROOT / 'package.json']
+    files = [ROOT / 'package.json', ROOT / 'tests/helpers/Publication.mjs']
     for directory in (ROOT / 'web', ROOT / 'examples/web_demo', HERE):
         files += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(files)}
@@ -139,6 +139,7 @@ def main():
         report['installed_npm_sha256_before'] = {name: inventory(public / 'node_modules' / name) for name in ('telemetry-sdk', 'telemetry-ux')}
         for name in ('Scaling.mjs', 'App.js', 'index.html'):
             shutil.copy2(HERE / name, public / name)
+        shutil.copy2(ROOT / 'tests/helpers/Publication.mjs', public / 'Publication.mjs')
         provider = json.loads(run('installed-watchlist-scaling', [tools['node'], public / 'Scaling.mjs', device]).strip().splitlines()[-1])
         check(provider.get('passed') and provider.get('checks', 0) >= 3686 and provider.get('scenarios', 0) >= 30,
               'Both real Session modes and deterministic scaling floor')

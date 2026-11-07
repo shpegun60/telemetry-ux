@@ -8,6 +8,7 @@ import {descriptorFingerprint, parseDescriptor} from 'telemetry-sdk/runtime';
 import {createSessionProvider} from 'telemetry-ux/web';
 import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
+import {publication, waitForPublication, finishDriver} from './Publication.mjs';
 
 const [executable] = process.argv.slice(2);
 const descriptor = new Uint8Array(await readFile(new URL('./descriptor.bin', import.meta.url)));
@@ -24,7 +25,6 @@ const flush = async () => {
 	for (let i = 0; i < 35; i++)
 		await Promise.resolve();
 };
-const tick = () => new Promise(resolve => setImmediate(resolve));
 const results = [];
 
 for (const mode of ['static', 'dynamic']) {
@@ -34,14 +34,27 @@ for (const mode of ['static', 'dynamic']) {
 	let bootstrapDescriptor = descriptor;
 	const discovery = {readMany : true, batch : true};
 	const drained = new Set();
+	const peerEvents = publication(), responseEvents = publication();
+	let peerFailure, primaryFailure;
+	const failPeer = error => {
+		peerFailure ??= error;
+		pending?.reject(peerFailure);
+		peerEvents.publish();
+	};
 	child.stderr.on('data', bytes => errors += bytes);
+	child.stdin.on('error', failPeer);
 	const exit = new Promise((resolve, reject) => {
-		child.once('error', reject);
-		child.once('exit', code => {
-			pending?.reject(new Error('Native peer ended ' + code + ': ' + errors));
+		child.once('error', error => {
+			failPeer(error);
+			reject(error);
+		});
+		child.once('exit', (code, signal) => {
+			failPeer(new Error('Native peer ended ' + code + ' signal=' + signal + ': ' + errors));
 			resolve(code);
 		});
 	});
+	void exit.catch(() => {
+	                }); // A phase barrier reports spawn failure before final cleanup awaits exit.
 	createInterface({input : child.stdout}).on('line', line => {
 		assert(pending, 'Unsolicited native output');
 		const {resolve} = pending;
@@ -49,6 +62,10 @@ for (const mode of ['static', 'dynamic']) {
 		resolve(line);
 	});
 	const native = command => new Promise((resolve, reject) => {
+		if (peerFailure) {
+			reject(peerFailure);
+			return;
+		}
 		assert(!pending, 'Physical exchange bypassed the existing FIFO');
 		pending = {resolve, reject};
 		child.stdin.write(command + '\n');
@@ -69,7 +86,10 @@ for (const mode of ['static', 'dynamic']) {
 				change(reply.subarray(32));
 			}
 			if (hold)
-				await new Promise(resolve => release = resolve);
+				await new Promise(resolve => {
+					release = resolve;
+					responseEvents.publish();
+				});
 			return reply;
 		} finally {
 			active--;
@@ -124,18 +144,64 @@ for (const mode of ['static', 'dynamic']) {
 	const text = (provider, source, name) =>
 	    provider.rows([], {source}).rows.find(row => row.name === name)?.text;
 
+	const diagnostics = provider => {
+		const state = provider?.snapshot();
+		return {
+			mode,
+			packets,
+			active,
+			nativePending : !!pending,
+			hold,
+			held : !!release,
+			peerExit : child.exitCode,
+			peerError : peerFailure?.message,
+			connection : session.state,
+			busy : state?.busy,
+			current : state?.current,
+			selected : state?.selected?.key,
+			error : state?.error,
+			watchPending : state?.watch.pending,
+			watchActive : state?.watch.active,
+			watchStatus : state?.watch.status,
+			batchStatus : state?.batch.status
+		};
+	};
+
 	async function idle(provider)
 	{
-		for (let i = 0; provider.snapshot().busy && i < 1000; i++)
-			await tick();
+		await waitForPublication({
+			label : mode + ' provider completion',
+			ready : () => !provider.snapshot().busy,
+			subscribe(changed) {
+			    const state = provider.subscribe(changed), peer = peerEvents.subscribe(changed);
+			    return () => {
+				    state();
+				    peer();
+			    };
+			},
+			failure : () => peerFailure,
+			diagnostics : () => diagnostics(provider)
+		});
 		eq(provider.snapshot().busy, false, 'Provider did not finish');
 		await flush();
 	}
 
 	async function held()
 	{
-		for (let i = 0; !release && i < 1000; i++)
-			await tick();
+		await waitForPublication({
+			label : mode + ' controlled backend response boundary',
+			ready : () => typeof release === 'function',
+			subscribe(changed) {
+			    const response = responseEvents.subscribe(changed),
+			          peer = peerEvents.subscribe(changed);
+			    return () => {
+				    response();
+				    peer();
+			    };
+			},
+			failure : () => peerFailure,
+			diagnostics : () => diagnostics()
+		});
 		yes(release, 'No controlled backend response boundary');
 	}
 
@@ -677,13 +743,23 @@ for (const mode of ['static', 'dynamic']) {
 		eq(peak, 1);
 		yes(packets > 15);
 		results.push({mode, packets, peak, opens, closes, checks});
+	} catch (error) {
+		primaryFailure = error;
+		throw error;
 	} finally {
-		unhold();
-		for (const provider of all)
-			provider.dispose();
-		await session.close();
-		child.stdin.end();
-		eq(await exit, 0);
+		await finishDriver({
+			primaryFailure,
+			stopHolding : unhold,
+			dispose : () => all.forEach(provider => provider.dispose()),
+			close : () => session.close(),
+			closeInput : () => child.stdin.end(),
+			exit,
+			abort : () => child.kill(),
+			label : mode + ' Session provider driver',
+			diagnostics : () => diagnostics()
+		});
+		if (!primaryFailure)
+			eq(child.exitCode, 0);
 	}
 }
 console.log(JSON.stringify({passed : true, hardware : false, checks, scenarios, results}));
