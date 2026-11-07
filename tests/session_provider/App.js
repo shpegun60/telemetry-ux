@@ -13,7 +13,7 @@ import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
 
 const mode = new URL(location.href).searchParams.get('mode') || 'static';
-const transport = demoWebSocket(location.origin);
+const transport = demoWebSocket(location.origin, {enableReadMany : true, enableBatch : true});
 const session =
     mode === 'static'
         ? await connectStatic({sdk, metadata : structuralMetadata, transport, timeoutMs : 5000})
@@ -32,7 +32,9 @@ const views = {
 	    {session, endpoint : {category : 'command', catalog : 'control', name : 'Accepted'}}),
 	service : mountServicePanel(
 	    document.querySelector('#service'),
-	    {session, endpoint : {category : 'service', catalog : 'control', name : 'Inspect'}})
+	    {session, endpoint : {category : 'service', catalog : 'control', name : 'Inspect'}}),
+	watch : mountWatchlist(document.querySelector('#watch'), {session}),
+	batch : mountBatchEditor(document.querySelector('#batch'), {session})
 };
 const borrowed = createSessionProvider({session, endpoint : field});
 views.borrowed = mountFieldEditor(document.querySelector('#borrowed'), {provider : borrowed});
@@ -41,14 +43,6 @@ for (const options of [{}, {session, provider : borrowed}]) {
 	const host = document.createElement('div');
 	try {
 		mountConfigurator(host, options);
-	} catch (error) {
-		invalidMounts.push(error instanceof TypeError && host.childNodes.length === 0);
-	}
-}
-for (const mount of [mountWatchlist, mountBatchEditor]) {
-	const host = document.createElement('div');
-	try {
-		mount(host, {session});
 	} catch (error) {
 		invalidMounts.push(error instanceof TypeError && host.childNodes.length === 0);
 	}

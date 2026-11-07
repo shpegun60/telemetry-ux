@@ -13,14 +13,26 @@ does not duplicate the native descriptor, model, or Encoded protocol.
 endpoint selectors and drafts, QueueFull refusal, accepted sibling invalidation,
 explicit headless invalidation, exact U64/S64/unknown enum/signed-zero values,
 untouched NaN payload bytes, automatic disconnect/reconnect, disposal, and pending
-outcome ownership. Session providers expose no Watchlist or Batch surface.
+outcome ownership. ReadMany and Mixed Batch use the same real Session/FIFO and
+the independently discovered TRM1/TBM1 records. The optional tests cover bounded
+polling, skipped ticks, stop/drain, per-item statuses, exact scalar values,
+QueueFull preservation, accepted mutation freshness, and delayed Watchlist or
+read-only Batch responses after another panel mutates data. Missing optional
+methods fail without I/O while explicit Individual FieldRead remains usable.
+New admission restores neither a poll recipe nor a Batch, and a disposed editor
+retains its uncertain operation facts without replaying mutations.
 
 `Browser.py` runs Chromium against the unchanged HTTP/WebSocket demo server and
 native dispatcher. It verifies full and standalone Session mounts, independent
 editors, stale draft text, native readback normalization, exact large integer
 editing, historical standalone facts with revoked values hidden, and owned versus
-borrowed provider unmounts during accepted work. This is offline host validation;
-it does not use physical hardware.
+borrowed provider unmounts during accepted work. Actual Watchlist buttons produce
+one ReadMany exchange or the explicitly selected Individual reads. The Batch
+editor submits an exact-integer FieldWrite, Command, Service and FieldRead in one
+exchange, verifies peer invalidation and independent item outcomes, and checks a
+lost ACK/disconnect/reconnect without replay. Standalone Watchlist and Batch
+panels mount directly from Session. This is host validation; it does not use
+physical hardware or establish exactly-once execution.
 
 The shipped `examples/session_web` application is staged unchanged and checked
 in both modes for independent selection, one explicit native read, historical
