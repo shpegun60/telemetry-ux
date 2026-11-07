@@ -219,13 +219,23 @@ void InspectorController::tcpAdmissionChanged()
 		writesEnabled_ = false;
 		bindCurrentState();
 		status_ =
-		    QStringLiteral("TCP connected ? Descriptor loaded ? read-only ? Encoded transport");
+		    QStringLiteral("TCP connected - Descriptor loaded - read-only - Encoded transport");
 		updating_ = false;
 		notifyState({});
 	} else if (state_ && state_->tcpManaged) {
 		const bool readPending =
 		    busy_ && !state_->applying && !state_->executing && !state_->calling;
-		const auto completion = retire();
+		// Automatic transport failure keeps the closed generation for guarded
+		// introspection and the selected watch rows marked Stale. Explicit user
+		// Disconnect still uses retire() to clear the entire presentation.
+		// progressed() may already have retired data and published the final
+		// watch-drain status; do not overwrite that terminal status again.
+		if (connected_ || !selection_.isEmpty() || endpoints_.rowCount())
+			invalidateSession(*state_);
+		busy_ = connecting_ = writesEnabled_ = false;
+		invalidEditors_.clear();
+		const Completion completion{consumeApply(*state_, false), consumeCommand(*state_, false),
+		                            consumeService(*state_, false)};
 		status_ = QStringLiteral("TCP: %1").arg(tcpSession_->lastError());
 		updating_ = false;
 		notifyState(completion, readPending ? std::optional<bool>{false} : std::nullopt);
