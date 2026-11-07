@@ -10,7 +10,9 @@ import {
 	mountWatchlist,
 	mountBatchEditor
 } from 'telemetry-ux/web';
-import type {SessionPresentationState, PresentationProvider} from 'telemetry-ux/web';
+import type {
+	SessionPresentationState, PresentationProvider, BatchPresentationProvider} from
+	'telemetry-ux/web';
 import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
 
@@ -30,6 +32,7 @@ export async function windows(transport: ConnectionProfile, host: HTMLElement)
 	    {session : dyn, endpoint : {category : 'service', catalog : 'control', name : 'Inspect'}});
 	const provider = createSessionProvider({session : dyn, endpoint : {category : 1, id : 0}});
 	const ordinary: PresentationProvider = provider;
+	const optional: BatchPresentationProvider = provider;
 	const state: SessionPresentationState = provider.snapshot();
 	const ready: boolean = state.connection.ready;
 	const disposed: boolean = state.disposed;
@@ -51,19 +54,24 @@ export async function windows(transport: ConnectionProfile, host: HTMLElement)
 	mountConfigurator(host, {});
 	// @ts-expect-error provider and Session ownership choices are exclusive
 	mountConfigurator(host, {provider, session : dyn});
-	// @ts-expect-error Session provider has no Watchlist admission surface
 	provider.refreshWatch();
-	// @ts-expect-error Session provider has no Batch admission surface
 	provider.executeBatch();
-	// @ts-expect-error Session mounts do not provide Watchlist support
-	mountWatchlist(host, {session : dyn});
-	// @ts-expect-error Session mounts do not provide Batch support
-	mountBatchEditor(host, {session : dyn});
+	const watch = mountWatchlist(host, {session : dyn});
+	const batch = mountBatchEditor(host, {session : stat});
+	const running: boolean = state.watch.running;
+	const itemStatus: string|undefined = state.batch.items[0]?.status;
+	provider.setWatchIndividual(true);
+	provider.addWatch();
+	provider.addBatch('read');
+	watch.unmount();
+	batch.unmount();
+	// @ts-expect-error optional operations stay bounded to known operation names
+	provider.addBatch('writeMany');
 	// @ts-expect-error selectors are endpoint categories, not arbitrary strings
 	createSessionProvider({session : stat, endpoint : {category : 'anything', id : 0}});
 	// @ts-expect-error scalar text remains exact text
 	provider.setText([ 'large' ], 9007199254740993, state.revision);
 	// @ts-expect-error immutable state
 	state.disposed = true;
-	void[ordinary, ready, disposed, stale, reason, stop];
+	void[ordinary, optional, ready, disposed, stale, reason, stop, running, itemStatus];
 }

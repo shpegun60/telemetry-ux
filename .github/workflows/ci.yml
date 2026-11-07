@@ -392,6 +392,13 @@ jobs:
             "$RUNNER_TEMP/web-builder/bin/python" -B tests/web_device_starter/run.py \
               --prepared "$RUNNER_TEMP/ux-own-device-$profile" \
               --output "$RUNNER_TEMP/ux-own-device-browser-$profile"
+            python -B tests/project_starter/run.py --output "$RUNNER_TEMP/ux-created-web-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+              --ux-package "$RUNNER_TEMP/web-dist/telemetry-ux-0.1.0.tgz" \
+              --browser-python "$RUNNER_TEMP/web-builder/bin/python" \
+              --node "$(command -v node)" --npm-cli "$(npm root -g)/npm/bin/npm-cli.js" \
+              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
       - name: Retain installed browser, native and package receipts
         if: always()
@@ -444,6 +451,10 @@ jobs:
             ${{ runner.temp }}/ux-own-device-*/*.log
             ${{ runner.temp }}/ux-own-device-browser-*/*.png
             ${{ runner.temp }}/own-device-npm-pack.json
+            ${{ runner.temp }}/ux-created-web-*/*.json
+            ${{ runner.temp }}/ux-created-web-*/*.log
+            ${{ runner.temp }}/ux-created-web-*/browser/*.json
+            ${{ runner.temp }}/ux-created-web-*/browser/*.png
 
   generated-qml:
     name: Installed generated QML example (Linux)
@@ -542,6 +553,10 @@ jobs:
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/project_starter/run.py --output "$RUNNER_TEMP/ux-created-qml-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
       - name: Retain generated QML and installed package evidence
         if: always()
@@ -571,6 +586,8 @@ jobs:
             ${{ runner.temp }}/ux-dynamic-qml-gcc/*.json
             ${{ runner.temp }}/ux-dynamic-qml-gcc/*.log
             ${{ runner.temp }}/ux-dynamic-qml-gcc/*.png
+            ${{ runner.temp }}/ux-created-qml-*/*.json
+            ${{ runner.temp }}/ux-created-qml-*/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.json
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.png

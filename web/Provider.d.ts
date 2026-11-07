@@ -243,16 +243,14 @@ export interface SessionProviderOptions {
 	/** Resolve one endpoint without I/O. Reconnect restores selection only for an unchanged fingerprint. */
 	readonly endpoint?: SessionEndpointSelector;
 }
-export interface SessionPresentationState extends PresentationState {
+export interface SessionPresentationState extends BatchPresentationState {
 	readonly connection: SessionSnapshot;
 	readonly disposed: boolean;
 	/** Peer or explicit invalidation hides values but preserves stale draft text until cancel/restart. */
 	readonly dataStale: boolean;
 	readonly dataInvalidationReason: string;
-	readonly watch?: never;
-	readonly batch?: never;
 }
-export interface SessionPresentationProvider extends PresentationProvider {
+export interface SessionPresentationProvider extends BatchPresentationProvider {
 	snapshot(): SessionPresentationState;
 	subscribe(listener: (state: SessionPresentationState) => void): () => void;
 	/** Retire this presentation. Accepted requests retain their outcomes; the borrowed Session stays owned by the host. */
@@ -260,5 +258,5 @@ export interface SessionPresentationProvider extends PresentationProvider {
 	/** Invalidate data in every live provider borrowing this Session after direct/headless operations. */
 	invalidateData(reason?: string): void;
 }
-/** One local presentation over a borrowed Session. No Watchlist/Batch, transport, execution queue or lifecycle ownership. */
+/** One local presentation, including optional Watchlist/Batch, over a borrowed Session and its existing FIFO. */
 export function createSessionProvider(options: SessionProviderOptions): SessionPresentationProvider;

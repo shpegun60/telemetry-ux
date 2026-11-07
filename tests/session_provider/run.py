@@ -129,7 +129,7 @@ def main():
         run('strict-installed-types',[tools['node'],args.tsc,'--strict','--noEmit','--target','ES2022',
             '--module','NodeNext','--moduleResolution','NodeNext',public/'Consumer.ts'])
         provider=json.loads(run('installed-session-providers',[tools['node'],public/'Provider.mjs',device]).strip().splitlines()[-1])
-        check(provider.get('passed') and provider.get('checks',0)>=377 and provider.get('scenarios',0)>=19,'Provider assertion floor')
+        check(provider.get('passed') and provider.get('checks',0)>=697 and provider.get('scenarios',0)>=33,'Provider assertion floor')
         report['providers']=provider
         shutil.copy2(ROOT/'tests/web_configurator/Provider.mjs',public/'LegacyProvider.mjs')
         legacy=json.loads(run('unchanged-low-level-providers',[tools['node'],public/'LegacyProvider.mjs',
@@ -139,7 +139,7 @@ def main():
         run('chromium-real-websocket',[tools['browser_python'],'-B',HERE/'Browser.py','--device',device,
             '--public-root',public,'--data-dir',output/'browser'])
         browser=json.loads((output/'browser/summary.json').read_text(encoding='utf8'))
-        check(browser.get('passed') and set(browser.get('modes',{}))=={'static','dynamic'} and browser.get('checks',0)>=100,'Both browser modes and assertion floor')
+        check(browser.get('passed') and set(browser.get('modes',{}))=={'static','dynamic'} and browser.get('checks',0)>=134,'Both browser modes and assertion floor')
         report['browser']=browser
         report['source_sha256_after']=sources()
         report['installed_cpp_sha256_after']=inventory(sdk)

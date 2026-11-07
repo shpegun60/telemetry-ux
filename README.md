@@ -29,6 +29,17 @@ application; it does not introduce another implementation.
 
 ## Embed the Configurator in your application
 
+To start from a complete application instead of assembling examples, use the
+[project creator](doc/ProjectStarter.md):
+
+```sh
+python -B tools/create_project.py --target dynamic-qml --name MyDevice --output /projects/MyDevice
+```
+
+It creates an application-owned Qt Creator project with a small Model and two
+independent panels. Use `--target web-device` for the complete HTTP/WebSocket
+browser starter. Existing directories are never overwritten.
+
 Use the same [Configurator view](lib/qml/README.md) inside your own Qt Quick
 window or tab. Install the view package, link `TelemetryUX::configurator` and
 supply a QObject provider:
@@ -112,9 +123,10 @@ const view = mountConfigurator(document.querySelector('#device'), {session});
 
 The [Session adapter](doc/SessionProvider.md) follows lifecycle automatically.
 Multiple views borrow one Session/FIFO and own separate selection and drafts;
-unmounting a view leaves connection ownership with the host. Its initial scope is
-Fields, Commands and Services; Watchlist/Batch still use the explicit capable
-providers below. The [two-view example](examples/session_web/README.md) runs with
+unmounting a view leaves connection ownership with the host. Fields, Commands,
+Services, Watchlist and Mixed Batch use that same Session. TRM1/TBM1 and backend
+support are checked independently, with explicit Individual FieldRead fallback.
+The [two-view example](examples/session_web/README.md) runs with
 the existing reference server. `demoWebSocket` describes that server's bootstrap;
 it is not a generic production server profile.
 

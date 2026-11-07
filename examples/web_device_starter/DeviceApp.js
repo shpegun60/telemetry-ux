@@ -5,9 +5,10 @@ import {staticAvailable} from './starter-options.js';
 
 const element = id => document.getElementById(id);
 element('mode').querySelector('[value="static"]').disabled = !staticAvailable;
-element('mode').title = staticAvailable ? 'Both SDK modes are prepared' : 'Static mode requires prepare.py --codegen-python';
+element('mode').title = staticAvailable ? 'Both SDK modes are prepared'
+                                        : 'Static mode requires prepare.py --codegen-python';
 // This starter implements the reference-server contract documented in README.md.
-const transport = demoWebSocket(location.origin);
+const transport = demoWebSocket(location.origin, {enableReadMany : true, enableBatch : true});
 let session, view, unsubscribe, working = false;
 
 function render()
@@ -45,12 +46,15 @@ element('connect').onclick = () => run(async () => {
 			sdk = await import('./generated/js/device.js');
 			({structuralMetadata : metadata} = await import('./generated/js/device.metadata.js'));
 		} catch (cause) {
-			throw new Error('Static mode needs generated files. Run prepare.py with --codegen-python, or choose Dynamic.', {cause});
+			throw new Error(
+			    'Static mode needs generated files. Run prepare.py with --codegen-python, or choose Dynamic.',
+			    {cause});
 		}
 	}
 	view?.unmount();
 	unsubscribe?.();
-	session = sdk ? await connectStatic({sdk, metadata, transport}) : await connectDynamic({transport});
+	session =
+	    sdk ? await connectStatic({sdk, metadata, transport}) : await connectDynamic({transport});
 	unsubscribe = session.subscribe(render);
 	try {
 		view = mountConfigurator(element('device'), {session});

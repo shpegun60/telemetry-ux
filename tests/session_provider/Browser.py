@@ -60,7 +60,7 @@ def main():
                         expect(field).to_be_visible(); field.fill(text); return field
                     def outcome(view,operation): return view.locator('[data-role="outcome"][data-operation="'+operation+'"]')
                     snap=lambda name:page.evaluate('name=>suite.snapshot(name)',name)
-                    check(page.evaluate('suite.invalidMounts') == [True]*4,'Invalid ownership/unsupported mounts reject before DOM')
+                    check(page.evaluate('suite.invalidMounts') == [True]*2,'Invalid ownership mounts reject before DOM')
                     check(state()['reads']==0 and state()['writes']==0,'Mounts do not send endpoint traffic')
                     check(page.evaluate('suite.providers.a!==suite.providers.b&&suite.providers.a!==suite.providers.full'),'Session mounts own independent providers')
                     check(snap('full')['selected'] is None,'Full view starts without coupled selection')
@@ -107,6 +107,82 @@ def main():
                     action(service,'cancelEdit').click(); action(service,'beginEdit').click()
                     action(service,'writes').check(); action(service,'call').click(); idle(service)
                     check(snap('service')['hasResponse'],'Inspect publishes the current response')
+                    # The same high-level Session now supplies both optional
+                    # panels. All UI actions use the existing native FIFO.
+                    check(page.locator('#watch [data-role="configurator"]').count()==1 and
+                          page.locator('#batch [data-role="configurator"]').count()==1,
+                          'Standalone Watchlist and Batch mount directly from Session')
+                    for name in ('Wide','Signed','Mode','Unavailable'):
+                        full.locator('button[data-endpoint]').filter(has_text=name).first.click()
+                        action(full,'addWatch').click()
+                    exchanges=server.exchange_count
+                    action(full,'refreshWatch').click()
+                    expect(full.locator('[data-role="watch-status"]')).to_contain_text('ReadMany complete')
+                    idle(full)
+                    check(server.exchange_count==exchanges+1,'Session Watchlist sends one native ReadMany, not four reads')
+                    watched=full.locator('.tux-watch-table tbody tr')
+                    expect(watched).to_have_count(4)
+                    expect(watched.nth(0)).to_contain_text('18446744073709551615')
+                    expect(watched.nth(1)).to_contain_text('-9223372036854775808')
+                    expect(watched.nth(3)).to_contain_text('Unavailable')
+                    check(snap('full')['watch']['rows'][3]['text']=='','Unavailable item does not publish a value')
+                    action(full,'watch-individual').check()
+                    exchanges=server.exchange_count
+                    action(full,'refreshWatch').click()
+                    expect(full.locator('[data-role="watch-status"]')).to_contain_text('Individual FieldRead complete')
+                    idle(full)
+                    check(server.exchange_count==exchanges+4,'Individual fallback remains an explicit user choice')
+                    action(full,'startWatch').click()
+                    expect(action(full,'stopWatch')).to_be_enabled()
+                    action(full,'stopWatch').click()
+                    expect(action(full,'clearWatch')).to_be_enabled()
+                    exchanges=server.exchange_count
+                    page.wait_for_timeout(150)
+                    check(server.exchange_count==exchanges,'Stopped Session polling does not retain missed ticks')
+                    action(full,'clearWatch').click()
+                    def add_batch(name,operation):
+                        full.locator('button[data-endpoint]').filter(has_text=name).first.click()
+                        action(full,'batch-operation').select_option(operation)
+                        action(full,'addBatch').click()
+                    def batch_text(name,value):
+                        control=full.locator('input[data-source="batchDraft"][data-path=\'["'+name+'"]\']')
+                        expect(control).to_be_visible();control.fill(value)
+                    add_batch('Config','write')
+                    batch_text('gain','6.25');batch_text('large','9007199254740993')
+                    batch_text('negative','-9223372036854775808')
+                    add_batch('Accepted','command')
+                    add_batch('Echo','service')
+                    batch_text('gain','2.5');batch_text('large','18446744073709551615')
+                    add_batch('Wide','read')
+                    batch_rows=full.locator('.tux-batch-table tbody tr')
+                    expect(batch_rows).to_have_count(4)
+                    check(action(full,'executeBatch').is_disabled(),'Session Batch needs its own mutation opt-in')
+                    action(full,'writes').check()
+                    action(b,'refresh').click();idle(b)
+                    action(b,'beginEdit').click();edit(b,'gain','7.')
+                    before=state();exchanges=server.exchange_count
+                    action(full,'executeBatch').click()
+                    expect(full.locator('[data-role="batch-status"]')).to_contain_text('Batch reply received')
+                    idle(full)
+                    after=state()
+                    check(server.exchange_count==exchanges+1,'Mixed Session Batch uses exactly one native exchange')
+                    check(all(after[key]==before[key]+1 for key in ('reads','writes','commands','services')),
+                          'Each mixed Batch item executes once in this measured request')
+                    check(after['gain']==6.25 and after['large']=='9007199254740993','Batch editor preserves exact U64 and request DTO')
+                    expect(batch_rows.nth(0)).to_contain_text('Applied')
+                    expect(batch_rows.nth(1)).to_contain_text('Accepted')
+                    check('Executed' not in batch_rows.nth(1).inner_text(),'Batch Accepted is not reported as Executed')
+                    check(snap('b')['dataStale'] and not snap('b')['actions']['apply'],'Accepted Batch mutation invalidates peer draft')
+                    expect(b.locator('input[data-source="draft"][data-path=\'["gain"]\']')).to_have_value('7.')
+                    batch_rows.nth(2).locator('[data-action="selectBatch"]').click()
+                    expect(row(full,'batchResponse','gain')).to_have_text('2.5')
+                    expect(row(full,'batchResponse','large')).to_have_text('18446744073709551615')
+                    batch_rows.nth(3).locator('[data-action="selectBatch"]').click()
+                    expect(full.locator('.tux-row[data-source="batchResponse"] .tux-value')).to_have_text('9007199254740993')
+                    page.wait_for_timeout(150)
+                    check(server.exchange_count==exchanges+1,'Session Batch never adds a hidden retry or readback')
+                    action(b,'cancelEdit').click();action(b,'refresh').click();idle(b)
+                    action(full,'clearBatch').click()
                     # Every standalone panel keeps historical checked facts after revocation.
                     action(a,'refresh').click(); idle(a)
                     # Own-category facts stay hidden while a ready provider's
@@ -184,6 +260,32 @@ def main():
                           terminal['services']==before['services'], 'History projection/disposal never repeats a Command or Service')
                     page.evaluate('suite.outcomeObserver.unmount()')
                     server.reply_delay_seconds=0
+                    # Lost ACK for a prepared mixed mutation preserves global
+                    # uncertainty; reconnect must not replay its recipe.
+                    full.locator('button[data-endpoint]').filter(has_text='Accepted').first.click()
+                    action(full,'batch-operation').select_option('command')
+                    action(full,'addBatch').click();action(full,'writes').check()
+                    server.reply_delay_seconds=.3
+                    before=state();exchanges=server.exchange_count
+                    action(full,'executeBatch').click()
+                    for _ in range(100):
+                        if state()['commands']>before['commands']:break
+                        time.sleep(.01)
+                    check(state()['commands']==before['commands']+1,'Prepared Session Batch reached native Command')
+                    page.locator('#disconnect').click()
+                    expect(page.locator('#status')).to_have_text('recovery-required')
+                    expect(full.locator('[data-role="batch-status"]')).to_contain_text('OutcomeUnknown')
+                    check(snap('full')['batch']['outcome']['historical'],'Disconnected Batch keeps its operation facts')
+                    check(not page.evaluate('suite.providers.full.rows([], {source:"batchResponse"}).available'),
+                          'Uncertain Batch publishes no response')
+                    server.reply_delay_seconds=0
+                    page.wait_for_timeout(350)
+                    terminal=state()
+                    page.locator('#reconnect').click();expect(page.locator('#status')).to_have_text('ready')
+                    check(snap('full')['batch']['items']==[] and not snap('full')['watch']['running'],
+                          'New admission does not restore Batch or polling recipes')
+                    check(counts(state())==counts(terminal) and server.exchange_count==exchanges+1,
+                          'Reconnect sends no automatic Batch mutation or read')
                     page.evaluate('suite.views.borrowed.unmount()')
                     check(page.evaluate('!suite.borrowed.snapshot().disposed&&suite.session.ready'),'Explicit provider mounts borrow presentation')
                     screenshot=output/(mode+'.png'); page.screenshot(path=str(screenshot),full_page=True)

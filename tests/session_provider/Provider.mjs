@@ -32,6 +32,7 @@ for (const mode of ['static', 'dynamic']) {
 	let pending, errors = '', active = 0, peak = 0, packets = 0, generation = 16;
 	let hold = false, release, transformRead, lastWritten, closes = 0, opens = 0;
 	let bootstrapDescriptor = descriptor;
+	const discovery = {readMany : true, batch : true};
 	const drained = new Set();
 	child.stderr.on('data', bytes => errors += bytes);
 	const exit = new Promise((resolve, reject) => {
@@ -78,13 +79,18 @@ for (const mode of ['static', 'dynamic']) {
 				drained.clear();
 			}
 		}
-	});
+	}, {readMany : true, batch : true});
 	const profile = {
 		async open(context) {
 		    opens++;
 		    generation++;
 		    await native('session ' + generation);
+		    const capabilities = {};
+		    for (const [key, command] of [[ 'readMany', 'readmany' ], [ 'batch', 'mixedbatch' ]])
+			    if (discovery[key])
+				    capabilities[key] = new Uint8Array(Buffer.from(await native(command), 'hex'));
 		    return {
+			    ...capabilities,
 			    peer : 'native-demo',
 			    session : generation,
 			    header : bootstrapDescriptor.slice(0, 64),
@@ -162,10 +168,10 @@ for (const mode of ['static', 'dynamic']) {
 		eq(p.snapshot().disposed, false);
 		eq(p.snapshot().selected.name, 'Config');
 		eq(r.snapshot().selected.name, 'Inspect');
-		eq('watch' in p.snapshot(), false);
-		eq('batch' in p.snapshot(), false);
+		eq('watch' in p.snapshot(), true);
+		eq('batch' in p.snapshot(), true);
 		for (const name of ['addWatch', 'refreshWatch', 'tickWatch', 'addBatch', 'executeBatch'])
-			eq(name in p, false);
+			eq(typeof p[name], 'function');
 		eq(Object.isFrozen(p.snapshot()), true);
 		eq(Object.isFrozen(p.snapshot().connection), true);
 		checks++;
@@ -357,6 +363,259 @@ for (const mode of ['static', 'dynamic']) {
 		eq(deferred.snapshot().selected, null);
 		yes(deferred.snapshot().error);
 		deferred.dispose();
+
+		// Optional UI operations borrow this same Session. Capability discovery is
+		// installed once for each admission; polling creates no second scheduler.
+		const watch = createSessionProvider({session});
+		const batch = createSessionProvider({session});
+		all.push(watch, batch);
+		const key = (provider, name, category = 1) => endpoint(provider, name, category).key;
+		const watchValues = () => watch.snapshot().watch.rows.map(row => [row.status, row.text]);
+		scenarios++;
+		const optionalBefore = packets;
+		eq(watch.addWatch(key(watch, 'Config')), false, 'ReadMany does not flatten DTO members');
+		for (const name of ['Wide', 'Signed', 'Mode', 'Unavailable'])
+			eq(watch.addWatch(key(watch, name)), true);
+		eq(watch.addWatch(key(watch, 'Wide')), false);
+		eq(packets, optionalBefore, 'Watch selection is local');
+		eq(watch.refreshWatch(), true, 'Session discovery supplies TRM1 without caller wiring');
+		await idle(watch);
+		eq(packets, optionalBefore + 1, 'Four watched Fields use one existing FIFO request');
+		eq(watchValues(), [
+			[ 'Ok', '9007199254740993' ], [ 'Ok', '-9223372036854775808' ], [ 'Ok', '-123' ],
+			[ 'Unavailable', '' ]
+		]);
+		eq(Object.isFrozen(watch.snapshot().watch.rows[0]), true);
+		hold = true;
+		eq(watch.refreshWatch(), true);
+		await held();
+		eq(p.select(key(p, 'Accepted', 2)), true);
+		eq(p.setWritesEnabled(true), true);
+		eq(p.execute(), true);
+		eq(watch.snapshot().watch.rows.every(row => row.status === 'Stale' && row.text === ''),
+		   true);
+		unhold();
+		await idle(watch);
+		await idle(p);
+		eq(watch.snapshot().watch.rows.every(row => row.status === 'Stale' && row.text === ''),
+		   true,
+		   'Late Watchlist response cannot restore data revoked by an accepted peer mutation');
+		eq(p.select(key(p, 'Config')), true);
+
+		scenarios++;
+		eq(watch.setWatchInterval(100), true);
+		hold = true;
+		const pollingBefore = packets;
+		eq(watch.startWatch(0), true);
+		await held();
+		for (const now of [100, 200, 300, 500])
+			eq(watch.tickWatch(now), false, 'Missed ticks must not queue another request');
+		eq(packets, pollingBefore + 1);
+		eq(watch.clearWatch(), false);
+		eq(watch.stopWatch(), true);
+		eq(watch.snapshot().watch.active, true, 'Stop retains the pending lifetime fence');
+		eq(watch.clearWatch(), false);
+		unhold();
+		await idle(watch);
+		eq(watch.snapshot().watch.active, false);
+		eq(watch.tickWatch(1000), false);
+		eq(packets, pollingBefore + 1, 'Stopped poll never replays missed ticks');
+		eq(watch.setWatchIndividual(true), true);
+		const individualBefore = packets;
+		eq(watch.refreshWatch(), true);
+		await idle(watch);
+		eq(packets, individualBefore + 4, 'Individual fallback is explicit');
+		eq(watchValues(), [
+			[ 'Ok', '9007199254740993' ], [ 'Ok', '-9223372036854775808' ], [ 'Ok', '-123' ],
+			[ 'Unavailable', '' ]
+		]);
+		eq(watch.setWatchIndividual(false), true);
+
+		scenarios++;
+		eq(batch.addBatch('read', key(batch, 'Wide')), true);
+		eq(batch.addBatch('read', key(batch, 'Signed')), true);
+		const signedBatch = batch.snapshot().batch.selectedKey;
+		const readBatchBefore = packets;
+		const nonMutatedWatch = watchValues();
+		eq(batch.executeBatch(), true, 'Session discovery supplies TBM1 independently');
+		await idle(batch);
+		eq(packets, readBatchBefore + 1);
+		eq(watchValues(), nonMutatedWatch, 'Read-only Batch does not invalidate sibling values');
+		eq(batch.snapshot().batch.items.map(item => item.outcome.succeeded), [ true, true ]);
+		eq(batch.rows([], {source : 'batchResponse'}).rows[0].text, '-9223372036854775808');
+		hold = true;
+		eq(batch.executeBatch(), true);
+		await held();
+		eq(p.select(key(p, 'Accepted', 2)), true);
+		eq(p.execute(), true);
+		unhold();
+		await idle(batch);
+		await idle(p);
+		eq(batch.snapshot().batch.outcome.succeeded, true,
+		   'Late Batch keeps the checked operation result');
+		eq(batch.snapshot().batch.outcome.valueStatus, 'Stale');
+		eq(batch.snapshot().batch.items.map(item => item.outcome.succeeded), [ true, true ]);
+		eq(batch.rows([], {source : 'batchResponse'}).available, false,
+		   'Late read-only Batch cannot publish responses after a peer mutation');
+		eq(p.select(key(p, 'Config')), true);
+		eq(batch.executeBatch(), true);
+		await idle(batch);
+		const previousResponse = batch.rows([], {source : 'batchResponse'});
+		eq(batch.setWritesEnabled(true), true);
+		eq(batch.addBatch('command', key(batch, 'Accepted', 2)), true);
+		eq(q.select(key(q, 'Config')), true);
+		await read(q);
+		eq(q.setWritesEnabled(true), true);
+		eq(q.beginEdit(), true);
+		edit(q, 'gain', '7.');
+		hold = true;
+		const fillers =
+		    Array.from({length : 3}, () => session.read(binding(sdk.control.fields.Config)));
+		await held();
+		const refusedBefore = packets;
+		eq(batch.executeBatch(), false);
+		await flush();
+		eq(batch.snapshot().batch.outcome.name, 'QueueFull');
+		eq(q.snapshot().dataStale, false, 'Rejected Batch does not revoke a peer draft');
+		eq(text(q, 'draft', 'gain'), '7.');
+		eq(packets, refusedBefore);
+		eq(batch.snapshot().batch.items[0].outcome.succeeded, true,
+		   'Refusal keeps checked item history');
+		unhold();
+		await Promise.all(fillers);
+		await idle(batch);
+		eq(batch.snapshot().batch.items.length, 3, 'Refusal keeps the Batch recipe');
+		eq(batch.selectBatch(signedBatch), true);
+		eq(batch.rows([], {source : 'batchResponse'}).rows[0].text, previousResponse.rows[0].text,
+		   'QueueFull preserves the previous owned Batch response');
+		eq(batch.clearBatch(), true);
+		eq(batch.addBatch('command', key(batch, 'Accepted', 2)), true);
+		eq(batch.addBatch('service', key(batch, 'Inspect', 3)), true);
+		const serviceItem = batch.snapshot().batch.selectedKey;
+		eq(batch.addBatch('read', key(batch, 'Unavailable')), true);
+		const mixedBefore = packets;
+		eq(batch.executeBatch(), true);
+		eq(q.snapshot().dataStale, true, 'Accepted mixed Batch immediately invalidates peers');
+		eq(text(q, 'draft', 'gain'), '7.');
+		await idle(batch);
+		eq(packets, mixedBefore + 1, 'Mixed request never fans out or reads back implicitly');
+		const facts = batch.snapshot().batch.items.map(item => item.outcome);
+		eq(facts[0].accepted, true);
+		eq(facts[0].executed, false);
+		eq(facts[1].succeeded, true);
+		eq(facts[2].succeeded, false);
+		eq(batch.selectBatch(serviceItem), true);
+		eq(batch.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'large').text,
+		   '9007199254740993');
+		await flush();
+		eq(packets, mixedBefore + 1, 'Publishing per-item facts does not replay mutations');
+
+		scenarios++;
+		// Removing either discovery record must not imply the other capability.
+		const oldOptionalSession = session.session;
+		await session.disconnect();
+		eq(batch.snapshot().batch.outcome.historical, true);
+		eq(batch.rows([], {source : 'batchResponse'}).available, false);
+		discovery.batch = false;
+		await session.reconnect();
+		await flush();
+		yes(session.session > oldOptionalSession);
+		eq(watch.snapshot().watch.rows.length, 0, 'New admission does not restore a poll recipe');
+		eq(batch.snapshot().batch.items.length, 0);
+		eq(watch.addWatch(key(watch, 'Wide')), true);
+		let beforeCapability = packets;
+		eq(watch.refreshWatch(), true);
+		await idle(watch);
+		eq(packets, beforeCapability + 1);
+		eq(batch.addBatch('read', key(batch, 'Wide')), true);
+		beforeCapability = packets;
+		eq(batch.executeBatch(), false, 'TRM1 cannot authorize Batch');
+		eq(packets, beforeCapability);
+		yes(batch.snapshot().batch.status.includes('TBM1'));
+		await session.disconnect();
+		discovery.readMany = false;
+		discovery.batch = true;
+		await session.reconnect();
+		await flush();
+		eq(watch.addWatch(key(watch, 'Wide')), true);
+		beforeCapability = packets;
+		eq(watch.refreshWatch(), false, 'TBM1 cannot authorize ReadMany');
+		eq(packets, beforeCapability, 'Missing TRM1 causes no implicit FieldRead');
+		yes(watch.snapshot().watch.status.includes('TRM1'));
+		eq(watch.setWatchIndividual(true), true);
+		eq(watch.refreshWatch(), true);
+		await idle(watch);
+		eq(packets, beforeCapability + 1);
+		eq(batch.addBatch('read', key(batch, 'Wide')), true);
+		eq(batch.executeBatch(), true);
+		await idle(batch);
+		eq(packets, beforeCapability + 2);
+
+		scenarios++;
+		// Earlier duck-typed Session facades keep ordinary/Individual I/O usable.
+		const ordinary = createSessionProvider(
+		    {session : {...session, readMany : undefined, batch : undefined}});
+		all.push(ordinary);
+		eq(ordinary.addWatch(key(ordinary, 'Wide')), true);
+		eq(ordinary.setReadManyCapability(session.capabilities.batch), true);
+		const ordinaryBefore = packets;
+		eq(ordinary.refreshWatch(), false);
+		eq(packets, ordinaryBefore);
+		yes(/Unsupported|unavailable/i.test(ordinary.snapshot().watch.status));
+		eq(ordinary.setWatchIndividual(true), true);
+		eq(ordinary.refreshWatch(), true);
+		await idle(ordinary);
+		eq(packets, ordinaryBefore + 1);
+		eq(ordinary.addBatch('read', key(ordinary, 'Wide')), true);
+		eq(ordinary.executeBatch(), false);
+		eq(packets, ordinaryBefore + 1);
+		yes(/Unsupported|unavailable/i.test(ordinary.snapshot().batch.status));
+		ordinary.dispose();
+
+		scenarios++;
+		// A read may finish physically after revocation, but cannot republish data.
+		hold = true;
+		eq(watch.refreshWatch(), true);
+		await held();
+		const beforeLateRead = packets;
+		const retiringRead = session.disconnect();
+		eq(watch.snapshot().current, false);
+		eq(watch.snapshot().watch.rows.every(row => row.text === ''), true);
+		unhold();
+		await retiringRead;
+		await idle(watch);
+		eq(watch.snapshot().watch.rows.every(row => row.text === ''), true);
+		discovery.readMany = discovery.batch = true;
+		await session.reconnect();
+		await flush();
+		eq(packets, beforeLateRead, 'Reconnect does not restart a previous Watchlist');
+		eq(watch.snapshot().watch.running, false);
+
+		scenarios++;
+		// An unmounted Batch editor leaves accepted native execution and its facts
+		// alive, and reconnect never resubmits an uncertain mutation.
+		eq(batch.setWritesEnabled(true), true);
+		eq(batch.addBatch('command', key(batch, 'Accepted', 2)), true);
+		hold = true;
+		eq(batch.executeBatch(), true);
+		await held();
+		const beforeUncertain = packets, beforeBatchClose = closes;
+		batch.dispose();
+		eq(session.ready, true);
+		eq(closes, beforeBatchClose);
+		const retiringBatch = session.disconnect();
+		unhold();
+		await retiringBatch;
+		await idle(batch);
+		eq(batch.snapshot().batch.outcome.name, 'OutcomeUnknown');
+		eq(batch.snapshot().batch.outcome.historical, true);
+		eq(batch.rows([], {source : 'batchResponse'}).available, false);
+		await session.reconnect();
+		await flush();
+		eq(packets, beforeUncertain, 'Unknown Batch does not replay after new admission');
+		eq(batch.executeBatch(), false);
+		eq(packets, beforeUncertain);
+		eq(peak, 1, 'All optional operations use the original physical FIFO');
 
 		if (mode === 'dynamic') {
 			scenarios++;

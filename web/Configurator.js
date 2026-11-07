@@ -57,9 +57,6 @@ function mount(element, options = {}, categoryFilter)
 		throw new TypeError('Supply exactly one provider or Session');
 	if (typeof now !== 'function')
 		throw new TypeError('The Watchlist clock must be a function');
-	// Optional operations are deliberately unavailable through this first Session adapter.
-	if (session !== undefined && categoryFilter >= 4)
-		throw new TypeError('Watchlist and Batch require an explicit capable provider');
 	const owned =
 	    session === undefined ? undefined : createSessionProvider({session, limits, endpoint});
 	const selected = owned ?? provider;

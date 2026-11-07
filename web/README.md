@@ -6,7 +6,11 @@ local presentation and follows Session lifecycle automatically. Static Sessions
 also supply generated structural metadata and wire-editing codecs. Independent
 views share the Session's existing FIFO; unmounting does not close or cancel it.
 Accepted peer mutations invalidate cached values and lock stale drafts until an
-explicit cancel/restart. This initial Session path has no Watchlist/Batch API.
+explicit cancel/restart. The same Session provider now exposes Watchlist and
+Mixed Batch. `mountWatchlist(host, {session})` and `mountBatchEditor(host, {session})`
+reuse the existing editors and Session FIFO. TRM1/TBM1 records follow each new
+admission; the reference profile requires separate `enableReadMany` and
+`enableBatch` opt-ins. Individual FieldRead remains an explicit selection.
 
 The advanced APIs below remain available for a host-owned low-level client.
 `Provider.js` adapts one host-owned Telemetry SDK client to the reusable web

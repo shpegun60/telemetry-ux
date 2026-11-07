@@ -46,7 +46,11 @@ export function mountServicePanel(element: HTMLElement,
                                   options: ConfiguratorOptions): ConfiguratorView;
 /** Optional provider Watchlist contract; owner-driven ticks remain with the host. */
 export function mountWatchlist(element: HTMLElement,
+                               options: SessionConfiguratorOptions): SessionConfiguratorView;
+export function mountWatchlist(element: HTMLElement,
                                options: ProviderConfiguratorOptions): ConfiguratorView;
 /** Ordered mixed Batch with one explicit submit and the provider's shared request editor. */
+export function mountBatchEditor(element: HTMLElement,
+                                 options: SessionConfiguratorOptions): SessionConfiguratorView;
 export function mountBatchEditor(element: HTMLElement,
                                  options: ProviderConfiguratorOptions): ConfiguratorView;

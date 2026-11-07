@@ -5,7 +5,7 @@ import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
 
 const get = id => document.getElementById(id);
-const transport = demoWebSocket(location.origin);
+const transport = demoWebSocket(location.origin, {enableReadMany : true, enableBatch : true});
 let session, unsubscribe, views = [], working = false, ownerError = '';
 
 function state()
