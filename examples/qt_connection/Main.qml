@@ -6,6 +6,7 @@ import QtQuick.Window
 import Telemetry.UX
 Window {
     width: 1440; height: 820; visible: true
+    minimumWidth: 1240; minimumHeight: 600
     title: "Telemetry - one TCP connection, two panels"
     color: "#11151c"
     ColumnLayout {
@@ -25,6 +26,7 @@ Window {
             Layout.fillHeight: true; Layout.fillWidth: true
             ColumnLayout {
                 Layout.fillHeight: true; Layout.fillWidth: true
+                Layout.minimumWidth: 600; Layout.preferredWidth: 700
                 CheckBox {
                     text: "Allow changes in configuration panel"; palette.windowText: "#e8edf5"
                     checked: configuration.allowMutations
@@ -36,10 +38,11 @@ Window {
                     provider: configuration; watchlistVisible: false
                 }
             }
-            FieldEditor {
+            Configurator {
                 objectName: "measurementPanel"
-                Layout.fillHeight: true; Layout.preferredWidth: 520
-                provider: measurements
+                Layout.fillHeight: true; Layout.fillWidth: true
+                Layout.minimumWidth: 600; Layout.preferredWidth: 700
+                provider: measurements; watchlistVisible: false
             }
         }
     }

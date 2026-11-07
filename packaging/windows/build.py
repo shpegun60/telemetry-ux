@@ -82,7 +82,7 @@ def main():
                   '-DCMAKE_CXX_COMPILER='+str(tools['cxx']),
                   '-DCMAKE_MAKE_PROGRAM='+str(tools['ninja']), '-DCMAKE_PREFIX_PATH='+str(qt),
                   '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF']
-        components = 'inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_transport'
+        components = 'inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_transport;qt_connection'
         if not args.no_serial:
             components += ';qt_serial_transport'
         prefix = output/'sdk-prefix'
