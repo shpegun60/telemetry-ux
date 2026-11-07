@@ -7,6 +7,7 @@ import {connectStatic, connectDynamic, EncodedBackend} from 'telemetry-sdk';
 import {createSessionProvider} from 'telemetry-ux/web';
 import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
+import {publication, waitForPublication, finishDriver} from './Publication.mjs';
 
 const [executable] = process.argv.slice(2);
 const descriptor = new Uint8Array(await readFile(new URL('./descriptor.bin', import.meta.url)));
@@ -19,7 +20,6 @@ const yes = (value, why = '') => {
 	++checks;
 	assert(value, why);
 };
-const tick = () => new Promise(resolve => setImmediate(resolve));
 const flush = async () => {
 	for (let i = 0; i < 30; ++i)
 		await Promise.resolve();
@@ -31,14 +31,27 @@ for (const mode of ['static', 'dynamic']) {
 	let waiter, errors = '', active = 0, peak = 0, sessionId = 16;
 	let manyCount = 0, holdMany = 0, failMany = 0, release, capabilityLimits;
 	const trace = [], draining = new Set();
+	const peerEvents = publication(), responseEvents = publication();
+	let peerFailure, primaryFailure;
+	const failPeer = error => {
+		peerFailure ??= error;
+		waiter?.reject(peerFailure);
+		peerEvents.publish();
+	};
 	child.stderr.on('data', bytes => errors += bytes);
+	child.stdin.on('error', failPeer);
 	const exit = new Promise((resolve, reject) => {
-		child.once('error', reject);
-		child.once('exit', code => {
-			waiter?.reject(new Error('Native peer exited ' + code + ': ' + errors));
+		child.once('error', error => {
+			failPeer(error);
+			reject(error);
+		});
+		child.once('exit', (code, signal) => {
+			failPeer(new Error('Native peer exited ' + code + ' signal=' + signal + ': ' + errors));
 			resolve(code);
 		});
 	});
+	void exit.catch(() => {
+	                });
 	createInterface({input : child.stdout}).on('line', line => {
 		assert(waiter, 'Native traffic bypassed the one request owner');
 		const {resolve} = waiter;
@@ -46,6 +59,10 @@ for (const mode of ['static', 'dynamic']) {
 		resolve(line);
 	});
 	const native = command => new Promise((resolve, reject) => {
+		if (peerFailure) {
+			reject(peerFailure);
+			return;
+		}
 		assert(!waiter, 'Parallel physical exchange');
 		waiter = {resolve, reject};
 		child.stdin.write(command + '\n');
@@ -66,7 +83,10 @@ for (const mode of ['static', 'dynamic']) {
 			const reply = new Uint8Array(
 			    Buffer.from(await native(Buffer.from(bytes).toString('hex')), 'hex'));
 			if (ordinal && ordinal === holdMany)
-				await new Promise(resolve => release = resolve);
+				await new Promise(resolve => {
+					release = resolve;
+					responseEvents.publish();
+				});
 			if (ordinal && ordinal === failMany) {
 				failMany = 0;
 				throw new Error('Injected middle ReadMany transport failure');
@@ -136,8 +156,19 @@ for (const mode of ['static', 'dynamic']) {
 
 	async function until(predicate, why)
 	{
-		for (let i = 0; !predicate() && i < 3000; ++i)
-			await tick();
+		await waitForPublication({
+			label : mode + ' ' + why,
+			ready : predicate,
+			subscribe(changed) {
+			    const stops = [
+				    watch.subscribe(changed), peer.subscribe(changed),
+				    responseEvents.subscribe(changed), peerEvents.subscribe(changed)
+			    ];
+			    return () => stops.forEach(stop => stop());
+			},
+			failure : () => peerFailure,
+			diagnostics
+		});
 		yes(predicate(), why);
 		await flush();
 	}
@@ -149,6 +180,27 @@ for (const mode of ['static', 'dynamic']) {
 	const cycle = () => until(() => !watch.snapshot().watch.pending && !watch.snapshot().busy &&
 	                                watch.snapshot().watch.status.includes('complete'),
 	                          'Running Watch cycle did not complete');
+	const diagnostics = () => {
+		const state = watch.snapshot();
+		return {
+			mode,
+			active,
+			exchanges : trace.length,
+			manyCount,
+			holdMany,
+			failMany,
+			nativePending : !!waiter,
+			held : !!release,
+			peerExit : child.exitCode,
+			peerError : peerFailure?.message,
+			connection : session.state,
+			busy : state.busy,
+			watchActive : state.watch.active,
+			watchPending : state.watch.pending,
+			watchStatus : state.watch.status,
+			peerBusy : peer.snapshot().busy
+		};
+	};
 
 	function select(count)
 	{
@@ -342,13 +394,26 @@ for (const mode of ['static', 'dynamic']) {
 		eq(watch.snapshot().watch.rows.length, 0);
 		eq(peak, 1);
 		results.push({mode, fields : 65, exchanges : trace.length, readMany : manyCount, peak});
+	} catch (error) {
+		primaryFailure = error;
+		throw error;
 	} finally {
-		unhold();
-		watch.dispose();
-		peer.dispose();
-		await session.close();
-		child.stdin.end();
-		eq(await exit, 0);
+		await finishDriver({
+			primaryFailure,
+			stopHolding : unhold,
+			dispose : () => {
+			    watch.dispose();
+			    peer.dispose();
+			},
+			close : () => session.close(),
+			closeInput : () => child.stdin.end(),
+			exit,
+			abort : () => child.kill(),
+			label : mode + ' Watchlist scaling driver',
+			diagnostics
+		});
+		if (!primaryFailure)
+			eq(child.exitCode, 0);
 	}
 }
 console.log(JSON.stringify({passed : true, hardware : false, checks, scenarios, results}));

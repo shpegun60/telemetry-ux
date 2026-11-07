@@ -24,6 +24,14 @@ later publication/handoff. A failed or session-invalidated cycle retires its
 displayed values. An accepted mutation invalidates sibling readings; ReadMany
 itself remains read-only and never becomes OutcomeUnknown.
 
+Live IPC phases wait for explicit held-response or provider publication events,
+not a machine-speed-dependent number of event-loop turns. The shared test-only
+publication fence observes readiness after a publisher finishes its stack and
+uses a real 30-second watchdog independent of the frozen SDK clock. Peer exit or
+error rejects the phase immediately. Bounded driver cleanup releases held work,
+terminates only its own failed native subprocess and preserves the first test
+failure. Shared lifecycle/cleanup controls run in the Session provider suite.
+
 `Browser.py` loads 65 actual rows, changes the real interval input to 1 ms,
 executes one three-chunk Refresh, starts repeated automatic Session cycles,
 stops/drains and removes a polling view. Explicit `autoPoll:false` and advanced
