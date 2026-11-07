@@ -23,7 +23,8 @@
 
 namespace telemetry::integration::qt {
 class DeviceTransport;
-}
+class ConnectionSession;
+} // namespace telemetry::integration::qt
 
 namespace inspector_qml {
 
@@ -121,10 +122,7 @@ public:
 		return peerPort_;
 	}
 
-	bool cleanupPending() const noexcept
-	{
-		return bool(retiredState_);
-	}
+	bool cleanupPending() const noexcept;
 
 	bool serialAvailable() const noexcept;
 
@@ -290,6 +288,7 @@ private:
 	std::shared_ptr<State> retiredState_;
 	std::unique_ptr<telemetry::ux::DynamicConfiguratorBinding> dynamicBinding_;
 	std::unique_ptr<telemetry::integration::qt::DeviceTransport> transport_;
+	std::unique_ptr<telemetry::integration::qt::ConnectionSession> tcpSession_;
 	EndpointModel endpoints_;
 	ValueModel values_;
 	ValueModel responses_;
@@ -336,6 +335,8 @@ private:
 	std::optional<std::pair<bool, bool>> consumeService(State& state, bool live);
 	void notifyState(Completion completion, std::optional<bool> read = {});
 	void bindTransportSignals();
+	void bindCurrentState();
+	void tcpAdmissionChanged();
 	void transportFailed(quint64 epoch, QString error);
 	void transportDescriptor(quint64 epoch, QByteArray bytes);
 };

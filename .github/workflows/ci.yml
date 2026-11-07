@@ -149,7 +149,7 @@ jobs:
         run: |
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
           cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/sdk-build" -G Ninja \
-            '-DTELEMETRY_COMPONENTS=inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_serial_transport;resource_adapter' \
+            '-DTELEMETRY_COMPONENTS=inspector;workbench;read_many_workbench;encoded_backend;encoded_server;core;tcp_server;qt_serial_transport;qt_connection;resource_adapter' \
             -DCOBS_ROOT="$GITHUB_WORKSPACE/.ci/cobs" -DCMAKE_BUILD_TYPE=Release \
             -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdk-prefix-stage"
@@ -508,7 +508,7 @@ jobs:
           "$RUNNER_TEMP/qml-codegen/bin/python" -m pip install --no-index --find-links "$RUNNER_TEMP/qml-wheels" \
             telemetry-codegen-core==0.1.0 telemetry-ux-codegen==0.1.0 \
             2>&1 | tee "$RUNNER_TEMP/qml-wheels-install.log"
-      - name: Install relocated headless SDKs and execute QML qualification
+      - name: Install relocated SDKs and execute QML qualification
         run: |
           set -euo pipefail
           for profile in gcc clang-asan; do
@@ -521,8 +521,8 @@ jobs:
               checks+=(--sanitize)
             fi
             cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/qml-sdk-build-$profile" -G Ninja \
-              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions;workbench' \
-              -DCMAKE_DISABLE_FIND_PACKAGE_Qt6=ON -DCMAKE_CXX_COMPILER="$compiler" \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions;workbench;qt_connection;tcp_server' \
+              -DCMAKE_CXX_COMPILER="$compiler" \
               -DCMAKE_BUILD_TYPE=Release -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qml-sdk-stage-$profile" "${flags[@]}" \
               2>&1 | tee "$RUNNER_TEMP/qml-sdk-configure-$profile.log"
@@ -531,7 +531,7 @@ jobs:
             mv "$RUNNER_TEMP/qml-sdk-stage-$profile" "$RUNNER_TEMP/qml-sdk-prefix-$profile"
             cmake -S . -B "$RUNNER_TEMP/static-ux-build-$profile" -G Ninja \
               -DTELEMETRY_UX_BUILD_INSPECTOR=OFF -DTELEMETRY_UX_BUILD_CONFIGURATOR=ON \
-              -DTELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR=ON \
+              -DTELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR=ON -DTELEMETRY_UX_BUILD_QT_CONNECTION=ON \
               -DTelemetry_DIR="$RUNNER_TEMP/qml-sdk-prefix-$profile/lib/cmake/Telemetry" \
               '-DCMAKE_CXX_FLAGS=-Wall -Wextra -Werror' \
               -DCMAKE_CXX_COMPILER="$compiler" -DCMAKE_BUILD_TYPE=Release \
@@ -550,6 +550,10 @@ jobs:
               --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/dynamic_qml_configurator/run.py --build-dir "$RUNNER_TEMP/ux-dynamic-qml-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/qt_connection/run.py --build-dir "$RUNNER_TEMP/ux-qt-connection-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
@@ -588,6 +592,8 @@ jobs:
             ${{ runner.temp }}/ux-dynamic-qml-gcc/*.png
             ${{ runner.temp }}/ux-created-qml-*/*.json
             ${{ runner.temp }}/ux-created-qml-*/*.log
+            ${{ runner.temp }}/ux-qt-connection-*/*.json
+            ${{ runner.temp }}/ux-qt-connection-*/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.json
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.png
