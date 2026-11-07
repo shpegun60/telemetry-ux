@@ -7,6 +7,10 @@ Open this CMake project in Qt Creator with installed SDK and UX prefixes in
 `main.cpp` creates one `ConnectionSession`, one presentation adapter and two
 independent providers. No application-owned pump, Descriptor indexing, transport
 copy or generated DTO is needed. The session progresses on its Qt owner thread.
+Both Configurators include their own endpoint tree. After connecting, choose a
+Field independently in each panel and press Refresh. Neither panel requires a
+hard-coded endpoint or a programmatic selection before it can be used. Selecting
+an endpoint alone sends no request; refreshing one panel does not fill the other.
 
 Connect to the maintained Inspector TCP reference server (default localhost:5577).
 This is the exclusive Resource-bootstrap/Encoded profile, not arbitrary TCP.

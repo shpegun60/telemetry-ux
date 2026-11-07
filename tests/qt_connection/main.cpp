@@ -3,8 +3,11 @@
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
 #include <QtGui/QGuiApplication>
+#include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQuick/QQuickItem>
+#include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
@@ -92,6 +95,36 @@ void readConfig(ux::DynamicConfiguratorProvider& provider)
 	CHECK(provider.values()->rowCount() == 1);
 }
 
+QQuickItem* visual(QQuickItem* parent, const QString& name, const QString& text = {})
+{
+	if (parent->isVisible() && parent->objectName() == name &&
+	    (text.isEmpty() || parent->property("text").toString() == text))
+		return parent;
+	for (auto* child : parent->childItems())
+		if (auto* item = visual(child, name, text))
+			return item;
+	return nullptr;
+}
+
+QQuickItem* control(QQuickItem* parent, const QString& name, const QString& text = {})
+{
+	QQuickItem* result = nullptr;
+	CHECK(await([&] {
+		result = visual(parent, name, text);
+		return result && result->width() > 0 && result->height() > 0;
+	}));
+	return result;
+}
+
+void click(QQuickWindow& window, QQuickItem& item)
+{
+	item.ensurePolished();
+	const auto point = item.mapToScene({item.width() / 2, item.height() / 2}).toPoint();
+	CHECK(item.isEnabled() && point.x() >= 0 && point.y() >= 0 && point.x() < window.width() &&
+	      point.y() < window.height());
+	QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
+}
+
 void twoPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -108,21 +141,48 @@ void twoPanels()
 	engine.rootContext()->setContextProperty(QStringLiteral("measurements"), second);
 	engine.load(QUrl{QStringLiteral("qrc:/Main.qml")});
 	CHECK(engine.rootObjects().size() == 1);
+	auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	CHECK(first->selection().isEmpty() && second->selection().isEmpty());
 	connect(connection, peer);
 	CHECK(first->connected() && second->connected());
-	CHECK(first->selectEndpoint(endpoint(first->endpoints(), QStringLiteral("Config"))));
-	CHECK(second->selectEndpoint(endpoint(second->endpoints(), QStringLiteral("Config"))));
+	CHECK(first->selection().isEmpty() && second->selection().isEmpty() && peer.fieldReads() == 0);
+	// Use the shipped window exactly as a user does: the previously blank
+	// second pane must provide its own visible endpoint navigation and Refresh.
+	auto* right = control(window->contentItem(), QStringLiteral("measurementPanel"));
+	click(*window, *control(right, QStringLiteral("endpointRow"), QStringLiteral("Config")));
+	CHECK(!second->selection().isEmpty() && first->selection().isEmpty());
+	CHECK(peer.fieldReads() == 0 && connection.workbench()->pending() == 0);
+	auto* left = control(window->contentItem(), QStringLiteral("configurationPanel"));
+	click(*window, *control(left, QStringLiteral("endpointRow"), QStringLiteral("Config")));
+	CHECK(first->selection() == second->selection() && peer.fieldReads() == 0);
+	click(*window, *control(left, QStringLiteral("refreshButton")));
+	CHECK(await([&] {
+		return !first->busy() && first->values()->rowCount() == 1;
+	}));
+	CHECK(peer.fieldReads() == 1 && second->values()->rowCount() == 0);
+	click(*window, *control(right, QStringLiteral("refreshButton")));
+	CHECK(await([&] {
+		return !second->busy() && second->values()->rowCount() == 1;
+	}));
+	CHECK(peer.fieldReads() == 2);
+	// Concurrent explicit reads still use the one existing FIFO after those
+	// independent real-QML selections and Refresh actions.
 	CHECK(first->refresh());
 	CHECK(second->refresh());
 	CHECK(connection.workbench()->pending() == 2);
 	CHECK(await([&] {
 		return !first->busy() && !second->busy();
 	}));
-	CHECK(peer.fieldReads() == 2);
+	CHECK(peer.fieldReads() == 4);
 	CHECK(first->selection() == second->selection());
 	const auto maximum = member(second->values(), QStringLiteral("Counter"));
 	CHECK(second->values()->data(maximum, ux::ValueModel::ValueRole).toString() ==
 	      QStringLiteral("18446744073709551615"));
+	const auto arguments = QCoreApplication::arguments();
+	const auto screenshot = arguments.indexOf(QStringLiteral("--screenshot"));
+	if (screenshot >= 0 && screenshot + 1 < arguments.size())
+		CHECK(window->grabWindow().save(arguments[screenshot + 1]));
 	first->setAllowMutations(true);
 	CHECK(first->beginEdit());
 	CHECK(first->setScalarText(member(first->values(), QStringLiteral("Gain")),
