@@ -7,7 +7,7 @@ get_filename_component(TELEMETRY_UX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABS
 set(BUILD_TESTING OFF CACHE BOOL "Build only the maintained Inspector TCP checks" FORCE)
 # Import in the test directory so Qt deferred finalization can resolve every
 # SDK target transitively linked by the app's shared support library.
-set(_inspector_components inspector workbench read_many_workbench encoded_backend encoded_server core tcp_server qt_transport)
+set(_inspector_components inspector workbench read_many_workbench encoded_backend encoded_server core tcp_server qt_transport qt_connection)
 if(INSPECTOR_ENABLE_SERIAL)
     list(APPEND _inspector_components qt_serial_transport)
 endif()

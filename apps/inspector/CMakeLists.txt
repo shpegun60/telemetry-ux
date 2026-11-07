@@ -13,7 +13,7 @@ if(NOT TARGET TelemetryUX::configurator)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/qml"
                      "${CMAKE_CURRENT_BINARY_DIR}/telemetry-ux-qml")
 endif()
-set(_inspector_components inspector workbench read_many_workbench encoded_backend encoded_server core tcp_server qt_transport)
+set(_inspector_components inspector workbench read_many_workbench encoded_backend encoded_server core tcp_server qt_transport qt_connection)
 if(INSPECTOR_ENABLE_SERIAL)
     list(APPEND _inspector_components qt_serial_transport)
 endif()
@@ -31,7 +31,7 @@ target_compile_definitions(inspector_qml_support PUBLIC QT_NO_KEYWORDS QT_NO_FOR
 target_include_directories(inspector_qml_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(inspector_qml_support PUBLIC Qt6::Core Qt6::Network TelemetryUX::configurator
     TelemetryUX::dynamic_configurator
-    Telemetry::inspector Telemetry::workbench Telemetry::read_many_workbench Telemetry::encoded_backend Telemetry::encoded_server Telemetry::core Telemetry::tcp_server Telemetry::qt_transport)
+    Telemetry::inspector Telemetry::workbench Telemetry::read_many_workbench Telemetry::encoded_backend Telemetry::encoded_server Telemetry::core Telemetry::tcp_server Telemetry::qt_transport Telemetry::qt_connection)
 if(INSPECTOR_ENABLE_SERIAL)
     target_compile_definitions(inspector_qml_support PUBLIC INSPECTOR_ENABLE_SERIAL=1)
     target_link_libraries(inspector_qml_support PUBLIC Telemetry::qt_serial_transport)

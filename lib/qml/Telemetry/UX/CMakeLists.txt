@@ -66,3 +66,21 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
+
+if(TELEMETRY_UX_BUILD_QT_CONNECTION)
+    find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
+    add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp)
+    add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
+    set_target_properties(telemetry_ux_qt_connection PROPERTIES EXPORT_NAME qt_connection AUTOMOC ON)
+    target_compile_features(telemetry_ux_qt_connection PUBLIC cxx_std_20)
+    target_include_directories(telemetry_ux_qt_connection PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+    target_link_libraries(telemetry_ux_qt_connection PUBLIC
+        TelemetryUX::dynamic_configurator Telemetry::qt_connection)
+    install(TARGETS telemetry_ux_qt_connection EXPORT TelemetryUXConnectionTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+    install(EXPORT TelemetryUXConnectionTargets NAMESPACE TelemetryUX::
+        DESTINATION "${_telemetry_ux_package_dir}")
+    install(FILES QtConnectionBinding.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
+endif()

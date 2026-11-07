@@ -7,7 +7,7 @@
 #include "InspectorController.hpp"
 #include <Telemetry/UX/ScalarEditor.hpp>
 #include "DemoPeer.hpp"
-#include "TcpTransport.hpp"
+#include <integration/qt/ConnectionSession.hpp>
 #ifdef INSPECTOR_ENABLE_SERIAL
 #include <integration/qt/SerialTransport.hpp>
 #include <QtSerialPort/QSerialPortInfo>
@@ -133,7 +133,7 @@ QString serviceStatusName(std::uint8_t status)
 
 } // namespace
 
-struct InspectorController::State {
+struct InspectorController::State : telemetry::integration::qt::ConnectionStorage {
 	struct WatchCompletion {
 		struct Row {
 			quint32 id = 0;
@@ -146,107 +146,24 @@ struct InspectorController::State {
 		int count = 0;
 	};
 
-	struct Reply {
-		std::vector<std::byte> bytes;
-		quint32 session = 0, id = 0, due = 0;
-	};
-
 	DemoPeer peer;
-	QElapsedTimer elapsed;
-	QByteArray descriptor;
-	std::vector<rt::RuntimeType> types;
-	std::vector<rt::RuntimeMember> members;
-	std::vector<rt::RuntimeEnumEntry> enums;
-	std::vector<rt::RuntimeCatalog> catalogs;
-	std::vector<rt::RuntimeEndpoint> endpoints;
-	std::unique_ptr<rt::RuntimeSchemaWorkspace> storage;
-	rt::RuntimeSchema schema;
-	std::array<std::byte, 65568> tx{}, rx{}, port{}, response{};
-	cl::Clock clock{this, +[](void* owner) noexcept {
-		                return static_cast<State*>(owner)->now();
-	                }};
-	telemetry::integration::encoded::EncodedBackend backend{tx, rx, clock, 30000, true};
-	std::array<std::byte, 65536> serviceStorage{};
-	Workbench inspector{backend, clock, serviceStorage};
-	std::vector<Reply> replies;
+	std::array<std::byte, 65568> port{}, response{};
 	std::optional<im::ReadResult> completed;
 	std::optional<wb::ApplyResult> applied;
 	std::optional<im::OperationResult> commanded;
 	std::optional<wb::ServiceResult> serviced;
 	std::optional<rm::wire::Capability> capability;
 	std::optional<WatchCompletion> watched;
-	bool applying = false, mutationAuthorized = false;
+	bool applying = false;
 	bool executing = false;
 	bool calling = false;
 	bool demo = false;
 	bool serial = false;
-	bool remote = false, remoteAccepted = false;
-	quint32 remoteRequestId = 0;
+	bool remote = false, tcpManaged = false;
 
 	State(QByteArray bytes, bool isDemo, bool writableDemo = false, bool readManyDemo = false)
-	    : peer(writableDemo, readManyDemo), descriptor(std::move(bytes)), demo(isDemo)
-	{
-		elapsed.start();
-	}
-
-	quint32 now() const noexcept
-	{
-		return static_cast<quint32>(elapsed.elapsed());
-	}
-
-	cl::Input input() const noexcept
-	{
-		return {reinterpret_cast<const std::byte*>(descriptor.constData()),
-		        static_cast<std::size_t>(descriptor.size())};
-	}
-
-	QString initialize(quint32 session, bool admit = true)
-	{
-		rt::RuntimeSchemaWorkspace sizing{{}, {}, {}, {}, {}};
-		const auto required = rt::RuntimeSchema::parse(input(), sizing);
-		if (!required && required.status != rt::Status::Capacity)
-			return QStringLiteral("Descriptor rejected (status %1, error %2)")
-			    .arg(static_cast<unsigned>(required.status))
-			    .arg(static_cast<unsigned>(required.error));
-		types.resize(required.requirements.types);
-		members.resize(required.requirements.members);
-		enums.resize(required.requirements.enumEntries);
-		catalogs.resize(required.requirements.catalogs);
-		endpoints.resize(required.requirements.endpoints);
-		storage = std::make_unique<rt::RuntimeSchemaWorkspace>(types, members, enums, catalogs,
-		                                                       endpoints);
-		const auto parsed = rt::RuntimeSchema::parse(input(), *storage);
-		if (!parsed)
-			return QStringLiteral("Descriptor rejected (status %1, error %2)")
-			    .arg(static_cast<unsigned>(parsed.status))
-			    .arg(static_cast<unsigned>(parsed.error));
-		schema = parsed.schema;
-		return admit ? admitSession(session) : QString{};
-	}
-
-	QString admitSession(quint32 session)
-	{
-		const auto admitted = inspector.admit(schema, input().first(64), session);
-		return admitted == cl::Status::Ok ? QString{} : statusName(admitted);
-	}
-
-	void closeAndDrain()
-	{
-		// The port is already closed (the demo releases TX synchronously). Settle
-		// only complete, already-owned replies whose delay
-		// has elapsed. onReply still enforces the operation deadline. Never pump
-		// here: retirement must not authorize another physical handoff. A readback
-		// queued by a write callback is closed below before it can be transmitted.
-		for (const auto& reply : replies)
-			if (cl::expired(now(), reply.due))
-				(void)inspector.onReply(reply.bytes, reply.session, reply.id);
-		replies.clear();
-		inspector.close();
-		for (unsigned i = 0; i < 16 && !inspector.drained(); ++i)
-			inspector.process(now());
-		if (!inspector.drained())
-			std::abort();
-	}
+	    : ConnectionStorage(std::move(bytes)), peer(writableDemo, readManyDemo), demo(isDemo)
+	{}
 
 	~State()
 	{
@@ -256,9 +173,75 @@ struct InspectorController::State {
 
 InspectorController::InspectorController(QObject* parent) : QObject(parent)
 {
+	using Session = telemetry::integration::qt::ConnectionSession;
+	tcpSession_ = std::make_unique<Session>([](QByteArray bytes) {
+		auto state = std::make_shared<State>(std::move(bytes), false);
+		state->remote = state->tcpManaged = true;
+		return state;
+	});
+	connect(tcpSession_.get(), &Session::aboutToRetire, this, [this] {
+		if (!state_ || !state_->tcpManaged || updating_)
+			return;
+		if (dynamicBinding_)
+			dynamicBinding_->retire();
+	});
+	connect(tcpSession_.get(), &Session::progressed, this, &InspectorController::pump);
+	connect(tcpSession_.get(), &Session::admissionChanged, this,
+	        &InspectorController::tcpAdmissionChanged);
+	connect(tcpSession_.get(), &Session::stateChanged, this, [this] {
+		if (updating_ || (!connecting_ && (!state_ || !state_->tcpManaged)))
+			return;
+		connecting_ = tcpSession_->connecting();
+		if (!tcpSession_->lastError().isEmpty())
+			status_ = QStringLiteral("TCP: %1").arg(tcpSession_->lastError());
+		Q_EMIT stateChanged();
+	});
 	timer_.setInterval(5);
 	connect(&timer_, &QTimer::timeout, this, &InspectorController::pump);
 	timer_.start();
+}
+
+bool InspectorController::cleanupPending() const noexcept
+{
+	return bool(retiredState_) || tcpSession_->recoveryRequired();
+}
+
+void InspectorController::tcpAdmissionChanged()
+{
+	if (updating_)
+		return;
+	updating_ = true;
+	if (tcpSession_->ready()) {
+		state_ = std::static_pointer_cast<State>(tcpSession_->storage());
+		session_ = state_->inspector.session();
+		connected_ = true;
+		connecting_ = false;
+		writesEnabled_ = false;
+		bindCurrentState();
+		status_ =
+		    QStringLiteral("TCP connected - Descriptor loaded - read-only - Encoded transport");
+		updating_ = false;
+		notifyState({});
+	} else if (state_ && state_->tcpManaged) {
+		const bool readPending =
+		    busy_ && !state_->applying && !state_->executing && !state_->calling;
+		// Automatic transport failure keeps the closed generation for guarded
+		// introspection and the selected watch rows marked Stale. Explicit user
+		// Disconnect still uses retire() to clear the entire presentation.
+		// progressed() may already have retired data and published the final
+		// watch-drain status; do not overwrite that terminal status again.
+		if (connected_ || !selection_.isEmpty() || endpoints_.rowCount())
+			invalidateSession(*state_);
+		busy_ = connecting_ = writesEnabled_ = false;
+		invalidEditors_.clear();
+		const Completion completion{consumeApply(*state_, false), consumeCommand(*state_, false),
+		                            consumeService(*state_, false)};
+		status_ = QStringLiteral("TCP: %1").arg(tcpSession_->lastError());
+		updating_ = false;
+		notifyState(completion, readPending ? std::optional<bool>{false} : std::nullopt);
+	} else {
+		updating_ = false;
+	}
 }
 
 InspectorController::~InspectorController()
@@ -289,16 +272,19 @@ InspectorController::Completion InspectorController::retire()
 			std::abort();
 		transport_.reset();
 	}
+	if ((state_ && state_->tcpManaged) || tcpSession_->connecting())
+		tcpSession_->disconnect();
 	Completion completion;
 	if (state_) {
-		state_->closeAndDrain();
+		if (!state_->tcpManaged)
+			state_->closeAndDrain();
 		if (dynamicBinding_)
 			dynamicBinding_->poll();
 		watchPending_ = false;
 		completion.applied = consumeApply(*state_, false);
 		completion.command = consumeCommand(*state_, false);
 		completion.service = consumeService(*state_, false);
-		if (state_->remote && state_->inspector.recoveryRequired()) {
+		if (state_->remote && !state_->tcpManaged && state_->inspector.recoveryRequired()) {
 			// Local abort releases all Qt-owned TX/RX storage. It does not prove
 			// that a peer finished an already handed-off request. Preserve that
 			// obligation until the same single-client server admits fresh bootstrap.
@@ -611,12 +597,30 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 	dynamicBinding_.reset();
 	++session_;
 	state_ = std::move(candidate);
+	connected_ = demo || remote;
+	writesEnabled_ = demo && writableDemo;
+	bindCurrentState();
+	connecting_ = false;
+	status_ =
+	    remote && serial_
+	        ? QStringLiteral("Serial connected - Descriptor loaded - read-only - COBS/Encoded")
+	    : remote
+	        ? QStringLiteral("TCP connected · Descriptor loaded · read-only · Encoded transport")
+	    : demo && writableDemo
+	        ? QStringLiteral("Writable demo connected · explicit Field editing · Encoded transport")
+	    : demo ? QStringLiteral("Demo connected · read-only · Encoded transport")
+	           : QStringLiteral("Descriptor file · metadata only · no transport connected");
+	updating_ = false;
+	notifyState(retiredApply);
+	return true;
+}
+
+void InspectorController::bindCurrentState()
+{
 	// Any previous State has completed closeAndDrain before replacement.
 	watchPending_ = false;
 	watchlist_.bind(state_->inspector);
 	endpoints_.rebuild(state_->inspector);
-	connected_ = demo || remote;
-	writesEnabled_ = demo && writableDemo;
 	dynamicBinding_ =
 	    std::make_unique<telemetry::ux::DynamicConfiguratorBinding>(state_->inspector, state_);
 	dynamicBinding_->setMutationsAllowed(writesEnabled_);
@@ -636,19 +640,6 @@ bool InspectorController::replaceDescriptor(QByteArray bytes, bool demo, bool re
 		        updating_ = false;
 		        Q_EMIT stateChanged();
 	        });
-	connecting_ = false;
-	status_ =
-	    remote && serial_
-	        ? QStringLiteral("Serial connected - Descriptor loaded - read-only - COBS/Encoded")
-	    : remote
-	        ? QStringLiteral("TCP connected · Descriptor loaded · read-only · Encoded transport")
-	    : demo && writableDemo
-	        ? QStringLiteral("Writable demo connected · explicit Field editing · Encoded transport")
-	    : demo ? QStringLiteral("Demo connected · read-only · Encoded transport")
-	           : QStringLiteral("Descriptor file · metadata only · no transport connected");
-	updating_ = false;
-	notifyState(retiredApply);
-	return true;
 }
 
 QByteArray InspectorController::demoDescriptor() const
@@ -696,34 +687,30 @@ bool InspectorController::connectTcp(const QString& host, quint16 port)
 	    host.trimmed().isEmpty() || port == 0)
 		return false;
 	updating_ = true;
-	const auto retiredApply = retire();
-	auto normalized = host.trimmed().toLower();
-	QHostAddress numeric;
-	if (numeric.setAddress(normalized))
-		normalized = numeric.toString().toLower();
-	if (retiredState_ &&
-	    (retiredSerial_ || normalized != retiredPeerHost_ || port != retiredPeerPort_)) {
+	const auto retired = retire();
+	if (retiredState_) {
 		status_ =
-		    QStringLiteral("Reconnect %1:%2 first to finish the previous TCP session cleanup.")
-		        .arg(retiredPeerHost_)
-		        .arg(retiredPeerPort_);
+		    QStringLiteral("Reconnect the previous serial device first to finish session cleanup.");
 		updating_ = false;
-		notifyState(retiredApply);
+		notifyState(retired);
 		return false;
 	}
 	serial_ = false;
-	peerHost_ = normalized;
+	peerHost_ = host.trimmed().toLower();
+	QHostAddress numeric;
+	if (numeric.setAddress(peerHost_))
+		peerHost_ = numeric.toString().toLower();
 	peerPort_ = port;
-	connecting_ = true;
-	status_ = QStringLiteral("Connecting TCP and loading Descriptor…");
-	transport_ = std::make_unique<TcpTransport>();
-	auto* tcpPortAdapter = static_cast<TcpTransport*>(transport_.get());
-	transport_->setWriteChunkBytes(tcpWriteChunk_);
-	bindTransportSignals();
-	tcpPortAdapter->connectTo(peerHost_, peerPort_);
+	status_ = QStringLiteral("Connecting TCP and loading Descriptor?");
+	const bool reserved = tcpSession_->reserveSessionsThrough(session_);
+	tcpSession_->setWriteChunkBytes(tcpWriteChunk_);
+	const bool submitted = reserved && tcpSession_->connectTcpReference(peerHost_, peerPort_);
+	connecting_ = tcpSession_->connecting();
+	if (!submitted)
+		status_ = tcpSession_->lastError();
 	updating_ = false;
-	notifyState(retiredApply);
-	return true;
+	notifyState(retired);
+	return submitted;
 }
 
 void InspectorController::bindTransportSignals()
@@ -799,8 +786,9 @@ bool InspectorController::connectSerial(const QString& port, qint32 baud)
 	updating_ = true;
 	const auto retiredApply = retire();
 	const auto name = port.trimmed();
-	if (retiredState_ &&
-	    (!retiredSerial_ || name != retiredSerialPort_ || baud != retiredSerialBaud_)) {
+	if (tcpSession_->recoveryRequired() ||
+	    (retiredState_ &&
+	     (!retiredSerial_ || name != retiredSerialPort_ || baud != retiredSerialBaud_))) {
 		status_ = QStringLiteral("Reconnect the previous device first to finish session cleanup.");
 		updating_ = false;
 		notifyState(retiredApply);
@@ -1622,24 +1610,9 @@ void InspectorController::pump()
 	updating_ = true;
 	auto& state = *state_;
 	const auto now = state.now();
-	state.inspector.process(now);
-	if (state.remoteAccepted) {
-		state.remoteAccepted = false;
-		(void)state.inspector.onSendAccepted(state.inspector.session(), state.remoteRequestId);
-	}
-	const auto packet = state.inspector.nextPacket();
-	if (state.remote && transport_ && packet && transport_->canStage() &&
-	    transport_->stage(packet)) {
-		if (state.inspector.prepareHandoff(packet.session, packet.requestId)) {
-			if (mutationPacket(packet))
-				state.mutationAuthorized = true;
-			state.remoteRequestId = packet.requestId;
-			if (!transport_->sendStaged())
-				state.inspector.invalidate();
-		} else {
-			transport_->discardStaged();
-		}
-	}
+	const auto packet = state.tcpManaged
+	                        ? cl::Packet{}
+	                        : state.progressTransport(state.remote ? transport_.get() : nullptr);
 	if (state.demo && packet && packet.bytes.size() <= state.port.size()) {
 		std::copy(packet.bytes.begin(), packet.bytes.end(), state.port.begin());
 		if (state.inspector.prepareHandoff(packet.session, packet.requestId) &&
@@ -1655,15 +1628,8 @@ void InspectorController::pump()
 				                         now + static_cast<quint32>(replyDelay_)});
 		}
 	}
-	for (auto i = state.replies.begin(); i != state.replies.end();) {
-		if (!cl::expired(now, i->due)) {
-			++i;
-			continue;
-		}
-		(void)state.inspector.onReply(i->bytes, i->session, i->id);
-		i = state.replies.erase(i);
-	}
-	state.inspector.process(now);
+	if (!state.tcpManaged)
+		state.settleReplies();
 	const auto completion = state.completed;
 	state.completed.reset();
 	const bool stale = !state.inspector.isCurrent();
@@ -1698,7 +1664,8 @@ void InspectorController::pump()
 		const bool fatalTransport =
 		    outcome == cl::Status::TransportError || outcome == cl::Status::MalformedReply ||
 		    outcome == cl::Status::SessionLost || outcome == cl::Status::OutcomeUnknown;
-		if (state.remote && transport_ && (state.inspector.recoveryRequired() || fatalTransport)) {
+		if (state.remote && (transport_ || state.tcpManaged) &&
+		    (state.inspector.recoveryRequired() || fatalTransport)) {
 			invalidateSession(state);
 		}
 		notify = true;
@@ -1806,8 +1773,7 @@ void InspectorController::setReadTimeout(int milliseconds) noexcept
 void InspectorController::setTcpWriteChunkBytes(int bytes) noexcept
 {
 	tcpWriteChunk_ = std::max(0, bytes);
-	if (!serial_ && transport_)
-		transport_->setWriteChunkBytes(tcpWriteChunk_);
+	tcpSession_->setWriteChunkBytes(tcpWriteChunk_);
 }
 
 Workbench& InspectorController::inspector() noexcept
