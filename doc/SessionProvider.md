@@ -87,9 +87,27 @@ that belongs to an old connection can retain `Accepted`, confirmed success or
 `OutcomeUnknown` while its value remains unavailable. Standalone panels display
 these historical facts even when current selection has been cleared.
 
-This first adapter exposes the four ordinary operations. It deliberately hides
-Watchlist and Mixed Batch until tracked high-level Session operations are added.
-Existing explicit providers retain those capabilities. There is no hidden fan-out.
+The same adapter exposes Watchlist and Mixed Batch through the tracked high-level
+Session operations. Discovered TRM1 and TBM1 records are copied independently for
+each new admission. On the reference profile, enable the corresponding backend
+operations explicitly when creating the transport:
+
+```js
+const transport = demoWebSocket(location.origin,
+    {enableReadMany: true, enableBatch: true});
+const session = await connectDynamic({transport});
+const watch = mountWatchlist(document.querySelector('#watch'), {session});
+const batch = mountBatchEditor(document.querySelector('#batch'), {session});
+```
+
+Import the two mount functions from `telemetry-ux/web`. Each mount has its own
+watch selection or ordered Batch recipe and submits through the same Session
+FIFO. Polling has one pending cycle, skips missed ticks and stops on invalidation.
+Reconnect does not restore or execute a recipe, restart polling or replay an
+uncertain mutation. ReadMany requires a supported scalar/enum selection; the user
+can explicitly choose Individual FieldRead instead. Missing capability or backend
+support reports a refusal and never causes hidden fan-out. A mixed Batch has
+per-item outcomes, without rollback, atomic snapshot or exactly-once guarantees.
 
 A FIFO-admitted mutation through a Session provider makes sibling providers' cached
 values and responses stale. Dirty draft text remains visible for review, but it
@@ -97,8 +115,10 @@ cannot be edited or submitted until discarded and prepared again. The view shows
 the reason; it does not silently overwrite another panel's draft. A refused
 submission such as `QueueFull` does not invalidate sibling state. A later device
 refusal does not restore invalidated data; this policy is deliberately conservative.
-Pending checked operation facts
-remain available, and an older read cannot republish its stale value.
+Pending checked operation facts remain available, and an older foreground,
+Watchlist or Batch read cannot republish its stale value. A read-only Batch does
+not invalidate sibling data. Accepted mutation items do, even when their eventual
+endpoint result is a refusal or their final outcome is unknown.
 
 This is a local presentation policy, not server-side compare-and-write or an
 atomic snapshot guarantee. Direct headless calls through the Session and changes

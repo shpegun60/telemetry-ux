@@ -3,6 +3,9 @@
 This example uses the existing host [WebSocket demo server](../web_demo/README.md)
 and its native application Model. It adds no new server, protocol or queue.
 Both Configurators share one Session while owning separate selection and drafts.
+They also expose scalar Watchlists and ordered Mixed Batch. The reference profile
+opts into ReadMany and Batch separately; discovered capability records follow
+each admission, with no implicit Individual fallback or mutation replay.
 
 Prepare that demo's installed SDK/native helper and generated JavaScript context,
 then install the matching SDK/UX npm tarballs into an external public directory.

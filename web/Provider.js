@@ -446,6 +446,13 @@ function presentation(adapter, inputLimits, hooks = {})
 		hasValue = hasResponse = false;
 		clearWatchValues();
 		clearBatchResponses();
+		// An older in-flight read must not republish values after another
+		// view's mutation. Retain pending storage and checked operation facts.
+		watchRunning = watchCycle = false;
+		++watchRevision;
+		++batchRevision;
+		watchStatus = watchPending ? 'Stopping - draining a stale read.'
+		                           : 'Stale after mutation - explicitly refresh watched Fields.';
 		++revision;
 		notify();
 	}
@@ -635,6 +642,11 @@ function presentation(adapter, inputLimits, hooks = {})
 				                                             name : String(row.name)
 			                                             })));
 			selected = null;
+			// A Session supplies independently discovered records once per
+			// admission, never by issuing discovery or requests from the view.
+			const capabilities = adapter.capabilities?.();
+			watchCapability = copyCapability(capabilities?.readMany);
+			batchCapability = copyCapability(capabilities?.batch);
 			const after = adapter.identity();
 			current = token === epoch && after.session === live.session &&
 			          after.schema === live.schema && after.ready;
@@ -1404,6 +1416,8 @@ function presentation(adapter, inputLimits, hooks = {})
 				valueStatus : 'NoValue'
 			});
 			batchStatus = 'Pending - one ordered Batch request';
+			if (record.items.some(item => item.operation !== 'read'))
+				hooks.acceptedMutation?.('batch');
 			return true;
 		} catch (failure) {
 			batchPending = undefined;
@@ -1705,6 +1719,12 @@ const ordinaryMethods = [
 	'rows', 'subscribe', 'invalidate', 'select', 'setWritesEnabled', 'setText', 'refresh',
 	'beginEdit', 'cancelEdit', 'apply', 'execute', 'call'
 ];
+const optionalMethods = [
+	'addWatch', 'removeWatch', 'clearWatch', 'setWatchIndividual', 'setWatchInterval',
+	'setReadManyCapability', 'refreshWatch', 'startWatch', 'stopWatch', 'tickWatch', 'addBatch',
+	'removeBatch', 'moveBatch', 'selectBatch', 'clearBatch', 'setBatchText', 'setBatchCapability',
+	'executeBatch'
+];
 
 function endpointSelector(input)
 {
@@ -1785,14 +1805,47 @@ export function createSessionProvider({session, limits, endpoint} = {})
 		}),
 		describe : base.describe,
 		validate : base.validate,
+		capabilities : () => session.capabilities,
 		submit(row, operation, value, originalPayload) {
 		    const target = session.mode === 'static' ? row.binding : row.id;
 		    return operation === 'read'    ? session.read(target)
 		           : operation === 'write' ? session.writePreserving(target, value, originalPayload)
 		                                   : session[operation](target, value);
 		},
-		result : result =>
-		    ({operation : result.rawResult, valueStatus : result.valueStatus, value : result.value})
+		result : result => (
+		    {operation : result.rawResult, valueStatus : result.valueStatus, value : result.value}),
+		readMany(capability, endpoints) {
+		    if (typeof session.readMany !== 'function')
+			    fail('Unsupported: ReadMany is unavailable in this Session');
+		    return session.readMany(
+		        capability, endpoints.map(row => session.mode === 'static' ? row.binding : row.id));
+		},
+		manyResult : result => ({operation : result.rawResult, items : result.items}),
+		batch(capability, items) {
+		    if (typeof session.batch !== 'function')
+			    fail('Unsupported: Batch is unavailable in this Session');
+		    const requests = items.map(item => {
+			    if (session.mode === 'dynamic')
+				    return {
+					    operation : {
+						    read : 'FieldRead',
+						    write : 'FieldWrite',
+						    command : 'Command',
+						    service : 'Service'
+					    }[item.operation],
+					    id : item.endpoint.id,
+					    value : item.request
+				    };
+			    const binding = item.endpoint.binding;
+			    return item.operation === 'read'      ? Batch.read(binding)
+			           : item.operation === 'write'   ? Batch.write(binding, item.request)
+			           : item.operation === 'command' ? Batch.command(binding, item.request)
+			                                          : Batch.service(binding, item.request);
+		    });
+		    return session.batch(capability, requests);
+		},
+		batchResult : result =>
+		    ({operation : result.rawResult, valueStatus : result.valueStatus, items : result.items})
 	};
 	let members = sessionProviders.get(session);
 	if (!members) {
@@ -1820,9 +1873,7 @@ export function createSessionProvider({session, limits, endpoint} = {})
 		    controls = value;
 		},
 		snapshot(state, data) {
-		    const {watch, batch, ...ordinary} = state;
-		    return freeze(
-		        {...ordinary, ...data, connection : connectionSnapshot(session), disposed});
+		    return freeze({...state, ...data, connection : connectionSnapshot(session), disposed});
 		},
 		acceptedMutation() {
 		    invalidatePeers('Data changed after a mutation in another view.', false);
@@ -1905,7 +1956,8 @@ export function createSessionProvider({session, limits, endpoint} = {})
 		provider.invalidate();
 		throw cause;
 	}
-	const publicProvider = Object.fromEntries(ordinaryMethods.map(name => [name, provider[name]]));
+	const publicProvider = Object.fromEntries(
+	    [...ordinaryMethods, ...optionalMethods ].map(name => [name, provider[name]]));
 	return freeze({
 		...publicProvider,
 		snapshot : provider.snapshot,

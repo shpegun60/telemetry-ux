@@ -107,8 +107,10 @@ one exclusive lease and no added execution queue or Telemetry wire format.
   first 64 bytes. These are application bootstrap routes, not a new Resource API.
 - `/capabilities/read-many.bin` and `/capabilities/batch.bin` return the native
   session/fingerprint-bound records. Discovery is not admission; optional backend
-  features require separate explicit SDK opt-in. The ordinary starter UI uses
-  only FieldRead/FieldWrite/Command/Service.
+  features require separate explicit SDK opt-in. This starter opts into both;
+  its Configurator also offers a scalar Watchlist and ordered Mixed Batch through
+  the same Session. Each item keeps its own outcome and an uncertain mutation is
+  never replayed automatically.
 - Every subsequent socket message is one complete bounded binary TEQ1 frame
   (32..65536 bytes). The native installed dispatcher validates it before getters
   or mutations. TCP fragmentation is handled by the WS library, not Telemetry.

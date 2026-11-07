@@ -1,5 +1,10 @@
 # Browser deploy assets
 
+For a new QML or browser application, start with
+[`create_project.py`](../doc/ProjectStarter.md). It creates a complete editable
+project from the maintained examples. The exporter below packages an application
+that has already been prepared; it does not create a project or connection.
+
 `export_web_assets.py` turns a **prepared public directory** into an explicit,
 relocatable set of browser files. Run npm installation and any application SDK
 generation on the development machine first. Python and Node are not needed on
