@@ -19,7 +19,7 @@ from support import (check_cache, check_compile_sources, codegen_identity, diges
                      installed_sdk, sdk_inputs, snapshot)
 
 GUI_CHECK_FLOOR = 590
-CONTRACT_CHECK_FLOOR = 443
+CONTRACT_CHECK_FLOOR = 1339
 QT_TEXTURE_RULE = 'leak:QSGRenderContext::textureForFactory\n'
 QT_TEXTURE_SOURCES = (
     'https://raw.githubusercontent.com/qt/qtdeclarative/v6.4.2/src/quick/scenegraph/qsgcontext.cpp',

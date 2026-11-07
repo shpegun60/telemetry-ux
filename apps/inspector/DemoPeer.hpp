@@ -28,7 +28,7 @@ namespace inspector_qml {
 // immutable Descriptor and complete Encoded frames through this boundary.
 class DemoPeer {
 public:
-	explicit DemoPeer(bool writable = false, bool readMany = false);
+	explicit DemoPeer(bool writable = false, bool readMany = false, bool extended = false);
 	~DemoPeer();
 	DemoPeer(const DemoPeer&) = delete;
 	DemoPeer& operator=(const DemoPeer&) = delete;

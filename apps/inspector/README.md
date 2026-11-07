@@ -9,11 +9,15 @@ passes actual Encoded request/reply packets through its dispatcher. Demonstratio
 values are not measurements from a connected controller. Importing a Descriptor
 file enables metadata browsing only; its endpoint IDs are never sent to the demo.
 
-The [scalar Watchlist](https://github.com/shpegun60/telemetry-sdk/blob/main/doc/ReadManyWatchlist.md) adds bounded periodic reads
-of up to 32 selected Fields. Use **ReadMany demo**, or explicitly enable TRM1
-discovery for the UART ReadMany firmware. **Individual FieldRead** is an explicit
-fallback for older devices. Missed polling ticks are skipped; foreground
-snapshots and editing drafts keep their own state.
+The [scalar Watchlist](https://github.com/shpegun60/telemetry-sdk/blob/main/doc/ReadManyWatchlist.md) reads selected Fields in sequence, including lists larger
+than 32 entries. Each ReadMany request respects the device's advertised item
+and byte limits, with at most 32 Fields per request and one pending request at a
+time. Use **ReadMany demo**, or explicitly enable TRM1 discovery for the UART
+ReadMany firmware. **Individual FieldRead** is an explicit fallback for older
+devices. Choose an integer polling interval from 1 to 60000 ms; this is a nominal
+schedule, not a guaranteed completion rate. Missed ticks are skipped; foreground
+snapshots and editing drafts keep their own state. Completed chunks become
+visible separately and do not form an atomic snapshot.
 
 Use **Connection settings** to show TCP, UART and Descriptor-file controls.
 They collapse after connection and reopen on disconnect, leaving room for the
@@ -24,8 +28,8 @@ endpoint tree and values. Watchlist status messages wrap below its actions.
 Use a matching Qt 6.4-or-newer C++20 kit with Core, Gui, Qml, Quick,
 Quick Controls 2 and Network, plus CMake and Ninja. The application requires an
 installed Telemetry SDK 0.1.0 prefix containing `inspector`, `workbench`,
-`read_many_workbench`, `encoded_backend`, `encoded_server`, `core`, `tcp_server`
-and `qt_transport`. Optional UART support also requires the installed
+`read_many_workbench`, `encoded_backend`, `encoded_server`, `core`, `tcp_server`,
+`qt_transport` and `qt_connection`. Optional UART support also requires the installed
 `qt_serial_transport` component and matching Qt SerialPort.
 
 The user build has four steps:
@@ -365,7 +369,7 @@ it under the new selection.
 
 Watchlist invalidation also notifies existing QML delegates after foreground
 transport failures. A logical read cycle stays active while paused behind
-foreground work, so its selection, mode and frequency cannot change mid-cycle.
+foreground work, so its selection, mode and interval cannot change mid-cycle.
 Stop revokes future reads; an accepted read still drains before these controls
 become available again.
 

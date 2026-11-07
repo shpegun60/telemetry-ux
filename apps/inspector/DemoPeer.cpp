@@ -338,6 +338,81 @@ constexpr telemetry::Model watchModel{watchFields, commands, services};
 constexpr telemetry::descriptor::Descriptor watchDescriptor{watchModel};
 constexpr auto watchDescriptorBytes = telemetry::descriptor::packDescriptor<watchDescriptor>();
 
+// Optional host qualification profile. Existing demo Descriptor bytes remain
+// unchanged unless explicitly selected by the caller.
+constexpr telemetry::FieldTable extendedFields{
+    telemetry::field<&demo::WatchDevice::wide<0>>("Value_0", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<1>>("Value_1", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<2>>("Value_2", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<3>>("Value_3", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<4>>("Value_4", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<5>>("Value_5", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<6>>("Value_6", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<7>>("Value_7", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<8>>("Value_8", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<9>>("Value_9", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<10>>("Value_10", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<11>>("Value_11", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<12>>("Value_12", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<13>>("Value_13", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<14>>("Value_14", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<15>>("Value_15", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<16>>("Value_16", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<17>>("Value_17", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<18>>("Value_18", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<19>>("Value_19", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<20>>("Value_20", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<21>>("Value_21", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<22>>("Value_22", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<23>>("Value_23", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<24>>("Value_24", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<25>>("Value_25", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<26>>("Value_26", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<27>>("Value_27", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<28>>("Value_28", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<29>>("Value_29", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<30>>("Value_30", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<31>>("Value_31", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<32>>("Value_32", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<33>>("Value_33", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<34>>("Value_34", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<35>>("Value_35", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<36>>("Value_36", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<37>>("Value_37", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<38>>("Value_38", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<39>>("Value_39", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<40>>("Value_40", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<41>>("Value_41", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<42>>("Value_42", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<43>>("Value_43", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<44>>("Value_44", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<45>>("Value_45", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<46>>("Value_46", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<47>>("Value_47", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<48>>("Value_48", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<49>>("Value_49", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<50>>("Value_50", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<51>>("Value_51", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<52>>("Value_52", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<53>>("Value_53", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<54>>("Value_54", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<55>>("Value_55", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<56>>("Value_56", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<57>>("Value_57", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<58>>("Value_58", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<59>>("Value_59", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<60>>("Value_60", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<61>>("Value_61", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<62>>("Value_62", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<63>>("Value_63", watchDevice),
+    telemetry::field<&demo::WatchDevice::wide<64>>("Value_64", watchDevice)};
+constexpr telemetry::FieldCatalogTable extendedCatalogs{
+    telemetry::group("scaling", extendedFields)};
+constexpr telemetry::Model extendedModel{extendedCatalogs, commands, services};
+constexpr telemetry::descriptor::Descriptor extendedDescriptor{extendedModel};
+constexpr auto extendedDescriptorBytes =
+    telemetry::descriptor::packDescriptor<extendedDescriptor>();
+
 demo::WritableDevice writablePrototype;
 constexpr telemetry::FieldTable writableFields{
     telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
@@ -368,6 +443,7 @@ constexpr auto writableDescriptorBytes =
 struct DemoPeer::Impl {
 	bool writable = false;
 	bool readMany = false;
+	bool extended = false;
 	demo::WritableDevice device;
 	decltype(writableFields) fields{
 	    telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
@@ -386,16 +462,17 @@ struct DemoPeer::Impl {
 	    telemetry::service<&demo::WritableDevice::emptyService>("Empty", device)};
 	decltype(writableServiceCatalogs) serviceCatalogs{telemetry::group("control", services)};
 	decltype(writablePrototypeModel) writableModel{catalogs, commandCatalogs, serviceCatalogs};
-	alignas(std::max_align_t)
-	    std::array<std::byte, std::max({model.maxScratch(), writablePrototypeModel.maxScratch(),
-	                                    watchModel.maxScratch()})> scratch{};
+	alignas(std::max_align_t) std::array<
+	    std::byte, std::max({model.maxScratch(), writablePrototypeModel.maxScratch(),
+	                         watchModel.maxScratch(), extendedModel.maxScratch()})> scratch{};
 	telemetry::Workspace workspace{scratch};
 };
 
-DemoPeer::DemoPeer(bool writable, bool readMany) : impl_(std::make_unique<Impl>())
+DemoPeer::DemoPeer(bool writable, bool readMany, bool extended) : impl_(std::make_unique<Impl>())
 {
 	impl_->writable = writable;
 	impl_->readMany = readMany && !writable;
+	impl_->extended = extended && impl_->readMany;
 }
 
 DemoPeer::~DemoPeer() = default;
@@ -403,6 +480,7 @@ DemoPeer::~DemoPeer() = default;
 telemetry::client::Input DemoPeer::descriptor() const noexcept
 {
 	return impl_->writable   ? telemetry::client::Input{writableDescriptorBytes}
+	       : impl_->extended ? telemetry::client::Input{extendedDescriptorBytes}
 	       : impl_->readMany ? telemetry::client::Input{watchDescriptorBytes}
 	                         : telemetry::client::Input{descriptorBytes};
 }
@@ -463,6 +541,7 @@ DemoPeer::makeTcpServer(resource::FileSystemView files, telemetry::client::Outpu
 {
 	return std::make_unique<telemetry::integration::tcp::Server>(
 	    impl_->writable   ? impl_->writableModel.view()
+	    : impl_->extended ? extendedModel.view()
 	    : impl_->readMany ? watchModel.view()
 	                      : model.view(),
 	    impl_->workspace, files, rx, tx);
@@ -473,9 +552,11 @@ std::size_t DemoPeer::dispatch(telemetry::client::Input request, telemetry::clie
 {
 	if (impl_->readMany) {
 		const telemetry::protocol::encoded::read_many::Capability capability{
-		    session, watchDescriptor.fingerprint()};
+		    session,
+		    impl_->extended ? extendedDescriptor.fingerprint() : watchDescriptor.fingerprint()};
 		const auto result = telemetry::integration::encoded::dispatchEncoded(
-		    watchModel.view(), impl_->workspace, session, request, reply, capability);
+		    impl_->extended ? extendedModel.view() : watchModel.view(), impl_->workspace, session,
+		    request, reply, capability);
 		return result ? result.written : 0;
 	}
 	const auto result = telemetry::integration::encoded::dispatchEncoded(

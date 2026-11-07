@@ -103,6 +103,19 @@ const batch = mountBatchEditor(document.querySelector('#batch'), {session});
 Import the two mount functions from `telemetry-ux/web`. Each mount has its own
 watch selection or ordered Batch recipe and submits through the same Session
 FIFO. Polling has one pending cycle, skips missed ticks and stops on invalidation.
+Session-mounted views provide the presentation polling timer automatically after
+the user presses Start. Pass `autoPoll: false` to drive `view.provider.tickWatch()`
+from an existing monotonic owner clock instead. Advanced `{provider}` mounts keep
+manual polling by default; `autoPoll: true` opts into the same view-owned timer.
+Unmount, Stop and revocation remove the timer. No request is sent just by mounting.
+
+The host list has no 32-row ceiling. ReadMany sends ordered chunks bounded by the
+device's advertised item, request and worst-case response limits; Individual mode
+reads one Field at a time. A cycle has one pending request and never queues missed
+ticks. Set an integer interval of 1..60,000 ms; it is a nominal delay between
+eligible cycles, not a transport or real-time throughput guarantee. A complete
+multi-request cycle is not an atomic snapshot.
+
 Reconnect does not restore or execute a recipe, restart polling or replay an
 uncertain mutation. ReadMany requires a supported scalar/enum selection; the user
 can explicitly choose Individual FieldRead instead. Missing capability or backend

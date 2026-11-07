@@ -34,6 +34,19 @@ lost ACK/disconnect/reconnect without replay. Standalone Watchlist and Batch
 panels mount directly from Session. This is host validation; it does not use
 physical hardware or establish exactly-once execution.
 
+Live native IPC waits use explicit response/publication barriers rather than a
+fixed number of `setImmediate` turns. Readiness is checked after the publisher's
+stack returns, including transitions between sequential Watchlist requests.
+A real 30-second test-driver watchdog is independent of the frozen SDK clock;
+it cannot change client deadlines or turn a timeout into a successful operation.
+Peer exit/error fails the waiting phase immediately with state diagnostics.
+Failure cleanup releases held replies, disposes views, aborts only this test's
+native child, and bounds Session/child drain without masking the first failure.
+The staged shared helper's deterministic controls cover delayed publication past
+1,000 event turns, synchronous subscription, transient idle, child exit/error,
+watchdog expiry and listener/timer cleanup. The original FIFO, stale-data and
+completion assertions remain unchanged.
+
 The shipped `examples/session_web` application is staged unchanged and checked
 in both modes for independent selection, one explicit native read, historical
 facts after disconnect, no reconnect replay, and terminal close behavior.

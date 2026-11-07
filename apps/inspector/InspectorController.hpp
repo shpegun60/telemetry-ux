@@ -142,6 +142,9 @@ public:
 	Q_INVOKABLE bool connectDemo();
 	Q_INVOKABLE bool connectWritableDemo();
 	Q_INVOKABLE bool connectReadManyDemo();
+	// Explicit larger host profile for application qualification; the shipped
+	// no-argument demo retains its original Descriptor.
+	bool connectReadManyDemo(bool extended);
 	// Each returned provider has independent selection/draft/snapshot and borrows
 	// this controller's one owner/FIFO. The controller owns the QObject by default.
 	Q_INVOKABLE QObject* createConfigurator();
@@ -324,7 +327,8 @@ private:
 	quint32 serviceOutcomeSession_ = 0;
 	QSet<quintptr> invalidEditors_;
 	bool replaceDescriptor(QByteArray bytes, bool demo, bool remote = false,
-	                       bool writableDemo = false, bool readManyDemo = false);
+	                       bool writableDemo = false, bool readManyDemo = false,
+	                       bool extendedDemo = false);
 	bool submitWatch();
 	void retireWatch(bool clear);
 	void invalidateSession(State& state);

@@ -78,9 +78,23 @@ struct Device {
 		return counters;
 	}
 
-	std::uint64_t wide() noexcept { ++counters.reads; return current.large; }
-	std::int64_t signedWide() noexcept { ++counters.reads; return current.negative; }
-	Mode mode() noexcept { ++counters.reads; return current.mode; }
+	std::uint64_t wide() noexcept
+	{
+		++counters.reads;
+		return current.large;
+	}
+
+	std::int64_t signedWide() noexcept
+	{
+		++counters.reads;
+		return current.negative;
+	}
+
+	Mode mode() noexcept
+	{
+		++counters.reads;
+		return current.mode;
+	}
 
 	void set(const Config& value) noexcept
 	{
@@ -165,8 +179,81 @@ inline constexpr telemetry::ServiceTable services{
     telemetry::service<&Device::inspect>("Inspect", device),
     telemetry::service<&Device::ping>("Ping", device),
     telemetry::service<&Device::empty>("Empty", device)};
+#ifdef TELEMETRY_UX_WATCHLIST_SCALING
+// Optional host-test catalog; the default demo Descriptor is unchanged.
+inline constexpr telemetry::FieldTable scalingFields{
+    telemetry::field<&Device::wide>("Field00", device),
+    telemetry::field<&Device::wide>("Field01", device),
+    telemetry::field<&Device::wide>("Field02", device),
+    telemetry::field<&Device::wide>("Field03", device),
+    telemetry::field<&Device::wide>("Field04", device),
+    telemetry::field<&Device::wide>("Field05", device),
+    telemetry::field<&Device::wide>("Field06", device),
+    telemetry::field<&Device::wide>("Field07", device),
+    telemetry::field<&Device::wide>("Field08", device),
+    telemetry::field<&Device::wide>("Field09", device),
+    telemetry::field<&Device::wide>("Field10", device),
+    telemetry::field<&Device::wide>("Field11", device),
+    telemetry::field<&Device::wide>("Field12", device),
+    telemetry::field<&Device::wide>("Field13", device),
+    telemetry::field<&Device::wide>("Field14", device),
+    telemetry::field<&Device::wide>("Field15", device),
+    telemetry::field<&Device::wide>("Field16", device),
+    telemetry::field<&Device::wide>("Field17", device),
+    telemetry::field<&Device::wide>("Field18", device),
+    telemetry::field<&Device::wide>("Field19", device),
+    telemetry::field<&Device::wide>("Field20", device),
+    telemetry::field<&Device::wide>("Field21", device),
+    telemetry::field<&Device::wide>("Field22", device),
+    telemetry::field<&Device::wide>("Field23", device),
+    telemetry::field<&Device::wide>("Field24", device),
+    telemetry::field<&Device::wide>("Field25", device),
+    telemetry::field<&Device::wide>("Field26", device),
+    telemetry::field<&Device::wide>("Field27", device),
+    telemetry::field<&Device::wide>("Field28", device),
+    telemetry::field<&Device::wide>("Field29", device),
+    telemetry::field<&Device::wide>("Field30", device),
+    telemetry::field<&Device::wide>("Field31", device),
+    telemetry::field<&Device::wide>("Field32", unavailableDevice),
+    telemetry::field<&Device::wide>("Field33", device),
+    telemetry::field<&Device::wide>("Field34", device),
+    telemetry::field<&Device::wide>("Field35", device),
+    telemetry::field<&Device::wide>("Field36", device),
+    telemetry::field<&Device::wide>("Field37", device),
+    telemetry::field<&Device::wide>("Field38", device),
+    telemetry::field<&Device::wide>("Field39", device),
+    telemetry::field<&Device::wide>("Field40", device),
+    telemetry::field<&Device::wide>("Field41", device),
+    telemetry::field<&Device::wide>("Field42", device),
+    telemetry::field<&Device::wide>("Field43", device),
+    telemetry::field<&Device::wide>("Field44", device),
+    telemetry::field<&Device::wide>("Field45", device),
+    telemetry::field<&Device::wide>("Field46", device),
+    telemetry::field<&Device::wide>("Field47", device),
+    telemetry::field<&Device::wide>("Field48", device),
+    telemetry::field<&Device::wide>("Field49", device),
+    telemetry::field<&Device::wide>("Field50", device),
+    telemetry::field<&Device::wide>("Field51", device),
+    telemetry::field<&Device::wide>("Field52", device),
+    telemetry::field<&Device::wide>("Field53", device),
+    telemetry::field<&Device::wide>("Field54", device),
+    telemetry::field<&Device::wide>("Field55", device),
+    telemetry::field<&Device::wide>("Field56", device),
+    telemetry::field<&Device::wide>("Field57", device),
+    telemetry::field<&Device::wide>("Field58", device),
+    telemetry::field<&Device::wide>("Field59", device),
+    telemetry::field<&Device::wide>("Field60", device),
+    telemetry::field<&Device::wide>("Field61", device),
+    telemetry::field<&Device::wide>("Field62", device),
+    telemetry::field<&Device::wide>("Field63", device),
+    telemetry::field<&Device::wide>("Field64", device)};
+inline constexpr telemetry::FieldCatalogTable fieldCatalogs{
+    telemetry::group("control", controlFields), telemetry::group("diagnostics", diagnosticFields),
+    telemetry::group("scaling", scalingFields)};
+#else
 inline constexpr telemetry::FieldCatalogTable fieldCatalogs{
     telemetry::group("control", controlFields), telemetry::group("diagnostics", diagnosticFields)};
+#endif
 inline constexpr telemetry::CommandCatalogTable commandCatalogs{
     telemetry::group("control", commands)};
 inline constexpr telemetry::ServiceCatalogTable serviceCatalogs{
