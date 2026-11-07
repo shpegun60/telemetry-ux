@@ -40,6 +40,16 @@ It creates an application-owned Qt Creator project with a small Model and two
 independent panels. Use `--target web-device` for the complete HTTP/WebSocket
 browser starter. Existing directories are never overwritten.
 
+For an existing device with the documented TCP reference profile, create the
+[connected Qt project](doc/ProjectStarter.md#qt-creator-connect-to-a-device):
+
+```sh
+python -B tools/create_project.py --target qt-connection --name MyDevice --output /projects/MyConnectedDevice
+```
+
+Open its `CMakeLists.txt` in Qt Creator with matching installed SDK/UX prefixes.
+Both panels have endpoint navigation; the SDK Session owns discovery and progress.
+
 Use the same [Configurator view](lib/qml/README.md) inside your own Qt Quick
 window or tab. Install the view package, link `TelemetryUX::configurator` and
 supply a QObject provider:

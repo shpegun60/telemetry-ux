@@ -21,7 +21,9 @@ TEMPLATES = ('examples/dynamic_qml/CMakeLists.txt', 'examples/dynamic_qml/Device
              'examples/web_device_starter/native/CMakeLists.txt',
              'examples/web_device_starter/native/Device.hpp',
              'examples/web_device_starter/native/Peer.cpp',
-             'examples/web_demo/serve.py', 'examples/web_demo/serve_ws.py')
+             'examples/web_demo/serve.py', 'examples/web_demo/serve_ws.py',
+             'examples/qt_connection/CMakeLists.txt', 'examples/qt_connection/main.cpp',
+             'examples/qt_connection/Main.qml')
 
 
 def digest(path):
@@ -45,6 +47,8 @@ def main():
     parser.add_argument('--ninja', default='ninja')
     parser.add_argument('--cxx', default='g++')
     parser.add_argument('--sanitize', action='store_true', help='Match ASan/UBSan-instrumented installed native packages')
+    parser.add_argument('--qt-connection', action='store_true',
+                        help='Also build the generated owned-connection target against installed qt_connection packages')
     parser.add_argument('--node', default='node')
     parser.add_argument('--npm-cli', type=Path)
     parser.add_argument('--browser-python', type=Path,
@@ -56,12 +60,15 @@ def main():
     qt = (args.sdk_prefix, args.ux_prefix, args.qt_prefix)
     if (args.ux_prefix or args.qt_prefix) and not all(qt):
         parser.error('SDK, UX and Qt prefixes are required together for installed QML qualification')
+    if args.qt_connection and not all(qt):
+        parser.error('--qt-connection requires SDK, UX and Qt prefixes')
     if (args.sdk_package is None) != (args.ux_package is None):
         parser.error('Both npm packages are required together')
     if args.sdk_package and (not args.sdk_prefix or not args.browser_python):
         parser.error('Web qualification requires --sdk-prefix and --browser-python')
     output.mkdir(parents=True)
     report = {'passed': False, 'hardware': False, 'checks': 0, 'commands': [],
+              'qt_connection_requested': args.qt_connection,
               'started_utc': datetime.now(timezone.utc).isoformat()}
     before = {relative: digest(ROOT / relative) for relative in (*TEMPLATES, 'tools/create_project.py')}
     report['source_sha256_before'] = before
@@ -101,8 +108,15 @@ def main():
         creator('create-qml-a', first)
         creator('create-qml-b', second)
         creator('create-web', web, target='web-device')
+        connection, connection_again = output / 'connection-a', output / 'connection-b'
+        creator('create-connection-a', connection, target='qt-connection')
+        creator('create-connection-b', connection_again, target='qt-connection')
         check(hashes(first) == hashes(second), 'Same templates/options produce deterministic project bytes')
-        for project in (first, web):
+        check(hashes(connection) == hashes(connection_again), 'Owned-connection project creation is deterministic')
+        check(set(hashes(connection)) == {'CMakeLists.txt', 'main.cpp', 'Main.qml',
+                                        'project-options.json', 'README.md', 'project-manifest.json'},
+              'Owned-connection project contains only the three public source templates and creator metadata')
+        for project in (first, web, connection):
             manifest = json.loads((project / 'project-manifest.json').read_text(encoding='utf8'))
             for relative, expected in manifest['files'].items():
                 check(digest(project / relative) == expected, 'Published file hash: ' + relative)
@@ -138,6 +152,18 @@ def main():
         check(not (output / 'partial').exists(), 'Partial options fail before destination creation')
         creator('refuse-wrong-target-option', output / 'wrong-option', '--sdk-package', upper, refused=True)
         check(not (output / 'wrong-option').exists(), 'Inapplicable option fails before destination creation')
+        creator('refuse-connection-partial-options', output / 'connection-partial',
+                '--sdk-prefix', upper, refused=True, target='qt-connection')
+        check(not (output / 'connection-partial').exists(), 'Connection partial prefixes create no destination')
+        creator('refuse-connection-package-option', output / 'connection-package',
+                '--sdk-package', upper, refused=True, target='qt-connection')
+        check(not (output / 'connection-package').exists(), 'Connection target refuses npm-only inputs')
+        original_connection = hashes(connection)
+        creator('refuse-existing-connection', connection, refused=True, target='qt-connection')
+        check(hashes(connection) == original_connection, 'Existing connection application remains byte-identical')
+        creator('refuse-connection-name', output / 'connection-bad-name', name='bad);message(FATAL_ERROR boom)',
+                refused=True, target='qt-connection')
+        check(not (output / 'connection-bad-name').exists(), 'Connection invalid name fails before creation')
 
         target, link = output / 'link-target', output / 'linked-parent'
         target.mkdir()
@@ -186,6 +212,10 @@ def main():
         if all(qt):
             creator('create-configured-qml', configured_qml, '--sdk-prefix', args.sdk_prefix,
                     '--ux-prefix', args.ux_prefix, '--qt-prefix', args.qt_prefix)
+        configured_connection = output / 'connection-installed'
+        if args.qt_connection:
+            creator('create-configured-connection', configured_connection, '--sdk-prefix', args.sdk_prefix,
+                    '--ux-prefix', args.ux_prefix, '--qt-prefix', args.qt_prefix, target='qt-connection')
         configured_web = output / 'web-installed'
         if args.sdk_package:
             creator('create-configured-web', configured_web, '--sdk-prefix', args.sdk_prefix,
@@ -216,6 +246,27 @@ def main():
             report['qml'] = {'passed': True, 'sanitize': args.sanitize,
                              'leak_checking': False if args.sanitize else None,
                              'executable_sha256': digest(executable)}
+
+        if args.qt_connection:
+            check(not (producer / 'examples').exists(), 'Connection consumer builds with its producer templates hidden')
+            run('connection-configure', [args.cmake, '--preset', 'local',
+                '-DCMAKE_CXX_COMPILER=' + str(args.cxx), '-DCMAKE_MAKE_PROGRAM=' + str(args.ninja),
+                '-DCMAKE_CXX_FLAGS=' + flags, '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'], cwd=configured_connection)
+            run('connection-build', [args.cmake, '--build', '--preset', 'local'], cwd=configured_connection)
+            executable = configured_connection / 'build' / ('telemetry-qt-connection.exe' if os.name == 'nt'
+                                                            else 'telemetry-qt-connection')
+            check(executable.is_file(), 'Generated owned-connection consumer linked an actual executable')
+            commands = json.loads((configured_connection / 'build/compile_commands.json').read_text(encoding='utf8'))
+            for entry in commands:
+                paths = (str(entry.get('file', '')) + ' ' +
+                         entry.get('command', ' '.join(entry.get('arguments', [])))).replace('\\', '/')
+                check(str(ROOT).replace('\\', '/') not in paths and
+                      str(ROOT.parent / 'telemetry-sdk').replace('\\', '/') not in paths and
+                      str(producer).replace('\\', '/') not in paths,
+                      'Generated connection consumer compiles without producer or SDK/UX source paths')
+            report['qt_connection'] = {'passed': True, 'built': True, 'runtime': False,
+                                       'producer_templates_hidden': True, 'sanitize': args.sanitize,
+                                       'executable_sha256': digest(executable)}
 
         if args.sdk_package:
             options = [args.browser_python, '-B', configured_web / 'prepare.py',

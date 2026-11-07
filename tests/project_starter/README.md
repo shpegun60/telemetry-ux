@@ -17,6 +17,18 @@ Use `--sanitize` with ASan/UBSan-instrumented installed archives. The copied
 QML example uses offscreen Qt and disables leak checking for its global platform
 caches; the maintained provider suite owns the separate lifetime/leak controls.
 
+The controls also create the `qt-connection` target twice, verify its manifests
+and exact three-source-file allowlist, and refuse an existing destination,
+invalid name, partial prefixes and npm-only options. Add `--qt-connection` with
+the same three prefixes to build its actual generated executable after hiding
+the producer templates. Both installed packages must include `qt_connection`;
+the generated configure/build uses only installed headers, modules and libraries.
+Compiler commands are checked for accidental producer or SDK/UX source paths.
+This creator suite records that connected-device build as `runtime: false`:
+actual loopback TCP, two-panel QML and lifecycle are qualified separately by
+the [owned Qt connection suite](../qt_connection/README.md). It does not claim
+that copying a project establishes a connection to a physical device.
+
 For the complete Web consumer also add `--sdk-package`, `--ux-package`, `--node`,
 optional `--npm-cli`, and `--browser-python` with the existing pinned Playwright,
 Chromium and websockets dependencies. The generated root prepare wrapper builds
