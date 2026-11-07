@@ -9,6 +9,8 @@ export interface ConfiguratorView {
 }
 
 export interface ProviderConfiguratorOptions {
+	/** Advanced providers receive the overlay at creation. */
+	readonly presentation?: never;
 	readonly provider: PresentationProvider;
 	readonly session?: never;
 	/** Same monotonic millisecond clock used by the host's tickWatch owner loop. */

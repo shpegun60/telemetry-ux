@@ -1,0 +1,1782 @@
+{
+  "format": "telemetry-presentation-parser-cases",
+  "version": 1,
+  "cases": [
+    {
+      "name": "empty-document",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "all-advisory-properties",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Trip threshold",
+            "unit": "V",
+            "help": "Device validates its operating range.",
+            "minimum": "-9223372036854775808",
+            "maximum": "18446744073709551615",
+            "step": "0.1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-optional-display-strings",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "",
+            "unit": "",
+            "help": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "endpoint-and-index-upper-bound",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 4294967295,
+            "role": "value",
+            "path": [
+              "phases",
+              4294967295,
+              "voltage"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "root-command",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 2,
+            "id": 42,
+            "role": "request",
+            "path": [],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "service-request",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 3,
+            "id": 42,
+            "role": "request",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "service-response",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 3,
+            "id": 42,
+            "role": "response",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "signed-zero-advisory-bounds",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "-0",
+            "maximum": "-0.0",
+            "step": "0.0001"
+          }
+        ]
+      }
+    },
+    {
+      "name": "literal-dot-and-object-member",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "a.b",
+              "__proto__",
+              "constructor"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "path-64-components",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "display-string-boundaries",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "unit": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "help": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "minimum": "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+            "step": "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      }
+    },
+    {
+      "name": "astral-utf16-boundaries",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            "unit": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+          }
+        ]
+      }
+    },
+    {
+      "name": "string-and-index-selectors-distinct",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "0"
+            ],
+            "label": "Hint"
+          },
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              0
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "category-and-role-selectors-distinct",
+      "valid": true,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          },
+          {
+            "category": 3,
+            "id": 42,
+            "role": "response",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "null-document",
+      "valid": false,
+      "input": null
+    },
+    {
+      "name": "array-document",
+      "valid": false,
+      "input": []
+    },
+    {
+      "name": "missing-format",
+      "valid": false,
+      "input": {
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "missing-version",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "fingerprint": "0x0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "missing-fingerprint",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "entries": []
+      }
+    },
+    {
+      "name": "missing-entries",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef"
+      }
+    },
+    {
+      "name": "invalid-top-format-20",
+      "valid": false,
+      "input": {
+        "format": "telemetry-other",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "invalid-top-version-21",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 2,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "invalid-top-fingerprint-22",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0123456789abcdef",
+        "entries": []
+      }
+    },
+    {
+      "name": "invalid-top-fingerprint-23",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdeF",
+        "entries": []
+      }
+    },
+    {
+      "name": "invalid-top-fingerprint-24",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcde",
+        "entries": []
+      }
+    },
+    {
+      "name": "invalid-top-entries-25",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": {}
+      }
+    },
+    {
+      "name": "unknown-top-property",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [],
+        "unknown": true
+      }
+    },
+    {
+      "name": "null-entry",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          null
+        ]
+      }
+    },
+    {
+      "name": "missing-entry-category",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-entry-id",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-entry-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-entry-path",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-entry-property",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "extra": "ignored",
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "category-zero",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 0,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "category-four",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 4,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "category-string",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": "1",
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative-id",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": -1,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "overflow-id",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 4294967296,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional-id",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 1.5,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "string-id",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": "42",
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "field-request-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "request",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "field-response-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "response",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "draft",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "null-path",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": null,
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "string-path",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": "threshold",
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "path-65-components",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x",
+              "x"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative-index",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              -1
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "overflow-index",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              4294967296
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional-index",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              0.5
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "null-component",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              null
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "boolean-component",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              true
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "object-component",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              {}
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric-label",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": 12
+          }
+        ]
+      }
+    },
+    {
+      "name": "null-label",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "label-too-long",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "name": "astral-label-too-long",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unit-too-long",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "unit": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "name": "help-too-long",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "help": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "null-maximum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "maximum": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "exponent-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "1e3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "plus-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "+1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "leading-zero-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "01"
+          }
+        ]
+      }
+    },
+    {
+      "name": "leading-zero-negative",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "maximum": "-01"
+          }
+        ]
+      }
+    },
+    {
+      "name": "whitespace-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": " 1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "trailing-space-maximum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "maximum": "1 "
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-whole-number",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": ".5"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-fraction",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "maximum": "1."
+          }
+        ]
+      }
+    },
+    {
+      "name": "nan-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "NaN"
+          }
+        ]
+      }
+    },
+    {
+      "name": "infinity-maximum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "maximum": "Infinity"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too-long-number",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "minimum": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "zero-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "zero-fraction-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": "0.000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative-zero-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": "-0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": "-0.5"
+          }
+        ]
+      }
+    },
+    {
+      "name": "exponent-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "step": "1e-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "command-value-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 2,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "service-value-role",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 3,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-selector",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          },
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Other"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-selector-property-order",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [
+              "threshold"
+            ],
+            "label": "Hint"
+          },
+          {
+            "path": [
+              "threshold"
+            ],
+            "role": "value",
+            "id": 42,
+            "category": 1,
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "newline-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [],
+            "minimum": "1\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "carriage-return-minimum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [],
+            "minimum": "1\r"
+          }
+        ]
+      }
+    },
+    {
+      "name": "newline-step",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [],
+            "step": "1\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "exponent-maximum",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [],
+            "maximum": "1E3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "boolean-version",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": true,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": [],
+            "label": "Hint"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entry-with-no-hints",
+      "valid": false,
+      "input": {
+        "format": "telemetry-presentation",
+        "version": 1,
+        "fingerprint": "0x0123456789abcdef",
+        "entries": [
+          {
+            "category": 1,
+            "id": 42,
+            "role": "value",
+            "path": []
+          }
+        ]
+      }
+    }
+  ]
+}

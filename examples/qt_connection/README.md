@@ -25,3 +25,15 @@ Destroy panels/adapter freely; the connection retains accepted work until drain.
 Destroy the connection outside a native callback stack (use `deleteLater()` from
 custom native callbacks). QML/provider notifications are delivered after native
 processing, so ordinary Qt UI callbacks can disconnect or remove panels safely.
+
+For labels, units and help, read your optional
+[presentation document](../../doc/PresentationMetadata.md) into a `QByteArray`
+and call `presentation.setPresentation(json)` once. Existing and future providers
+receive the same hints, while keeping independent selection and drafts. Check
+its boolean result and `presentation.presentationError()` before reporting the
+configuration as loaded. Empty input clears it. Range and step hints are
+advisory, and no hint grants write permission or submits a request.
+
+The example also accepts `--presentation path/to/presentation.json` (set it in
+Qt Creator's run arguments). The file is validated before any connection opens;
+missing or invalid input is reported without starting a session.

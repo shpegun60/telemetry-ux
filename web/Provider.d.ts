@@ -1,6 +1,7 @@
 /* Explicit-provider presentation over Telemetry SDK. SPDX-License-Identifier: MIT. */
 import type {ByteInput, DeviceClient} from 'telemetry-sdk/client';
 import type {DynamicClient} from 'telemetry-sdk/dynamic';
+import type {PresentationHints, PresentationOverlay} from './Presentation.js';
 import type {
 	StaticConnectionSession, DynamicConnectionSession, SessionSnapshot} from
 	'telemetry-sdk/session';
@@ -15,6 +16,7 @@ export interface PresentationLimits {
 	readonly wireBytes?: number;
 }
 export interface PresentationEndpoint {
+	readonly presentation?: PresentationHints;
 	readonly key: string;
 	readonly category: 1|2|3;
 	readonly id: number;
@@ -60,6 +62,7 @@ export interface PresentationState {
 	    Readonly<Record<'refresh'|'beginEdit'|'cancelEdit'|'apply'|'execute'|'call', boolean>>;
 }
 export interface PresentationWatchRow {
+	readonly presentation?: PresentationHints;
 	readonly key: string;
 	readonly id: number;
 	readonly name: string;
@@ -79,6 +82,7 @@ export interface PresentationWatch {
 	readonly canRefresh: boolean;
 }
 export interface PresentationRow {
+	readonly presentation?: PresentationHints;
 	readonly key: string;
 	readonly path: ValuePath;
 	readonly name: string;
@@ -226,9 +230,10 @@ export function createStaticProvider(options: {
 		readonly fingerprint : bigint; readonly codecs : object
 	};
 	readonly limits?: PresentationLimits;
+	readonly presentation?: PresentationOverlay;
 }): BatchPresentationProvider;
 export function createDynamicProvider(
-    options: {readonly client: DynamicClient; readonly limits?: PresentationLimits;}):
+    options: {readonly client: DynamicClient; readonly limits?: PresentationLimits; readonly presentation?: PresentationOverlay;}):
     BatchPresentationProvider;
 
 export type SessionEndpointSelector =
@@ -239,6 +244,7 @@ export type SessionEndpointSelector =
 }
 > ;
 export interface SessionProviderOptions {
+	readonly presentation?: PresentationOverlay;
 	readonly session: StaticConnectionSession|DynamicConnectionSession;
 	readonly limits?: PresentationLimits;
 	/** Resolve one endpoint without I/O. Reconnect restores selection only for an unchanged fingerprint. */

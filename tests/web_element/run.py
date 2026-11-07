@@ -26,6 +26,7 @@ def inventory(root):
 def inputs():
     files = [ROOT / name for name in ('package.json', 'VERSION', 'LICENSE', 'README.md')]
     files += [path for directory in (ROOT / 'web', HERE) for path in directory.rglob('*')]
+    files += [ROOT / 'tests/presentation_metadata' / name for name in ('Parse.mjs', 'cases.json')]
     return {path.relative_to(ROOT).as_posix(): digest(path)
             for path in sorted(files) if path.is_file() and '__pycache__' not in path.parts}
 
@@ -109,6 +110,11 @@ def main():
         report['installed_npm_sha256_before'] = {name: inventory(path) for name, path in packages.items()}
         for name in ('Consumer.ts', 'SSR.mjs', 'Element.mjs'):
             shutil.copyfile(HERE / name, consumer / name)
+        for name in ('Parse.mjs', 'cases.json'):
+            shutil.copyfile(ROOT / 'tests/presentation_metadata' / name, consumer / name)
+        report['presentation'] = json.loads(run('presentation-contract', [node, consumer / 'Parse.mjs']))
+        if report['presentation'].get('passed') is not True or report['presentation'].get('cases', 0) < 83:
+            raise RuntimeError('Presentation metadata contract incomplete')
         run('strict-types', [node, args.tsc, '--strict', '--noEmit', '--target', 'ES2022',
             '--module', 'NodeNext', '--moduleResolution', 'NodeNext', consumer / 'Consumer.ts'])
         ssr = json.loads(run('ssr-import', [node, consumer / 'SSR.mjs']))

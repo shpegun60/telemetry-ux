@@ -39,3 +39,9 @@ localhost reference application, not STM32 firmware or a production authenticati
 implementation. No board or Ethernet/DMA qualification is implied.
 
 [Session provider contract](../../doc/SessionProvider.md)
+
+To add your own labels, units and help, load one
+[presentation document](../../doc/PresentationMetadata.md) and pass the same object
+to both `mountConfigurator(..., {session, presentation})` calls. The document is
+optional and must identify your schema's fingerprint. Numeric range and step
+hints are advisory; they do not validate or change values on the device.

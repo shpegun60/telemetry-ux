@@ -190,8 +190,15 @@
 }
 .telemetry-configurator .tux-row-detail {
     display: block;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     color: var(--tux-muted);
     font-size: 0.8rem;
+}
+.telemetry-configurator .tux-unit {
+    margin-inline-start: 0.5em;
+    color: var(--tux-muted);
+    overflow-wrap: anywhere;
 }
 .telemetry-configurator .tux-row-actions {
     display: flex;

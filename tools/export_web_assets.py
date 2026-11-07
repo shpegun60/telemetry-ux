@@ -17,7 +17,7 @@ from urllib.parse import unquote, urlsplit
 SDK_FILES = ('LICENSE', 'lib/client/web/Client.js', 'web/telemetry.js', 'web/DynamicClient.js',
              'web/WebSocketTransport.js')
 SESSION_SDK_FILES = ('web/index.js', 'web/Session.js', 'web/WebSocketConnection.js')
-UX_FILES = ('LICENSE', 'web/index.js', 'web/Provider.js', 'web/ProviderContract.js',
+UX_FILES = ('LICENSE', 'web/index.js', 'web/Provider.js', 'web/ProviderContract.js', 'web/Presentation.js',
             'web/Configurator.js', 'web/Element.js', 'web/WebSocketTransport.js',
             'web/Configurator.css')
 IMPORTS = {

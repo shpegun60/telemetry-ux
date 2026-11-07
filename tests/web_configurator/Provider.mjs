@@ -79,9 +79,24 @@ for (const mode of ['dynamic', 'static']) {
 	eq(mode === 'dynamic' ? client.admit(schema, descriptor.subarray(0, 64), 17)
 	                      : client.openSession(17, descriptor.subarray(0, 64)),
 	   mode === 'dynamic' ? Status.Ok : true);
-	const p = mode === 'dynamic'
-	              ? createDynamicProvider({client})
-	              : createStaticProvider({client, metadata : structuralMetadata, sdk});
+	const configId = structuralMetadata.endpoints.find(row => row.category === 1 && row.name === 'Config').id;
+	const presentation = {format: 'telemetry-presentation', version: 1,
+		fingerprint: structuralMetadata.fingerprint, entries: [
+			{category: 1, id: configId, role: 'value', path: [], label: 'Configuration'},
+			{category: 1, id: configId, role: 'value', path: ['large'], label: 'Exact counter',
+			 unit: 'ticks', minimum: '-9223372036854775808', maximum: '18446744073709551615'},
+			{category: 1, id: configId, role: 'value', path: ['nested','matrix',1,1], label: 'Nested sample'}
+		]};
+	const make = overlay => mode === 'dynamic'
+	              ? createDynamicProvider({client, presentation: overlay})
+	              : createStaticProvider({client, metadata : structuralMetadata, sdk, presentation: overlay});
+	const p = make(presentation);
+	eq(frames, 0); // Loading hints never reads a device or admits a new client.
+	eq(p.snapshot().endpoints.find(row => row.id === configId && row.category === 1).presentation.label, 'Configuration');
+	const dormant = make({...presentation, fingerprint: '0x0000000000000000'});
+	eq(dormant.snapshot().endpoints.find(row => row.id === configId && row.category === 1).presentation, {});
+	eq(make().snapshot().endpoints.find(row => row.id === configId && row.category === 1).presentation, {});
+	presentation.entries[1].label = 'Caller changed its object';
 	let events = 0;
 	const unsubscribe = p.subscribe(() => events++);
 
@@ -105,6 +120,9 @@ for (const mode of ['dynamic', 'static']) {
 	await done();
 	let rows = p.rows().rows;
 	eq(rows.find(row => row.name === 'large').text, '18446744073709551615');
+	eq(rows.find(row => row.name === 'large').presentation.label, 'Exact counter');
+	eq(rows.find(row => row.name === 'large').presentation.maximum, '18446744073709551615');
+	eq(rows.find(row => row.name === 'negative').presentation, {});
 	eq(rows.find(row => row.name === 'negative').text, '-9223372036854775808');
 	eq(rows.find(row => row.name === 'zero').text, '-0');
 	eq(rows.find(row => row.name === 'mode').text, '-123');
@@ -358,6 +376,7 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.beginEdit(), true);
 	eq(p.setText([ 'nested', 'matrix', 1, 1 ], '-15', p.snapshot().revision), true);
 	eq(p.rows([ 'nested', 'matrix', 1 ], {source : 'draft'}).rows[1].text, '-15');
+	eq(p.rows([ 'nested', 'matrix', 1 ], {source : 'draft'}).rows[1].presentation.label, 'Nested sample');
 	hold = true;
 	eq(p.apply(), true);
 	for (let i = 0; !release && i < 1000; i++)
@@ -724,6 +743,7 @@ for (const mode of ['dynamic', 'static']) {
 	eq(p.selectBatch(configReadItem), true);
 	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'gain').text, '10');
 	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'large').text, '18446744073709551615');
+	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'large').presentation.label, 'Exact counter');
 	eq(p.selectBatch(echoItem), true);
 	eq(p.rows([], {source : 'batchResponse'}).rows.find(row => row.name === 'gain').text, '6.25');
 	lastReply.fill(0);
