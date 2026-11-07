@@ -4,7 +4,45 @@ Create a complete application from the maintained examples, then edit your own
 Model and window. This optional host tool copies a small allowlist of application
 templates; it does not generate DTOs or introduce another code generator.
 
-## Qt Creator
+## Qt Creator: connect to a device
+
+```sh
+python -B tools/create_project.py --target qt-connection --name MyDevice --output /projects/MyConnectedDevice \
+  --sdk-prefix /installed/sdk --ux-prefix /installed/ux --qt-prefix /installed/qt
+cd /projects/MyConnectedDevice
+cmake --preset local
+cmake --build --preset local
+```
+
+Open `CMakeLists.txt` in Qt Creator with the matching Qt 6.4+ C++20 kit, or run
+`telemetry-qt-connection` (`.exe` on Windows) from the build directory. SDK and UX
+must include their optional `qt_connection` components; UX is configured with
+`TELEMETRY_UX_BUILD_QT_CONNECTION=ON`. Omitting the three prefix arguments creates
+the same editable project without a machine-specific preset.
+
+Enter the matching device's host/port and press Connect. For an existing local
+Inspector installation, `telemetry-inspector-qml --serve-demo 5577` starts its
+read-only reference device. The creator does not install a server or firmware.
+
+The three copied public application files create one `ConnectionSession`, one
+`QtConnectionBinding` and two independent providers. The SDK owns connection,
+Descriptor indexing, progress, native buffers and the one FIFO; your application
+composes the ready Configurator and FieldEditor in `Main.qml`. Another panel
+requires another `presentation.createProvider()`, not another client or pump.
+No generated DTO or private Inspector source is copied.
+
+This target selects the documented exclusive Resource-bootstrap/Encoded TCP
+reference profile. It does not connect to arbitrary TCP or infer authentication
+or remote recovery from an address. Use a matching trusted server; transport
+security and firmware networking are application responsibilities. A fresh full
+bootstrap from the same peer proves supersession only under that server contract.
+Disconnect preserves terminal operation facts, reconnect is explicit, and no
+uncertain mutation is replayed. Providers can be removed independently of their
+shared connection. See the generated README and the
+[owned connection example](../examples/qt_connection/README.md) for lifecycle and
+explicit host/panel mutation policy.
+
+## Qt Creator: local Model
 
 ```sh
 python -B tools/create_project.py --target dynamic-qml --name MyDevice --output /projects/MyDevice
@@ -89,5 +127,6 @@ and generated DTO output remains separate. Installed packages and build/runtime
 dependencies are still required; no SDK source or private Inspector file is copied.
 
 [Project qualification](../tests/project_starter/README.md) builds the generated
-application after hiding its producer templates and exercises the real browser
-journey rather than only comparing copied files.
+applications after hiding their producer templates, executes the local Model
+panels, builds the connected-device consumer from installed packages, and
+exercises the real browser journey rather than only comparing copied files.

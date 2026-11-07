@@ -12,6 +12,7 @@ import tarfile
 
 ROOT = Path(__file__).absolute().parents[1]
 QML = ('CMakeLists.txt', 'Device.hpp', 'main.cpp', 'Main.qml')
+QT_CONNECTION = ('CMakeLists.txt', 'main.cpp', 'Main.qml')
 WEB = ('prepare.py', 'serve.py', 'DeviceApp.js', 'index.html',
        'native/CMakeLists.txt', 'native/Device.hpp', 'native/Peer.cpp')
 RESERVED = {'con', 'prn', 'aux', 'nul', 'clock$'} | {
@@ -117,6 +118,17 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 ''').encode('utf8')
 
 
+def cmake_presets(options):
+    return encoded({
+        'version': 3, 'cmakeMinimumRequired': {'major': 3, 'minor': 21, 'patch': 0},
+        'configurePresets': [{'name': 'local', 'generator': 'Ninja',
+            'binaryDir': '${sourceDir}/build', 'cacheVariables': {
+                'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_FIND_USE_PACKAGE_REGISTRY': False,
+                'CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY': False,
+                'CMAKE_PREFIX_PATH': ';'.join(options[key] for key in ('sdk_prefix', 'ux_prefix', 'qt_prefix'))}}],
+        'buildPresets': [{'name': 'local', 'configurePreset': 'local', 'jobs': 2}]})
+
+
 def render(target, name, options):
     files, templates = {}, {}
 
@@ -138,14 +150,7 @@ def render(target, name, options):
             old, ('project(' + name + ' LANGUAGES CXX)').encode('ascii'))
         files['Main.qml'] = files['Main.qml'].replace(b'My Telemetry device', name.encode('ascii'))
         if options:
-            files['CMakePresets.json'] = encoded({
-                'version': 3, 'cmakeMinimumRequired': {'major': 3, 'minor': 21, 'patch': 0},
-                'configurePresets': [{'name': 'local', 'generator': 'Ninja',
-                    'binaryDir': '${sourceDir}/build', 'cacheVariables': {
-                        'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_FIND_USE_PACKAGE_REGISTRY': False,
-                        'CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY': False,
-                        'CMAKE_PREFIX_PATH': ';'.join(options[key] for key in ('sdk_prefix', 'ux_prefix', 'qt_prefix'))}}],
-                'buildPresets': [{'name': 'local', 'configurePreset': 'local', 'jobs': 2}]})
+            files['CMakePresets.json'] = cmake_presets(options)
         instructions = '''Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
 Set CMAKE_PREFIX_PATH to the matching SDK, UX and Qt prefixes if no preset was supplied.
 With supplied prefixes: `cmake --preset local` then `cmake --build --preset local`.
@@ -167,6 +172,53 @@ progress. Panels own independent selection, draft, snapshot and response state;
 they share that owner's one DynamicClient/FIFO. Removing a panel does not close
 the connection. Retire/drain/poll before destroying native backing; read the
 lifetime comments in main.cpp before substituting an asynchronous transport.
+'''
+    elif target == 'qt-connection':
+        for file in QT_CONNECTION:
+            files[file] = copy('examples/qt_connection/' + file)
+        old = b'project(TelemetryQtConnection LANGUAGES CXX)'
+        if files['CMakeLists.txt'].count(old) != 1:
+            raise ValueError('Qt connection template project declaration changed; update the creator')
+        files['CMakeLists.txt'] = files['CMakeLists.txt'].replace(
+            old, ('project(' + name + ' LANGUAGES CXX)').encode('ascii'))
+        files['Main.qml'] = files['Main.qml'].replace(
+            b'Telemetry - one TCP connection, two panels',
+            name.encode('ascii') + b' - one TCP connection, two panels')
+        if options:
+            files['CMakePresets.json'] = cmake_presets(options)
+        instructions = '''Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
+Set CMAKE_PREFIX_PATH to the matching SDK, UX and Qt prefixes if no preset was supplied.
+With supplied prefixes: `cmake --preset local` then `cmake --build --preset local`.
+Run the `telemetry-qt-connection` target (add `.exe` on Windows).
+
+Install the SDK with its optional qt_connection component and UX with
+TELEMETRY_UX_BUILD_QT_CONNECTION=ON. Link TelemetryUX::qt_connection; Qt 6.4+
+Core, Network, Gui, Qml, Quick and QuickControls2 are required by this application.
+Python, generated DTOs and private Inspector sources are not runtime dependencies.
+
+Connect to your matching device, or start an existing Telemetry Inspector binary
+with `telemetry-inspector-qml --serve-demo 5577` in another terminal. That local
+demo is read-only; installing this starter does not install a server or firmware.
+Enter its host/port and press Connect. The initial address is 127.0.0.1:5577.
+The left Configurator and
+right FieldEditor share one ConnectionSession, DynamicClient and FIFO, while
+keeping independent selection, draft, snapshot and response state. There is no
+application-owned transport pump, Descriptor indexing or second connection.
+Change Main.qml to compose your own panels; call presentation.createProvider()
+for another panel. A provider borrows the connection and does not close it.
+
+This explicitly selects the exclusive Resource-bootstrap/Encoded TCP reference
+profile, not arbitrary TCP or UART. Use a matching trusted server. A fresh full
+bootstrap from the same peer supplies remote supersession under that server's
+contract; socket closure alone does not prove remote retirement. Authentication,
+authorization, TLS and firmware networking belong to your application.
+
+Read-only is the initial panel policy. The example host permits explicit changes;
+the configuration panel still requires its Allow changes checkbox. Write uses
+actual device readback. Disconnect retains terminal mutation facts, including
+OutcomeUnknown; reconnect is explicit and never replays a mutation. Remove panels
+freely. Destroy the connection outside a custom native callback stack; use
+deleteLater() there. Ordinary Qt UI notifications arrive after native processing.
 '''
     else:
         for file in WEB:
@@ -240,7 +292,7 @@ Do not place user code inside a code-generator-owned output directory.
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', required=True, choices=('dynamic-qml', 'web-device'))
+    parser.add_argument('--target', required=True, choices=('dynamic-qml', 'qt-connection', 'web-device'))
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--name', required=True)
     for option in ('sdk-prefix', 'ux-prefix', 'qt-prefix', 'sdk-package', 'ux-package'):
@@ -254,7 +306,7 @@ def main(argv=None):
             raise ValueError('--output must not exist; no existing file or directory is overwritten')
         if overlaps(output, checked_path(ROOT, exists=True)):
             raise ValueError('--output must be outside the creator checkout')
-        allowed = ('sdk_prefix', 'ux_prefix', 'qt_prefix') if args.target == 'dynamic-qml' else (
+        allowed = ('sdk_prefix', 'ux_prefix', 'qt_prefix') if args.target in ('dynamic-qml', 'qt-connection') else (
             'sdk_prefix', 'sdk_package', 'ux_package')
         options = {}
         for key in ('sdk_prefix', 'ux_prefix', 'qt_prefix', 'sdk_package', 'ux_package'):
