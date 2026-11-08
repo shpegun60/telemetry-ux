@@ -1,0 +1,2 @@
+# Preserve the bytes named by the acceptance manifest on every checkout.
+*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

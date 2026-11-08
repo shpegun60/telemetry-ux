@@ -1,0 +1,111 @@
+{
+  "passed": true,
+  "run": 42429738594,
+  "artifact": 13596882298,
+  "head": "14e374569795b2b8c473fde80a9ccd866f848e4d",
+  "zip_sha256": "3c05cb10bc829b888fcda10838987c5f7a868569069232284d2e08c7954efffe",
+  "summaries": [
+    {
+      "name": "ux-created-web-clang-asan/browser/summary.json",
+      "sha256": "6c822fec5139f49c637affda3684114a2b6ddd927a5ac2c1ee556cb837b86697",
+      "checks": 47
+    },
+    {
+      "name": "ux-created-web-clang-asan/cpp-assets/summary.json",
+      "sha256": "e9f74d7c7cf65de9778cc81c1b079c533da21b156ac478de0fb03ec490064e69",
+      "checks": null
+    },
+    {
+      "name": "ux-created-web-clang-asan/summary.json",
+      "sha256": "09a6399a33a6a42d0b7c74217f96c0fc6885d8405558b7c67fbbe2db36a5b29e",
+      "checks": 111
+    },
+    {
+      "name": "ux-created-web-gcc/browser/summary.json",
+      "sha256": "672bd70defd066669716b20d02e7a5b4d044129300bc89dff7c6f087cb5938c1",
+      "checks": 47
+    },
+    {
+      "name": "ux-created-web-gcc/cpp-assets/summary.json",
+      "sha256": "1098184db20f42a740b2a07356e0f463d1d9ab57dd87c81f6759a79219864387",
+      "checks": null
+    },
+    {
+      "name": "ux-created-web-gcc/summary.json",
+      "sha256": "325daa903febb64ec1b1240b1fdf35ced1195fca4185f342bef4e4ae59df0601",
+      "checks": 111
+    },
+    {
+      "name": "ux-own-device-assets-clang-asan-dynamic-cpp/summary.json",
+      "sha256": "0a4f3602fb60354484d13000cadb1a4ad1f322ad39383fd2a9300368aa622198",
+      "checks": null
+    },
+    {
+      "name": "ux-own-device-assets-clang-asan-static-files/summary.json",
+      "sha256": "9b7dbe777e05d4518eb020589408f0f2d71504e3d7403d07f17b47d7528064a4",
+      "checks": null
+    },
+    {
+      "name": "ux-own-device-assets-gcc-dynamic-cpp/summary.json",
+      "sha256": "b92e20be20cbfb409bf2df0ecb93eb547450f776106a5dd5e5096be62aa3ce58",
+      "checks": null
+    },
+    {
+      "name": "ux-own-device-assets-gcc-static-files/summary.json",
+      "sha256": "6fb0056e0adac7716298942ad0cce0c4f9955b2e6b925f5ccf6d017508e81fc6",
+      "checks": null
+    },
+    {
+      "name": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+      "sha256": "cc43afa9263f8aa1132be54c89c23c6ccaca28a52130905f3c94562f0ac83161",
+      "checks": 46
+    },
+    {
+      "name": "ux-own-device-browser-clang-asan-static-files/summary.json",
+      "sha256": "5860e9189ae91e2c4e84138679b5f816f6a701eefd8d6881f6dd27cc96eedaf7",
+      "checks": 68
+    },
+    {
+      "name": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+      "sha256": "a6aed97f06cac280d6c29b378b9008068894cc104144274b670651edfc398954",
+      "checks": 46
+    },
+    {
+      "name": "ux-own-device-browser-gcc-static-files/summary.json",
+      "sha256": "6a233f9fd192046851cc8cfb0e418031fa58e682ee89e44b9a063f5e704e38ef",
+      "checks": 68
+    }
+  ],
+  "tables": [
+    {
+      "summary": "ux-created-web-clang-asan/cpp-assets/summary.json",
+      "assets": 23,
+      "bytes": 300974,
+      "all_payload_hashes_verified": true
+    },
+    {
+      "summary": "ux-created-web-gcc/cpp-assets/summary.json",
+      "assets": 23,
+      "bytes": 300974,
+      "all_payload_hashes_verified": true
+    },
+    {
+      "summary": "ux-own-device-assets-clang-asan-dynamic-cpp/summary.json",
+      "assets": 22,
+      "bytes": 300932,
+      "all_payload_hashes_verified": true
+    },
+    {
+      "summary": "ux-own-device-assets-gcc-dynamic-cpp/summary.json",
+      "assets": 22,
+      "bytes": 300932,
+      "all_payload_hashes_verified": true
+    }
+  ],
+  "log_hashes_verified": 84,
+  "git_source_files_verified": 90,
+  "creator_title_substitutions_verified": 2,
+  "known_fixture_files_verified": 6,
+  "hardware": false,
+  "zip_members_crc_verified": 508
+}
