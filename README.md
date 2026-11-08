@@ -182,6 +182,9 @@ session; Individual FieldRead remains an explicit Watchlist mode.
 For device-hosted files, the [deploy exporter](tools/README.md) turns a prepared
 application and its installed runtime packages into a relocatable `vendor/`
 bundle with MIME/length/SHA-256 manifest and an optional C++17 Flash asset table.
+In a created own-device project, `python -B prepare.py --export-web cpp` prepares
+that bundle in one step; `python -B serve.py --exported` tests it locally. Follow
+the [own-device deploy guide](doc/OwnDeviceDeploy.md) for file budgets and extra assets.
 The target needs no Node or Python. Its HTTP/WebSocket stack and admission policy
 remain application-owned; exporting files does not supply an STM32 Ethernet port.
 

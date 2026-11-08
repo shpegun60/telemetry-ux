@@ -51,7 +51,7 @@ def main():
         managed = {'index.html', 'deviceapp.js', 'favicon.svg', 'starter-options.js',
                    'static-context.js', 'package.json', 'package-lock.json', 'assets.json',
                    'telemetry_web_assets.hpp', 'generated', 'node_modules', 'vendor'}
-        names, total = set(), 0
+        names, parent_names, total = set(), set(), 0
         try:
             if len(args.web_asset) > web_max_files:
                 raise ValueError('Additional assets exceed the exported file budget')
@@ -59,8 +59,13 @@ def main():
                 name = exporter['asset_name'](value)
                 if name.casefold() in names or name.split('/')[0].casefold() in managed:
                     raise ValueError('Duplicate or managed application asset: ' + name)
+                parts = name.casefold().split('/')
+                parents = ['/'.join(parts[:count]) for count in range(1, len(parts))]
+                if name.casefold() in parent_names or any(parent in names for parent in parents):
+                    raise ValueError('File/directory asset collision: ' + name)
                 payload = exporter['read_file'](HERE, name, web_max_bytes - total)
                 names.add(name.casefold())
+                parent_names.update(parents)
                 total += len(payload)
                 extra_assets[name] = payload
         except (OSError, ValueError) as error:
