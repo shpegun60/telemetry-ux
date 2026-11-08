@@ -7,6 +7,12 @@ panels over the SDK-owned TCP reference session, `dynamic-qml` for a local nativ
 Model, or `web-device` for the HTTP/WebSocket application. The exporter below packages an application
 that has already been prepared; it does not create a project or connection.
 
+The [own-device deploy workflow](../doc/OwnDeviceDeploy.md) combines preparation
+with that same exporter: pass `--export-web files` or `--export-web cpp` to the
+own-device `prepare.py`. A created `web-device` project includes the exporter,
+so this works without the producer checkout. `serve.py --exported` runs the
+resulting `www/` tree against the existing host reference Model/server.
+
 `export_web_assets.py` turns a **prepared public directory** into an explicit,
 relocatable set of browser files. Run npm installation and any application SDK
 generation on the development machine first. Python and Node are not needed on

@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
+import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -30,7 +32,44 @@ def main():
     parser.add_argument('--cxx', default='g++')
     parser.add_argument('--codegen-python', help='Optional Python with matching installed telemetry-codegen-core for Static mode')
     parser.add_argument('--sanitize', action='store_true', help='Enable supported native Clang/GCC ASan/UBSan checks')
+    parser.add_argument('--export-web', choices=('files', 'cpp'),
+                        help='Export self-contained browser assets under output/www; cpp adds a Flash asset table')
+    parser.add_argument('--web-max-bytes', type=int, help='Exported runtime byte budget; default 4194304')
+    parser.add_argument('--web-max-files', type=int, help='Exported file budget, 1..4096; default 256')
+    parser.add_argument('--web-asset', action='append', default=[], metavar='NAME',
+                        help='Additional asset relative to this starter source directory; requires --export-web')
     args = parser.parse_args()
+    if not args.export_web and (args.web_asset or args.web_max_bytes is not None or args.web_max_files is not None):
+        parser.error('--web-asset, --web-max-bytes and --web-max-files require --export-web')
+    web_max_bytes = args.web_max_bytes if args.web_max_bytes is not None else 4 * 1024 * 1024
+    web_max_files = args.web_max_files if args.web_max_files is not None else 256
+    if web_max_bytes < 1 or not 1 <= web_max_files <= 4096:
+        parser.error('--web-max-bytes must be positive and --web-max-files must be 1..4096')
+    extra_assets = {}
+    if args.web_asset:
+        exporter = runpy.run_path(str(ROOT / 'tools/export_web_assets.py'))
+        managed = {'index.html', 'deviceapp.js', 'favicon.svg', 'starter-options.js',
+                   'static-context.js', 'package.json', 'package-lock.json', 'assets.json',
+                   'telemetry_web_assets.hpp', 'generated', 'node_modules', 'vendor'}
+        names, parent_names, total = set(), set(), 0
+        try:
+            if len(args.web_asset) > web_max_files:
+                raise ValueError('Additional assets exceed the exported file budget')
+            for value in args.web_asset:
+                name = exporter['asset_name'](value)
+                if name.casefold() in names or name.split('/')[0].casefold() in managed:
+                    raise ValueError('Duplicate or managed application asset: ' + name)
+                parts = name.casefold().split('/')
+                parents = ['/'.join(parts[:count]) for count in range(1, len(parts))]
+                if name.casefold() in parent_names or any(parent in names for parent in parents):
+                    raise ValueError('File/directory asset collision: ' + name)
+                payload = exporter['read_file'](HERE, name, web_max_bytes - total)
+                names.add(name.casefold())
+                parent_names.update(parents)
+                total += len(payload)
+                extra_assets[name] = payload
+        except (OSError, ValueError) as error:
+            parser.error('--web-asset: ' + str(error))
     output = args.output.resolve()
     prefix = args.sdk_prefix.resolve()
     if ROOT == output or ROOT in output.parents or output in ROOT.parents or prefix == output or prefix in output.parents or output in prefix.parents:
@@ -58,10 +97,14 @@ def main():
         parser.error('--npm-cli must name npm-cli.js')
     output.mkdir(parents=True, exist_ok=True)
     source_paths = [p for p in HERE.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
-    source_paths += [ROOT / 'examples/web_demo/serve.py', ROOT / 'examples/web_demo/serve_ws.py']
+    source_paths += [ROOT / 'examples/web_demo/serve.py', ROOT / 'examples/web_demo/serve_ws.py',
+                     ROOT / 'tools/export_web_assets.py']
     source_hashes = lambda: {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(source_paths)}
+    source_snapshot = source_hashes()
+    for name, payload in extra_assets.items():
+        source_snapshot[(HERE / name).relative_to(ROOT).as_posix()] = hashlib.sha256(payload).hexdigest()
     report = dict(passed=False, hardware=False, started_utc=datetime.now(timezone.utc).isoformat(), commands=[],
-                  source_sha256=source_hashes(),
+                  source_sha256=source_snapshot,
                   packages={name:dict(path=str(path.resolve()), sha256=digest(path.resolve()))
                             for name, path in [('sdk', args.sdk_package), ('ux', args.ux_package)]})
     report_path = output / 'prepared.json'
@@ -96,14 +139,54 @@ def main():
         (public / 'package.json').write_text('{"private":true,"type":"module"}\n', encoding='utf8')
         run('install', npm + ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false',
             '--prefix', public, '--cache', output / 'npm-cache', args.sdk_package.resolve(), args.ux_package.resolve()])
-        for name in ('index.html', 'DeviceApp.js'):
+        for name in ('index.html', 'DeviceApp.js', 'favicon.svg'):
             shutil.copy2(HERE / name, public / name)
+        for name, payload in extra_assets.items():
+            destination = public / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
         (public / 'starter-options.js').write_text(
             'export const staticAvailable = ' + ('true' if args.codegen_python else 'false') + ';\n', encoding='utf8')
         if args.codegen_python:
             run('generate', [executable(args.codegen_python), '-m', 'tools.telemetry_codegen', 'generate',
                 output / 'descriptor.bin', '--targets', 'js', '--structural-metadata', '--wire-editing',
                 '--namespace', 'my_device', '--output', public / 'generated'])
+            static_context = '''// Generated optional Static context; application UI stays shared. MIT.
+export async function loadStaticContext() {
+    const sdk = await import('./generated/js/device.js');
+    const {structuralMetadata: metadata} = await import('./generated/js/device.metadata.js');
+    return {sdk, metadata};
+}
+'''
+        else:
+            static_context = '''// Dynamic-only preparation has no generated SDK dependencies. MIT.
+export async function loadStaticContext() {
+    throw new Error('Static mode needs generated files. Run prepare.py with --codegen-python, or choose Dynamic.');
+}
+'''
+        (public / 'static-context.js').write_text(static_context, encoding='utf8')
+        if args.export_web:
+            command = [sys.executable, '-B', ROOT / 'tools/export_web_assets.py',
+                       '--public-root', public, '--output', output / 'www',
+                       '--max-bytes', str(web_max_bytes), '--max-files', str(web_max_files)]
+            assets = ['index.html', 'DeviceApp.js', 'favicon.svg', 'starter-options.js', 'static-context.js']
+            if args.codegen_python:
+                assets += ['generated/js/device.js', 'generated/js/device.metadata.js']
+            assets += extra_assets
+            for asset in assets:
+                command += ['--asset', asset]
+            if args.export_web == 'cpp':
+                command.append('--cpp')
+            run('export-web', command)
+            manifest = output / 'www/assets.json'
+            exported = json.loads(manifest.read_text(encoding='utf8'))
+            report['web_export'] = dict(mode=args.export_web, directory='www',
+                manifest='www/assets.json', manifest_sha256=digest(manifest),
+                total_bytes=exported['totalBytes'], asset_count=len(exported['assets']))
+            if args.export_web == 'cpp':
+                header = output / 'www/telemetry_web_assets.hpp'
+                report['web_export'].update(cpp_header='www/telemetry_web_assets.hpp',
+                    cpp_header_sha256=digest(header), cpp_header_bytes=header.stat().st_size)
         if source_hashes() != report['source_sha256']:
             raise RuntimeError('Starter inputs changed during preparation; use a fresh output directory')
         for package in report['packages'].values():
@@ -112,7 +195,8 @@ def main():
         report.update(passed=True, static_generated=bool(args.codegen_python), device_sha256=digest(device),
                       descriptor_sha256=digest(output / 'descriptor.bin'))
         print('Prepared ' + str(output))
-        print('Start: python ' + str(HERE / 'serve.py') + ' --prepared ' + str(output))
+        print('Start: python ' + str(HERE / 'serve.py') + ' --prepared ' + str(output) +
+              (' --exported' if args.export_web else ''))
     except Exception as error:
         report['error'] = str(error)
         raise

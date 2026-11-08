@@ -34,7 +34,15 @@ optional `--npm-cli`, and `--browser-python` with the existing pinned Playwright
 Chromium and websockets dependencies. The generated root prepare wrapper builds
 the native dispatcher and installs packages. The maintained real browser journey
 then checks discovery, exact U64, normalized Write/readback, Command, Service,
-lost acknowledgement, explicit reconnect and no replay against generated paths.
+Watchlist, mixed Batch, lost acknowledgement, explicit reconnect and no replay
+against generated paths. Preparation uses the default Dynamic mode with no
+generator and `--export-web cpp`. The creator must copy the maintained exporter
+and local favicon; its producer templates are hidden before preparation. The
+browser serves a relocated `www/` bundle, and an independent C++17 consumer
+compares every generated asset path, MIME type, length and byte with its manifest.
+An application-owned JSON file is exported and fetched without changing the
+starter. Invalid extra paths, duplicate names, managed names and case-folded
+file/directory conflicts in both orders fail before output creation or a build.
 The same `--sanitize` option instruments the native Web peer and keeps its leak
 checking enabled; there is no Qt platform in that native peer.
 

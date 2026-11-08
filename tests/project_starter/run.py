@@ -18,6 +18,7 @@ TEMPLATES = ('examples/dynamic_qml/CMakeLists.txt', 'examples/dynamic_qml/Device
              'examples/dynamic_qml/main.cpp', 'examples/dynamic_qml/Main.qml',
              'examples/web_device_starter/prepare.py', 'examples/web_device_starter/serve.py',
              'examples/web_device_starter/DeviceApp.js', 'examples/web_device_starter/index.html',
+             'examples/web_device_starter/favicon.svg', 'tools/export_web_assets.py',
              'examples/web_device_starter/native/CMakeLists.txt',
              'examples/web_device_starter/native/Device.hpp',
              'examples/web_device_starter/native/Peer.cpp',
@@ -108,6 +109,8 @@ def main():
         creator('create-qml-a', first)
         creator('create-qml-b', second)
         creator('create-web', web, target='web-device')
+        check((web / 'tools/export_web_assets.py').is_file(), 'Created Web project owns its deploy exporter')
+        check((web / 'examples/web_device_starter/favicon.svg').is_file(), 'Created Web project owns its local favicon')
         connection, connection_again = output / 'connection-a', output / 'connection-b'
         creator('create-connection-a', connection, target='qt-connection')
         creator('create-connection-b', connection_again, target='qt-connection')
@@ -220,6 +223,44 @@ def main():
         if args.sdk_package:
             creator('create-configured-web', configured_web, '--sdk-prefix', args.sdk_prefix,
                     '--sdk-package', args.sdk_package, '--ux-package', args.ux_package, target='web-device')
+            extra = configured_web / 'examples/web_device_starter/presentation.json'
+            extra.write_text('{"label":"My device","unit":"V","exact":"18446744073709551615"}\n', encoding='utf8')
+            for label, asset_options in (
+                    ('traversal', ['--web-asset', '../escape.json']),
+                    ('absolute', ['--web-asset', '/outside.json']),
+                    ('remote', ['--web-asset', 'https://example.invalid/extra.json']),
+                    ('missing', ['--web-asset', 'missing-extra.json']),
+                    ('managed', ['--web-asset', 'index.html']),
+                    ('duplicate', ['--web-asset', 'presentation.json', '--web-asset', 'presentation.json']),
+                    ('case-alias', ['--web-asset', 'presentation.json', '--web-asset', 'Presentation.json'])):
+                destination = output / ('refused-extra-' + label)
+                answer = run('web-refuse-extra-' + label, [sys.executable, '-B', configured_web / 'prepare.py',
+                    '--output', destination, '--export-web', 'cpp', *asset_options], expected=1)
+                check(not destination.exists() and 'Traceback' not in answer,
+                      'Invalid extra ' + label + ' asset is refused before preparation output or native build')
+            destination = output / 'refused-extra-without-export'
+            answer = run('web-refuse-extra-without-export', [sys.executable, '-B', configured_web / 'prepare.py',
+                '--output', destination, '--web-asset', 'presentation.json'], expected=1)
+            check(not destination.exists() and 'Traceback' not in answer,
+                  'Extra assets require explicit deploy export before preparation begins')
+            # Windows cannot contain both aliases physically. Only the first
+            # source is present: reject the complete requested namespace before
+            # attempting to read the conflicting second source.
+            extra_root = configured_web / 'examples/web_device_starter'
+            (extra_root / 'parent-first').write_bytes(b'first asset\n')
+            child = extra_root / 'parent-last' / 'child.json'
+            child.parent.mkdir()
+            child.write_bytes(b'{"label":"child"}\n')
+            for label, names in (
+                    ('parent-before-child', ('parent-first', 'PARENT-FIRST/child.json')),
+                    ('child-before-parent', ('parent-last/child.json', 'PARENT-LAST'))):
+                destination = output / ('refused-extra-' + label)
+                options = [argument for name in names for argument in ('--web-asset', name)]
+                answer = run('web-refuse-extra-' + label, [sys.executable, '-B', configured_web / 'prepare.py',
+                    '--output', destination, '--export-web', 'cpp', *options], expected=1)
+                check(not destination.exists() and 'Traceback' not in answer and
+                      'file/directory asset collision' in answer.lower(),
+                      'Case-folded extra asset file/directory conflict fails preflight in either order')
         hidden = producer / 'hidden-templates'
         (producer / 'examples').rename(hidden)
         check(not (producer / 'examples').exists(), 'All producer templates hidden before consumer builds')
@@ -270,7 +311,8 @@ def main():
 
         if args.sdk_package:
             options = [args.browser_python, '-B', configured_web / 'prepare.py',
-                       '--cmake', args.cmake, '--ninja', args.ninja, '--cxx', args.cxx, '--node', args.node]
+                       '--cmake', args.cmake, '--ninja', args.ninja, '--cxx', args.cxx, '--node', args.node,
+                       '--export-web', 'cpp', '--web-asset', 'presentation.json']
             if args.npm_cli:
                 options += ['--npm-cli', args.npm_cli]
             web_env = dict(environment)
@@ -282,6 +324,11 @@ def main():
             prepared = configured_web.with_name(configured_web.name + '-prepared')
             prepared_report = json.loads((prepared / 'prepared.json').read_text(encoding='utf8'))
             check(prepared_report['passed'], 'Generated wrapper prepares the complete native/browser application')
+            check(not prepared_report['static_generated'], 'Created Dynamic project needs no generator')
+            check(prepared_report.get('web_export', {}).get('mode') == 'cpp',
+                  'Created project exports actual Flash-ready browser assets without its producer')
+            run('web-cpp-assets', [sys.executable, '-B', ROOT / 'tests/web_assets/run.py',
+                '--export-root', prepared / 'www', '--build-dir', output / 'cpp-assets', '--cxx', args.cxx], env=web_env)
             # Run the maintained browser journey against generated paths. Its
             # imports/server/fixtures now refer only to this generated project.
             invocation = '''import importlib.util,sys
@@ -289,7 +336,7 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location('generated_starter_checks',sys.argv[1])
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 module.ROOT=Path(sys.argv[2]);module.STARTER=module.ROOT/'examples/web_device_starter'
-sys.argv=[sys.argv[1],'--prepared',sys.argv[3],'--output',sys.argv[4]]
+sys.argv=[sys.argv[1],'--prepared',sys.argv[3],'--output',sys.argv[4],'--exported','--extra-json','presentation.json']
 module.main()
 '''
             run('web-browser', [args.browser_python, '-B', '-c', invocation,

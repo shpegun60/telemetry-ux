@@ -83,6 +83,25 @@ and structural metadata with preserving-write support. Static validates the
 observed header against that generated SDK and never falls back to Dynamic.
 Keep your application code outside the generator-owned output directory.
 
+## Export deploy files or a Flash table
+
+Add `--export-web files` to preparation for a self-contained `www/` tree, or
+`--export-web cpp` for those same files plus `www/telemetry_web_assets.hpp`.
+Dynamic-only preparation needs no codegen or generated modules. Run
+`serve.py --prepared /external/my-device --exported` to test only those exported
+files with the existing host server and native Model. No Node or Python is needed
+on a device that serves the resulting bytes.
+
+The default export limits are 4 MiB runtime bytes and 256 files. Override them
+with `--web-max-bytes` and `--web-max-files` for your target. `prepared.json`
+records export sizes and manifest/header hashes; require `passed: true`.
+Add `--web-asset hints/presentation.json` for each additional file relative to
+this starter source directory. The same name is preserved in `public/` and
+`www/`; it is checked before the native build and is not loaded automatically.
+An existing preparation or export is never overwritten. See
+[Own-device deploy](../../doc/OwnDeviceDeploy.md) for the complete workflow and
+the firmware/networking boundary: this supplies assets, not an STM32 HTTP stack.
+
 ## What to change for your product
 
 1. Replace DTOs and endpoint tables in `native/Device.hpp`; rebuild into a new output.

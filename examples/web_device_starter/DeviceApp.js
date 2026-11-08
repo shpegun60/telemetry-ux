@@ -2,6 +2,7 @@
 import {connectDynamic, connectStatic, demoWebSocket} from 'telemetry-sdk';
 import {mountConfigurator} from 'telemetry-ux/web';
 import {staticAvailable} from './starter-options.js';
+import {loadStaticContext} from './static-context.js';
 
 const element = id => document.getElementById(id);
 element('mode').querySelector('[value="static"]').disabled = !staticAvailable;
@@ -42,14 +43,7 @@ async function run(action)
 element('connect').onclick = () => run(async () => {
 	let sdk, metadata;
 	if (element('mode').value === 'static') {
-		try {
-			sdk = await import('./generated/js/device.js');
-			({structuralMetadata : metadata} = await import('./generated/js/device.metadata.js'));
-		} catch (cause) {
-			throw new Error(
-			    'Static mode needs generated files. Run prepare.py with --codegen-python, or choose Dynamic.',
-			    {cause});
-		}
+		({sdk, metadata} = await loadStaticContext());
 	}
 	view?.unmount();
 	unsubscribe?.();
