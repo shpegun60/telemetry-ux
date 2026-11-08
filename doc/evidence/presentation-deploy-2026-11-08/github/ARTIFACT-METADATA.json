@@ -1,0 +1,20 @@
+{
+  "id": 13596882298,
+  "node_id": "MDg6QXJ0aWZhY3QxMzU5Njg4MjI5OA==",
+  "name": "installed-web-configurator",
+  "size_in_bytes": 10826915,
+  "url": "https://api.github.com/repos/shpegun60/telemetry-ux/actions/artifacts/13596882298",
+  "archive_download_url": "https://api.github.com/repos/shpegun60/telemetry-ux/actions/artifacts/13596882298/zip",
+  "expired": false,
+  "digest": "sha256:3c05cb10bc829b888fcda10838987c5f7a868569069232284d2e08c7954efffe",
+  "created_at": "2026-11-08T00:31:58Z",
+  "updated_at": "2026-11-08T00:31:58Z",
+  "expires_at": "2027-02-06T00:26:15Z",
+  "workflow_run": {
+    "id": 42429738594,
+    "repository_id": 1443938512,
+    "head_repository_id": 1443938512,
+    "head_branch": "feature/own-device-deploy",
+    "head_sha": "14e374569795b2b8c473fde80a9ccd866f848e4d"
+  }
+}

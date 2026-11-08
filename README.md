@@ -188,6 +188,10 @@ the [own-device deploy guide](doc/OwnDeviceDeploy.md) for file budgets and extra
 The target needs no Node or Python. Its HTTP/WebSocket stack and admission policy
 remain application-owned; exporting files does not supply an STM32 Ethernet port.
 
+The [presentation/deploy acceptance snapshot](doc/evidence/presentation-deploy-2026-11-08/README.md)
+publishes exact revisions, CI links and a read-only archive verification recipe,
+including the limits of retained evidence.
+
 For an existing browser WebSocket connection, the optional
 [`telemetry-ux/transports/websocket` carrier](web/README.md#browser-websocket-carrier)
 binds the SDK's ordinary Encoded backend. The host retains bootstrap, session,

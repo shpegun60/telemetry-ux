@@ -1,0 +1,1464 @@
+{
+  "format": "telemetry-ux-archive-log-coverage-v1",
+  "artifact": {
+    "id": 13596882298,
+    "run": 42429738594,
+    "head_sha": "14e374569795b2b8c473fde80a9ccd866f848e4d",
+    "zip_sha256": "3c05cb10bc829b888fcda10838987c5f7a868569069232284d2e08c7954efffe"
+  },
+  "counts": {
+    "original_direct_command_logs": 84,
+    "available_unique_members": 108,
+    "referenced_unique_members": 120,
+    "missing_unique_members": 12,
+    "total_references": 120
+  },
+  "notes": [
+    "The original 84-log verification covered direct entries in each selected summary commands array.",
+    "This coverage includes every log/sha256 pair reachable recursively from the 14 selected summaries.",
+    "The 12 absent members were omitted by the historical artifact upload patterns. Their absence is not a failed test result and their bytes cannot be independently checked from this ZIP.",
+    "All member names are relative paths within the original ZIP; no files were extracted."
+  ],
+  "logs": [
+    {
+      "member": "ux-created-web-clang-asan/browser/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/browser/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/browser/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/browser/serve-missing.log",
+      "sha256": "e59eda57f7e9bec0f98e58058625ec92bfc6350e662aa63b23faa5f2e58dbf43",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/browser/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/browser/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/browser/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/cpp-assets/table-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/cpp-assets/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/cpp-assets/table-run.log",
+      "sha256": "93823fbf1a4bfe4f6f821ad3469396298ce5097d61d912f147af35d77191c77c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/cpp-assets/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-configured-web.log",
+      "sha256": "2db59ffbfbedb11493671a817899d82aa96c0427e64174eb07796e3b2acb1d84",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/24",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-connection-a.log",
+      "sha256": "0edcafa7161d2cce86358ddf6022b861089dda98acc01317b9d78ca93c9793f1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/3",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-connection-b.log",
+      "sha256": "f347e35420403cd9e5fcb00b774386bca7b586103878a9d7d06102f70e8129a7",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/4",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-qml-a.log",
+      "sha256": "f591ab871bbdb6366f52ac6be11f268dee1e0d59f40b234c1a27ce74d6fdf5c6",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-qml-b.log",
+      "sha256": "794334b07efc4cf7e39ff0d8ed6960598681cc72af072b7cfa3c88fe737b80d1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/create-web.log",
+      "sha256": "b26b7718b0838623e05c1baeb9fc8cc46609cb910c5c9b80db5745c09fba1c53",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/2",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-case-alias.log",
+      "sha256": "f1728b503e03dc1da395edc0a4315176f13b56637deab1fdad5f76005826287c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/12",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-connection-name.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/18",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-connection-package-option.log",
+      "sha256": "88ea9aa9bfc609a055cbe6f8004ac7719ab1e3f480364471b1d9daadcb8a8011",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/16",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-connection-partial-options.log",
+      "sha256": "f09f2651e4addd70b47d75ef09a385ed1e5fef5985310d268a6c88330b08d260",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/15",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-empty-directory.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/5",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-existing-connection.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/17",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-existing-project.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/6",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-linked-input.log",
+      "sha256": "d9ddeb5f198be5cde19c100e3ac516e50fff6187324cb7104e9d67d1ad6986c8",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/20",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-linked-parent.log",
+      "sha256": "d9ddeb5f198be5cde19c100e3ac516e50fff6187324cb7104e9d67d1ad6986c8",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/19",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-metadata-list.log",
+      "sha256": "d477c5f54c41c973d9fb93ab1eee6d8edf406aed0e861cdc42a7f99cdfa0821d",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/22",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-metadata-null.log",
+      "sha256": "d477c5f54c41c973d9fb93ab1eee6d8edf406aed0e861cdc42a7f99cdfa0821d",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/23",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-name-syntax.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/8",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-output-file.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/7",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-package-identity.log",
+      "sha256": "ebb615f37150eda6663cec3d0fd843df76af33f76d58c32b8fe356cb978f84bf",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/21",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-partial-options.log",
+      "sha256": "f09f2651e4addd70b47d75ef09a385ed1e5fef5985310d268a6c88330b08d260",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/13",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-producer-output.log",
+      "sha256": "1101221a12c6ad1511707a4394cb2b54a8ec4f69ae8b3c6cec0d3e87e6dd7a3a",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/11",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-reserved-name.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/9",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-traversal.log",
+      "sha256": "2700ab454254fd5d2b12c55071c0bcc8add4bfda5495a1ff28a6bba6f0cf7bec",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/10",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/refuse-wrong-target-option.log",
+      "sha256": "88ea9aa9bfc609a055cbe6f8004ac7719ab1e3f480364471b1d9daadcb8a8011",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/14",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-browser.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/37",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-cpp-assets.log",
+      "sha256": "94e4f314e9e1837c5c3f4614df42093d9bff83721204cd59bd67e00a470fc820",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/36",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-prepare.log",
+      "sha256": "b54fc52b4f2204678c4a66ad249dd6ef9f3285bdba88343f8a00226537490ca5",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/35",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-absolute.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/26",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-case-alias.log",
+      "sha256": "310d93a42f1d271db07c83dffb798e34cc9ad917d0c7426a65194c2f63a0963f",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/31",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-child-before-parent.log",
+      "sha256": "65337d05a33df6fcc403ce07ea72e9354260129c481e7d982d5bd06c1ce4c1ab",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/34",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-duplicate.log",
+      "sha256": "dbcee9808a552f45362719331b0281920f0c980df255158690cf2a79265fafda",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/30",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-managed.log",
+      "sha256": "daba7e64fbf398465ce3b2215f16c8b4cb175177e598c9cf809e06aad0e3462e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/29",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-missing.log",
+      "sha256": "c7767b8abb52b89a2ccf1f1df53da1520148f4e8a39c999e61131053a014bb8d",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/28",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-parent-before-child.log",
+      "sha256": "d8e55f4a985787f5407122800ae6728a259d36e823f450abb5c3f1cfa50f3062",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/33",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-remote.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/27",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-traversal.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/25",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-clang-asan/web-refuse-extra-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-clang-asan/summary.json",
+          "json_pointer": "/commands/32",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/serve-missing.log",
+      "sha256": "01db8b415f2c527dbe0b88025dbf7b603c4656511301393ff92b31d2b034c7a9",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/browser/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": false,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/browser/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/cpp-assets/table-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/cpp-assets/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/cpp-assets/table-run.log",
+      "sha256": "93823fbf1a4bfe4f6f821ad3469396298ce5097d61d912f147af35d77191c77c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/cpp-assets/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-configured-web.log",
+      "sha256": "0dd12fb2fc0f880a36a05801343a3d670a7a3e58c40afb0201eafb6c28b92706",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/24",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-connection-a.log",
+      "sha256": "60997f056309ed44e4e57dc9c2fdc3e3cc4859907652e87c85b44439c6ffe45c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/3",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-connection-b.log",
+      "sha256": "ef4db7c5d6e5651993720dc7f58f48c6017b29b4d63dba179c13a5645948fe0e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/4",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-qml-a.log",
+      "sha256": "206030b356bd6764dd5cfa39d76ea4c8ea1acd62d6268e27b5356fc83735ffa3",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-qml-b.log",
+      "sha256": "4f7d830e15d45aa8831cb56f4763c0bc2dc2a56449d048ea2b0fff689f93f3ac",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/create-web.log",
+      "sha256": "b5183df284b851932a064ab00699779230c5c96e953f397f83f27a3b0e99b6f5",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/2",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-case-alias.log",
+      "sha256": "abd9e8bf148a8032fb6a6f46c3741b1747f07801745caf68cd4ced000d4be5a8",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/12",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-connection-name.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/18",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-connection-package-option.log",
+      "sha256": "88ea9aa9bfc609a055cbe6f8004ac7719ab1e3f480364471b1d9daadcb8a8011",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/16",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-connection-partial-options.log",
+      "sha256": "f09f2651e4addd70b47d75ef09a385ed1e5fef5985310d268a6c88330b08d260",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/15",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-empty-directory.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/5",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-existing-connection.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/17",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-existing-project.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/6",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-linked-input.log",
+      "sha256": "f48914033a50f17f6b9046f332dd31a88ddffcf35796abf54e052df68c1f392e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/20",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-linked-parent.log",
+      "sha256": "f48914033a50f17f6b9046f332dd31a88ddffcf35796abf54e052df68c1f392e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/19",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-metadata-list.log",
+      "sha256": "d477c5f54c41c973d9fb93ab1eee6d8edf406aed0e861cdc42a7f99cdfa0821d",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/22",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-metadata-null.log",
+      "sha256": "d477c5f54c41c973d9fb93ab1eee6d8edf406aed0e861cdc42a7f99cdfa0821d",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/23",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-name-syntax.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/8",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-output-file.log",
+      "sha256": "fe86566918647fe2f547ad2408ff35985bf0cbcc422d3c30a72d1193ca477aba",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/7",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-package-identity.log",
+      "sha256": "ebb615f37150eda6663cec3d0fd843df76af33f76d58c32b8fe356cb978f84bf",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/21",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-partial-options.log",
+      "sha256": "f09f2651e4addd70b47d75ef09a385ed1e5fef5985310d268a6c88330b08d260",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/13",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-producer-output.log",
+      "sha256": "1101221a12c6ad1511707a4394cb2b54a8ec4f69ae8b3c6cec0d3e87e6dd7a3a",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/11",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-reserved-name.log",
+      "sha256": "d7c6f9191546c65a84b4a166dfb25a20dabe27c915f646db6666d40c2038aae0",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/9",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-traversal.log",
+      "sha256": "2700ab454254fd5d2b12c55071c0bcc8add4bfda5495a1ff28a6bba6f0cf7bec",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/10",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/refuse-wrong-target-option.log",
+      "sha256": "88ea9aa9bfc609a055cbe6f8004ac7719ab1e3f480364471b1d9daadcb8a8011",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/14",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-browser.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/37",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-cpp-assets.log",
+      "sha256": "94e4f314e9e1837c5c3f4614df42093d9bff83721204cd59bd67e00a470fc820",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/36",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-prepare.log",
+      "sha256": "45025ee488d70236b3806e97af57f013f06a8f50cc23dd8f23d104bfdf2e14f2",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/35",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-absolute.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/26",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-case-alias.log",
+      "sha256": "310d93a42f1d271db07c83dffb798e34cc9ad917d0c7426a65194c2f63a0963f",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/31",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-child-before-parent.log",
+      "sha256": "65337d05a33df6fcc403ce07ea72e9354260129c481e7d982d5bd06c1ce4c1ab",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/34",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-duplicate.log",
+      "sha256": "dbcee9808a552f45362719331b0281920f0c980df255158690cf2a79265fafda",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/30",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-managed.log",
+      "sha256": "daba7e64fbf398465ce3b2215f16c8b4cb175177e598c9cf809e06aad0e3462e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/29",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-missing.log",
+      "sha256": "156db17af35967a9d612ea0ee9990f7356c1ba96ff367492053bb8e9afe943db",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/28",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-parent-before-child.log",
+      "sha256": "d8e55f4a985787f5407122800ae6728a259d36e823f450abb5c3f1cfa50f3062",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/33",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-remote.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/27",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-traversal.log",
+      "sha256": "2252619ea36ee3f61556f74bd4c99f66091a71c4fee268c08906bdc6268043b1",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/25",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-created-web-gcc/web-refuse-extra-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-created-web-gcc/summary.json",
+          "json_pointer": "/commands/32",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-assets-clang-asan-dynamic-cpp/table-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-assets-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-assets-clang-asan-dynamic-cpp/table-run.log",
+      "sha256": "1c76daa7e3b0b875335f10e9b64ec1ac98bbbd1b506094221894ad329d02b911",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-assets-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-assets-gcc-dynamic-cpp/table-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-assets-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/commands/0",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-assets-gcc-dynamic-cpp/table-run.log",
+      "sha256": "1c76daa7e3b0b875335f10e9b64ec1ac98bbbd1b506094221894ad329d02b911",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-assets-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/commands/1",
+          "origin": "direct-command"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/serve-missing.log",
+      "sha256": "29cb627b6f2f5142eab5e57c7f91e7fae3864812c1d5291fdcfaaa9918863c1f",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-dynamic-cpp/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/serve-missing.log",
+      "sha256": "4ff759fdbaa75672a70696e92e8e1b71e5db9cc11f5859e1ce714a4313e61356",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-clang-asan-static-files/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-clang-asan-static-files/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/serve-missing.log",
+      "sha256": "f965da16711811a964d8331ac89d31c7076629e9da3286dc4c8526ec000cab70",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-dynamic-cpp/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-dynamic-cpp/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/budget-without-export.log",
+      "sha256": "f83a8c9739d60c4d021491b787019529d9c056c8638c41565f4343929aac012e",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/2",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/excess-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/5",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/serve-changed.log",
+      "sha256": "1af6f22b6b75d3b377b80551432a8d677a51225ea47a5644360b98bb5540d1a4",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/0",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/serve-missing.log",
+      "sha256": "35966379ee67ef0a662573d8e77af940065afaa68418746b2eab56765c9aa424",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/1",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/zero-byte-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/3",
+          "origin": "nested-reference"
+        }
+      ]
+    },
+    {
+      "member": "ux-own-device-browser-gcc-static-files/zero-file-budget.log",
+      "sha256": "9caa70416d785eaa8867f76c47bbe87e91d4d6a8fb45764c30aa2d6b1288a91c",
+      "present": true,
+      "origins": [
+        {
+          "summary": "ux-own-device-browser-gcc-static-files/summary.json",
+          "json_pointer": "/negative_controls/4",
+          "origin": "nested-reference"
+        }
+      ]
+    }
+  ]
+}

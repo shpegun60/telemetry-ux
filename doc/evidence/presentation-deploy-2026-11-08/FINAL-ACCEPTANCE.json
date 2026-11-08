@@ -1,0 +1,163 @@
+{
+  "format": "telemetry-ux-public-acceptance-v1",
+  "scope": "Historical acceptance snapshot for PR #34 and PR #35; publication is not a new production qualification",
+  "original_recorded_utc": "2026-11-08T00:53:07.119711+00:00",
+  "published_utc": "2026-11-08T01:34:53.072807+00:00",
+  "provenance": {
+    "derived_from": "Local FINAL-ACCEPTANCE.json",
+    "original_sha256": "199481e7adc3f630a1e08f217dc09d0cfa55b857f058b73da4cca291a9c20541",
+    "transformation": "Qualified revisions, merges and CI observations retained; personal local paths and private receipt references replaced with public artifact identities, relative evidence files and explicit availability limits."
+  },
+  "qualified_revisions": {
+    "sdk": "972e30e28ba203e04959cbc9c0af0358bfdbc60d",
+    "ux": "00275e1a60c98c3638afe538b15a83f064561095",
+    "ux_accepted_pr_head": "14e374569795b2b8c473fde80a9ccd866f848e4d"
+  },
+  "merged_prs": [
+    {
+      "number": 34,
+      "merge": "cc3ecac8dc1fd61410898aeb6c107e8f5575ee00",
+      "accepted_head": "094a760365d18d5219f43770549c5d5447b0b019"
+    },
+    {
+      "number": 35,
+      "merge": "00275e1a60c98c3638afe538b15a83f064561095",
+      "accepted_head": "14e374569795b2b8c473fde80a9ccd866f848e4d"
+    }
+  ],
+  "workflows": [
+    {
+      "run": 42421647855,
+      "url": "https://github.com/shpegun60/telemetry-sdk/actions/runs/42421647855",
+      "head_sha": "972e30e28ba203e04959cbc9c0af0358bfdbc60d",
+      "conclusion": "success",
+      "passed": 19,
+      "jobs": [
+        "Source comments, guards and pinned formatting",
+        "Cortex-M7 compile and link",
+        "Bounded catalogs, type graphs and module integration",
+        "Independent installed modules (g++)",
+        "Qt playground",
+        "Windows installed client and junction containment",
+        "Portable async client (clang++-18)",
+        "Portable async client (g++)",
+        "Shared C++ JS TS async contracts",
+        "Generated SDK (g++)",
+        "MPSC ThreadSanitizer (Linux)",
+        "Real little/big endian byte equivalence",
+        "g++ c++20 release",
+        "g++ c++20 nullchecks",
+        "Independent installed modules (clang++-18)",
+        "clang++-18 c++20 sanitized",
+        "Generated Qt QML SDK",
+        "Generated SDK (clang++-18)",
+        "clang++-18 c++20 release"
+      ]
+    },
+    {
+      "run": 42430622131,
+      "url": "https://github.com/shpegun60/telemetry-ux/actions/runs/42430622131",
+      "head_sha": "00275e1a60c98c3638afe538b15a83f064561095",
+      "conclusion": "success",
+      "passed": 6,
+      "jobs": [
+        "Installed generated QML example (Linux)",
+        "Installed web Configurator (Linux)",
+        "Installed pure Qt Configurator (Linux)",
+        "Installed codegen (windows-2022)",
+        "Installed codegen (ubuntu-24.04)",
+        "Installed SDK Inspector (Linux)"
+      ]
+    },
+    {
+      "run": 42430622189,
+      "url": "https://github.com/shpegun60/telemetry-ux/actions/runs/42430622189",
+      "head_sha": "00275e1a60c98c3638afe538b15a83f064561095",
+      "conclusion": "success",
+      "passed": 10,
+      "jobs": [
+        "Select immutable release pair",
+        "integration / Installed web Configurator (Linux)",
+        "integration / Installed SDK Inspector (Linux)",
+        "integration / Installed generated QML example (Linux)",
+        "integration / Installed pure Qt Configurator (Linux)",
+        "windows-portable / Produce Windows Inspector ZIP",
+        "integration / Installed codegen (windows-2022)",
+        "integration / Installed codegen (ubuntu-24.04)",
+        "windows-portable / Windows portable Inspector (clean runner)",
+        "Exact SDK + UX integration"
+      ]
+    }
+  ],
+  "local_observation": {
+    "recorded_utc": "2026-11-08T00:53:07.119711+00:00",
+    "source": "Local agent observation, not remotely established by GitHub",
+    "ux_main_matched_remote": true,
+    "ux_tree_clean": true,
+    "sdk_tracked_changes": false,
+    "current_state_claim": false
+  },
+  "artifact": {
+    "id": 13596882298,
+    "name": "installed-web-configurator",
+    "workflow_run": 42429738594,
+    "head_sha": "14e374569795b2b8c473fde80a9ccd866f848e4d",
+    "archive_sha256": "3c05cb10bc829b888fcda10838987c5f7a868569069232284d2e08c7954efffe",
+    "archive_bytes": 10826915,
+    "expires_at": "2027-02-06T00:26:15Z",
+    "download_page": "https://github.com/shpegun60/telemetry-ux/actions/runs/42429738594/artifacts/13596882298",
+    "api_metadata_url": "https://api.github.com/repos/shpegun60/telemetry-ux/actions/artifacts/13596882298",
+    "retention_limit": "GitHub artifact retention applies. Future replay after expiry requires a retained copy with the exact recorded archive SHA-256."
+  },
+  "evidence_files": [
+    {
+      "path": "github/VERIFIED-ARTIFACT.json",
+      "sha256": "075cb6046bd2ce1b832b65f1097b4844a72ca40c21ce5c09634ffecd1d0bf069"
+    },
+    {
+      "path": "github/ARTIFACT-METADATA.json",
+      "sha256": "dd426eadeb629ee8e94fc54234ab8e4ec83c60990dac0be5a4595bf841fee075"
+    },
+    {
+      "path": "github/LOG-COVERAGE.json",
+      "sha256": "7cee93aaeb8b72e2a3f598f58f5528e63d1119bf076792646334c5d1064422ed"
+    },
+    {
+      "path": "ARM-OBJECT-ACCEPTANCE.json",
+      "sha256": "92ccb8f96c362baa7e69b4ed7c9f75249ad63e58d35db74ea83ebbf0052d3946"
+    }
+  ],
+  "reproducible_archive_checks": {
+    "command": "python -B tools/verify_delivery_evidence.py --archive /downloads/installed-web-configurator.zip",
+    "network_or_native_execution": false,
+    "crc_members": 508,
+    "summary_receipts": 14,
+    "original_top_level_command_logs": 84,
+    "recursive_log_coverage": {
+      "original_direct_command_logs": 84,
+      "available_unique_members": 108,
+      "referenced_unique_members": 120,
+      "missing_unique_members": 12,
+      "total_references": 120
+    },
+    "cpp_tables": 4,
+    "asset_payloads": 90
+  },
+  "historical_observations_not_replayed_by_archive_verifier": {
+    "git_source_hash_comparisons": 90,
+    "created_title_substitutions": 2,
+    "known_fixture_files": 6,
+    "local_arm_object_compile": true,
+    "local_receipt_directories_public": false
+  },
+  "limitations": [
+    "minimum, maximum and step are advisory and do not block Apply or replace device validation.",
+    "One-command export assumes an already created web-device project with compatible installed SDK/UX packages and development tools; it builds the native host example and browser assets, not deployable STM32 firmware.",
+    "Twelve referenced created-browser negative-control logs were omitted from the original artifact. Their names/hashes are declared in LOG-COVERAGE.json; passed CI/receipts do not reconstruct their missing contents.",
+    "C++17 table generation and the local Cortex-M7 object compile establish neither firmware linking nor Flash/RAM/stack fit for a specific STM32.",
+    "No firmware HTTP/WebSocket implementation, server authorization or physical STM32 qualification is included.",
+    "The archive verifier does not repeat the historical local source/object checks or establish current local Windows state."
+  ],
+  "hardware": false,
+  "qualified_cut_ci_success": true
+}

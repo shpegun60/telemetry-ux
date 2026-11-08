@@ -1,0 +1,22 @@
+﻿{
+    "passed":  true,
+    "hardware":  false,
+    "qualification":  "Cortex-M7 object compilation only",
+    "compiler":  "/usr/bin/arm-none-eabi-g++",
+    "compiler_version":  "13.2.1",
+    "standard":  "C++17",
+    "cpu":  "cortex-m7",
+    "flags":  [
+                  "-Os",
+                  "-mthumb",
+                  "-ffreestanding",
+                  "-fno-exceptions",
+                  "-fno-rtti",
+                  "-Wall",
+                  "-Wextra",
+                  "-Werror"
+              ],
+    "header_sha256":  "7016dc7728331fa0179e8708581607a656f41e85eb4ec483207687ac6e3e6328",
+    "source_sha256":  "2503b342df98ad3b8467d2368f39e4b4a7a71fcf8bb1ed51badcc18ceaed1470",
+    "object_sha256":  "84b983aa7b9966c1724476e5614739dfb8aa0bf9383c54d8447d10c3312f833c"
+}

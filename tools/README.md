@@ -124,3 +124,42 @@ read/edit/write/readback, mixed Batch, late replies and reconnect, with strict
 browser diagnostics. The browser environment needs the pinned Playwright and
 websockets dependencies used by the existing WebSocket gate. CI runs this
 deployed-assets journey and retains its manifest and receipts.
+
+## Recheck published delivery evidence
+
+[`verify_delivery_evidence.py`](verify_delivery_evidence.py) checks a downloaded
+`installed-web-configurator` ZIP against the committed
+[presentation/deploy evidence](../doc/evidence/presentation-deploy-2026-11-08/README.md):
+
+```sh
+python -B tools/verify_delivery_evidence.py --archive /downloads/installed-web-configurator.zip
+```
+
+Use `--evidence-dir /path/to/published-evidence` to select a copied evidence
+directory containing `github/ARTIFACT-METADATA.json`,
+`github/VERIFIED-ARTIFACT.json` and `github/LOG-COVERAGE.json`.
+The verifier uses only Python's standard library. It
+does not download files, extract the ZIP, write artifacts, execute archived
+programs or need the SDK/UX source checkout. Its result is JSON on stdout;
+failure returns a nonzero exit status.
+
+The streamed archive SHA-256, size, artifact/run IDs and exact head must match
+the published metadata before any ZIP member is opened. The verifier then checks
+all 508 member CRCs, 14 summary hashes and successful results, recorded unchanged
+export/relocation maps, and four C++ table logs containing 90 asset payloads.
+Each reconstructed payload is compared with its recorded SHA-256 and length;
+table counts and byte totals must match the published report.
+
+Log coverage is explicit: the original report checked 84 direct command logs.
+Recursive summary references identify 108 available hash-checked logs and 12
+nested browser control logs that were omitted from this historical archive.
+Their exact missing paths and expected hashes remain in `LOG-COVERAGE.json`;
+the verifier requires that inventory to match and lists the omissions in its
+output. It does not claim those missing logs were checked.
+
+Use evidence from a trusted published revision. Hash matching establishes
+consistency with that evidence, not independent GitHub authenticity or a new
+test run. The historical Git-source comparisons, creator title substitutions
+and known fixture checks are reported as **not rechecked** by this archive-only
+tool. It does not rebuild the C++ tables, rerun a browser, perform hardware
+qualification or refresh CI status.
