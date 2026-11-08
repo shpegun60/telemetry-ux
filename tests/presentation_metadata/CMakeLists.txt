@@ -1,0 +1,18 @@
+# Relocated installed-package consumer; the runner copies the shared host fixture. MIT.
+cmake_minimum_required(VERSION 3.21)
+project(telemetry_presentation_checks LANGUAGES CXX)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
+find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS core workbench encoded_server encoded_backend qt_connection)
+find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS static_configurator qt_connection)
+qt_standard_project_setup(REQUIRES 6.4)
+qt_add_executable(telemetry_presentation_check Qt.cpp)
+target_compile_features(telemetry_presentation_check PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_presentation_check PRIVATE QT_NO_KEYWORDS)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Fixture.hpp")
+    target_include_directories(telemetry_presentation_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+else()
+    target_include_directories(telemetry_presentation_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_qml_configurator")
+endif()
+target_link_libraries(telemetry_presentation_check PRIVATE TelemetryUX::static_configurator
+    TelemetryUX::qt_connection Telemetry::core Telemetry::encoded_server Telemetry::encoded_backend Qt6::Test)
+qt_import_qml_plugins(telemetry_presentation_check)

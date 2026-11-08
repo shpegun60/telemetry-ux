@@ -32,6 +32,7 @@ class StaticConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString commandOutcome READ commandOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceOutcome READ serviceOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
+	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 	// Explicit Individual FieldRead scheduling over the host's existing API/FIFO.
 	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported CONSTANT)
 	Q_PROPERTY(bool watchActive READ watchActive NOTIFY stateChanged)
@@ -69,6 +70,8 @@ public:
 	QString commandOutcome() const;
 	QString serviceOutcome() const;
 	QString statusText() const;
+	Q_INVOKABLE bool setPresentation(const QByteArray& json);
+	QString presentationError() const;
 	Q_INVOKABLE void selectEndpoint(const QModelIndex& index);
 	Q_INVOKABLE void refresh();
 	Q_INVOKABLE void beginEdit();

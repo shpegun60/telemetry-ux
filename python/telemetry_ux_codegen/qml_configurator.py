@@ -25,7 +25,8 @@ def _binding(schema, groups):
             '    using StaticType = ::telemetry::ux::StaticType;\n',
             '    using StaticTypeKind = ::telemetry::ux::StaticTypeKind;\n',
             '    using StaticEndpoint = ::telemetry::ux::StaticEndpoint;\n',
-            '    StaticConfiguratorBinding binding;\n    binding.api = &api;\n']
+            '    StaticConfiguratorBinding binding;\n    binding.api = &api;\n',
+            f'    binding.fingerprint = QString::fromLatin1("0x{schema.fingerprint:016x}");\n']
     for source in schema.types:
         rows.append('    { StaticType type;\n'
                     f'      type.id = {source["id"]}; type.kind = StaticTypeKind::{("Void", "Scalar", "Enum", "Struct", "Array")[source["kind"]]};\n')

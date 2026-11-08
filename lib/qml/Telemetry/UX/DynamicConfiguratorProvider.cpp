@@ -60,11 +60,12 @@ struct DynamicConfiguratorBinding::Impl {
 	std::vector<std::shared_ptr<DynamicViewState>> views;
 	std::uint64_t admission;
 	std::uint32_t session;
+	QString fingerprint;
 	bool retired = false, allowed = false, notifying = false;
 
-	Impl(Workbench& value, std::shared_ptr<void> token)
+	Impl(Workbench& value, std::shared_ptr<void> token, QString identity)
 	    : owner(value), storage(std::move(token)), admission(value.snapshotInfo().admission),
-	      session(value.session())
+	      session(value.session()), fingerprint(std::move(identity))
 	{}
 
 	bool current() const
@@ -76,8 +77,9 @@ struct DynamicConfiguratorBinding::Impl {
 
 DynamicConfiguratorBinding::DynamicConfiguratorBinding(Workbench& owner,
                                                        std::shared_ptr<void> ownerStorage,
-                                                       QObject* parent)
-    : QObject(parent), d(std::make_unique<Impl>(owner, std::move(ownerStorage)))
+                                                       QObject* parent, QString fingerprint)
+    : QObject(parent),
+      d(std::make_unique<Impl>(owner, std::move(ownerStorage), std::move(fingerprint)))
 {}
 
 DynamicConfiguratorBinding::~DynamicConfiguratorBinding()
@@ -93,6 +95,11 @@ DynamicConfiguratorBinding::~DynamicConfiguratorBinding()
 bool DynamicConfiguratorBinding::current() const
 {
 	return d->current();
+}
+
+QString DynamicConfiguratorBinding::fingerprint() const
+{
+	return current() ? d->fingerprint : QString{};
 }
 
 bool DynamicConfiguratorBinding::drained() const
@@ -253,6 +260,9 @@ struct DynamicConfiguratorProvider::Impl {
 	                                     service;
 	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
 	int category = 0;
+	quint32 responseId = 0;
+	PresentationOverlay presentation;
+	QString presentationError;
 	bool allowed = false, updating = false;
 	QSet<quintptr> invalid;
 	QMetaObject::Connection changed, destroyed;
@@ -263,6 +273,17 @@ struct DynamicConfiguratorProvider::Impl {
 	bool current() const
 	{
 		return binding && binding->current() && state && !state->retired && state->view.isCurrent();
+	}
+
+	void present(bool notify = true)
+	{
+		const auto fingerprint = current() ? binding->fingerprint() : QString{};
+		endpoints.setPresentation(presentation, fingerprint, notify);
+		values.setPresentation(presentation, fingerprint, category, state ? state->endpointId : 0,
+		                       category == 1 ? QStringLiteral("value") : QStringLiteral("request"),
+		                       notify);
+		responses.setPresentation(presentation, fingerprint, 3, responseId,
+		                          QStringLiteral("response"), notify);
 	}
 
 	bool busy() const
@@ -438,6 +459,7 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	p->invalid.clear();
 	if (target) {
 		p->state = target->acquire();
+		p->present(false);
 		std::weak_ptr<Impl> weak = p;
 		p->changed = connect(target, &DynamicConfiguratorBinding::changed, alive, [weak] {
 			if (auto state = weak.lock()) {
@@ -458,8 +480,47 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	}
 	p->status =
 	    p->current() ? QStringLiteral("Select an endpoint") : QStringLiteral("Not connected");
+	p->present();
 	p->updating = false;
 	p->notify();
+}
+
+bool DynamicConfiguratorProvider::setPresentation(const QByteArray& json)
+{
+	auto p = d;
+	if (!canSetPresentation())
+		return false;
+	auto overlay = p->presentation;
+	if (!overlay.replace(json, p->presentationError)) {
+		p->notify();
+		return false;
+	}
+	setPresentationOverlay(overlay);
+	return true;
+}
+
+bool DynamicConfiguratorProvider::canSetPresentation() const
+{
+	return !d->updating && !d->endpoints.changing() && !d->values.changing() &&
+	       !d->responses.changing();
+}
+
+void DynamicConfiguratorProvider::setPresentationOverlay(const PresentationOverlay& overlay)
+{
+	auto p = d;
+	if (p->updating)
+		return;
+	p->updating = true;
+	p->presentation = overlay;
+	p->presentationError.clear();
+	p->present();
+	p->updating = false;
+	p->notify();
+}
+
+QString DynamicConfiguratorProvider::presentationError() const
+{
+	return d->presentationError;
 }
 
 QAbstractItemModel* DynamicConfiguratorProvider::endpoints() const
@@ -604,10 +665,12 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	p->selection = endpoint.value(QStringLiteral("path")).toString();
 	p->category = category;
 	p->state->endpointId = id;
+	p->present(false);
 	p->invalid.clear();
 	p->state->staleData = false;
 	p->values.resetSnapshot(p->state->view);
 	p->responses.clear();
+	p->present();
 	p->status = category == 1
 	                ? QStringLiteral("Press Refresh to read")
 	                : QStringLiteral("Arguments start at canonical zero; no request sent");
@@ -757,13 +820,16 @@ bool DynamicConfiguratorProvider::callService()
 	state->action = DynamicViewState::Action::Service;
 	p->serviceSession = state->view.session();
 	p->responseEndpoint = p->selection;
+	p->responseId = state->endpointId;
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
 	p->service = p->status = QStringLiteral("Service pending");
 	p->updating = true;
+	p->present(false);
 	p->values.clear();
 	p->responses.clear();
+	p->present();
 	p->updating = false;
 	if (p->binding)
 		p->binding->mutationAccepted(state);

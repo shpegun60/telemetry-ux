@@ -1,6 +1,7 @@
 // Automatic presentation binding for an owned SDK Qt session. MIT.
 #pragma once
 #include "DynamicConfiguratorProvider.hpp"
+#include "PresentationOverlay.hpp"
 #include <integration/qt/ConnectionSession.hpp>
 #include <QtCore/QPointer>
 
@@ -14,6 +15,7 @@ class QtConnectionBinding final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
 	Q_PROPERTY(QString lastError READ lastError NOTIFY stateChanged)
+	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 	Q_PROPERTY(
 	    bool mutationsAllowed READ mutationsAllowed WRITE setMutationsAllowed NOTIFY stateChanged)
 public:
@@ -23,6 +25,8 @@ public:
 	Q_INVOKABLE DynamicConfiguratorProvider* createProvider(QObject* parent = nullptr);
 	bool connected() const;
 	QString lastError() const;
+	Q_INVOKABLE bool setPresentation(const QByteArray& json);
+	QString presentationError() const;
 	bool mutationsAllowed() const;
 	void setMutationsAllowed(bool allowed);
 Q_SIGNALS:
@@ -32,5 +36,9 @@ Q_SIGNALS:
 private:
 	QPointer<integration::qt::ConnectionSession> session_;
 	QPointer<QObject> views_;
+	PresentationOverlay presentation_;
+	QString presentationError_;
+	bool presentationChanging_ = false;
+	QList<QPointer<DynamicConfiguratorProvider>> providers_;
 };
 } // namespace telemetry::ux

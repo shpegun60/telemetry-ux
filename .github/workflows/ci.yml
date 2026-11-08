@@ -567,6 +567,9 @@ jobs:
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/presentation_metadata/run.py --build-dir "$RUNNER_TEMP/ux-presentation-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/project_starter/run.py --qt-connection --output "$RUNNER_TEMP/ux-created-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
@@ -604,6 +607,8 @@ jobs:
             ${{ runner.temp }}/ux-created-qml-*/*.log
             ${{ runner.temp }}/ux-qt-connection-*/*.json
             ${{ runner.temp }}/ux-qt-connection-*/*.log
+            ${{ runner.temp }}/ux-presentation-*/*.json
+            ${{ runner.temp }}/ux-presentation-*/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.json
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.png

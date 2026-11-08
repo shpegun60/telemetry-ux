@@ -16,9 +16,10 @@ class DynamicConfiguratorBinding final : public QObject {
 	Q_OBJECT
 public:
 	DynamicConfiguratorBinding(Workbench& owner, std::shared_ptr<void> ownerStorage,
-	                           QObject* parent = nullptr);
+	                           QObject* parent = nullptr, QString fingerprint = {});
 	~DynamicConfiguratorBinding() override;
 	bool current() const;
+	QString fingerprint() const;
 	bool drained() const;
 	bool mutationsAllowed() const;
 	void setMutationsAllowed(bool allowed);

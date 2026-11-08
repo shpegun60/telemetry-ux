@@ -13,9 +13,12 @@ int main(int argc, char** argv)
 {
 	QGuiApplication application(argc, argv);
 	QCommandLineParser arguments;
-	arguments.setApplicationDescription(QStringLiteral("Two Telemetry panels sharing one connection"));
+	arguments.setApplicationDescription(
+	    QStringLiteral("Two Telemetry panels sharing one connection"));
 	arguments.addHelpOption();
-	arguments.addOption({QStringLiteral("presentation"), QStringLiteral("Optional presentation JSON for this Model"), QStringLiteral("file")});
+	arguments.addOption({QStringLiteral("presentation"),
+	                     QStringLiteral("Optional presentation JSON for this Model"),
+	                     QStringLiteral("file")});
 	arguments.process(application);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
 	telemetry::integration::qt::ConnectionSession connection;

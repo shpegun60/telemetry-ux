@@ -8,6 +8,8 @@
 #define TELEMETRY_UX_DYNAMIC_MODELS_HPP
 #pragma once
 
+#include "PresentationOverlay.hpp"
+
 #include <integration/inspector/InspectorModel.hpp>
 #include <integration/workbench/WorkbenchModel.hpp>
 
@@ -49,6 +51,8 @@ public:
 	void rebuild(const WorkbenchView& view);
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;
+	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
+	                     bool notify = true);
 	Q_INVOKABLE QVariantMap endpoint(const QModelIndex& index) const;
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& index) const override;
@@ -93,6 +97,8 @@ public:
 	void updateScalar(const QModelIndex& index);
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;
+	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
+	                     int category, quint32 id, const QString& role, bool notify = true);
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& index) const override;
 	int rowCount(const QModelIndex& parent = {}) const override;

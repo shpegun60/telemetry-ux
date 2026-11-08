@@ -27,6 +27,7 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString commandOutcome READ commandOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceOutcome READ serviceOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
+	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 public:
 	explicit DynamicConfiguratorProvider(DynamicConfiguratorBinding* binding = nullptr,
 	                                     QObject* parent = nullptr);
@@ -53,6 +54,8 @@ public:
 	QString commandOutcome() const;
 	QString serviceOutcome() const;
 	QString statusText() const;
+	Q_INVOKABLE bool setPresentation(const QByteArray& json);
+	QString presentationError() const;
 	Q_INVOKABLE bool selectEndpoint(const QModelIndex& index);
 	Q_INVOKABLE bool refresh();
 	Q_INVOKABLE bool beginEdit();
@@ -70,6 +73,9 @@ Q_SIGNALS:
 	void serviceFinished(bool succeeded, bool published);
 
 private:
+	friend class QtConnectionBinding;
+	bool canSetPresentation() const;
+	void setPresentationOverlay(const PresentationOverlay& overlay);
 	struct Impl;
 	// A model notification may delete the provider. In-flight methods retain the
 	// models until their structural notification returns; native leases are host-owned.

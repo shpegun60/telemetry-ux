@@ -64,6 +64,15 @@ jobs:
             --ux-revision $env:UX_REVISION --qt-prefix $qt --cobs-root "$env:GITHUB_WORKSPACE/.ci/cobs" `
             --cxx $compiler --cmake (Get-Command cmake).Source --ninja (Get-Command ninja).Source
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify installed semantic metadata with the same Windows kit
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'Qt'
+          $qt = Join-Path $root '6.10.1/mingw_64'
+          $compiler = Join-Path $root 'Tools/mingw1310_64/bin/g++.exe'
+          python -B tests/presentation_metadata/run.py --build-dir "$env:RUNNER_TEMP/ux-presentation-windows" `
+            --sdk-prefix "$env:RUNNER_TEMP/portable-inspector/sdk-prefix" --qt-prefix $qt `
+            --cxx $compiler --cmake (Get-Command cmake).Source --ninja (Get-Command ninja).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-inspector-distribution
@@ -79,6 +88,8 @@ jobs:
           path: |
             ${{ runner.temp }}/portable-inspector/*.log
             ${{ runner.temp }}/portable-inspector/build-summary.json
+            ${{ runner.temp }}/ux-presentation-windows/*.log
+            ${{ runner.temp }}/ux-presentation-windows/summary.json
 
   clean-runner:
     name: Windows portable Inspector (clean runner)

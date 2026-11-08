@@ -101,7 +101,9 @@ public:
 		const auto owner = session->storage();
 		if (!owner)
 			return;
-		current = std::make_unique<DynamicConfiguratorBinding>(owner->inspector, owner);
+		current = std::make_unique<DynamicConfiguratorBinding>(
+		    owner->inspector, owner, nullptr,
+		    QStringLiteral("0x%1").arg(owner->schema.fingerprint(), 16, 16, QLatin1Char('0')));
 		current->setMutationsAllowed(allowed);
 		QObject::connect(current.get(), &DynamicConfiguratorBinding::operationFinished, this,
 		                 [this](const QVariantMap& facts) {
@@ -155,7 +157,49 @@ DynamicConfiguratorProvider* QtConnectionBinding::createProvider(QObject* parent
 	                                                 parent ? parent : this);
 	if (registry)
 		registry->providers.emplace_back(provider);
-	return provider;
+	providers_.removeIf([](const auto& value) {
+		return value.isNull();
+	});
+	providers_.append(provider);
+	const QPointer<DynamicConfiguratorProvider> alive(provider);
+	provider->setPresentationOverlay(presentation_);
+	return alive.data();
+}
+
+bool QtConnectionBinding::setPresentation(const QByteArray& json)
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	if (presentationChanging_)
+		return false;
+	providers_.removeIf([](const auto& value) {
+		return value.isNull();
+	});
+	for (const auto& provider : providers_)
+		if (provider && !provider->canSetPresentation())
+			return false;
+	auto overlay = presentation_;
+	if (!overlay.replace(json, presentationError_)) {
+		Q_EMIT stateChanged();
+		return false;
+	}
+	presentation_ = overlay;
+	presentationChanging_ = true;
+	const auto providers = providers_;
+	const QPointer<QtConnectionBinding> alive(this);
+	for (const auto& provider : providers) {
+		if (provider)
+			provider->setPresentationOverlay(overlay);
+		if (!alive)
+			return true;
+	}
+	presentationChanging_ = false;
+	Q_EMIT stateChanged();
+	return true;
+}
+
+QString QtConnectionBinding::presentationError() const
+{
+	return presentationError_;
 }
 
 bool QtConnectionBinding::connected() const

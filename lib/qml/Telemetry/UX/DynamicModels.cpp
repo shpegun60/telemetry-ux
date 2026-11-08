@@ -7,6 +7,7 @@
 #include "DynamicModels.hpp"
 
 #include <QtCore/QHash>
+#include <QtCore/QPointer>
 #include <QtCore/QString>
 
 #include <algorithm>
@@ -123,6 +124,7 @@ struct Row {
 	Row* parent = nullptr;
 	int row = 0;
 	QString name, detail, value, type, path, editorText;
+	QVariantList valuePath;
 	std::uint32_t endpointId = 0, totalChildren = 0;
 	int category = 0;
 	bool readable = false, writable = false, endpoint = false, aggregate = false;
@@ -378,6 +380,8 @@ struct EndpointModel::Impl {
 	Tree tree;
 	Reader inspector;
 	std::uint64_t admission = 0;
+	PresentationOverlay presentation;
+	QString fingerprint;
 
 	bool current() const
 	{
@@ -405,6 +409,24 @@ void EndpointModel::clear()
 bool EndpointModel::changing() const noexcept
 {
 	return impl_->tree.changing;
+}
+
+void EndpointModel::setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
+                                    bool notify)
+{
+	impl_->presentation = overlay;
+	impl_->fingerprint = fingerprint;
+	if (!notify)
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : impl_->tree.rows)
+		indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<EndpointModel> alive(this);
+	for (const auto& index : indices) {
+		Q_EMIT dataChanged(index, index, {Qt::DisplayRole, NameRole, DetailRole});
+		if (!alive)
+			return;
+	}
 }
 
 void EndpointModel::rebuild(const Inspector& inspector)
@@ -527,12 +549,18 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 	const auto* row = impl_->tree.at(this, index);
 	if (!row || !impl_->current())
 		return {};
+	const auto hints =
+	    row->endpoint
+	        ? impl_->presentation.hints(impl_->fingerprint, row->category, row->endpointId,
+	                                    row->category == 1 ? QStringLiteral("value")
+	                                                       : QStringLiteral("request"))
+	        : PresentationHints{};
 	switch (role) {
 		case Qt::DisplayRole:
 		case NameRole:
-			return row->name;
+			return hints.displayName(row->name);
 		case DetailRole:
-			return row->detail;
+			return hints.displayDetail(row->name, row->detail);
 		case ValueRole:
 			return row->value;
 		case EndpointIdRole:
@@ -563,6 +591,10 @@ struct ValueModel::Impl {
 	Tree tree;
 	Reader inspector;
 	std::uint64_t admission = 0, revision = 0;
+	PresentationOverlay presentation;
+	QString fingerprint, role;
+	int category = 0;
+	quint32 endpointId = 0;
 
 	bool current() const
 	{
@@ -593,6 +625,27 @@ void ValueModel::clear()
 bool ValueModel::changing() const noexcept
 {
 	return impl_->tree.changing;
+}
+
+void ValueModel::setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
+                                 int category, quint32 id, const QString& role, bool notify)
+{
+	impl_->presentation = overlay;
+	impl_->fingerprint = fingerprint;
+	impl_->category = category;
+	impl_->endpointId = id;
+	impl_->role = role;
+	if (!notify)
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : impl_->tree.rows)
+		indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		Q_EMIT dataChanged(index, index, {Qt::DisplayRole, NameRole, DetailRole, ValueRole});
+		if (!alive)
+			return;
+	}
 }
 
 void ValueModel::resetSnapshot(const Inspector& inspector)
@@ -679,14 +732,16 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 	const auto* row = impl_->tree.at(this, index);
 	if (!row || !impl_->current())
 		return {};
+	const auto hints = impl_->presentation.hints(impl_->fingerprint, impl_->category,
+	                                             impl_->endpointId, impl_->role, row->valuePath);
 	switch (role) {
 		case Qt::DisplayRole:
 		case NameRole:
-			return row->name;
+			return hints.displayName(row->name);
 		case DetailRole:
-			return row->detail;
+			return hints.displayDetail(row->name, row->detail);
 		case ValueRole:
-			return row->value;
+			return row->aggregate ? row->value : hints.displayValue(row->value);
 		case TypeRole:
 			return row->type;
 		case AggregateRole:
@@ -770,6 +825,12 @@ void ValueModel::fetchMore(const QModelIndex& parent)
 		auto child = valueRow(impl_->inspector, handle.value);
 		if (!child)
 			return;
+		child->valuePath = row->valuePath;
+		const auto info = impl_->inspector.info(handle.value);
+		if (!info)
+			return;
+		child->valuePath.append(info.value.arrayElement ? QVariant::fromValue(info.value.index)
+		                                                : QVariant(text(info.value.name)));
 		pending.push_back(std::move(child));
 	}
 	if (pending.empty() || impl_->tree.nextToken == 0 ||
