@@ -2,6 +2,9 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
@@ -203,6 +206,124 @@ void twoPanels()
 	CHECK(first->values()->rowCount() == 0 && first->selection().isEmpty());
 }
 
+void presentationPanels()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* first = presentation.createProvider();
+	auto* second = presentation.createProvider();
+	connect(connection, peer);
+	const auto fingerprint = QStringLiteral("0x%1").arg(connection.storage()->schema.fingerprint(),
+	                                                    16, 16, QLatin1Char('0'));
+	const QJsonArray entries{QJsonObject{{"category", 1},
+	                                     {"id", 0},
+	                                     {"role", "value"},
+	                                     {"path", QJsonArray{}},
+	                                     {"label", "Settings"},
+	                                     {"help", "Plain device settings"}},
+	                         QJsonObject{{"category", 1},
+	                                     {"id", 0},
+	                                     {"role", "value"},
+	                                     {"path", QJsonArray{"Counter"}},
+	                                     {"label", "Exact counter"},
+	                                     {"unit", "ticks"}}};
+	const auto document = [&](const QString& identity) {
+		return QJsonDocument(QJsonObject{{"format", "telemetry-presentation"},
+		                                 {"version", 1},
+		                                 {"fingerprint", identity},
+		                                 {"entries", entries}})
+		    .toJson(QJsonDocument::Compact);
+	};
+	const auto metadata = document(fingerprint);
+	auto input = metadata;
+	const auto requests = peer.requests();
+	CHECK(presentation.setPresentation(input));
+	input.fill('x'); // The adapter owns its validated copy.
+	CHECK(presentation.presentationError().isEmpty());
+	CHECK(peer.requests() == requests && peer.fieldReads() == 0);
+	CHECK(connection.workbench()->pending() == 0);
+	CHECK(first->selection().isEmpty() && second->selection().isEmpty());
+	CHECK(endpoint(first->endpoints(), QStringLiteral("Settings")).isValid());
+	CHECK(endpoint(second->endpoints(), QStringLiteral("Settings")).isValid());
+	auto* future = presentation.createProvider();
+	CHECK(endpoint(future->endpoints(), QStringLiteral("Settings")).isValid());
+	CHECK(peer.requests() == requests && connection.workbench()->pending() == 0);
+	for (auto* provider : {first, second, future}) {
+		CHECK(
+		    provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Settings"))));
+		CHECK(provider->selection().contains(QStringLiteral("Config")));
+		CHECK(provider->refresh());
+	}
+	CHECK(connection.workbench()->pending() == 3);
+	CHECK(await([&] {
+		return !first->busy() && !second->busy() && !future->busy();
+	}));
+	CHECK(peer.fieldReads() == 3);
+	for (auto* provider : {first, second, future}) {
+		const auto counter = member(provider->values(), QStringLiteral("Exact counter"));
+		CHECK(counter.isValid());
+		CHECK(provider->values()->data(counter, ux::ValueModel::ValueRole) ==
+		      QStringLiteral("18446744073709551615 ticks"));
+	}
+	const auto completedRequests = peer.requests();
+	CHECK(!presentation.setPresentation("{"));
+	CHECK(!presentation.presentationError().isEmpty());
+	CHECK(endpoint(first->endpoints(), QStringLiteral("Settings")).isValid());
+	CHECK(first->values()->data(member(first->values(), QStringLiteral("Exact counter")),
+	                            ux::ValueModel::ValueRole) ==
+	      QStringLiteral("18446744073709551615 ticks"));
+	delete second;
+	second = presentation.createProvider();
+	CHECK(endpoint(second->endpoints(), QStringLiteral("Settings")).isValid());
+	CHECK(second->selection().isEmpty() && second->values()->rowCount() == 0);
+	const auto wrongFingerprint = fingerprint == QStringLiteral("0x0000000000000000")
+	                                  ? QStringLiteral("0x0000000000000001")
+	                                  : QStringLiteral("0x0000000000000000");
+	CHECK(presentation.setPresentation(document(wrongFingerprint)));
+	for (auto* provider : {first, second, future}) {
+		CHECK(endpoint(provider->endpoints(), QStringLiteral("Config")).isValid());
+		CHECK(!endpoint(provider->endpoints(), QStringLiteral("Settings")).isValid());
+	}
+	CHECK(first->values()->data(member(first->values(), QStringLiteral("Counter")),
+	                            ux::ValueModel::ValueRole) ==
+	      QStringLiteral("18446744073709551615"));
+	CHECK(presentation.setPresentation(metadata));
+	CHECK(presentation.presentationError().isEmpty());
+	CHECK(peer.requests() == completedRequests && peer.fieldReads() == 3);
+	CHECK(connection.workbench()->pending() == 0);
+	connection.disconnect();
+	CHECK(!first->connected() && first->values()->rowCount() == 0);
+	// The replacement schema reuses Field ID 0 for Voltage. Retained hints for
+	// Config must stay inactive before and after that fresh admission.
+	peer.setWritableDemo(false);
+	connect(connection, peer);
+	CHECK(connection.storage()->schema.fingerprint() !=
+	      fingerprint.mid(2).toULongLong(nullptr, 16));
+	for (auto* provider : {first, second, future}) {
+		CHECK(provider->connected() && provider->selection().isEmpty());
+		CHECK(endpoint(provider->endpoints(), QStringLiteral("Voltage")).isValid());
+		CHECK(!endpoint(provider->endpoints(), QStringLiteral("Settings")).isValid());
+		CHECK(provider->values()->rowCount() == 0);
+	}
+	CHECK(peer.fieldReads() == 3 && connection.workbench()->pending() == 0);
+	CHECK(peer.nativeWrites() == 0 && peer.nativeCommands() == 0 && peer.nativeServices() == 0);
+	connection.disconnect();
+	peer.setWritableDemo(true);
+	connect(connection, peer);
+	for (auto* provider : {first, second, future})
+		CHECK(endpoint(provider->endpoints(), QStringLiteral("Settings")).isValid());
+	CHECK(peer.fieldReads() == 3 && connection.workbench()->pending() == 0);
+	const auto finalRequests = peer.requests();
+	CHECK(presentation.setPresentation({}));
+	for (auto* provider : {first, second, future})
+		CHECK(endpoint(provider->endpoints(), QStringLiteral("Config")).isValid());
+	CHECK(peer.requests() == finalRequests && peer.fieldReads() == 3);
+	CHECK(peer.nativeWrites() == 0 && peer.nativeCommands() == 0 && peer.nativeServices() == 0);
+}
+
 void phase(const QString& name)
 {
 	inspector_qml::TcpDemoServer peer;
@@ -363,6 +484,7 @@ int main(int argc, char** argv)
 		std::fprintf(stderr, "%s\n", qPrintable(text));
 	});
 	twoPanels();
+	presentationPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));
 	phase(QStringLiteral("prepared"));

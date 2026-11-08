@@ -13,6 +13,13 @@ same-peer fresh admission, removing accepted panels, factory self-deletion,
 reentrant disconnect and deleting Session from model reset. The same shipped
 example QML is loaded with zero tolerated warnings.
 
+Presentation metadata is also checked over the actual TCP session: two existing
+panels and a later panel inherit one adapter's immutable overlay without I/O.
+Malformed replacement preserves prior hints; closing and replacing a panel
+retains the configured overlay. Disconnect clears values, and a different
+Descriptor reusing Field ID 0 does not inherit the old label or unit. Returning
+to the matching schema restores hints without automatic reads or mutations.
+
 `--sanitize` verifies ASan/UBSan instrumentation in six installed archives and
 uses the existing narrowly named Qt software texture leak exception. A separate
 123-byte injected application leak must still fail with exit 86. The runner
