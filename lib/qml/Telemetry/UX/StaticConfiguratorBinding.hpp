@@ -65,6 +65,8 @@ struct StaticConfiguratorBinding {
 	// they never submit requests, own a FIFO or create another confirmed cache.
 	void (*connect)(QObject*, QObject* context, std::function<void()> changed,
 	                std::function<void(QString, QVariantMap)> finished) = nullptr;
+	// Optional presentation identity; an empty value never matches an overlay.
+	QString fingerprint;
 };
 
 } // namespace telemetry::ux

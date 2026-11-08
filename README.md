@@ -78,6 +78,11 @@ installed consumer needs neither the UX source tree nor a QML plugin or manual
 engine import path. The [package test](tests/qml_package/README.md) verifies that
 path after moving the install prefix and hiding the producer source/build tree.
 
+Optional [presentation metadata](doc/PresentationMetadata.md) adds labels, units,
+plain-text help and advisory range/step hints to Web and Qt editors using the
+same JSON document. It is matched to a schema fingerprint; it does not change
+wire values, permissions, validation or connection ownership.
+
 ## Generated typed QML provider
 
 For a known device schema, the optional QML starter connects the same view to

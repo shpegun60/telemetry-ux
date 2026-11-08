@@ -1,5 +1,6 @@
 // Shared Qt presentation for generated APIs; no client or wire codec. MIT.
 #include "StaticConfiguratorProvider.hpp"
+#include "PresentationOverlay.hpp"
 #include <QtCore/QSet>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
@@ -11,6 +12,25 @@
 namespace telemetry::ux {
 namespace {
 using Path = QVector<QVariant>;
+
+void presentationChanged(QAbstractItemModel& model)
+{
+	QVector<QModelIndex> indices;
+	const auto collect = [&](auto&& self, const QModelIndex& parent) -> void {
+		for (int row = 0; row < model.rowCount(parent); ++row) {
+			const auto index = model.index(row, 0, parent);
+			indices.append(index);
+			self(self, index);
+		}
+	};
+	collect(collect, {});
+	const QPointer<QAbstractItemModel> alive(&model);
+	for (const auto& index : indices) {
+		Q_EMIT model.dataChanged(index, index);
+		if (!alive)
+			return;
+	}
+}
 
 QString pathKey(const Path& path)
 {
@@ -167,9 +187,10 @@ public:
 
 	ValueTree(const StaticConfiguratorBinding& binding, std::function<RootValue()> root,
 	          std::function<QString(const Path&, const QString&)> text,
-	          std::function<bool(bool)> mutation, QObject* parent)
+	          std::function<bool(bool)> mutation,
+	          std::function<PresentationHints(const Path&)> hints, QObject* parent)
 	    : QAbstractItemModel(parent), binding_(binding), root_(std::move(root)),
-	      text_(std::move(text)), mutation_(std::move(mutation))
+	      text_(std::move(text)), mutation_(std::move(mutation)), hints_(std::move(hints))
 	{}
 
 	QHash<int, QByteArray> roleNames() const override
@@ -246,15 +267,17 @@ public:
 		const auto* type = typeAt(binding_, n->type);
 		if (!type)
 			return {};
+		const auto hints = hints_(n->path);
 		switch (role) {
 			case Qt::DisplayRole:
 			case Name:
-				return n->name;
+				return hints.displayName(n->name);
 			case Detail:
-				return detail(*type);
+				return hints.displayDetail(n->name, detail(*type));
 			case Value:
 				return aggregate(*type) ? QString()
-				                        : scalarText(*type, atPath(root.value, n->path), false);
+				                        : hints.displayValue(scalarText(
+				                              *type, atPath(root.value, n->path), false));
 			case IsAggregate:
 				return aggregate(*type);
 			case ChildCount:
@@ -401,6 +424,7 @@ private:
 	std::function<RootValue()> root_;
 	std::function<QString(const Path&, const QString&)> text_;
 	std::function<bool(bool)> mutation_;
+	std::function<PresentationHints(const Path&)> hints_;
 	QHash<quintptr, Node> nodes_;
 	quintptr next_ = 0;
 };
@@ -511,8 +535,9 @@ public:
 		IsEndpoint
 	};
 
-	explicit EndpointTree(const StaticConfiguratorBinding& binding, QObject* parent)
-	    : QAbstractItemModel(parent), binding_(binding)
+	explicit EndpointTree(const StaticConfiguratorBinding& binding,
+	                      std::function<PresentationHints(int)> hints, QObject* parent)
+	    : QAbstractItemModel(parent), binding_(binding), hints_(std::move(hints))
 	{
 		// A category/catalog parent followed by its endpoint rows. IDs are immutable
 		// within this static binding and never contain pointers into API caches.
@@ -593,10 +618,11 @@ public:
 		const auto endpoint = endpointIndex(index);
 		if (endpoint >= 0) {
 			const auto& e = binding_.endpoints[endpoint];
+			const auto hints = hints_(endpoint);
 			if (role == Qt::DisplayRole || role == Name)
-				return e.name;
+				return hints.displayName(e.name);
 			if (role == Detail)
-				return QStringLiteral("ID %1").arg(e.id);
+				return hints.displayDetail(e.name, QStringLiteral("ID %1").arg(e.id));
 			if (role == IsEndpoint)
 				return true;
 		} else if (index.internalId() > 0 &&
@@ -618,6 +644,7 @@ public:
 
 private:
 	const StaticConfiguratorBinding& binding_;
+	std::function<PresentationHints(int)> hints_;
 	QStringList keys_;
 	QVector<QVector<int>> groups_;
 };
@@ -635,6 +662,8 @@ struct StaticConfiguratorProvider::Impl {
 	};
 	StaticConfiguratorProvider* q;
 	StaticConfiguratorBinding binding;
+	PresentationOverlay presentation;
+	QString presentationError;
 	EndpointTree endpointModel;
 	ValueTree valueModel, responseModel;
 	WatchList watchModel;
@@ -653,11 +682,23 @@ struct StaticConfiguratorProvider::Impl {
 	QVariant draft, response;
 	QByteArray seed;
 	quint32 responseType = 0;
+	quint32 responseId = 0;
 	QHash<QString, QString> texts;
 	QSet<QString> errors;
 
 	Impl(StaticConfiguratorProvider* owner, StaticConfiguratorBinding value)
-	    : q(owner), binding(std::move(value)), endpointModel(binding, owner),
+	    : q(owner), binding(std::move(value)),
+	      endpointModel(
+	          binding,
+	          [this](int index) {
+		          const auto& endpoint = binding.endpoints[index];
+		          return ready() ? presentation.hints(
+		                               binding.fingerprint, endpoint.category, endpoint.id,
+		                               endpoint.category == 1 ? QStringLiteral("value")
+		                                                      : QStringLiteral("request"))
+		                         : PresentationHints{};
+	          },
+	          owner),
 	      valueModel(
 	          binding,
 	          [this] {
@@ -668,6 +709,15 @@ struct StaticConfiguratorProvider::Impl {
 	          },
 	          [this](bool entering) {
 		          return modelMutation(entering);
+	          },
+	          [this](const Path& path) {
+		          const auto* e = endpoint();
+		          return ready() && e
+		                     ? presentation.hints(binding.fingerprint, e->category, e->id,
+		                                          e->category == 1 ? QStringLiteral("value")
+		                                                           : QStringLiteral("request"),
+		                                          path)
+		                     : PresentationHints{};
 	          },
 	          owner),
 	      responseModel(
@@ -684,6 +734,11 @@ struct StaticConfiguratorProvider::Impl {
 	          },
 	          [this](bool entering) {
 		          return modelMutation(entering);
+	          },
+	          [this](const Path& path) {
+		          return ready() ? presentation.hints(binding.fingerprint, 3, responseId,
+		                                              QStringLiteral("response"), path)
+		                         : PresentationHints{};
 	          },
 	          owner),
 	      watchModel(binding, owner)
@@ -1168,6 +1223,7 @@ struct StaticConfiguratorProvider::Impl {
 				if (success && current && e && e->responseType != 0) {
 					response = result.value(QStringLiteral("value"));
 					responseType = e->responseType;
+					responseId = e->id;
 					responseEndpoint = e->catalog + QStringLiteral(" / ") + e->name;
 				}
 			}
@@ -1199,6 +1255,35 @@ StaticConfiguratorProvider::StaticConfiguratorProvider(StaticConfiguratorBinding
 {}
 
 StaticConfiguratorProvider::~StaticConfiguratorProvider() = default;
+
+bool StaticConfiguratorProvider::setPresentation(const QByteArray& json)
+{
+	if (d->publishing)
+		return false;
+	if (!d->presentation.replace(json, d->presentationError)) {
+		Q_EMIT stateChanged();
+		return false;
+	}
+	d->publishing = true;
+	const QPointer<StaticConfiguratorProvider> alive(this);
+	presentationChanged(d->endpointModel);
+	if (!alive)
+		return true;
+	presentationChanged(d->valueModel);
+	if (!alive)
+		return true;
+	presentationChanged(d->responseModel);
+	if (!alive)
+		return true;
+	d->publishing = false;
+	Q_EMIT stateChanged();
+	return true;
+}
+
+QString StaticConfiguratorProvider::presentationError() const
+{
+	return d->presentationError;
+}
 
 QAbstractItemModel* StaticConfiguratorProvider::endpoints() const
 {

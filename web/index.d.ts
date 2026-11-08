@@ -8,6 +8,7 @@ export {
 	mountBatchEditor
 } from './Configurator.js';
 export {defineConfiguratorElement} from './Element.js';
+export type {PresentationHints, PresentationEntry, PresentationOverlay} from './Presentation.js';
 export type {
 	TelemetryConfiguratorElement,
 	TelemetryConfiguratorElementConstructor

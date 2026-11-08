@@ -6,6 +6,16 @@ import * as sdk from './generated/js/device.js';
 import {structuralMetadata} from './generated/js/device.metadata.js';
 import {mountDevice} from './generated/ui/DevicePage.js';
 import type {PresentationProvider, PresentationState} from 'telemetry-ux/web';
+import type {PresentationOverlay} from 'telemetry-ux/web';
+const presentation: PresentationOverlay = {
+    format: 'telemetry-presentation', version: 1, fingerprint: structuralMetadata.fingerprint,
+    entries: [{category: 1, id: 0, role: 'value', path: ['large'], maximum: '18446744073709551615'}]
+};
+// @ts-expect-error presentation numeric hints are exact text, not JavaScript Number
+const badHint: PresentationOverlay = {...presentation, entries: [{category: 1, id: 0, role: 'value', path: [], maximum: 18446744073709551615}]};
+// @ts-expect-error Commands have request hints, never Field value hints
+const badRole: PresentationOverlay = {...presentation, entries: [{category: 2, id: 0, role: 'value', path: [], label: 'Wrong'}]};
+void badHint; void badRole;
 
 // A pre-Watchlist host provider remains a valid renderer contract.
 type LegacyProvider = Pick<PresentationProvider,
@@ -27,7 +37,7 @@ export function generatedWindow(client: DeviceClient, host: HTMLElement) {
 }
 
 export function staticWindow(client: DeviceClient, host: HTMLElement) {
-    const provider = createStaticProvider({client, metadata: structuralMetadata, sdk});
+    const provider = createStaticProvider({client, metadata: structuralMetadata, sdk, presentation});
     const view = mountConfigurator(host, {provider});
     const state = provider.snapshot();
     const watchCount: number = state.watch.rows.length;

@@ -133,9 +133,13 @@ for (const mode of ['static', 'dynamic']) {
 	        : await connectDynamic({transport : profile, clock, maxPending : 3});
 	const binding = object => mode === 'static' ? object : object.id;
 	const config = {category : 'field', catalog : 'control', name : 'Config'};
-	const p = createSessionProvider({session, endpoint : config});
+	const presentation = {format: 'telemetry-presentation', version: 1,
+		fingerprint: '0x' + session.fingerprint.toString(16).padStart(16, '0'), entries: [
+			{category: 1, id: sdk.control.fields.Config.id, role: 'value', path: ['large'], label: 'Total', unit: 'ticks', maximum: '18446744073709551615'}
+		]};
+	const p = createSessionProvider({session, endpoint : config, presentation});
 	const q = createSessionProvider(
-	    {session, endpoint : {category : 1, id : sdk.control.fields.Config.id}});
+	    {session, endpoint : {category : 1, id : sdk.control.fields.Config.id}, presentation});
 	const r = createSessionProvider(
 	    {session, endpoint : {category : 'service', catalog : 'control', name : 'Inspect'}});
 	const all = [ p, q, r ];
@@ -257,6 +261,11 @@ for (const mode of ['static', 'dynamic']) {
 		eq(text(p, 'value', 'negative'), '-9223372036854775808');
 		eq(text(p, 'value', 'mode'), '-123');
 		eq(text(p, 'value', 'zero'), '-0');
+		for (const provider of [p, q]) {
+			const hints = provider.rows().rows.find(row => row.name === 'large').presentation;
+			eq(hints.label, 'Total');
+			eq(hints.maximum, '18446744073709551615');
+		}
 		for (const provider of [p, q]) {
 			eq(provider.setWritesEnabled(true), true);
 			eq(provider.beginEdit(), true);
@@ -699,6 +708,7 @@ for (const mode of ['static', 'dynamic']) {
 			await session.reconnect();
 			await flush();
 			eq(q.snapshot().current, true);
+			eq(q.snapshot().endpoints.find(row => row.name === 'Config').presentation, {}, 'Old overlay stays dormant for changed schema');
 			eq(q.snapshot().selected, null, 'Changed fingerprint requires explicit reselect');
 			eq(q.snapshot().hasValue, false);
 			eq(q.select(endpoint(q, 'Config', 1).key), true);

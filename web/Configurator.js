@@ -1,6 +1,7 @@
 /* Provider-neutral browser view. Authors: Ruslan Kovtun, codexAi. MIT. */
 import {assertPresentationProvider} from './ProviderContract.js';
 import {createSessionProvider} from './Provider.js';
+import {presentationDetail} from './Presentation.js';
 
 let nextViewId = 0;
 const pageSize = 128;
@@ -58,16 +59,19 @@ function mount(element, options = {}, categoryFilter)
 		now = () => performance.now(),
 		limits,
 		endpoint,
+		presentation,
 		autoPoll = session !== undefined
 	} = options;
 	if ((provider === undefined) === (session === undefined))
 		throw new TypeError('Supply exactly one provider or Session');
+	if (provider !== undefined && presentation !== undefined)
+		throw new TypeError('Supply presentation when creating the provider, or mount a Session');
 	if (typeof now !== 'function')
 		throw new TypeError('The Watchlist clock must be a function');
 	if (typeof autoPoll !== 'boolean')
 		throw new TypeError('autoPoll must be a boolean');
 	const owned =
-	    session === undefined ? undefined : createSessionProvider({session, limits, endpoint});
+	    session === undefined ? undefined : createSessionProvider({session, limits, endpoint, presentation});
 	const selected = owned ?? provider;
 	let view;
 	try {
@@ -450,7 +454,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 			entry.live = false;
 		for (const endpoint of state.endpoints) {
 			const text =
-			    [ categoryNames[endpoint.category], endpoint.catalog, endpoint.name ].join(' ');
+			    [ categoryNames[endpoint.category], endpoint.catalog, endpoint.name, endpoint.presentation?.label ].join(' ');
 			if (!text.toLocaleLowerCase().includes(filter))
 				continue;
 			const key = endpoint.category + ':' + endpoint.catalog;
@@ -477,7 +481,8 @@ function mountPresentation(element, provider, categoryFilter, now)
 			}
 			entry.live = true;
 			const button = entry.button;
-			button.textContent = endpoint.name;
+			button.textContent = endpoint.presentation?.label || endpoint.name;
+			button.title = presentationDetail(endpoint.presentation, endpoint.catalog + ' / ' + endpoint.name);
 			button.dataset.endpoint = endpoint.key;
 			button.setAttribute('aria-current', String(state.selected?.key === endpoint.key));
 			button.disabled = state.busy;
@@ -506,6 +511,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 			const labelCell = node('div', 'tux-row-name');
 			const label = node('label');
 			const detail = node('small', 'tux-row-detail');
+			detail.id = viewId + '-detail-' + (++nextViewId);
 			labelCell.append(label, detail);
 			const cell = node('div');
 			const value = node('span', 'tux-value');
@@ -520,10 +526,11 @@ function mountPresentation(element, provider, categoryFilter, now)
 			input.setAttribute('list', choices.id);
 			const rowError = node('span', 'tux-error');
 			rowError.id = input.id + '-error';
-			input.setAttribute('aria-describedby', rowError.id);
+			input.setAttribute('aria-describedby', detail.id + ' ' + rowError.id);
+			const unit = node('span', 'tux-unit');
 			const children = node('button');
 			children.type = 'button';
-			cell.append(value, input, choices, rowError, children);
+			cell.append(value, input, unit, choices, rowError, children);
 			wrapper.append(labelCell, cell);
 			entry = {
 				wrapper,
@@ -532,6 +539,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 				value,
 				input,
 				choices,
+				unit,
 				rowError,
 				children,
 				path : row.path
@@ -566,8 +574,11 @@ function mountPresentation(element, provider, categoryFilter, now)
 		entry.wrapper.dataset.row = row.key;
 		entry.wrapper.dataset.path = JSON.stringify(row.path);
 		entry.wrapper.style.setProperty('--tux-depth', String(Math.min(row.path.length, 16)));
-		entry.label.textContent = row.name;
-		entry.detail.textContent = row.type || row.kind;
+		entry.label.textContent = row.presentation?.label || row.name;
+		entry.detail.textContent = presentationDetail(row.presentation,
+		    (row.presentation?.label ? row.name + ' / ' : '') + (row.type || row.kind));
+		entry.unit.textContent = row.presentation?.unit || '';
+		entry.unit.hidden = !entry.unit.textContent;
 		entry.value.textContent = row.text;
 		entry.value.hidden = row.editable;
 		entry.input.hidden = !row.editable;
@@ -785,8 +796,9 @@ function mountPresentation(element, provider, categoryFilter, now)
 				watchRows.set(row.key, entry);
 			}
 			entry.live = true;
-			entry.name.textContent = row.catalog + ' / ' + row.name;
-			entry.text.textContent = row.text;
+			entry.name.textContent = row.catalog + ' / ' + (row.presentation?.label || row.name);
+			entry.name.title = presentationDetail(row.presentation, row.name);
+			entry.text.textContent = row.text + (row.text && row.presentation?.unit ? ' ' + row.presentation.unit : '');
 			entry.text.setAttribute('part', 'watch-value');
 			entry.status.textContent = row.status;
 			entry.remove.disabled = !state.current || value.active;
@@ -938,7 +950,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 		permissionInput.checked = state.writesEnabled;
 		permissionInput.disabled = state.busy || !state.current;
 		selection.textContent = state.selected
-		                            ? state.selected.catalog + ' / ' + state.selected.name
+		                            ? state.selected.catalog + ' / ' + (state.selected.presentation?.label || state.selected.name)
 		                            : 'Select an endpoint';
 		const matches = matchesSelection();
 		if (!matches)

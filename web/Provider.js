@@ -3,6 +3,7 @@
  */
 import {Batch, Status, inspectReadManyCapability} from 'telemetry-sdk/client';
 import {encodeValue} from 'telemetry-sdk/runtime';
+import {compilePresentation} from './Presentation.js';
 
 const names = new Map(Object.entries(Status).map(([ name, code ]) => [code, name]));
 const kinds = [ 'void', 'scalar', 'enum', 'struct', 'array' ];
@@ -387,8 +388,9 @@ function dynamicAdapter({client})
 	};
 }
 
-function presentation(adapter, inputLimits, hooks = {})
+function presentation(adapter, inputLimits, hooks = {}, overlay)
 {
+	const lookup = compilePresentation(overlay);
 	const limits = limitsFor(inputLimits), listeners = new Set();
 	let identity, description, model, endpoints = empty, selected = null;
 	let revision = 0, epoch = 0, blockedSession, current = false, writesEnabled = false;
@@ -421,6 +423,13 @@ function presentation(adapter, inputLimits, hooks = {})
 	function selectedInternal()
 	{
 		return selected && description?.endpoints.find(row => row.key === selected.key);
+	}
+
+	function hints(endpoint, role, path = [])
+	{
+		return isCurrent() && endpoint
+		    ? lookup(identity.schema.fingerprint, endpoint.category, endpoint.id, role, path)
+		    : undefined;
 	}
 
 	function clearValues()
@@ -490,6 +499,7 @@ function presentation(adapter, inputLimits, hooks = {})
 					                          catalog : String(row.endpoint.catalog),
 					                          status : valid ? row.status : 'Stale',
 					                          text : valid ? row.text : ''
+					                          , presentation : hints(row.endpoint, 'value')
 				                          }))),
 				active : watchActive(),
 				pending : !!watchPending,
@@ -639,7 +649,9 @@ function presentation(adapter, inputLimits, hooks = {})
 				                                             category : row.category,
 				                                             id : row.id,
 				                                             catalog : String(row.catalog),
-				                                             name : String(row.name)
+			                                             name : String(row.name),
+			                                             presentation : lookup(live.schema.fingerprint, row.category, row.id,
+			                                                 row.category === 1 ? 'value' : 'request', [])
 			                                             })));
 			selected = null;
 			// A Session supplies independently discovered records once per
@@ -790,6 +802,9 @@ function presentation(adapter, inputLimits, hooks = {})
 				key : pathKey(childPath),
 				path : freeze([...childPath ]),
 				name,
+				presentation : hints(item?.endpoint ?? selected,
+				    (item?.endpoint ?? selected).category === 1 ? 'value'
+				    : source === 'response' || source === 'batchResponse' ? 'response' : 'request', childPath),
 				kind : kinds[type.kind],
 				type : scalarNames[scalarType.scalarCode] || kinds[type.kind],
 				children : type.kind === 3   ? type.members.length
@@ -1735,12 +1750,12 @@ function presentation(adapter, inputLimits, hooks = {})
 
 export function createStaticProvider(options)
 {
-	return presentation(staticAdapter(options), options.limits);
+	return presentation(staticAdapter(options), options.limits, {}, options.presentation);
 }
 
 export function createDynamicProvider(options)
 {
-	return presentation(dynamicAdapter(options), options.limits);
+	return presentation(dynamicAdapter(options), options.limits, {}, options.presentation);
 }
 
 // Presentation freshness only. The borrowed Session remains the sole execution owner.
@@ -1807,7 +1822,7 @@ function connectionSnapshot(session)
 }
 
 /** Borrow a Session; this provider owns presentation state and no device lifecycle. */
-export function createSessionProvider({session, limits, endpoint} = {})
+export function createSessionProvider({session, limits, endpoint, presentation: overlay} = {})
 {
 	if (!session || !['static', 'dynamic'].includes(session.mode) ||
 	    [ 'subscribe', 'read', 'writePreserving', 'command', 'service' ].some(
@@ -1908,7 +1923,7 @@ export function createSessionProvider({session, limits, endpoint} = {})
 		acceptedMutation() {
 		    invalidatePeers('Data changed after a mutation in another view.', false);
 		}
-	});
+	}, overlay);
 
 	function rememberSelection()
 	{

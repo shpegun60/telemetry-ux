@@ -20,7 +20,7 @@ def main():
     files = {'/': (root / 'index.html', 'text/html'),
              '/Element.mjs': (root / 'Element.mjs', 'text/javascript')}
     ux = root / 'node_modules/telemetry-ux/web'
-    for name in ('index.js', 'Provider.js', 'Configurator.js', 'ProviderContract.js', 'Element.js'):
+    for name in ('index.js', 'Provider.js', 'Configurator.js', 'ProviderContract.js', 'Presentation.js', 'Element.js'):
         files['/ux/' + name] = (ux / name, 'text/javascript')
     files['/ux/Configurator.css'] = (ux / 'Configurator.css', 'text/css')
     sdk = root / 'node_modules/telemetry-sdk'

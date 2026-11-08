@@ -44,7 +44,7 @@ export async function runRendererChecks()
 	const windows = [];
 	let subscriptions = 0, unsubscriptions = 0, lifecycleCalls = 0, selections = 0, textCalls = 0;
 	let draftText = '';
-	let nested = false, snapshotCalls = 0;
+	let nested = false, snapshotCalls = 0, semantic = false;
 	const publish = changes => {
 		state = Object.freeze({...state, ...changes, revision : state.revision + 1});
 		for (const listener of [...listeners])
@@ -84,6 +84,8 @@ export async function runRendererChecks()
 				    key : JSON.stringify(rowPath),
 				    path : Object.freeze(rowPath),
 				    name : source === 'value' ? 'Row ' + index + ' <script>' : 'Counter',
+				    presentation : semantic ? {label: 'Exact total', unit: 'ticks', help: hostile,
+				        minimum: '-9223372036854775808', maximum: '18446744073709551615', step: '1'} : undefined,
 				    kind : aggregate ? 'array' : 'scalar',
 				    type : aggregate ? 'array' : 'U64',
 				    children : aggregate ? 300 : 0,
@@ -232,6 +234,16 @@ export async function runRendererChecks()
 		liveExpand.click();
 		check(count() === 129, 'Current expansion control remains functional');
 		const liveMore = host.querySelector('[data-action="load-more"]');
+		semantic = true;
+		draftText = '18446744073709551615';
+		publish({hasValue: false, hasDraft: true});
+		const hinted = host.querySelector('.tux-row[data-source="draft"]');
+		check(hinted.querySelector('label').textContent === 'Exact total', 'Overlay label decorates the visible row');
+		check(hinted.querySelector('.tux-row-detail').textContent.includes('Counter / U64'), 'Original member name remains visible');
+		check(hinted.querySelector('.tux-unit').textContent === 'ticks', 'Unit is separate from editable numeric text');
+		check(hinted.querySelector('input').value === '18446744073709551615', 'U64 editor remains exact and unscaled');
+		check(hinted.querySelector('.tux-row-detail').textContent.includes('Advisory only: min -9223372036854775808 / max 18446744073709551615'), 'Range is exact, visible and explicitly advisory');
+		check(!host.querySelector('img,svg,script') && window.__tuxRendererInjected__ !== true, 'Help remains literal text');
 		const snapshotsBeforeUnmount = snapshotCalls, windowsBeforeUnmount = windows.length;
 		view.unmount();
 		liveExpand.click();

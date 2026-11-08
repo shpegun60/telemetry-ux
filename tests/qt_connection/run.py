@@ -147,7 +147,7 @@ def main():
         executable = build / ('telemetry_qt_connection_check.exe' if os.name == 'nt' else 'telemetry_qt_connection_check')
         log = run('runtime', [executable])
         count = re.search(r'Qt owned connection checks=(\d+) warnings=(\d+)', log)
-        if not count or int(count[1]) < 137 or int(count[2]) != 0:
+        if not count or int(count[1]) < 250 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
         report.update(checks=int(count[1]), warnings=int(count[2]), executable_sha256=digest(executable))
         if args.sanitize:
