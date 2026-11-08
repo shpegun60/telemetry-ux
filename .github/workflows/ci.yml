@@ -475,6 +475,7 @@ jobs:
             ${{ runner.temp }}/ux-created-web-*/*.log
             ${{ runner.temp }}/ux-created-web-*/browser/*.json
             ${{ runner.temp }}/ux-created-web-*/browser/*.png
+            ${{ runner.temp }}/ux-created-web-*/browser/*.log
             ${{ runner.temp }}/ux-created-web-*/cpp-assets/*.json
             ${{ runner.temp }}/ux-created-web-*/cpp-assets/*.log
 
