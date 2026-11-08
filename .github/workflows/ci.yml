@@ -388,17 +388,27 @@ jobs:
               compiler=clang++-18
               checks+=(--sanitize)
             fi
-            python -B examples/web_device_starter/prepare.py \
-              --output "$RUNNER_TEMP/ux-own-device-$profile" \
-              --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
-              --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
-              --ux-package "$RUNNER_TEMP/web-dist/telemetry-ux-0.1.0.tgz" \
-              --node "$(command -v node)" --npm-cli "$(npm root -g)/npm/bin/npm-cli.js" \
-              --codegen-python "$RUNNER_TEMP/web-codegen/bin/python" \
-              --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
-            "$RUNNER_TEMP/web-builder/bin/python" -B tests/web_device_starter/run.py \
-              --prepared "$RUNNER_TEMP/ux-own-device-$profile" \
-              --output "$RUNNER_TEMP/ux-own-device-browser-$profile"
+            for mode in dynamic-cpp static-files; do
+              codegen=()
+              export_mode=cpp
+              if [ "$mode" = static-files ]; then
+                codegen+=(--codegen-python "$RUNNER_TEMP/web-codegen/bin/python")
+                export_mode=files
+              fi
+              prepared="$RUNNER_TEMP/ux-own-device-$profile-$mode"
+              python -B examples/web_device_starter/prepare.py \
+                --output "$prepared" --export-web "$export_mode" \
+                --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
+                --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
+                --ux-package "$RUNNER_TEMP/web-dist/telemetry-ux-0.1.0.tgz" \
+                --node "$(command -v node)" --npm-cli "$(npm root -g)/npm/bin/npm-cli.js" \
+                --cxx "$compiler" --cmake cmake --ninja ninja "${codegen[@]}" "${checks[@]}"
+              "$RUNNER_TEMP/web-builder/bin/python" -B tests/web_device_starter/run.py \
+                --prepared "$prepared" --exported \
+                --output "$RUNNER_TEMP/ux-own-device-browser-$profile-$mode"
+              python -B tests/web_assets/run.py --export-root "$prepared/www" \
+                --build-dir "$RUNNER_TEMP/ux-own-device-assets-$profile-$mode" --cxx "$compiler"
+            done
             python -B tests/project_starter/run.py --output "$RUNNER_TEMP/ux-created-web-$profile" \
               --sdk-prefix "$RUNNER_TEMP/web-sdk-prefix-$profile" \
               --sdk-package "$RUNNER_TEMP/web-dist/telemetry-sdk-0.1.0.tgz" \
@@ -465,6 +475,8 @@ jobs:
             ${{ runner.temp }}/ux-created-web-*/*.log
             ${{ runner.temp }}/ux-created-web-*/browser/*.json
             ${{ runner.temp }}/ux-created-web-*/browser/*.png
+            ${{ runner.temp }}/ux-created-web-*/cpp-assets/*.json
+            ${{ runner.temp }}/ux-created-web-*/cpp-assets/*.log
 
   generated-qml:
     name: Installed generated QML example (Linux)
