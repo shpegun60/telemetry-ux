@@ -13,7 +13,7 @@ import tarfile
 ROOT = Path(__file__).absolute().parents[1]
 QML = ('CMakeLists.txt', 'Device.hpp', 'main.cpp', 'Main.qml')
 QT_CONNECTION = ('CMakeLists.txt', 'main.cpp', 'Main.qml')
-WEB = ('prepare.py', 'serve.py', 'DeviceApp.js', 'index.html',
+WEB = ('prepare.py', 'serve.py', 'DeviceApp.js', 'index.html', 'favicon.svg',
        'native/CMakeLists.txt', 'native/Device.hpp', 'native/Peer.cpp')
 RESERVED = {'con', 'prn', 'aux', 'nul', 'clock$'} | {
     prefix + str(index) for prefix in ('com', 'lpt') for index in range(1, 10)}
@@ -227,6 +227,7 @@ deleteLater() there. Ordinary Qt UI notifications arrive after native processing
         for file in ('serve.py', 'serve_ws.py'):
             relative = 'examples/web_demo/' + file
             files[relative] = copy(relative)
+        files['tools/export_web_assets.py'] = copy('tools/export_web_assets.py')
         files['examples/web_device_starter/index.html'] = files[
             'examples/web_device_starter/index.html'].replace(b'My Telemetry Device', name.encode('ascii'))
         files['prepare.py'] = wrapper('examples/web_device_starter/prepare.py', '''
@@ -262,12 +263,25 @@ core generator. Dynamic mode needs no generator. By default preparation writes
 to a fresh sibling `<project-directory>-prepared`; your application sources are
 separate from native builds, installed runtime packages and generated DTOs.
 
+For deployable browser files add --export-web files, or --export-web cpp for the
+same files plus a C++17 Flash asset table. Output is <prepared>/www/ with a
+MIME/length/SHA-256 manifest; pass --web-max-bytes and --web-max-files to enforce
+your target's runtime budgets. Dynamic export needs no generated SDK. All
+exporter code is included in this project; no producer checkout is needed.
+Add --web-asset hints/presentation.json for each extra file under
+examples/web_device_starter/. Names are source-relative, stay the same in www/,
+and must be plain local paths; no file is loaded or applied automatically.
+
 Create an external Python environment with websockets==15.0.1, then use its Python
 to run `python -B serve.py`. On Windows its interpreter is Scripts/python.exe;
 on Linux bin/python. Open http://127.0.0.1:8080 and press Connect. Read Config,
 enable changes, Edit periodMs to 1 and Apply + readback: the Model normalizes it
 to 10. Command Reset and Service Scale use the same Session/FIFO. Disconnect and
 Reconnect are explicit and never replay an uncertain operation.
+
+To run only the exported browser tree, use `python -B serve.py --exported` after
+preparing with --export-web. This host test uses the same Model and Session;
+the bundle itself needs no Python or Node on the serving device.
 
 The server is a localhost reference HTTP/WebSocket host, not STM32 networking.
 Its bootstrap routes, monotonically increasing exclusive session lease and
