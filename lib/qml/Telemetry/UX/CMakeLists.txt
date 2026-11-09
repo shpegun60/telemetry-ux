@@ -45,7 +45,9 @@ install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp Prese
 # Runtime providers are a separate optional export. Pure Qt/static consumers
 # must not start discovering the native SDK or transport components.
 if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
-    find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS workbench)
+    if(NOT TARGET Telemetry::workbench)
+        find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS workbench)
+    endif()
     add_library(telemetry_ux_dynamic_configurator STATIC
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp)
@@ -69,7 +71,9 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
 endif()
 
 if(TELEMETRY_UX_BUILD_QT_CONNECTION)
-    find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
+    if(NOT TARGET Telemetry::qt_connection)
+        find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
+    endif()
     add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
     set_target_properties(telemetry_ux_qt_connection PROPERTIES EXPORT_NAME qt_connection AUTOMOC ON)

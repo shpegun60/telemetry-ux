@@ -1,7 +1,7 @@
 # Windows portable Inspector qualification
 
 This optional distribution workflow is separate from the normal
-[Qt Creator source project](../../apps/inspector/README.md). Building from source
+[Qt Creator source project](../../examples/inspector/README.md). Building from source
 does not require a ZIP or deployment step.
 
 The release-pair workflow builds the recorded SDK commit and exact UX candidate

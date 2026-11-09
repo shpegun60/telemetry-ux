@@ -27,12 +27,17 @@ Installed consumers must not depend on a sibling checkout or a source fallback.
 ## Inspector application
 
 The single Inspector application and its QML/TCP suites move from SDK revision
-`3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e` to `apps/inspector` and the two
+`3a66a10f7742ac6ddaaef0f181a09bfc71b7d82e` to `examples/inspector` and the two
 matching `tests` directories here. The old SDK implementation is removed by its
 coordinated migration PR; no forwarding application or second controller is
 retained. The executable name, QML URI and operation/lifecycle behavior remain
 unchanged. Only the former disabled-UART diagnostic changes to name the installed
 transport component.
+
+The maintained Inspector now lives under `examples/inspector`, alongside the
+other optional consumers of the UX libraries. Root library builds leave it
+disabled unless `TELEMETRY_UX_BUILD_INSPECTOR=ON`; configuring its own CMake
+project or running its Windows packager still builds the same example.
 
 The normal application consumes an installed SDK. QML/TCP tests record the
 actual installed headers/libraries and SDK metadata separately from their UX

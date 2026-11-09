@@ -1,6 +1,6 @@
 # Qt/QML runtime Inspector checks
 
-This suite builds the [runtime Inspector example](../../apps/inspector/README.md)
+This suite builds the [runtime Inspector example](../../examples/inspector/README.md)
 against Qt 6.4 or newer. It uses the actual `EndpointModel`, `ValueModel`,
 `InspectorController` and native Encoded demo peer, without generated SDK files.
 

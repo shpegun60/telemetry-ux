@@ -137,7 +137,7 @@ def main():
         commands = json.loads((build / 'compile_commands.json').read_text(encoding='utf8'))
         for entry in commands:
             command = entry.get('command', ' '.join(entry.get('arguments', []))).replace('\\','/')
-            if '/apps/inspector/' in command:
+            if '/examples/inspector/' in command:
                 raise RuntimeError('Downstream test must not compile or include the Inspector application')
         executable = build / ('telemetry_dynamic_qml_provider.exe' if os.name == 'nt' else 'telemetry_dynamic_qml_provider')
         log = run('runtime', [executable])
@@ -164,7 +164,7 @@ def main():
         example_commands = json.loads((example_build / 'compile_commands.json').read_text(encoding='utf8'))
         for entry in example_commands:
             command = entry.get('command', ' '.join(entry.get('arguments', []))).replace('\\','/')
-            if '/apps/inspector/' in command:
+            if '/examples/inspector/' in command:
                 raise RuntimeError('Runnable example must not compile or include Inspector application files')
         example_executable = example_build / ('telemetry_dynamic_example.exe' if os.name == 'nt' else 'telemetry_dynamic_example')
         example_log = run('example-runtime', [example_executable, '--smoke'])

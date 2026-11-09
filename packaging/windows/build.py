@@ -98,7 +98,7 @@ def main():
         if metadata['sourceRevision'] != args.sdk_revision or metadata['sdkVersion'] != '0.1.0':
             raise RuntimeError('Installed SDK identity mismatch')
         report['sdk_metadata'] = metadata
-        run('app-configure', [tools['cmake'], '-S', ROOT/'apps/inspector', '-B', output/'app-build',
+        run('app-configure', [tools['cmake'], '-S', ROOT/'examples/inspector', '-B', output/'app-build',
             *common, '-DCMAKE_WIN32_EXECUTABLE=ON',
             '-DTelemetry_DIR='+str(prefix/'lib/cmake/Telemetry'),
             '-DINSPECTOR_ENABLE_SERIAL='+('OFF' if args.no_serial else 'ON')])
@@ -108,7 +108,7 @@ def main():
         executable = package/'telemetry-inspector-qml.exe'
         shutil.copyfile(output/'app-build'/executable.name, executable)
         run('deploy', [tools['deploy'], '--release', '--no-translations', '--compiler-runtime',
-            '--qmldir', ROOT/'apps/inspector', '--qmlimport', output/'app-build/qml', executable])
+            '--qmldir', ROOT/'examples/inspector', '--qmlimport', output/'app-build/qml', executable])
         # Offscreen is used only by the separate clean-runner qualification.
         shutil.copyfile(qt/'plugins/platforms/qoffscreen.dll', package/'platforms/qoffscreen.dll')
         (package/'qt.conf').write_text('[Paths]\nPrefix=.\nPlugins=.\nQmlImports=qml\n')

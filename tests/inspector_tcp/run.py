@@ -23,7 +23,7 @@ def digest(path):
 
 def sources():
     files = []
-    for directory in (HERE, ROOT / 'tests/inspector_qml', ROOT / 'apps/inspector', ROOT / 'lib/qml'):
+    for directory in (HERE, ROOT / 'tests/inspector_qml', ROOT / 'examples/inspector', ROOT / 'lib/qml'):
         files += [path for path in directory.rglob('*') if path.is_file() and
                   path.suffix in ('.py', '.cpp', '.hpp', '.h', '.qml', '.txt', '.cmake', '.pri') and
                   '__pycache__' not in path.parts]

@@ -1,7 +1,7 @@
 # Independent installed Dynamic QML providers
 
 This downstream consumer uses only installed `TelemetryUX::dynamic_configurator`
-and SDK targets. It does not compile `apps/inspector`, import application-private
+and SDK targets. It does not compile `examples/inspector`, import application-private
 headers, generate another SDK or create one client per panel.
 
 Prepare matching installed SDK (`core`, `workbench`, `encoded_server`,

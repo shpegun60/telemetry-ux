@@ -1,13 +1,15 @@
 # Telemetry UX
 
-Telemetry UX contains host applications and optional UI generation for
+Telemetry UX contains reusable presentation libraries, examples and optional UI generation for
 [Telemetry SDK](https://github.com/shpegun60/telemetry-sdk). Protocols, codecs,
 clients and portable transport components remain in the SDK. The UX applications reuse
-one existing client/FIFO per session.
+one existing client/FIFO per session. Complete application examples live under
+`examples/`; the root CMake project builds the reusable
+Qt view by default; applications and SDK-backed providers are explicit options.
 
 ## Universal Inspector
 
-The [Inspector](apps/inspector/README.md) discovers an unknown device, reads
+The [Inspector](examples/inspector/README.md) discovers an unknown device, reads
 Fields, edits configuration, executes Commands, calls Services and polls a
 scalar Watchlist. Its existing Demo and loopback TCP modes work without a board.
 The UART mode uses the SDK's optional SerialPort transport.
@@ -15,7 +17,7 @@ The UART mode uses the SDK's optional SerialPort transport.
 Install a matching Qt kit and SDK prefix, then configure, build and launch:
 
 ```sh
-cmake -S apps/inspector -B /external/inspector -G Ninja \
+cmake -S examples/inspector -B /external/inspector -G Ninja \
   -DCMAKE_PREFIX_PATH="/path/to/sdk-prefix;/path/to/qt-prefix"
 cmake --build /external/inspector --parallel 2
 /external/inspector/telemetry-inspector-qml
@@ -24,8 +26,9 @@ cmake --build /external/inspector --parallel 2
 For UART, add `-DINSPECTOR_ENABLE_SERIAL=ON` and use an SDK prefix that contains
 `qt_serial_transport`. The application build needs no COBS checkout, SDK source
 tree, generated per-device DTO or Python installation. The application README
-lists the SDK components to install. The root CMake project builds the same
-application; it does not introduce another implementation.
+lists the SDK components to install. To include the same application from the
+root CMake project, set `-DTELEMETRY_UX_BUILD_INSPECTOR=ON`. The default library
+build leaves the application disabled and does not discover the SDK.
 
 ## Embed the Configurator in your application
 
@@ -73,8 +76,22 @@ and can create independent providers through `createConfigurator()`. For a known
 The browser starter generates a thin entry module for the shared
 web view; it does not generate another form implementation.
 
-The pure Qt module can be built and installed without any Telemetry SDK. An
-installed consumer needs neither the UX source tree nor a QML plugin or manual
+The pure Qt module can be built and installed without any Telemetry SDK:
+
+```sh
+cmake -S . -B /external/ux-library -G Ninja \
+  -DCMAKE_PREFIX_PATH=/path/to/qt-prefix \
+  -DCMAKE_INSTALL_PREFIX=/path/to/ux-prefix
+cmake --build /external/ux-library --parallel 2
+cmake --install /external/ux-library
+```
+
+Enable `TELEMETRY_UX_BUILD_QT_CONNECTION` for the SDK-owned connection binding,
+or `TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR` for a provider over an existing
+Workbench. These optional components accept installed SDK targets or targets
+already supplied by a parent CMake project through `add_subdirectory`.
+
+An installed consumer needs neither the UX source tree nor a QML plugin or manual
 engine import path. The [package test](tests/qml_package/README.md) verifies that
 path after moving the install prefix and hiding the producer source/build tree.
 
