@@ -262,7 +262,7 @@ Pane {
             textFormat: Text.PlainText
             objectName: "writeOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 1) && panel.provider.writeOutcome.length > 0
-            text: panel.provider.writeOutcome
+            text: qsTr("Last write: %1").arg(panel.provider.writeOutcome)
             color: "#e6c57b"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -271,7 +271,7 @@ Pane {
             textFormat: Text.PlainText
             objectName: "commandOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 2) && panel.provider.commandOutcome.length > 0
-            text: panel.provider.commandOutcome
+            text: qsTr("Last command: %1").arg(panel.provider.commandOutcome)
             color: "#e6c57b"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -280,7 +280,7 @@ Pane {
             textFormat: Text.PlainText
             objectName: "serviceOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 3) && panel.provider.serviceOutcome.length > 0
-            text: panel.provider.serviceOutcome
+            text: qsTr("Last service: %1").arg(panel.provider.serviceOutcome)
             color: "#e6c57b"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
