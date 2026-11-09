@@ -56,7 +56,7 @@ def python_image():
 
 def sources():
     paths = []
-    for directory in (HERE, ROOT / 'apps/inspector', ROOT / 'lib/qml'):
+    for directory in (HERE, ROOT / 'examples/inspector', ROOT / 'lib/qml'):
         paths += [path for path in directory.rglob('*') if path.is_file() and
                   path.suffix in ('.py', '.cpp', '.hpp', '.h', '.qml', '.txt', '.cmake', '.pri') and
                   '__pycache__' not in path.parts]
@@ -161,7 +161,7 @@ def main():
             report['font_directory'] = str(fonts)
         for name in ('Models.hpp', 'Models.cpp', 'InspectorController.hpp', 'InspectorController.cpp',
                      'DemoPeer.hpp', 'DemoPeer.cpp', 'Main.qml', 'CMakeLists.txt', 'main.cpp'):
-            if not (ROOT / 'apps/inspector' / name).is_file():
+            if not (ROOT / 'examples/inspector' / name).is_file():
                 raise RuntimeError('Required runnable example input is missing: ' + name)
         tools = {name: executable(getattr(args, name)) for name in ('cxx', 'cmake', 'ninja')}
         qt = args.qt_prefix.resolve()

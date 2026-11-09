@@ -27,8 +27,8 @@ def inventory(root):
 
 def sources():
     paths = [ROOT / 'CMakeLists.txt', ROOT / 'lib/qml/TelemetryUXConfig.cmake.in',
-             ROOT / 'apps/inspector/DemoPeer.cpp', ROOT / 'apps/inspector/DemoPeer.hpp',
-             ROOT / 'apps/inspector/TcpDemoServer.cpp', ROOT / 'apps/inspector/TcpDemoServer.hpp']
+             ROOT / 'examples/inspector/DemoPeer.cpp', ROOT / 'examples/inspector/DemoPeer.hpp',
+             ROOT / 'examples/inspector/TcpDemoServer.cpp', ROOT / 'examples/inspector/TcpDemoServer.hpp']
     for directory in (HERE, ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(paths))}
@@ -142,7 +142,7 @@ def main():
         commands = json.loads((build / 'compile_commands.json').read_text(encoding='utf8'))
         for entry in commands:
             command = entry.get('command', ' '.join(entry.get('arguments', []))).replace('\\','/')
-            if '/apps/inspector/InspectorController' in command or '/apps/inspector/TcpTransport' in command:
+            if '/examples/inspector/InspectorController' in command or '/examples/inspector/TcpTransport' in command:
                 raise RuntimeError('Downstream test must use installed session/carrier, not Inspector lifecycle sources')
         executable = build / ('telemetry_qt_connection_check.exe' if os.name == 'nt' else 'telemetry_qt_connection_check')
         log = run('runtime', [executable])
@@ -164,7 +164,7 @@ def main():
         example_commands = json.loads((example_build / 'compile_commands.json').read_text(encoding='utf8'))
         for entry in example_commands:
             command = entry.get('command', ' '.join(entry.get('arguments', []))).replace('\\','/')
-            if '/apps/inspector/InspectorController' in command or '/apps/inspector/TcpTransport' in command:
+            if '/examples/inspector/InspectorController' in command or '/examples/inspector/TcpTransport' in command:
                 raise RuntimeError('Runnable example must not compile or include Inspector application files')
         example_executable = example_build / ('telemetry-qt-connection.exe' if os.name == 'nt' else 'telemetry-qt-connection')
         report['example'] = dict(panels=2, executable_sha256=digest(example_executable),

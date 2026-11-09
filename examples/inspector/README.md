@@ -39,7 +39,7 @@ The user build has four steps:
 2. Configure from the Telemetry UX root, using an external build directory:
 
    ```sh
-   cmake -S apps/inspector -B /tmp/telemetry-inspector-qml -G Ninja \
+   cmake -S examples/inspector -B /tmp/telemetry-inspector-qml -G Ninja \
      -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="/sdk-prefix;/qt-prefix"
    ```
 
@@ -50,12 +50,12 @@ The default build provides the local demo, Descriptor files and TCP. Add
 `-DINSPECTOR_ENABLE_SERIAL=ON` for the optional UART adapter. CMake requires all
 selected installed components and never falls back to an SDK source checkout.
 In Qt Creator, open this directory's `CMakeLists.txt`, choose the matching kit,
-and add the SDK prefix to `CMAKE_PREFIX_PATH`. The Widgets playground is a
-separate application.
+and add the SDK prefix to `CMAKE_PREFIX_PATH`. This maintained example is
+optional; the root library build leaves it disabled.
 
 ### Work on the application in Qt Creator
 
-Open **`apps/inspector/CMakeLists.txt`** from your Telemetry UX checkout. This is
+Open **`examples/inspector/CMakeLists.txt`** from your Telemetry UX checkout. This is
 the application's source project; the Windows ZIP is an optional distribution,
 not a prerequisite for editing or running it.
 
@@ -86,7 +86,7 @@ $SdkPrefix = "C:\external-sdk\telemetry-sdk"
 $InspectorBuild = "C:\external-build\telemetry-inspector"
 $CMake = "$QtTools\CMake_64\bin\cmake.exe"
 $env:PATH = "$QtTools\mingw1310_64\bin;$QtPrefix\bin;$env:PATH"
-& $CMake -S apps/inspector -B $InspectorBuild -G Ninja `
+& $CMake -S examples/inspector -B $InspectorBuild -G Ninja `
   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$SdkPrefix;$QtPrefix" `
   "-DCMAKE_CXX_COMPILER=$QtTools/mingw1310_64/bin/g++.exe" `
   "-DCMAKE_MAKE_PROGRAM=$QtTools/Ninja/ninja.exe"
@@ -261,7 +261,7 @@ The SDK's [Qt transport module documentation](https://github.com/shpegun60/telem
 describes the producer-side dependency.
 
 ```sh
-cmake -S apps/inspector -B /path/to/external/inspector-serial -G Ninja \
+cmake -S examples/inspector -B /path/to/external/inspector-serial -G Ninja \
   -DCMAKE_PREFIX_PATH="/sdk-prefix;/qt-prefix" \
   -DINSPECTOR_ENABLE_SERIAL=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build /path/to/external/inspector-serial --parallel 2
@@ -273,7 +273,7 @@ On Windows, reuse the Qt/tool/SDK variables above and select a fresh build:
 
 ```powershell
 $SerialBuild = "C:\external-build\telemetry-inspector-serial"
-& $CMake -S apps/inspector -B $SerialBuild -G Ninja `
+& $CMake -S examples/inspector -B $SerialBuild -G Ninja `
   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$SdkPrefix;$QtPrefix" `
   "-DCMAKE_CXX_COMPILER=$QtTools/mingw1310_64/bin/g++.exe" `
   "-DCMAKE_MAKE_PROGRAM=$QtTools/Ninja/ninja.exe" `
