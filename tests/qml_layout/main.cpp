@@ -5,6 +5,8 @@
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQmlError>
+#include <QQmlContext>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QQuickStyle>
@@ -182,6 +184,54 @@ int main(int argc, char** argv)
 		CHECK(flick && flick->property("contentHeight").toReal() <= flick->height() + 1);
 		CHECK(warnings == 0);
 		CHECK(!session.ready() && !session.connecting());
+        // Embedding a reusable panel must preserve the host's customized palette.
+        auto* embeddedTreePanel = item(view, QStringLiteral("endpointTreePane"));
+        auto* embeddedWatchPanel = item(view, QStringLiteral("watchlistPane"));
+        CHECK(embeddedTreePanel && embeddedWatchPanel);
+        CHECK(window->setProperty("testButtonText", QColor(QStringLiteral("#e38d27"))));
+        settle();
+        QQmlExpression treeText(qmlContext(embeddedTreePanel), embeddedTreePanel,
+                                QStringLiteral("palette.buttonText"));
+        QQmlExpression watchText(qmlContext(embeddedWatchPanel), embeddedWatchPanel,
+                                 QStringLiteral("palette.buttonText"));
+        CHECK(treeText.evaluate().value<QColor>() == QColor(QStringLiteral("#e38d27")) && !treeText.hasError());
+        CHECK(watchText.evaluate().value<QColor>() == QColor(QStringLiteral("#e38d27")) && !watchText.hasError());
+        CHECK(warnings == 0);
+        // Independently embedded panels share one caller-owned provider.
+        // The fake provider records intent without creating a transport.
+        engine.setInitialProperties({});
+        engine.load(QUrl(QStringLiteral("qrc:/Standalone.qml")));
+        auto* separateWindow = engine.rootObjects().size() > 1
+            ? qobject_cast<QQuickWindow*>(engine.rootObjects().last()) : nullptr;
+        CHECK(separateWindow != nullptr);
+        settle();
+        auto* separateTreePanel = item(separateWindow->contentItem(), QStringLiteral("standaloneTree"));
+        auto* separateWatchPanel = item(separateWindow->contentItem(), QStringLiteral("standaloneWatch"));
+        auto* selected = item(separateWindow->contentItem(), QStringLiteral("standaloneSelection"));
+        CHECK(separateTreePanel && separateWatchPanel && selected);
+        auto* shared = separateTreePanel->property("provider").value<QObject*>();
+        CHECK(shared && shared == separateWatchPanel->property("provider").value<QObject*>());
+        auto* row = item(separateTreePanel, QStringLiteral("endpointRow"));
+        CHECK(row != nullptr);
+        auto* rowContent = row->property("contentItem").value<QObject*>();
+        CHECK(rowContent && rowContent->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
+        click(separateWindow, row);
+        CHECK(shared->property("selections").toInt() == 1);
+        CHECK(selected->property("text").toString() == QStringLiteral("Voltage"));
+        click(separateWindow, item(separateWatchPanel, QStringLiteral("addWatchButton")));
+        CHECK(shared->property("watchCount").toInt() == 1);
+        click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
+        CHECK(shared->property("watchActive").toBool());
+        CHECK(shared->property("starts").toInt() == 1 && shared->property("stops").toInt() == 0);
+        separateWatchPanel->setVisible(false);
+        settle();
+        separateWatchPanel->setVisible(true);
+        settle();
+        CHECK(shared->property("watchActive").toBool());
+        CHECK(shared->property("starts").toInt() == 1 && shared->property("stops").toInt() == 0);
+        click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
+        CHECK(!shared->property("watchActive").toBool() && shared->property("stops").toInt() == 1);
+        CHECK(warnings == 0);
 		std::printf("QML layout checks=%u warnings=%u\n", checks, warnings);
 		return 0;
 	} catch (const std::exception& error) {

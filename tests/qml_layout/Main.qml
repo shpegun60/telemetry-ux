@@ -6,6 +6,8 @@ import QtQuick.Layouts
 import Telemetry.UX
 
 Window {
+    id: host
+    property color testButtonText: "#e8edf5"
     required property var ownerProvider
     visible: true
     width: 1160
@@ -18,6 +20,7 @@ Window {
             Layout.fillWidth: true
             Layout.fillHeight: true
             provider: ownerProvider
+            palette.buttonText: host.testButtonText
             headerComponent: Component {
                 Rectangle { objectName: "customHeader"; implicitHeight: 38; color: "#233349"
                     Label { anchors.centerIn: parent; text: "Host-owned header" }

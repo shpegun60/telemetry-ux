@@ -57,61 +57,11 @@ Control {
                 Layout.minimumHeight: 400
                 Layout.preferredHeight: Math.max(400, configurator.availableHeight - workspace.auxiliaryHeight)
                 orientation: Qt.Horizontal
-                Pane {
+                EndpointTreePanel {
+                    provider: configurator.provider
+                    palette: configurator.palette
                     SplitView.preferredWidth: 300
                     SplitView.minimumWidth: 220
-                    background: Rectangle { color: "#17202b"; radius: 10 }
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: 12
-                        Label { textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
-                        TreeView {
-                            id: endpointTree
-                            objectName: "endpointTree"
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            model: configurator.provider.endpoints
-                            columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
-                            onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
-                            delegate: TreeViewDelegate {
-                                id: endpointDelegate
-                                objectName: "endpointRow"
-                                required property string name
-                                required property string detail
-                                required property bool isEndpoint
-                                implicitWidth: endpointTree.width
-                                implicitHeight: 38
-                                text: name
-                                PlainToolTip {
-                                    objectName: "endpointToolTip"
-                                    visible: endpointDelegate.hovered && endpointDelegate.detail.length > 0
-                                    text: endpointDelegate.detail
-                                }
-                                // Basic TreeViewDelegate reads model.display directly.
-                                // A retired model may have no role data before its reset.
-                                contentItem: Label {
-                                    textFormat: Text.PlainText
-                                    text: endpointDelegate.name
-                                    elide: Text.ElideRight
-                                    color: endpointDelegate.highlighted
-                                        ? endpointDelegate.palette.highlightedText
-                                        : endpointDelegate.palette.buttonText
-                                }
-                                onClicked: {
-                                    if (isEndpoint)
-                                        configurator.provider.selectEndpoint(endpointTree.modelIndex(Qt.point(0, row)))
-                                }
-                            }
-                            ScrollBar.vertical: ScrollBar {}
-                            Component.onCompleted: Qt.callLater(function() {
-                                if (!endpointTree) return
-                                endpointTree.forceLayout()
-                                endpointTree.expandRecursively(0, 2)
-                            })
-                        }
-                        Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
-                    }
                 }
                 EndpointPanel {
                     provider: configurator.provider
@@ -126,124 +76,7 @@ Control {
                 Layout.minimumHeight: Layout.preferredHeight
                 active: configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
                 visible: configurator.watchlistVisible && active
-                sourceComponent: Component { Pane {
-                objectName: "watchlistPane"
-                implicitHeight: (watchPanelExpanded.checked ? 220 : 54)
-                    + (watchStatusLabel.visible ? watchStatusLabel.implicitHeight + 6 : 0)
-                background: Rectangle { color: "#17202b"; radius: 10 }
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 6
-                    RowLayout {
-                        Layout.fillWidth: true
-                        CheckBox {
-                            id: watchPanelExpanded
-                            objectName: "watchlistExpanded"
-                            text: "Watchlist " + configurator.provider.watchCount
-                            checked: false
-                        }
-                        Button {
-                            objectName: "addWatchButton"
-                            text: "Add selected Field"
-                            enabled: configurator.provider.canAddWatch && !configurator.provider.watchActive
-                            onClicked: {
-                                if (configurator.provider.addWatch())
-                                    watchPanelExpanded.checked = true
-                            }
-                        }
-                        Button {
-                            objectName: "refreshWatchButton"
-                            text: "Read once"
-                            enabled: configurator.provider.connected && configurator.provider.watchCount > 0 && !configurator.provider.watchActive
-                            onClicked: configurator.provider.refreshWatch()
-                        }
-                        Button {
-                            objectName: "startWatchButton"
-                            text: configurator.provider.watchActive ? "Stop" : "Start polling"
-                            enabled: configurator.provider.watchActive || (configurator.provider.connected && configurator.provider.watchCount > 0)
-                            onClicked: configurator.provider.watchActive ? configurator.provider.stopWatch() : configurator.provider.startWatch()
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                    Label {
-                        id: watchStatusLabel
-                        objectName: "watchStatusLabel"
-                        textFormat: Text.PlainText
-                        text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus
-                        color: "#99abbf"
-                        visible: text.length > 0
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                    RowLayout {
-                        visible: watchPanelExpanded.checked
-                        Layout.fillWidth: true
-                        ComboBox {
-                            objectName: "watchMode"
-                            Layout.preferredWidth: 210
-                            readonly property bool readManySupported: configurator.provider.watchReadManySupported !== false
-                            readonly property bool explicitIndividual: configurator.provider.watchRequiresExplicitIndividual === true
-                            model: readManySupported ? ["ReadMany", "Individual FieldRead"]
-                                : explicitIndividual ? ["ReadMany (unavailable)", "Individual FieldRead"] : ["Individual FieldRead"]
-                            currentIndex: (readManySupported || explicitIndividual) && configurator.provider.watchIndividual ? 1 : 0
-                            enabled: !configurator.provider.watchActive && (readManySupported || explicitIndividual)
-                            onActivated: configurator.provider.watchIndividual = (!readManySupported && !explicitIndividual) || currentIndex === 1
-                        }
-                        Label { textFormat: Text.PlainText; text: "Interval (ms)"; color: "#99abbf" }
-                        SpinBox {
-                            objectName: "watchFrequency"
-                            from: 1
-                            to: 60000
-                            stepSize: 1
-                            editable: true
-                            value: configurator.provider.watchIntervalMs
-                            enabled: !configurator.provider.watchActive
-                            onValueModified: configurator.provider.watchIntervalMs = value
-                        }
-                        Label { textFormat: Text.PlainText; text: "Nominal interval · sequential scalar reads"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
-                        Button {
-                            objectName: "clearWatchButton"
-                            text: "Clear"
-                            enabled: configurator.provider.watchCount > 0 && !configurator.provider.watchActive
-                            onClicked: configurator.provider.clearWatch()
-                        }
-                    }
-                    ListView {
-                        id: watchList
-                        objectName: "watchlistView"
-                        visible: watchPanelExpanded.checked
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        model: configurator.provider.watchlist
-                        clip: true
-                        delegate: Item {
-                            id: watchRow
-                            objectName: "watchlistRow"
-                            required property int index
-                            required property string name
-                            required property string status
-                            required property string text
-                            width: watchList.width
-                            height: 34
-                            RowLayout {
-                                anchors.fill: parent
-                                Label { textFormat: Text.PlainText; text: watchRow.name; Layout.preferredWidth: Math.min(260, watchList.width / 3); elide: Text.ElideMiddle }
-                                Label { textFormat: Text.PlainText; text: watchRow.text; font.family: "monospace"; color: "#83e1ce"; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label { textFormat: Text.PlainText; text: watchRow.status; color: "#99abbf" }
-                                Button {
-                                    objectName: "removeWatchButton"
-                                    property int watchRowIndex: watchRow.index
-                                    text: "Remove"
-                                    enabled: !configurator.provider.watchActive
-                                    onClicked: configurator.provider.removeWatch(watchRow.index)
-                                }
-                            }
-                        }
-                        ScrollBar.vertical: ScrollBar {}
-                        Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
-                    }
-                }
-                } }
+                sourceComponent: Component { WatchlistPanel { provider: configurator.provider; palette: configurator.palette } }
             }
             Loader {
                 id: batchLoader
@@ -284,12 +117,6 @@ Control {
             else if (position.y + focused.height > offset + viewport.height)
                 offset = position.y + focused.height - viewport.height
             viewport.contentY = Math.max(0, Math.min(offset, viewport.contentHeight - viewport.height))
-        }
-    }
-    Connections {
-        target: configurator.provider.endpoints
-        function onModelReset() {
-            Qt.callLater(function() { if (endpointTree) endpointTree.expandRecursively(0, 2) })
         }
     }
 }

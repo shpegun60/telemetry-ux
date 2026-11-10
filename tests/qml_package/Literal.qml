@@ -18,6 +18,7 @@ Window {
 
     QtObject {
         id: owner
+        objectName: "literalOwner"
         property ListModel endpoints: ListModel {}
         property ListModel values: ListModel {}
         property ListModel responses: ListModel {}

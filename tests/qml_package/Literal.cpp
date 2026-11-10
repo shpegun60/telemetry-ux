@@ -2,6 +2,7 @@
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSet>
@@ -62,6 +63,27 @@ int main(int argc, char** argv)
 		auto* label = window->findChild<QObject*>("unsafeLabel");
 		check(label && label->property("textFormat").toInt() == Qt::AutoText);
 	} else {
+        // Resolve and instantiate the new independent components through the
+        // relocated installed resource module, using the same host provider.
+        auto* owner = window->findChild<QObject*>("literalOwner");
+        QQmlComponent independent(&engine);
+        independent.setData(R"qml(import QtQuick
+import Telemetry.UX
+Item {
+    required property var provider
+    EndpointTreePanel { objectName: "installedTreePanel"; provider: parent.provider }
+    WatchlistPanel { objectName: "installedWatchPanel"; provider: parent.provider }
+})qml", QUrl());
+        auto* views = independent.createWithInitialProperties({{"provider", QVariant::fromValue(owner)}});
+        check(owner && views);
+        if (views) {
+            auto* treePanel = views->findChild<QObject*>("installedTreePanel");
+            auto* watchPanel = views->findChild<QObject*>("installedWatchPanel");
+            check(treePanel && watchPanel);
+            check(treePanel && treePanel->property("provider").value<QObject*>() == owner);
+            check(watchPanel && watchPanel->property("provider").value<QObject*>() == owner);
+            delete views;
+        }
 		auto* expanded = window->findChild<QObject*>("watchlistExpanded");
 		check(expanded && expanded->setProperty("checked", true));
 		drain();
