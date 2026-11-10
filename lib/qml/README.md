@@ -54,3 +54,29 @@ For a custom page, embed `FieldEditor`, `CommandPanel` or `ServicePanel` instead
 of the full Configurator. They use the same renderer and host-owned provider,
 with no endpoint browser or automatic request. All four views accept optional
 `headerComponent`/`footerComponent` extensions; see the provider contract above.
+
+A host that builds its own workspace can embed the same controls individually:
+
+```qml
+import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+
+SplitView {
+    anchors.fill: parent
+    EndpointTreePanel { provider: host.deviceProvider; SplitView.preferredWidth: 300 }
+    EndpointPanel { provider: host.deviceProvider; SplitView.fillWidth: true }
+    WatchlistPanel { provider: host.deviceProvider; SplitView.preferredWidth: 360 }
+    BatchPanel { provider: host.deviceProvider; SplitView.preferredWidth: 360 }
+}
+```
+
+The example expects a provider supporting Watchlist and Batch. Hosts that accept
+other provider types must check those capabilities before instantiating the
+corresponding panel, as `Configurator` does. The application owns the provider
+and session and must keep them alive while any panel uses them. Sharing a
+provider also shares its selected endpoint, edit draft, Watchlist and Batch; it
+does not create a client, a second FIFO, or a polling timer in the view. Hiding
+or showing a Watchlist panel does not stop or restart polling. If the application
+wants to stop polling, it must request that explicitly via the provider. A new
+provider has its own presentation and polling state and must be chosen deliberately.
