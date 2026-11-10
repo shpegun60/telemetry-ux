@@ -11,7 +11,8 @@ python3 -B tests/qml_layout/run.py --build-dir /external/layout-check \
   --cxx g++ --cmake cmake --ninja ninja
 ```
 
-The real QQuickWindow is resized to 1160×800 and 820×620. Collapsed and expanded
+The real QQuickWindow embeds the Configurator in a ColumnLayout and is resized
+to 1160×800 and 820×620. Collapsed and expanded
 Watchlist/Batch panels must leave usable endpoint and value trees. The test checks
 scroll reach, keyboard focus visibility, an actual mouse toggle, separate Batch
 response/empty geometry, a reachable custom footer, and removal of optional host

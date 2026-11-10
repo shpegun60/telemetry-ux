@@ -14,7 +14,10 @@ Control {
     property Component footerComponent: null
     padding: 0
     background: Rectangle { color: configurator.palette.window }
-    implicitWidth: contentItem.implicitWidth
+    // ScrollView's width depends on the host allocation. Keep the preferred
+    // width independent so an enclosing RowLayout cannot feed its own width
+    // back into its size hints (a polish loop on Qt 6.4).
+    implicitWidth: 640
     implicitHeight: contentItem.implicitHeight
     palette.window: "#11151c"
     palette.windowText: "#e8edf5"

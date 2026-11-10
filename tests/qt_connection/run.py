@@ -172,8 +172,12 @@ def main():
         layout_checks = re.search(r'QML layout checks=(\d+) warnings=0', layout_log)
         if not layout_checks or int(layout_checks[1]) < 65:
             raise RuntimeError('Real disconnected window layout did not reach its warning-free assertion floor')
+        layout_images = [output / (size + suffix + '.png')
+                         for size in ('1160x800', '820x620')
+                         for suffix in ('-collapsed', '-top', '')]
         report['layout'] = dict(checks=int(layout_checks[1]), warnings=0,
-            executable_sha256=digest(layout_executable), sizes=[[1160,800], [820,620]], network=False)
+            executable_sha256=digest(layout_executable), sizes=[[1160,800], [820,620]], network=False,
+            screenshots_sha256={image.name: digest(image) for image in layout_images})
         count = re.search(r'Qt owned connection checks=(\d+) warnings=(\d+)', log)
         if not count or int(count[1]) < 250 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
