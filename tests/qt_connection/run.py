@@ -27,9 +27,10 @@ def inventory(root):
 
 def sources():
     paths = [ROOT / 'CMakeLists.txt', ROOT / 'lib/qml/TelemetryUXConfig.cmake.in',
+             ROOT / 'tests/dynamic_qml_configurator/Fixture.hpp',
              ROOT / 'examples/inspector/DemoPeer.cpp', ROOT / 'examples/inspector/DemoPeer.hpp',
              ROOT / 'examples/inspector/TcpDemoServer.cpp', ROOT / 'examples/inspector/TcpDemoServer.hpp']
-    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
+    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch', ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(paths))}
 
@@ -82,10 +83,10 @@ def main():
     report_path = output / 'summary.json'
     report_path.write_text(json.dumps(report, indent=2)+'\n', encoding='utf8')
 
-    def run(label, command, expected=0, timeout=600):
+    def run(label, command, expected=0, timeout=600, env=None):
         start = time.monotonic()
         try:
-            result = subprocess.run(list(map(str, command)), cwd=output, env=environment, text=True,
+            result = subprocess.run(list(map(str, command)), cwd=output, env=environment if env is None else env, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
             log_text, code = result.stdout, result.returncode
         except subprocess.TimeoutExpired as error:
@@ -146,14 +147,26 @@ def main():
                 raise RuntimeError('Downstream test must use installed session/carrier, not Inspector lifecycle sources')
         executable = build / ('telemetry_qt_connection_check.exe' if os.name == 'nt' else 'telemetry_qt_connection_check')
         log = run('runtime', [executable])
+        headless_environment = dict(environment)
+        headless_environment.pop('LSAN_OPTIONS', None)
+        if args.sanitize:
+            headless_environment['LSAN_OPTIONS'] = 'exitcode=86:print_suppressions=1'
         scheduling_executable = build / ('telemetry_dynamic_watchlist_check.exe' if os.name == 'nt' else 'telemetry_dynamic_watchlist_check')
-        scheduling = run('watchlist-scheduling-runtime', [scheduling_executable])
+        scheduling = run('watchlist-scheduling-runtime', [scheduling_executable], env=headless_environment)
         scheduled_checks = re.search(r'Dynamic Watchlist checks=(\d+) chunks=32,32,1 no_native_callback_signals=1', scheduling)
         if not scheduled_checks or int(scheduled_checks[1]) < 264:
             raise RuntimeError('Controlled Watchlist scheduling did not reach its assertion floor')
         report['watchlist_scheduling'] = dict(checks=int(scheduled_checks[1]),
             executable_sha256=digest(scheduling_executable), chunks=[32,32,1],
             signals_in_native_callback=False, controlled_ticks=True)
+        batch_executable = build / ('telemetry_dynamic_batch_check.exe' if os.name == 'nt' else 'telemetry_dynamic_batch_check')
+        batch_log = run('batch-presentation-runtime', [batch_executable], env=headless_environment)
+        batch_checks = re.search(r'Dynamic Batch checks=(\d+) no_native_callback_signals=1 bounded_items=32', batch_log)
+        if not batch_checks or int(batch_checks[1]) < 239:
+            raise RuntimeError('Controlled Batch presentation did not reach its assertion floor')
+        report['batch_presentation'] = dict(checks=int(batch_checks[1]),
+            executable_sha256=digest(batch_executable), bounded_items=32,
+            signals_in_native_callback=False, execution_source='controlled')
         count = re.search(r'Qt owned connection checks=(\d+) warnings=(\d+)', log)
         if not count or int(count[1]) < 250 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')

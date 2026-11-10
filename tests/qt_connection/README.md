@@ -18,6 +18,13 @@ completion slots check 65-row chunking, smaller capability budgets, explicit
 Individual mode, Stop/drain, stale-source replacement and reentrant model
 publication. Native callbacks fill owned slots without model notifications.
 
+`tests/dynamic_batch` adds 239 controlled presentation checks for ordered
+duplicate IDs, owned captured request bytes, exact item/request/reply limits,
+mutation permission, QueueFull preservation, checked per-item facts, historical
+uncertainty, and model-reset/fetchMore reentrant invalidation. Its submission
+source is controlled; it is not a claim of native Batch execution. These QtCore
+controls run without the Qt Quick texture suppression under sanitizers.
+
 Presentation metadata is also checked over the actual TCP session: two existing
 panels and a later panel inherit one adapter's immutable overlay without I/O.
 Malformed replacement preserves prior hints; closing and replacing a panel

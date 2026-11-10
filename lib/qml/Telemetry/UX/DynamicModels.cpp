@@ -208,6 +208,7 @@ struct Reader {
 	bool editor = false;
 	bool response = false;
 	const WorkbenchView* view = nullptr;
+	const ins::SnapshotStore* snapshot = nullptr;
 
 	template<class F>
 	decltype(auto) edit(F&& read) const
@@ -226,7 +227,7 @@ struct Reader {
 
 	explicit operator bool() const noexcept
 	{
-		return inspector || workbench || view;
+		return inspector || workbench || view || snapshot;
 	}
 
 	template<class F>
@@ -241,6 +242,8 @@ struct Reader {
 
 	bool isCurrent() const
 	{
+		if (snapshot)
+			return snapshot->isCurrent();
 		return *this && visit([](const auto& model) {
 			return model.isCurrent();
 		});
@@ -248,6 +251,8 @@ struct Reader {
 
 	auto snapshotInfo() const
 	{
+		if (snapshot)
+			return snapshot->snapshotInfo();
 		if (response && (workbench || view))
 			return edit([](const auto& model) {
 				return model.serviceSnapshotInfo();
@@ -263,6 +268,8 @@ struct Reader {
 
 	auto info(const ins::NodeHandle& node) const
 	{
+		if (snapshot)
+			return snapshot->info(node);
 		if (response && (workbench || view))
 			return edit([&](const auto& model) {
 				return model.serviceInfo(node);
@@ -278,6 +285,8 @@ struct Reader {
 
 	auto child(const ins::NodeHandle& node, std::uint32_t index) const
 	{
+		if (snapshot)
+			return snapshot->child(node, index);
 		if (response && (workbench || view))
 			return edit([&](const auto& model) {
 				return model.serviceChild(node, index);
@@ -293,6 +302,8 @@ struct Reader {
 
 	auto root() const
 	{
+		if (snapshot)
+			return snapshot->root();
 		if (response && (workbench || view))
 			return edit([](const auto& model) {
 				return model.serviceRoot();
@@ -330,6 +341,8 @@ struct Reader {
 
 	ins::Result<ins::ScalarValue> scalar(const ins::NodeHandle& node) const
 	{
+		if (snapshot)
+			return snapshot->scalar(node);
 		if (response && (workbench || view))
 			return edit([&](const auto& model) {
 				return model.serviceScalar(node);
@@ -668,20 +681,25 @@ void ValueModel::resetSnapshot(const WorkbenchView& view)
 	resetSource(nullptr, nullptr, false, &view);
 }
 
+void ValueModel::resetSnapshot(const ins::SnapshotStore& snapshot)
+{
+	resetSource(nullptr, nullptr, false, nullptr, &snapshot);
+}
+
 void ValueModel::resetServiceResponse(const WorkbenchView& view)
 {
 	resetSource(nullptr, nullptr, true, &view);
 }
 
 void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbench, bool response,
-                             const WorkbenchView* view)
+                             const WorkbenchView* view, const ins::SnapshotStore* snapshotSource)
 {
 	if (changing())
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
 	beginResetModel();
 	impl_->tree.clear();
-	impl_->inspector = {inspector, workbench, !response, response, view};
+	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource};
 	const auto snapshot = impl_->inspector.snapshotInfo();
 	impl_->admission = snapshot.admission;
 	impl_->revision = snapshot.revision;

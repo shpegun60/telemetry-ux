@@ -20,3 +20,7 @@ qt_import_qml_plugins(telemetry_qt_connection_check)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_watchlist" watchlist-scheduling)
 set_target_properties(telemetry_dynamic_watchlist_check PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_batch" batch-presentation)
+set_target_properties(telemetry_dynamic_batch_check PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

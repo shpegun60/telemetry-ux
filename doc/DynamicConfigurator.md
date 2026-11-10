@@ -125,13 +125,16 @@ response bytes are copied by the native store before the user callback returns.
 ## Current bounds
 
 This component uses an explicit native profile: 8 shared FIFO slots, 4096 request
-bytes, 65536 snapshot bytes and a 768-byte callback slot. Each panel additionally
-owns 65536 response bytes. These are opt-in host UI budgets, not changes to the
+bytes, 65536 snapshot bytes and a 1536-byte callback slot. Each panel additionally
+owns 65536 Service response bytes and 65536 bytes for the selected Batch result
+snapshot. Captured Batch requests and owned per-item response payloads are
+bounded by the advertised limits and the 4096/65536-byte Session profile.
+These are opt-in host UI budgets, not changes to the
 portable defaults; memory grows with the number of panels. Qt model labels and
 rows use normal host allocations. Arrays materialize at most 128 children per
 fetch. Native-only providers omit Watchlist controls. Providers created by
 `QtConnectionBinding` additionally expose the Session-backed Watchlist described
-below. Batch presentation remains separate.
+below and the explicit Batch list described after it.
 
 ## Session-backed Watchlist
 
@@ -180,3 +183,61 @@ reentrancy. These checks do not qualify physical transport timing.
 exercise real Encoded dispatch, deletion in flight, new admission, no replay,
 exact scalar bytes, owned responses and strict QML warnings. Host/sanitizer tests
 do not establish physical STM32 transport qualification.
+
+## Session-backed Mixed Batch
+
+Providers created through `QtConnectionBinding` expose the same optional TBM1
+capability admitted by their Session. The public Configurator shows one ordered
+list with at most 32 operations. Repeated endpoint IDs are allowed, so a write
+followed by a read is a natural sequence. There is no atomic snapshot,
+transaction rollback, exactly-once execution or automatic replay guarantee.
+
+1. Select an endpoint in the existing endpoint tree. For a Field write, read it
+   explicitly, press **Edit**, and prepare the values in the existing editor.
+   Commands and Services use their existing request editor, including Void.
+2. Choose `read`, `write`, `command` or `service`, then **Add selected draft**.
+   This captures owned canonical request bytes without sending anything or
+   changing the editor. A Field read needs no draft. After capturing a Field
+   write, **Cancel** closes the local editor before selecting another endpoint;
+   the captured Batch step remains intact.
+3. Prepare and add more operations. Use Up, Down, Remove or Clear while idle.
+   Later editor changes do not alter a captured step. To change its arguments,
+   prepare a replacement and remove/re-add that step.
+4. Press **Execute Batch** to submit one ordered request through the existing
+   Session/FIFO. Any mutating item requires the shared mutation permission and
+   this panel's `allowMutations`. A read-only Batch needs no mutation permission.
+
+The entire list must fit the advertised item and byte limits and the Session
+profile: request `2 + sum(8 + requestBytes)`, maximum reply
+`2 + sum(12 + responseBytes)`. No hidden split or fallback is performed. The list
+is locked while one Batch is pending. Execute permits a still-open local draft;
+an accepted mutation invalidates it and cached data in sibling panels and the
+Watchlist. A rejected submission, including QueueFull, preserves drafts, captured
+arguments and previous owned results. Batch writes do not trigger implicit
+Field readback; add a Field read explicitly when it is needed.
+
+Every checked item shows its own outcome. Accepted remains distinct from
+Executed, and a Service refusal remains distinct from a successful outer reply.
+**View result** selects an owned FieldRead/Service value in the existing lazy
+read-only value model, including structured responses. Invalid or stale values
+are suppressed independently from the checked operation facts. A missing outer
+reply identifies no executed prefix: rows retain no fabricated per-item success.
+OutcomeUnknown and known historical outcomes remain visible after disconnect;
+old values and old-session recipes cannot become current or run automatically.
+
+The provider exposes `batchSupported`, `batchItems`, `batchCount`, `batchPending`,
+`canExecuteBatch`, `batchStatus`, `batchSelection`, `batchResponses` and
+`batchResponseEndpoint`. Its invokables are `canAddBatch(operation)`,
+`addBatch(operation)`, `removeBatch(row)`, `moveBatch(row, delta)` (delta -1/+1),
+`clearBatch()`, `selectBatch(row)` and `executeBatch()`. Operation names are the
+four lowercase strings above. `batchFinished()` is emitted after native progress
+returns; it does not imply that every item succeeded. The row model provides
+`name`, `operation`, `endpointId`, `status`, `hasValue`, `historical`, and a
+`result` map containing checked native status facts. That map is empty when no
+checked per-item outcome exists.
+
+The native callback only copies facts and bounded bytes into an owned completion
+slot. Qt model updates and signals occur later at the Session progress boundary.
+`BatchSource` is a host adapter seam, not another client or execution queue;
+native-only providers without it report unsupported. Controlled presentation
+checks are documented in [tests/dynamic_batch](../tests/dynamic_batch/README.md).

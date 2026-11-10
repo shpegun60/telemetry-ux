@@ -8,6 +8,7 @@ Control {
     id: configurator
     required property var provider
     property bool watchlistVisible: true
+    property bool batchVisible: true
     property Component headerComponent: null
     property Component footerComponent: null
     padding: 0
@@ -217,6 +218,13 @@ Control {
                 }
             }
             } }
+        }
+        Loader {
+            Layout.fillWidth: true
+            Layout.preferredHeight: item ? item.implicitHeight : 0
+            active: configurator.provider.batchItems !== undefined && configurator.provider.batchItems !== null
+            visible: configurator.batchVisible && active
+            sourceComponent: Component { BatchPanel { provider: configurator.provider } }
         }
         Label {
             textFormat: Text.PlainText
