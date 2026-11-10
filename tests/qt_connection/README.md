@@ -13,6 +13,11 @@ same-peer fresh admission, removing accepted panels, factory self-deletion,
 reentrant disconnect and deleting Session from model reset. The same shipped
 example QML is loaded with zero tolerated warnings.
 
+The same gate also executes `tests/dynamic_watchlist`: controlled ticks and
+completion slots check 65-row chunking, smaller capability budgets, explicit
+Individual mode, Stop/drain, stale-source replacement and reentrant model
+publication. Native callbacks fill owned slots without model notifications.
+
 Presentation metadata is also checked over the actual TCP session: two existing
 panels and a later panel inherit one adapter's immutable overlay without I/O.
 Malformed replacement preserves prior hints; closing and replacing a panel

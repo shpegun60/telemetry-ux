@@ -5,11 +5,25 @@
 #include <memory>
 
 namespace telemetry::ux {
+struct WatchlistSource;
+
 class DynamicConfiguratorProvider final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
+	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
+	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported NOTIFY stateChanged)
+	Q_PROPERTY(bool watchRequiresExplicitIndividual READ watchRequiresExplicitIndividual CONSTANT)
+	Q_PROPERTY(bool watchActive READ watchActive NOTIFY stateChanged)
+	Q_PROPERTY(bool watchPending READ watchPending NOTIFY stateChanged)
+	Q_PROPERTY(bool canAddWatch READ canAddWatch NOTIFY stateChanged)
+	Q_PROPERTY(int watchCount READ watchCount NOTIFY stateChanged)
+	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
+	Q_PROPERTY(
+	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
+	Q_PROPERTY(
+	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
 	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
@@ -36,6 +50,29 @@ public:
 	QAbstractItemModel* endpoints() const;
 	QAbstractItemModel* values() const;
 	QAbstractItemModel* responses() const;
+	QAbstractItemModel* watchlist() const;
+	bool watchReadManySupported() const;
+
+	bool watchRequiresExplicitIndividual() const
+	{
+		return true;
+	}
+
+	bool watchActive() const;
+	bool watchPending() const;
+	bool canAddWatch() const;
+	int watchCount() const;
+	QString watchStatus() const;
+	bool watchIndividual() const;
+	int watchIntervalMs() const;
+	void setWatchIndividual(bool individual);
+	void setWatchIntervalMs(int milliseconds);
+	Q_INVOKABLE bool addWatch();
+	Q_INVOKABLE void removeWatch(int row);
+	Q_INVOKABLE void clearWatch();
+	Q_INVOKABLE void refreshWatch();
+	Q_INVOKABLE void startWatch();
+	Q_INVOKABLE void stopWatch();
 	QString selection() const;
 	QString serviceResponseEndpoint() const;
 	bool connected() const;
@@ -74,6 +111,9 @@ Q_SIGNALS:
 
 private:
 	friend class QtConnectionBinding;
+	friend class ConnectionViews;
+	void setWatchSource(WatchlistSource source);
+	void pollWatch();
 	bool canSetPresentation() const;
 	void setPresentationOverlay(const PresentationOverlay& overlay);
 	struct Impl;

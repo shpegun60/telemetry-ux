@@ -155,10 +155,12 @@ Control {
                         objectName: "watchMode"
                         Layout.preferredWidth: 210
                         readonly property bool readManySupported: configurator.provider.watchReadManySupported !== false
-                        model: readManySupported ? ["ReadMany", "Individual FieldRead"] : ["Individual FieldRead"]
-                        currentIndex: readManySupported && configurator.provider.watchIndividual ? 1 : 0
-                        enabled: !configurator.provider.watchActive && readManySupported
-                        onActivated: configurator.provider.watchIndividual = !readManySupported || currentIndex === 1
+                        readonly property bool explicitIndividual: configurator.provider.watchRequiresExplicitIndividual === true
+                        model: readManySupported ? ["ReadMany", "Individual FieldRead"]
+                            : explicitIndividual ? ["ReadMany (unavailable)", "Individual FieldRead"] : ["Individual FieldRead"]
+                        currentIndex: (readManySupported || explicitIndividual) && configurator.provider.watchIndividual ? 1 : 0
+                        enabled: !configurator.provider.watchActive && (readManySupported || explicitIndividual)
+                        onActivated: configurator.provider.watchIndividual = (!readManySupported && !explicitIndividual) || currentIndex === 1
                     }
                     Label { textFormat: Text.PlainText; text: "Interval (ms)"; color: "#99abbf" }
                     SpinBox {

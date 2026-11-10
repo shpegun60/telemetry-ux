@@ -1,5 +1,6 @@
 // Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
 #include "DynamicConfiguratorProvider.hpp"
+#include "DynamicWatchlist.hpp"
 #include "ScalarEditor.hpp"
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
@@ -256,6 +257,7 @@ struct DynamicConfiguratorProvider::Impl {
 	std::shared_ptr<DynamicViewState> state;
 	EndpointModel endpoints;
 	ValueModel values, responses;
+	DynamicWatchlist watch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
 	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
@@ -267,7 +269,7 @@ struct DynamicConfiguratorProvider::Impl {
 	QSet<quintptr> invalid;
 	QMetaObject::Connection changed, destroyed;
 
-	explicit Impl(DynamicConfiguratorProvider* owner) : q(owner)
+	explicit Impl(DynamicConfiguratorProvider* owner) : q(owner), watch(owner)
 	{}
 
 	bool current() const
@@ -293,8 +295,8 @@ struct DynamicConfiguratorProvider::Impl {
 
 	bool idle() const
 	{
-		return current() && !busy() && !updating && !endpoints.changing() && !values.changing() &&
-		       !responses.changing();
+		return current() && !busy() && !watch.active() && !updating && !endpoints.changing() &&
+		       !values.changing() && !responses.changing();
 	}
 
 	bool mutate() const
@@ -371,6 +373,7 @@ struct DynamicConfiguratorProvider::Impl {
 				                       : operationText(result.operation);
 			}
 			if (!current()) {
+				watch.retire();
 				allowed = false;
 				category = 0;
 				selection.clear();
@@ -381,6 +384,7 @@ struct DynamicConfiguratorProvider::Impl {
 				endpoints.clear();
 			} else if (state->dirty) {
 				if (state->staleData) {
+					watch.retire(false);
 					values.clear();
 					responses.clear();
 					invalid.clear();
@@ -411,6 +415,16 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
                                                          QObject* parent)
     : QObject(parent), d(std::make_shared<Impl>(this))
 {
+	std::weak_ptr<Impl> weak = d;
+	d->watch.setNotify(
+	    [weak] {
+		    if (auto p = weak.lock())
+			    p->notify();
+	    },
+	    [weak] {
+		    const auto p = weak.lock();
+		    return !p || p->busy() || p->updating || (p->state && p->state->view.editing());
+	    });
 	setBinding(binding);
 }
 
@@ -430,6 +444,9 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	if (p->updating || (binding == p->binding && (!p->state || !p->state->retired)))
 		return;
 	if (binding && binding->thread() != thread())
+		return;
+	p->watch.retire();
+	if (!alive)
 		return;
 	// Host replacement settles the old owner first. Never move accepted work to
 	// a different binding. A caller may retry attachment after the old completion.
@@ -538,6 +555,112 @@ QAbstractItemModel* DynamicConfiguratorProvider::responses() const
 	return &d->responses;
 }
 
+void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
+{
+	auto p = d;
+	p->watch.setSource(std::move(source));
+}
+
+void DynamicConfiguratorProvider::pollWatch()
+{
+	auto p = d;
+	p->watch.poll();
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::watchlist() const
+{
+	return d->watch.model();
+}
+
+bool DynamicConfiguratorProvider::watchReadManySupported() const
+{
+	return d->watch.supported();
+}
+
+bool DynamicConfiguratorProvider::watchActive() const
+{
+	return d->watch.active();
+}
+
+bool DynamicConfiguratorProvider::watchPending() const
+{
+	return d->watch.pending();
+}
+
+bool DynamicConfiguratorProvider::canAddWatch() const
+{
+	return d->current() && !d->busy() && !d->updating && d->category == 1 &&
+	       d->watch.canAdd(d->state->endpointId);
+}
+
+int DynamicConfiguratorProvider::watchCount() const
+{
+	return d->watch.count();
+}
+
+QString DynamicConfiguratorProvider::watchStatus() const
+{
+	return d->watch.status();
+}
+
+bool DynamicConfiguratorProvider::watchIndividual() const
+{
+	return d->watch.individual();
+}
+
+int DynamicConfiguratorProvider::watchIntervalMs() const
+{
+	return d->watch.interval();
+}
+
+void DynamicConfiguratorProvider::setWatchIndividual(bool value)
+{
+	auto p = d;
+	p->watch.setIndividual(value);
+}
+
+void DynamicConfiguratorProvider::setWatchIntervalMs(int ms)
+{
+	auto p = d;
+	p->watch.setInterval(ms);
+}
+
+bool DynamicConfiguratorProvider::addWatch()
+{
+	auto p = d;
+	return canAddWatch() && p->watch.add(p->state->endpointId, p->selection);
+}
+
+void DynamicConfiguratorProvider::removeWatch(int row)
+{
+	auto p = d;
+	p->watch.remove(row);
+}
+
+void DynamicConfiguratorProvider::clearWatch()
+{
+	auto p = d;
+	p->watch.clear();
+}
+
+void DynamicConfiguratorProvider::refreshWatch()
+{
+	auto p = d;
+	p->watch.begin(false);
+}
+
+void DynamicConfiguratorProvider::startWatch()
+{
+	auto p = d;
+	p->watch.begin(true);
+}
+
+void DynamicConfiguratorProvider::stopWatch()
+{
+	auto p = d;
+	p->watch.stop();
+}
+
 QString DynamicConfiguratorProvider::selection() const
 {
 	return d->selection;
@@ -555,7 +678,7 @@ bool DynamicConfiguratorProvider::connected() const
 
 bool DynamicConfiguratorProvider::busy() const
 {
-	return d->busy();
+	return d->busy() || d->watch.pending();
 }
 
 bool DynamicConfiguratorProvider::editing() const
