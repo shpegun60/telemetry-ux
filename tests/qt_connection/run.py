@@ -30,7 +30,7 @@ def sources():
              ROOT / 'tests/dynamic_qml_configurator/Fixture.hpp',
              ROOT / 'examples/inspector/DemoPeer.cpp', ROOT / 'examples/inspector/DemoPeer.hpp',
              ROOT / 'examples/inspector/TcpDemoServer.cpp', ROOT / 'examples/inspector/TcpDemoServer.hpp']
-    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch', ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
+    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch', ROOT / 'tests/qml_layout', ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(paths))}
 
@@ -167,6 +167,13 @@ def main():
         report['batch_presentation'] = dict(checks=int(batch_checks[1]),
             executable_sha256=digest(batch_executable), bounded_items=32,
             signals_in_native_callback=False, execution_source='controlled')
+        layout_executable = build / ('telemetry_qml_layout_check.exe' if os.name == 'nt' else 'telemetry_qml_layout_check')
+        layout_log = run('layout-runtime', [layout_executable, output])
+        layout_checks = re.search(r'QML layout checks=(\d+) warnings=0', layout_log)
+        if not layout_checks or int(layout_checks[1]) < 65:
+            raise RuntimeError('Real disconnected window layout did not reach its warning-free assertion floor')
+        report['layout'] = dict(checks=int(layout_checks[1]), warnings=0,
+            executable_sha256=digest(layout_executable), sizes=[[1160,800], [820,620]], network=False)
         count = re.search(r'Qt owned connection checks=(\d+) warnings=(\d+)', log)
         if not count or int(count[1]) < 250 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
