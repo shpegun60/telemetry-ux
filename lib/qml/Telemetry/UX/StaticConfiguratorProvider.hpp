@@ -16,6 +16,7 @@ class StaticConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
+	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
 	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
 	Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -53,6 +54,7 @@ public:
 	QAbstractItemModel* responses() const;
 	QAbstractItemModel* watchlist() const;
 	QString selection() const;
+	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;
 	bool connected() const;
 	bool busy() const;

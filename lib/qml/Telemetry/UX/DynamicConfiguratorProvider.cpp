@@ -3,6 +3,7 @@
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "ScalarEditor.hpp"
+#include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QThread>
@@ -257,6 +258,7 @@ struct DynamicConfiguratorProvider::Impl {
 	QPointer<DynamicConfiguratorBinding> binding, desired;
 	std::shared_ptr<DynamicViewState> state;
 	EndpointModel endpoints;
+	QPersistentModelIndex selectedIndex;
 	ValueModel values, responses;
 	DynamicWatchlist watch;
 	DynamicBatch batch;
@@ -424,6 +426,7 @@ struct DynamicConfiguratorProvider::Impl {
 				batch.retire();
 				allowed = false;
 				category = 0;
+				selectedIndex = QModelIndex{};
 				selection.clear();
 				responseEndpoint.clear();
 				invalid.clear();
@@ -530,6 +533,7 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
+	p->selectedIndex = QModelIndex{};
 	p->endpoints.clear();
 	if (!alive)
 		return;
@@ -841,6 +845,14 @@ QString DynamicConfiguratorProvider::selection() const
 	return d->selection;
 }
 
+QModelIndex DynamicConfiguratorProvider::selectedEndpointIndex() const
+{
+	const QModelIndex index = d->selectedIndex;
+	return d->current() && d->category != 0 &&
+	               d->endpoints.matchesEndpoint(index, d->category, d->state->endpointId)
+	           ? index : QModelIndex{};
+}
+
 QString DynamicConfiguratorProvider::serviceResponseEndpoint() const
 {
 	return d->current() && d->responses.rowCount() ? d->responseEndpoint : QString{};
@@ -963,6 +975,7 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	p->selection = endpoint.value(QStringLiteral("path")).toString();
 	p->category = category;
 	p->state->endpointId = id;
+	p->selectedIndex = index;
 	p->present(false);
 	p->invalid.clear();
 	p->state->staleData = false;

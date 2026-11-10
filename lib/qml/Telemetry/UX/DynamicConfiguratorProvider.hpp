@@ -35,6 +35,7 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(
 	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
+	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
 	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
 	Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -100,6 +101,7 @@ public:
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();
 	QString selection() const;
+	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;
 	bool connected() const;
 	bool busy() const;

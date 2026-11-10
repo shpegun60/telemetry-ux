@@ -175,6 +175,7 @@ static void staticPresentation()
 	CHECK(provider.presentationError().isEmpty() && api.issued == 0);
 	CHECK(!changed.isEmpty());
 	CHECK(endpoints->data(index, role(*endpoints, "name")) == QStringLiteral("Total count"));
+	CHECK(provider.selectedEndpointIndex() == index); // Label changes do not alter identity.
 	CHECK(provider.selection().contains(QStringLiteral("RawCounter")));
 	const auto value = provider.values()->index(0, 0);
 	CHECK(provider.values()->data(value, role(*provider.values(), "value")) ==

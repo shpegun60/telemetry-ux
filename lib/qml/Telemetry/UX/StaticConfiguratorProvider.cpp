@@ -1,6 +1,7 @@
 // Shared Qt presentation for generated APIs; no client or wire codec. MIT.
 #include "StaticConfiguratorProvider.hpp"
 #include "PresentationOverlay.hpp"
+#include <QtCore/QPersistentModelIndex>
 #include <QtCore/QSet>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
@@ -611,6 +612,7 @@ public:
 		return static_cast<int>(id) - groups_.size() - 1;
 	}
 
+
 	QVariant data(const QModelIndex& index, int role) const override
 	{
 		if (!index.isValid() || index.model() != this)
@@ -665,6 +667,7 @@ struct StaticConfiguratorProvider::Impl {
 	PresentationOverlay presentation;
 	QString presentationError;
 	EndpointTree endpointModel;
+	QPersistentModelIndex selectedIndex;
 	ValueTree valueModel, responseModel;
 	WatchList watchModel;
 	QTimer watchTimer;
@@ -1414,6 +1417,14 @@ QString StaticConfiguratorProvider::selection() const
 	return e ? e->catalog + QStringLiteral(" / ") + e->name : QString();
 }
 
+QModelIndex StaticConfiguratorProvider::selectedEndpointIndex() const
+{
+	const QModelIndex index = d->selectedIndex;
+	return index.isValid() && d->selected >= 0 &&
+	               d->endpointModel.endpointIndex(index) == d->selected
+	           ? index : QModelIndex{};
+}
+
 QString StaticConfiguratorProvider::serviceResponseEndpoint() const
 {
 	return d->responseEndpoint;
@@ -1519,6 +1530,7 @@ void StaticConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	if (selected < 0 || selected == d->selected)
 		return;
 	d->selected = selected;
+	d->selectedIndex = index;
 	d->clearDraft();
 	d->retired = false;
 	d->supported = false;
