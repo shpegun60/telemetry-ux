@@ -39,6 +39,17 @@ QQuickItem* item(QQuickItem* root, const QString& name)
 	return nullptr;
 }
 
+QQuickItem* rowItem(QQuickItem* root, int row)
+{
+	if (root->objectName() == QStringLiteral("endpointRow") &&
+	    root->property("row").toInt() == row)
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* found = rowItem(child, row))
+			return found;
+	return nullptr;
+}
+
 void settle()
 {
 	QCoreApplication::processEvents();
@@ -206,18 +217,52 @@ int main(int argc, char** argv)
         CHECK(separateWindow != nullptr);
         settle();
         auto* separateTreePanel = item(separateWindow->contentItem(), QStringLiteral("standaloneTree"));
+        auto* separateTreePanel2 = item(separateWindow->contentItem(), QStringLiteral("standaloneTree2"));
+        auto* legacyTreePanel = item(separateWindow->contentItem(), QStringLiteral("legacyTree"));
         auto* separateWatchPanel = item(separateWindow->contentItem(), QStringLiteral("standaloneWatch"));
         auto* selected = item(separateWindow->contentItem(), QStringLiteral("standaloneSelection"));
-        CHECK(separateTreePanel && separateWatchPanel && selected);
+        CHECK(separateTreePanel && separateTreePanel2 && legacyTreePanel && separateWatchPanel && selected);
         auto* shared = separateTreePanel->property("provider").value<QObject*>();
         CHECK(shared && shared == separateWatchPanel->property("provider").value<QObject*>());
         auto* row = item(separateTreePanel, QStringLiteral("endpointRow"));
         CHECK(row != nullptr);
+        row = rowItem(separateTreePanel, 0);
+        auto* secondRow = rowItem(separateTreePanel, 1);
+        auto* mirrorRow = rowItem(separateTreePanel2, 0);
+        auto* mirrorSecondRow = rowItem(separateTreePanel2, 1);
+        auto* legacyRow = rowItem(legacyTreePanel, 0);
+        CHECK(row && secondRow && mirrorRow && mirrorSecondRow && legacyRow);
+        CHECK(!legacyRow->property("highlighted").toBool());
         auto* rowContent = row->property("contentItem").value<QObject*>();
         CHECK(rowContent && rowContent->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
         click(separateWindow, row);
         CHECK(shared->property("selections").toInt() == 1);
-        CHECK(selected->property("text").toString() == QStringLiteral("Voltage"));
+        CHECK(selected->property("text").toString() == QStringLiteral("Field voltage"));
+        CHECK(row->property("highlighted").toBool() && mirrorRow->property("highlighted").toBool());
+        CHECK(!secondRow->property("highlighted").toBool() && !mirrorSecondRow->property("highlighted").toBool());
+        CHECK(shared->setProperty("refuseSelection", true));
+        click(separateWindow, secondRow);
+        CHECK(shared->property("selections").toInt() == 1 && row->property("highlighted").toBool());
+        CHECK(!secondRow->property("highlighted").toBool());
+        CHECK(shared->setProperty("refuseSelection", false));
+        click(separateWindow, secondRow);
+        CHECK(shared->property("selections").toInt() == 2);
+        CHECK(!row->property("highlighted").toBool() && secondRow->property("highlighted").toBool());
+        CHECK(!mirrorRow->property("highlighted").toBool() && mirrorSecondRow->property("highlighted").toBool());
+        CHECK(!legacyRow->property("highlighted").toBool());
+        auto* keyboardTree = item(separateTreePanel, QStringLiteral("endpointTree"));
+        CHECK(keyboardTree != nullptr);
+        keyboardTree->forceActiveFocus();
+        settle();
+        QTest::keyClick(separateWindow, Qt::Key_Up);
+        settle();
+        CHECK(row->property("current").toBool());
+        CHECK(secondRow->property("highlighted").toBool()); // Cursor != accepted selection.
+        auto* focusIndicator = item(row, QStringLiteral("endpointFocusIndicator"));
+        CHECK(focusIndicator && focusIndicator->isVisible());
+        QTest::keyClick(separateWindow, Qt::Key_Return);
+        settle();
+        CHECK(row->property("highlighted").toBool() && !secondRow->property("highlighted").toBool());
         click(separateWindow, item(separateWatchPanel, QStringLiteral("addWatchButton")));
         CHECK(shared->property("watchCount").toInt() == 1);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));

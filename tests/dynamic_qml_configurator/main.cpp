@@ -21,11 +21,24 @@ static void independentFieldsAndRefusal()
 	Provider a{h.binding.get()}, b{h.binding.get()}, c{h.binding.get()};
 	CHECK(a.connected() && b.connected() && c.connected());
 	CHECK(h.storage->owner.pending() == 0 && device.reads == 0);
+	CHECK(!a.selectedEndpointIndex().isValid());
+	const auto fieldIndex = endpoint(a, "Config");
+	const auto commandIndex = endpoint(a, "Reset");
+	const auto serviceIndex = endpoint(a, "Inspect");
+	CHECK(fieldIndex.isValid() && commandIndex.isValid() && serviceIndex.isValid());
+	CHECK(a.selectEndpoint(commandIndex) && a.selectedEndpointIndex() == commandIndex);
+	CHECK(a.selectEndpoint(serviceIndex) && a.selectedEndpointIndex() == serviceIndex);
 	select(a, "Config");
 	select(b, "Config");
 	select(c, "Serial");
+	CHECK(a.selectedEndpointIndex() == fieldIndex);
+	CHECK(b.selectedEndpointIndex() == endpoint(b, "Config"));
+	CHECK(c.selectedEndpointIndex() == endpoint(c, "Serial"));
+	CHECK(!b.selectEndpoint(fieldIndex)); // A foreign model index cannot change selection.
+	CHECK(b.selectedEndpointIndex() == endpoint(b, "Config"));
 	CHECK(h.storage->owner.pending() == 0);
 	CHECK(a.refresh() && b.refresh() && c.refresh());
+	CHECK(!a.selectEndpoint(commandIndex) && a.selectedEndpointIndex() == fieldIndex);
 	CHECK(h.storage->owner.pending() == 3);
 	h.pump();
 	CHECK(device.reads == 3 && h.storage->packets == 3);
@@ -282,6 +295,62 @@ static QQuickItem* control(QQuickItem* scope, const char* name, const char* scal
 	return result;
 }
 
+static QQuickItem* endpointRow(QQuickItem* root, const QString& endpointName)
+{
+	if (root->isVisible() && root->objectName() == QStringLiteral("endpointRow") &&
+	    root->property("name").toString() == endpointName &&
+	    root->property("isEndpoint").toBool())
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* found = endpointRow(child, endpointName))
+			return found;
+	return nullptr;
+}
+
+static void typedSelectionInQml()
+{
+	Harness h;
+	Provider p{h.binding.get()};
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("realProvider"), &p);
+	QQmlComponent component{&engine};
+	component.setData(R"qml(import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+ApplicationWindow { width: 500; height: 900; visible: true
+    EndpointTreePanel { anchors.fill: parent; provider: realProvider }
+})qml", QUrl{QStringLiteral("qrc:/Selection.qml")});
+	if (component.isError())
+		std::fprintf(stderr, "%s\n", qPrintable(component.errorString()));
+	std::unique_ptr<QObject> root{component.create()};
+	CHECK(root);
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	CHECK(window);
+	QQuickItem* field = nullptr;
+	QQuickItem* command = nullptr;
+	CHECK(until([&] {
+		field = endpointRow(window->contentItem(), QStringLiteral("Config"));
+		command = endpointRow(window->contentItem(), QStringLiteral("Serial"));
+		return field && command;
+	}));
+	CHECK(p.selectEndpoint(endpoint(p, "Config")));
+	CHECK(until([&] { return field->property("highlighted").toBool(); }));
+	CHECK(!command->property("highlighted").toBool());
+	CHECK(p.refresh());
+	CHECK(!p.selectEndpoint(endpoint(p, "Serial")));
+	CHECK(field->property("highlighted").toBool() && !command->property("highlighted").toBool());
+	h.pump();
+	CHECK(p.selectEndpoint(endpoint(p, "Serial")));
+	CHECK(until([&] { return command->property("highlighted").toBool(); }));
+	CHECK(!field->property("highlighted").toBool());
+	h.binding->retire();
+	h.storage->owner.invalidate();
+	h.storage->owner.process(h.storage->now);
+	h.binding->poll();
+	events();
+	CHECK(!p.selectedEndpointIndex().isValid());
+}
+
 static bool inside(QQuickItem& item, QQuickItem& scope)
 {
 	const auto bounds = item.mapRectToItem(&scope, QRectF{0, 0, item.width(), item.height()});
@@ -503,6 +572,7 @@ static void threePanelsRetirementAndReconnect()
 	events();
 	CHECK(!a.connected() && !c.connected() && a.values()->rowCount() == 0 &&
 	      c.values()->rowCount() == 0);
+	CHECK(!a.selectedEndpointIndex().isValid() && !c.selectedEndpointIndex().isValid());
 	CHECK(!a.values()->data(oldValue).isValid() && !a.endpoints()->data(oldEndpoint).isValid());
 	CHECK(!a.refresh() && !c.refresh());
 	CHECK(h.storage->owner.confirmQuiescence({17, true, true, true}));
@@ -515,6 +585,7 @@ static void threePanelsRetirementAndReconnect()
 	events();
 	CHECK(a.connected() && c.connected() && !a.allowMutations() && !c.allowMutations());
 	CHECK(a.selection().isEmpty() && c.selection().isEmpty());
+	CHECK(!a.selectedEndpointIndex().isValid() && !c.selectedEndpointIndex().isValid());
 	CHECK(h.storage->packets == packets && device.services == services);
 	CHECK(!a.selectEndpoint(oldEndpoint));
 	select(a, "Config");
@@ -600,6 +671,8 @@ int main(int argc, char** argv)
 		invalidatedRequestKeepsCategory();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("deletion"))
 		modelNotificationDeletion();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("selection"))
+		typedSelectionInQml();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("panels"))
 		threePanelsRetirementAndReconnect();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("example"))

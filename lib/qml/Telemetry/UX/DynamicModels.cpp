@@ -531,6 +531,14 @@ QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
 	    {QStringLiteral("name"), row->name},         {QStringLiteral("path"), row->path}};
 }
 
+bool EndpointModel::matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const
+{
+	if (!impl_->current() || impl_->tree.changing)
+		return false;
+	const auto* row = impl_->tree.at(this, index);
+	return row && row->endpoint && row->category == category && row->endpointId == id;
+}
+
 QModelIndex EndpointModel::index(int row, int column, const QModelIndex& parent) const
 {
 	const auto* children = impl_->tree.children(this, parent);

@@ -52,6 +52,7 @@ The provider exposes notifying properties:
 | `endpoints`, `values`, `responses` | QAbstractItemModel objects owned by the host |
 | `watchlist` | QAbstractListModel owned by the host |
 | `selection`, `serviceResponseEndpoint` | QString display names |
+| `selectedEndpointIndex` | Optional current `QModelIndex` in `endpoints`; invalid when none is selected. Enables selection highlighting in `EndpointTreePanel`. |
 | `connected`, `busy`, `editing` | Connection/operation/draft state |
 | `canEdit`, `canApply`, `canRefresh` | Host-authorized Field actions |
 | `commandSelected`, `canExecute`, `serviceSelected`, `canCallService` | Operation selection and action gates |

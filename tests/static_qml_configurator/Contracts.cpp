@@ -236,6 +236,35 @@ static void actions()
 	CHECK(api.calls.size() == 1); // No automatic repeat after new admission.
 }
 
+static void selectionIdentity()
+{
+	Api api;
+	auto b = binding(api, 1);
+	// These distinct endpoints deliberately have the same ID, catalog, and name.
+	// Only their category differs; display text cannot be used as identity.
+	auto command = binding(api, 2, true).endpoints[0];
+	b.endpoints.append(command);
+	StaticConfiguratorProvider p(std::move(b));
+	auto* model = p.endpoints();
+	const auto field = model->index(0, 0, model->index(0, 0));
+	const auto action = model->index(0, 0, model->index(1, 0));
+	CHECK(field.isValid() && action.isValid());
+	CHECK(!p.selectedEndpointIndex().isValid());
+	p.selectEndpoint(action);
+	CHECK(p.selectedEndpointIndex() == action && p.commandSelected());
+	p.selectEndpoint(field);
+	CHECK(p.selectedEndpointIndex() == field && !p.commandSelected());
+	CHECK(api.issued == 0);
+	p.refresh();
+	CHECK(p.busy());
+	p.selectEndpoint(action); // Busy selection is refused without moving the highlight.
+	CHECK(p.selectedEndpointIndex() == field);
+	api.finish(true);
+	api.invalidate();
+	// Static selection remains a valid part of the fixed schema while offline.
+	CHECK(p.selectedEndpointIndex() == field);
+}
+
 static void draftAndReadback()
 {
 	Api api;
@@ -569,9 +598,11 @@ static void budgetsAndForeignIndices()
 	StaticConfiguratorProvider q(binding(other));
 	q.setAllowMutations(true);
 	const auto own = endpoint(q);
+	CHECK(!q.selectedEndpointIndex().isValid());
 	q.selectEndpoint(endpoint(p));
-	CHECK(q.selection().isEmpty());
+	CHECK(q.selection().isEmpty() && !q.selectedEndpointIndex().isValid());
 	q.selectEndpoint(own);
+	CHECK(q.selectedEndpointIndex() == own);
 	q.beginEdit();
 	CHECK(q.editing());
 	CHECK(!q.setScalarText(p.endpoints()->index(0, 0), "42"));
@@ -947,6 +978,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	actions();
+	selectionIdentity();
 	draftAndReadback();
 	sessionPermission();
 	responseMutationLifetime();

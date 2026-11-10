@@ -347,6 +347,57 @@ static QQuickItem* visual(QQuickItem* root, const QString& name, const QString& 
 	return nullptr;
 }
 
+static QQuickItem* endpointRow(QQuickItem* root, const QString& endpointName)
+{
+	if (root->isVisible() && root->objectName() == QStringLiteral("endpointRow") &&
+	    root->property("name").toString() == endpointName &&
+	    root->property("isEndpoint").toBool())
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* item = endpointRow(child, endpointName))
+			return item;
+	return nullptr;
+}
+
+static void typedSelectionInQml()
+{
+	Harness h;
+	Provider p{h.binding};
+	QQmlEngine engine;
+	QQmlComponent component(&engine);
+	component.setData(R"qml(import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+ApplicationWindow { required property var deviceProvider; width: 500; height: 900; visible: true
+    EndpointTreePanel { anchors.fill: parent; provider: deviceProvider }
+})qml", QUrl(QStringLiteral("qrc:/StaticSelection.qml")));
+	check(component.isReady(), qPrintable(component.errorString()));
+	std::unique_ptr<QObject> root(component.createWithInitialProperties(
+	    {{QStringLiteral("deviceProvider"), QVariant::fromValue(&p)}}));
+	check(bool(root), "create static tree panel");
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	check(window != nullptr, "static tree window");
+	events();
+	QTest::qWait(100);
+	auto* field = endpointRow(window->contentItem(), QStringLiteral("Config"));
+	auto* next = endpointRow(window->contentItem(), QStringLiteral("Wide"));
+	check(field && next, "static endpoint delegates visible");
+	p.selectEndpoint(endpoint(p, "Config"));
+	events();
+	check(field->property("highlighted").toBool() && !next->property("highlighted").toBool(),
+	      "static typed QModelIndex selects correct delegate");
+	p.refresh();
+	p.selectEndpoint(endpoint(p, "Wide"));
+	events();
+	check(field->property("highlighted").toBool() && !next->property("highlighted").toBool(),
+	      "static refused busy selection leaves highlight unchanged");
+	drain(h, p);
+	p.selectEndpoint(endpoint(p, "Wide"));
+	events();
+	check(!field->property("highlighted").toBool() && next->property("highlighted").toBool(),
+	      "static highlight follows accepted selection");
+}
+
 static void individualWatch()
 {
 	ex::device.config = ex::initial;
@@ -599,6 +650,7 @@ int main(int argc, char** argv)
 		responseMutationLifetime();
 		queueRefusal();
 		unknownWrite();
+		typedSelectionInQml();
 		individualWatch();
 		qmlInput(argc > 1 ? QString::fromLocal8Bit(argv[1])
 		                  : QStringLiteral("static-configurator.png"));
