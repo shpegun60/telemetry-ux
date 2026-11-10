@@ -8,9 +8,10 @@ Pane {
     required property var provider
     property int providerRevision: 0
     objectName: "batchPane"
-    implicitHeight: expanded.checked ? 340 : 100
+    implicitHeight: batchLayout.implicitHeight + topPadding + bottomPadding
     background: Rectangle { color: "#17202b"; radius: 10 }
     ColumnLayout {
+        id: batchLayout
         anchors.fill: parent
         spacing: 6
         RowLayout {
@@ -62,6 +63,8 @@ Pane {
             visible: expanded.checked
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.minimumHeight: 220
+            Layout.preferredHeight: 220
             ListView {
                 id: items
                 objectName: "batchList"
@@ -123,46 +126,50 @@ Pane {
                 SplitView.preferredWidth: 400
                 SplitView.minimumWidth: 220
                 Label {
+                    objectName: "batchResponseHeading"
                     textFormat: Text.PlainText
                     text: panel.provider.batchResponseEndpoint.length ? "Result - " + panel.provider.batchResponseEndpoint : "Select an item to inspect its result"
                     Layout.fillWidth: true
                     elide: Text.ElideMiddle
                 }
-                TreeView {
-                    id: responseTree
-                    objectName: "batchResponseTree"
+                Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
-                    model: panel.provider.batchResponses
-                    columnWidthProvider: function() { return Math.max(1, responseTree.width) }
-                    onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
-                    delegate: TreeViewDelegate {
-                        id: response
-                        objectName: "batchResponseRow"
-                        required property string name
-                        required property string detail
-                        required property string value
-                        required property bool isAggregate
-                        required property int childCount
-                        required property int loadedCount
-                        implicitWidth: responseTree.width
-                        implicitHeight: 40
-                        text: name
-                        PlainToolTip { text: response.detail; visible: response.hovered && text.length > 0 }
-                        contentItem: RowLayout {
-                            Label { textFormat: Text.PlainText; text: response.name; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { textFormat: Text.PlainText; text: response.value; font.family: "monospace"; color: "#83e1ce" }
-                            Button {
-                                text: "Load next 128"
-                                visible: response.isAggregate && response.childCount > 128
-                                enabled: response.loadedCount < response.childCount
-                                onClicked: panel.provider.batchResponses.fetchMore(responseTree.modelIndex(Qt.point(0, response.row)))
+                    TreeView {
+                        id: responseTree
+                        objectName: "batchResponseTree"
+                        anchors.fill: parent
+                        clip: true
+                        model: panel.provider.batchResponses
+                        columnWidthProvider: function() { return Math.max(1, responseTree.width) }
+                        onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
+                        delegate: TreeViewDelegate {
+                            id: response
+                            objectName: "batchResponseRow"
+                            required property string name
+                            required property string detail
+                            required property string value
+                            required property bool isAggregate
+                            required property int childCount
+                            required property int loadedCount
+                            implicitWidth: responseTree.width
+                            implicitHeight: 40
+                            text: name
+                            PlainToolTip { text: response.detail; visible: response.hovered && text.length > 0 }
+                            contentItem: RowLayout {
+                                Label { textFormat: Text.PlainText; text: response.name; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Label { textFormat: Text.PlainText; text: response.value; font.family: "monospace"; color: "#83e1ce" }
+                                Button {
+                                    text: "Load next 128"
+                                    visible: response.isAggregate && response.childCount > 128
+                                    enabled: response.loadedCount < response.childCount
+                                    onClicked: panel.provider.batchResponses.fetchMore(responseTree.modelIndex(Qt.point(0, response.row)))
+                                }
                             }
                         }
+                        ScrollBar.vertical: ScrollBar {}
                     }
-                    ScrollBar.vertical: ScrollBar {}
-                    Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: responseTree.rows === 0; text: "No current response value"; color: "#99abbf" }
+                    Label { objectName: "batchResponseEmpty"; textFormat: Text.PlainText; anchors.centerIn: parent; visible: responseTree.rows === 0; text: "No current response value"; color: "#99abbf" }
                 }
             }
         }

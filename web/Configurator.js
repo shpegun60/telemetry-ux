@@ -398,7 +398,7 @@ function mountPresentation(element, provider, categoryFilter, now)
 	content.append(outcomes);
 	if (categoryFilter === 0) {
 		const workspace = node('div', 'tux-workspace');
-		workspace.append(watch, noWatch, batch, noBatch, content);
+		workspace.append(content, watch, noWatch, batch, noBatch);
 		layout.append(navigation, workspace);
 	} else
 		layout.append(navigation, content);

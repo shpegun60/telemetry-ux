@@ -38,6 +38,10 @@ export async function runRendererChecks()
 		dirty : false,
 		error : '',
 		outcomes : Object.freeze({}),
+		watch : Object.freeze({active : false, individual : false, intervalMs : 1000,
+		    canAdd : false, canRefresh : false, rows : Object.freeze([]), status : 'Empty watchlist'}),
+		batch : Object.freeze({active : false, canAdd : false, canExecute : false,
+		    items : Object.freeze([]), addOperations : Object.freeze([]), status : 'Empty batch'}),
 		actions
 	});
 	const listeners = new Set();
@@ -141,6 +145,13 @@ export async function runRendererChecks()
 	let view;
 	try {
 		view = mountConfigurator(host, {provider});
+		const workspace = host.querySelector('.tux-workspace');
+		const editor = workspace.querySelector('.tux-content');
+		check(workspace.firstElementChild === editor,
+		      'Selected endpoint editor comes before optional tools in document and keyboard order');
+		const firstTool = [...workspace.children].find(item => item !== editor && !item.hidden);
+		check(firstTool && editor.getBoundingClientRect().top < firstTool.getBoundingClientRect().top,
+		      'Selected endpoint editor is visually above optional tools');
 		const count = () => host.querySelectorAll('.tux-row[data-source="value"]').length;
 		const more = () =>
 		    host.querySelector('[data-action="load-more"][data-source="value"][data-path="[]"]');

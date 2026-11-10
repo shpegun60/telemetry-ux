@@ -24,3 +24,8 @@ set_target_properties(telemetry_dynamic_watchlist_check PROPERTIES
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_batch" batch-presentation)
 set_target_properties(telemetry_dynamic_batch_check PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+# Geometry over the same installed Session/view, without opening a connection.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml_layout" layout)
+set_target_properties(telemetry_qml_layout_check PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

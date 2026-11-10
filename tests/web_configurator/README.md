@@ -48,6 +48,8 @@ The maintained checks cover:
   keyboard focus, unsubscribing once and preserving a host-owned sibling/client.
   Detached expand and pagination controls cannot change a new selection or an
   unmounted view.
+  The selected endpoint editor precedes optional Watchlist/Batch tools in both
+  document order and visual layout, preserving the same keyboard order.
   These small presentation controls use a provided model; the primary two
   client journeys always use the actual native SDK dispatcher.
 

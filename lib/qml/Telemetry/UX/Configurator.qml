@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
 // Presentation only: the caller owns this provider, its models and all I/O.
 Control {
@@ -13,7 +14,10 @@ Control {
     property Component footerComponent: null
     padding: 0
     background: Rectangle { color: configurator.palette.window }
-    implicitWidth: contentItem.implicitWidth
+    // ScrollView's width depends on the host allocation. Keep the preferred
+    // width independent so an enclosing RowLayout cannot feed its own width
+    // back into its size hints (a polish loop on Qt 6.4).
+    implicitWidth: 640
     implicitHeight: contentItem.implicitHeight
     palette.window: "#11151c"
     palette.windowText: "#e8edf5"
@@ -26,215 +30,261 @@ Control {
     palette.highlightedText: "#ffffff"
     palette.placeholderText: "#718297"
 
-    contentItem: ColumnLayout {
-        spacing: 16
-        Loader { Layout.fillWidth: true; active: configurator.headerComponent !== null; sourceComponent: configurator.headerComponent }
-        SplitView {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            orientation: Qt.Horizontal
-            Pane {
-                SplitView.preferredWidth: 300
-                SplitView.minimumWidth: 220
+    contentItem: ScrollView {
+        id: workspaceScroll
+        objectName: "configuratorScroll"
+        clip: true
+        contentWidth: availableWidth
+        contentHeight: workspace.height
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        ColumnLayout {
+            id: workspace
+            width: workspaceScroll.availableWidth
+            height: implicitHeight
+            spacing: 16
+            readonly property int visibleRows: 2 + Number(headerLoader.visible) + Number(watchLoader.visible)
+                + Number(batchLoader.visible) + Number(footerLoader.visible)
+            readonly property real auxiliaryHeight: (headerLoader.visible ? headerLoader.implicitHeight : 0)
+                + (watchLoader.visible ? watchLoader.implicitHeight : 0)
+                + (batchLoader.visible ? batchLoader.implicitHeight : 0)
+                + connectionStatus.implicitHeight + (footerLoader.visible ? footerLoader.implicitHeight : 0)
+                + spacing * (visibleRows - 1)
+            Loader { id: headerLoader; Layout.fillWidth: true; active: configurator.headerComponent !== null; visible: active; sourceComponent: configurator.headerComponent }
+            SplitView {
+                objectName: "primaryWorkspace"
+                Layout.fillWidth: true
+                // Advanced panels may grow below this workspace, never consume it.
+                Layout.minimumHeight: 400
+                Layout.preferredHeight: Math.max(400, configurator.availableHeight - workspace.auxiliaryHeight)
+                orientation: Qt.Horizontal
+                Pane {
+                    SplitView.preferredWidth: 300
+                    SplitView.minimumWidth: 220
+                    background: Rectangle { color: "#17202b"; radius: 10 }
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 12
+                        Label { textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
+                        TreeView {
+                            id: endpointTree
+                            objectName: "endpointTree"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: configurator.provider.endpoints
+                            columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
+                            onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
+                            delegate: TreeViewDelegate {
+                                id: endpointDelegate
+                                objectName: "endpointRow"
+                                required property string name
+                                required property string detail
+                                required property bool isEndpoint
+                                implicitWidth: endpointTree.width
+                                implicitHeight: 38
+                                text: name
+                                PlainToolTip {
+                                    objectName: "endpointToolTip"
+                                    visible: endpointDelegate.hovered && endpointDelegate.detail.length > 0
+                                    text: endpointDelegate.detail
+                                }
+                                // Basic TreeViewDelegate reads model.display directly.
+                                // A retired model may have no role data before its reset.
+                                contentItem: Label {
+                                    textFormat: Text.PlainText
+                                    text: endpointDelegate.name
+                                    elide: Text.ElideRight
+                                    color: endpointDelegate.highlighted
+                                        ? endpointDelegate.palette.highlightedText
+                                        : endpointDelegate.palette.buttonText
+                                }
+                                onClicked: {
+                                    if (isEndpoint)
+                                        configurator.provider.selectEndpoint(endpointTree.modelIndex(Qt.point(0, row)))
+                                }
+                            }
+                            ScrollBar.vertical: ScrollBar {}
+                            Component.onCompleted: Qt.callLater(function() {
+                                if (!endpointTree) return
+                                endpointTree.forceLayout()
+                                endpointTree.expandRecursively(0, 2)
+                            })
+                        }
+                        Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+                    }
+                }
+                EndpointPanel {
+                    provider: configurator.provider
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: 360
+                }
+            }
+            Loader {
+                id: watchLoader
+                Layout.fillWidth: true
+                Layout.preferredHeight: item ? item.implicitHeight : 0
+                Layout.minimumHeight: Layout.preferredHeight
+                active: configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
+                visible: configurator.watchlistVisible && active
+                sourceComponent: Component { Pane {
+                objectName: "watchlistPane"
+                implicitHeight: (watchPanelExpanded.checked ? 220 : 54)
+                    + (watchStatusLabel.visible ? watchStatusLabel.implicitHeight + 6 : 0)
                 background: Rectangle { color: "#17202b"; radius: 10 }
                 ColumnLayout {
                     anchors.fill: parent
-                    spacing: 12
-                    Label { textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
-                    TreeView {
-                        id: endpointTree
-                        objectName: "endpointTree"
+                    spacing: 6
+                    RowLayout {
+                        Layout.fillWidth: true
+                        CheckBox {
+                            id: watchPanelExpanded
+                            objectName: "watchlistExpanded"
+                            text: "Watchlist " + configurator.provider.watchCount
+                            checked: false
+                        }
+                        Button {
+                            objectName: "addWatchButton"
+                            text: "Add selected Field"
+                            enabled: configurator.provider.canAddWatch && !configurator.provider.watchActive
+                            onClicked: {
+                                if (configurator.provider.addWatch())
+                                    watchPanelExpanded.checked = true
+                            }
+                        }
+                        Button {
+                            objectName: "refreshWatchButton"
+                            text: "Read once"
+                            enabled: configurator.provider.connected && configurator.provider.watchCount > 0 && !configurator.provider.watchActive
+                            onClicked: configurator.provider.refreshWatch()
+                        }
+                        Button {
+                            objectName: "startWatchButton"
+                            text: configurator.provider.watchActive ? "Stop" : "Start polling"
+                            enabled: configurator.provider.watchActive || (configurator.provider.connected && configurator.provider.watchCount > 0)
+                            onClicked: configurator.provider.watchActive ? configurator.provider.stopWatch() : configurator.provider.startWatch()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Label {
+                        id: watchStatusLabel
+                        objectName: "watchStatusLabel"
+                        textFormat: Text.PlainText
+                        text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus
+                        color: "#99abbf"
+                        visible: text.length > 0
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        visible: watchPanelExpanded.checked
+                        Layout.fillWidth: true
+                        ComboBox {
+                            objectName: "watchMode"
+                            Layout.preferredWidth: 210
+                            readonly property bool readManySupported: configurator.provider.watchReadManySupported !== false
+                            readonly property bool explicitIndividual: configurator.provider.watchRequiresExplicitIndividual === true
+                            model: readManySupported ? ["ReadMany", "Individual FieldRead"]
+                                : explicitIndividual ? ["ReadMany (unavailable)", "Individual FieldRead"] : ["Individual FieldRead"]
+                            currentIndex: (readManySupported || explicitIndividual) && configurator.provider.watchIndividual ? 1 : 0
+                            enabled: !configurator.provider.watchActive && (readManySupported || explicitIndividual)
+                            onActivated: configurator.provider.watchIndividual = (!readManySupported && !explicitIndividual) || currentIndex === 1
+                        }
+                        Label { textFormat: Text.PlainText; text: "Interval (ms)"; color: "#99abbf" }
+                        SpinBox {
+                            objectName: "watchFrequency"
+                            from: 1
+                            to: 60000
+                            stepSize: 1
+                            editable: true
+                            value: configurator.provider.watchIntervalMs
+                            enabled: !configurator.provider.watchActive
+                            onValueModified: configurator.provider.watchIntervalMs = value
+                        }
+                        Label { textFormat: Text.PlainText; text: "Nominal interval · sequential scalar reads"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                        Button {
+                            objectName: "clearWatchButton"
+                            text: "Clear"
+                            enabled: configurator.provider.watchCount > 0 && !configurator.provider.watchActive
+                            onClicked: configurator.provider.clearWatch()
+                        }
+                    }
+                    ListView {
+                        id: watchList
+                        objectName: "watchlistView"
+                        visible: watchPanelExpanded.checked
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        model: configurator.provider.watchlist
                         clip: true
-                        model: configurator.provider.endpoints
-                        columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
-                        onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
-                        delegate: TreeViewDelegate {
-                            id: endpointDelegate
-                            objectName: "endpointRow"
+                        delegate: Item {
+                            id: watchRow
+                            objectName: "watchlistRow"
+                            required property int index
                             required property string name
-                            required property string detail
-                            required property bool isEndpoint
-                            implicitWidth: endpointTree.width
-                            implicitHeight: 38
-                            text: name
-                            PlainToolTip {
-                                objectName: "endpointToolTip"
-                                visible: endpointDelegate.hovered && endpointDelegate.detail.length > 0
-                                text: endpointDelegate.detail
-                            }
-                            // Basic TreeViewDelegate reads model.display directly.
-                            // A retired model may have no role data before its reset.
-                            contentItem: Label {
-                                textFormat: Text.PlainText
-                                text: endpointDelegate.name
-                                elide: Text.ElideRight
-                                color: endpointDelegate.highlighted
-                                    ? endpointDelegate.palette.highlightedText
-                                    : endpointDelegate.palette.buttonText
-                            }
-                            onClicked: {
-                                if (isEndpoint)
-                                    configurator.provider.selectEndpoint(endpointTree.modelIndex(Qt.point(0, row)))
+                            required property string status
+                            required property string text
+                            width: watchList.width
+                            height: 34
+                            RowLayout {
+                                anchors.fill: parent
+                                Label { textFormat: Text.PlainText; text: watchRow.name; Layout.preferredWidth: Math.min(260, watchList.width / 3); elide: Text.ElideMiddle }
+                                Label { textFormat: Text.PlainText; text: watchRow.text; font.family: "monospace"; color: "#83e1ce"; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Label { textFormat: Text.PlainText; text: watchRow.status; color: "#99abbf" }
+                                Button {
+                                    objectName: "removeWatchButton"
+                                    property int watchRowIndex: watchRow.index
+                                    text: "Remove"
+                                    enabled: !configurator.provider.watchActive
+                                    onClicked: configurator.provider.removeWatch(watchRow.index)
+                                }
                             }
                         }
                         ScrollBar.vertical: ScrollBar {}
-                        Component.onCompleted: Qt.callLater(function() {
-                            if (!endpointTree) return
-                            endpointTree.forceLayout()
-                            endpointTree.expandRecursively(0, 2)
-                        })
+                        Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
                     }
-                    Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
                 }
+                } }
             }
-            EndpointPanel {
-                provider: configurator.provider
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 360
+            Loader {
+                id: batchLoader
+                Layout.fillWidth: true
+                Layout.preferredHeight: item ? item.implicitHeight : 0
+                Layout.minimumHeight: Layout.preferredHeight
+                active: configurator.provider.batchItems !== undefined && configurator.provider.batchItems !== null
+                visible: configurator.batchVisible && active
+                sourceComponent: Component { BatchPanel { provider: configurator.provider } }
             }
-        }
-        Loader {
-            Layout.fillWidth: true
-            Layout.preferredHeight: item ? item.implicitHeight : 0
-            active: configurator.provider.watchlist !== undefined && configurator.provider.watchlist !== null
-            visible: configurator.watchlistVisible && active
-            sourceComponent: Component { Pane {
-            objectName: "watchlistPane"
-            implicitHeight: (watchPanelExpanded.checked ? 220 : 54)
-                + (watchStatusLabel.visible ? watchStatusLabel.implicitHeight + 6 : 0)
-            background: Rectangle { color: "#17202b"; radius: 10 }
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 6
-                RowLayout {
-                    Layout.fillWidth: true
-                    CheckBox {
-                        id: watchPanelExpanded
-                        objectName: "watchlistExpanded"
-                        text: "Watchlist " + configurator.provider.watchCount
-                        checked: false
-                    }
-                    Button {
-                        objectName: "addWatchButton"
-                        text: "Add selected Field"
-                        enabled: configurator.provider.canAddWatch && !configurator.provider.watchActive
-                        onClicked: {
-                            if (configurator.provider.addWatch())
-                                watchPanelExpanded.checked = true
-                        }
-                    }
-                    Button {
-                        objectName: "refreshWatchButton"
-                        text: "Read once"
-                        enabled: configurator.provider.connected && configurator.provider.watchCount > 0 && !configurator.provider.watchActive
-                        onClicked: configurator.provider.refreshWatch()
-                    }
-                    Button {
-                        objectName: "startWatchButton"
-                        text: configurator.provider.watchActive ? "Stop" : "Start polling"
-                        enabled: configurator.provider.watchActive || (configurator.provider.connected && configurator.provider.watchCount > 0)
-                        onClicked: configurator.provider.watchActive ? configurator.provider.stopWatch() : configurator.provider.startWatch()
-                    }
-                    Item { Layout.fillWidth: true }
-                }
-                Label {
-                    id: watchStatusLabel
-                    objectName: "watchStatusLabel"
-                    textFormat: Text.PlainText
-                    text: configurator.provider.watchPending ? "Reading…" : configurator.provider.watchStatus
-                    color: "#99abbf"
-                    visible: text.length > 0
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                }
-                RowLayout {
-                    visible: watchPanelExpanded.checked
-                    Layout.fillWidth: true
-                    ComboBox {
-                        objectName: "watchMode"
-                        Layout.preferredWidth: 210
-                        readonly property bool readManySupported: configurator.provider.watchReadManySupported !== false
-                        readonly property bool explicitIndividual: configurator.provider.watchRequiresExplicitIndividual === true
-                        model: readManySupported ? ["ReadMany", "Individual FieldRead"]
-                            : explicitIndividual ? ["ReadMany (unavailable)", "Individual FieldRead"] : ["Individual FieldRead"]
-                        currentIndex: (readManySupported || explicitIndividual) && configurator.provider.watchIndividual ? 1 : 0
-                        enabled: !configurator.provider.watchActive && (readManySupported || explicitIndividual)
-                        onActivated: configurator.provider.watchIndividual = (!readManySupported && !explicitIndividual) || currentIndex === 1
-                    }
-                    Label { textFormat: Text.PlainText; text: "Interval (ms)"; color: "#99abbf" }
-                    SpinBox {
-                        objectName: "watchFrequency"
-                        from: 1
-                        to: 60000
-                        stepSize: 1
-                        editable: true
-                        value: configurator.provider.watchIntervalMs
-                        enabled: !configurator.provider.watchActive
-                        onValueModified: configurator.provider.watchIntervalMs = value
-                    }
-                    Label { textFormat: Text.PlainText; text: "Nominal interval · sequential scalar reads"; color: "#99abbf"; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
-                    Button {
-                        objectName: "clearWatchButton"
-                        text: "Clear"
-                        enabled: configurator.provider.watchCount > 0 && !configurator.provider.watchActive
-                        onClicked: configurator.provider.clearWatch()
-                    }
-                }
-                ListView {
-                    id: watchList
-                    objectName: "watchlistView"
-                    visible: watchPanelExpanded.checked
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    model: configurator.provider.watchlist
-                    clip: true
-                    delegate: Item {
-                        id: watchRow
-                        objectName: "watchlistRow"
-                        required property int index
-                        required property string name
-                        required property string status
-                        required property string text
-                        width: watchList.width
-                        height: 34
-                        RowLayout {
-                            anchors.fill: parent
-                            Label { textFormat: Text.PlainText; text: watchRow.name; Layout.preferredWidth: Math.min(260, watchList.width / 3); elide: Text.ElideMiddle }
-                            Label { textFormat: Text.PlainText; text: watchRow.text; font.family: "monospace"; color: "#83e1ce"; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { textFormat: Text.PlainText; text: watchRow.status; color: "#99abbf" }
-                            Button {
-                                objectName: "removeWatchButton"
-                                property int watchRowIndex: watchRow.index
-                                text: "Remove"
-                                enabled: !configurator.provider.watchActive
-                                onClicked: configurator.provider.removeWatch(watchRow.index)
-                            }
-                        }
-                    }
-                    ScrollBar.vertical: ScrollBar {}
-                    Label { textFormat: Text.PlainText; anchors.centerIn: parent; visible: configurator.provider.watchCount === 0; text: "Select a scalar Field and add it to the watchlist."; color: "#718297" }
-                }
+            Label {
+                id: connectionStatus
+                textFormat: Text.PlainText
+                objectName: "statusLabel"
+                text: configurator.provider.statusText
+                color: configurator.provider.connected ? "#83e1ce" : "#99abbf"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
             }
-            } }
+            Loader { id: footerLoader; Layout.fillWidth: true; active: configurator.footerComponent !== null; visible: active; sourceComponent: configurator.footerComponent }
         }
-        Loader {
-            Layout.fillWidth: true
-            Layout.preferredHeight: item ? item.implicitHeight : 0
-            active: configurator.provider.batchItems !== undefined && configurator.provider.batchItems !== null
-            visible: configurator.batchVisible && active
-            sourceComponent: Component { BatchPanel { provider: configurator.provider } }
+    }
+    Connections {
+        target: configurator.Window.window
+        function onActiveFocusItemChanged() {
+            const focused = configurator.Window.window.activeFocusItem
+            let ancestor = focused
+            while (ancestor && ancestor !== workspace)
+                ancestor = ancestor.parent
+            if (!ancestor)
+                return
+            // Keyboard navigation must reveal controls below the main workspace.
+            const viewport = workspaceScroll.contentItem
+            const position = focused.mapToItem(workspace, 0, 0)
+            let offset = viewport.contentY
+            if (position.y < offset)
+                offset = position.y
+            else if (position.y + focused.height > offset + viewport.height)
+                offset = position.y + focused.height - viewport.height
+            viewport.contentY = Math.max(0, Math.min(offset, viewport.contentHeight - viewport.height))
         }
-        Label {
-            textFormat: Text.PlainText
-            objectName: "statusLabel"
-            text: configurator.provider.statusText
-            color: configurator.provider.connected ? "#83e1ce" : "#99abbf"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        Loader { Layout.fillWidth: true; active: configurator.footerComponent !== null; sourceComponent: configurator.footerComponent }
     }
     Connections {
         target: configurator.provider.endpoints

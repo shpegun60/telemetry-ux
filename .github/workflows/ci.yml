@@ -620,6 +620,7 @@ jobs:
             ${{ runner.temp }}/ux-created-qml-*/*.log
             ${{ runner.temp }}/ux-qt-connection-*/*.json
             ${{ runner.temp }}/ux-qt-connection-*/*.log
+            ${{ runner.temp }}/ux-qt-connection-*/*.png
             ${{ runner.temp }}/ux-presentation-*/*.json
             ${{ runner.temp }}/ux-presentation-*/*.log
             ${{ runner.temp }}/ux-dynamic-qml-clang-asan/*.json

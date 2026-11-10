@@ -1,0 +1,194 @@
+// Layout only: real disconnected SDK Session, no transport or device requests. MIT.
+#include <Telemetry/UX/QtConnectionBinding.hpp>
+#include <integration/qt/ConnectionSession.hpp>
+#include <QGuiApplication>
+#include <QImage>
+#include <QQmlApplicationEngine>
+#include <QQmlError>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QQuickStyle>
+#include <QTest>
+#include <algorithm>
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+
+namespace {
+unsigned checks = 0;
+unsigned warnings = 0;
+
+void check(bool condition, const char* expression)
+{
+	++checks;
+	if (!condition)
+		throw std::runtime_error(expression);
+}
+
+#define CHECK(expression) check(bool(expression), #expression)
+
+QQuickItem* item(QQuickItem* root, const QString& name)
+{
+	if (root->objectName() == name)
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* found = item(child, name))
+			return found;
+	return nullptr;
+}
+
+void settle()
+{
+	QCoreApplication::processEvents();
+	QTest::qWait(60);
+}
+
+QRectF rectangle(QQuickItem* object)
+{
+	return object->mapRectToScene(QRectF(0, 0, object->width(), object->height()));
+}
+
+void click(QQuickWindow* window, QQuickItem* target)
+{
+	CHECK(target != nullptr);
+	// Settle all ancestor layouts before mapping the real mouse position.
+	QList<QQuickItem*> ancestors;
+	for (auto* current = target; current; current = current->parentItem())
+		ancestors.prepend(current);
+	for (auto* current : ancestors)
+		current->ensurePolished();
+	QCoreApplication::processEvents();
+	QTest::mouseClick(
+	    window, Qt::LeftButton, Qt::NoModifier,
+	    target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint());
+	settle();
+}
+} // namespace
+
+int main(int argc, char** argv)
+{
+	QGuiApplication app(argc, argv);
+	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	if (argc != 2)
+		return 2;
+	telemetry::integration::qt::ConnectionSession session;
+	telemetry::ux::QtConnectionBinding binding(&session);
+	auto* provider = binding.createProvider(&app);
+	QQmlApplicationEngine engine;
+	QObject::connect(&engine, &QQmlEngine::warnings, &app, [](const QList<QQmlError>& errors) {
+		warnings += unsigned(errors.size());
+		for (const auto& error : errors)
+			std::fprintf(stderr, "%s\n", error.toString().toUtf8().constData());
+	});
+	engine.setInitialProperties({{"ownerProvider", QVariant::fromValue(provider)}});
+	engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));
+	auto* window = engine.rootObjects().isEmpty()
+	                   ? nullptr
+	                   : qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+	try {
+		CHECK(window != nullptr);
+		for (const QSize size : {QSize(1160, 800), QSize(820, 620)}) {
+			window->resize(size);
+			settle();
+			auto* view = item(window->contentItem(), QStringLiteral("layoutConfigurator"));
+			auto* tree = item(view, QStringLiteral("endpointTree"));
+			auto* values = item(view, QStringLiteral("valueTree"));
+			auto* watchToggle = item(view, QStringLiteral("watchlistExpanded"));
+			auto* batchToggle = item(view, QStringLiteral("batchToggle"));
+			CHECK(tree && values && watchToggle && batchToggle);
+			watchToggle->setProperty("checked", false);
+			batchToggle->setProperty("checked", false);
+			settle();
+			// Both collapsed and expanded must preserve a usable primary workspace.
+			CHECK(tree->height() >= 200);
+			CHECK(values->height() >= 200);
+			CHECK(window->grabWindow().save(
+			    QString::fromUtf8(argv[1]) +
+			    QStringLiteral("/%1x%2-collapsed.png").arg(size.width()).arg(size.height())));
+			watchToggle->setProperty("checked", true);
+			batchToggle->setProperty("checked", true);
+			settle();
+			std::printf("Layout %dx%d expanded endpoint=%.1f values=%.1f\n", size.width(),
+			            size.height(), tree->height(), values->height());
+			CHECK(tree->height() >= 200);
+			CHECK(values->height() >= 200);
+			auto* scroll = item(view, QStringLiteral("configuratorScroll"));
+			CHECK(scroll != nullptr);
+			auto* flick =
+			    qobject_cast<QQuickItem*>(scroll->property("contentItem").value<QObject*>());
+			CHECK(flick != nullptr);
+			const qreal maximum = flick->property("contentHeight").toReal() - flick->height();
+			CHECK(maximum > 0);
+			flick->setProperty("contentY", 0);
+			settle();
+			CHECK(rectangle(tree).top() >= rectangle(view).top());
+			CHECK(rectangle(tree).top() < rectangle(view).bottom());
+			CHECK(window->grabWindow().save(
+			    QString::fromUtf8(argv[1]) +
+			    QStringLiteral("/%1x%2-top.png").arg(size.width()).arg(size.height())));
+			view->forceActiveFocus(Qt::TabFocusReason);
+			batchToggle->forceActiveFocus(Qt::TabFocusReason);
+			settle();
+			CHECK(rectangle(batchToggle).top() >= rectangle(view).top());
+			CHECK(rectangle(batchToggle).bottom() <= rectangle(view).bottom());
+			flick->setProperty("contentY", maximum);
+			settle();
+			auto* footer = item(view, QStringLiteral("customFooter"));
+			auto* batch = item(view, QStringLiteral("batchPane"));
+			auto* response = item(view, QStringLiteral("batchResponseTree"));
+			CHECK(footer && batch && response);
+			CHECK(footer->height() >= 34);
+			CHECK(rectangle(footer).bottom() <= rectangle(view).bottom() + 1);
+			CHECK(rectangle(batch).bottom() <= rectangle(footer).top());
+			CHECK(response->height() >= 100);
+			CHECK(rectangle(response).top() >= rectangle(batch).top());
+			CHECK(rectangle(response).bottom() <= rectangle(batch).bottom());
+			auto* heading = item(view, QStringLiteral("batchResponseHeading"));
+			auto* empty = item(view, QStringLiteral("batchResponseEmpty"));
+			CHECK(heading && empty);
+			std::printf("heading y=%.1f h=%.1f empty y=%.1f h=%.1f response h=%.1f\n",
+			            rectangle(heading).y(), heading->height(), rectangle(empty).y(),
+			            empty->height(), response->height());
+			CHECK(rectangle(heading).bottom() <= rectangle(empty).top());
+			// Expanded controls stay reachable and interactive after scrolling.
+			flick->setProperty("contentY", std::max(qreal(0), maximum - 80));
+			settle();
+			click(window, batchToggle);
+			CHECK(!batchToggle->property("checked").toBool());
+			batchToggle->setProperty("checked", true);
+			settle();
+			flick->setProperty("contentY",
+			                   flick->property("contentHeight").toReal() - flick->height());
+			settle();
+			CHECK(window->grabWindow().save(
+			    QString::fromUtf8(argv[1]) +
+			    QStringLiteral("/%1x%2.png").arg(size.width()).arg(size.height())));
+			CHECK(warnings == 0);
+		}
+		// Optional host slots really disappear, rather than leaving layout gaps.
+		auto* view = item(window->contentItem(), QStringLiteral("layoutConfigurator"));
+		CHECK(view->setProperty("headerComponent", QVariant::fromValue<QQmlComponent*>(nullptr)));
+		CHECK(view->setProperty("footerComponent", QVariant::fromValue<QQmlComponent*>(nullptr)));
+		settle();
+		CHECK(!item(view, QStringLiteral("customHeader")));
+		CHECK(!item(view, QStringLiteral("customFooter")));
+		CHECK(view->setProperty("watchlistVisible", false));
+		CHECK(view->setProperty("batchVisible", false));
+		settle();
+		auto* primary = item(view, QStringLiteral("primaryWorkspace"));
+		CHECK(primary && primary->height() >= view->height() - 40);
+		auto* scroll = item(view, QStringLiteral("configuratorScroll"));
+		auto* flick = qobject_cast<QQuickItem*>(scroll->property("contentItem").value<QObject*>());
+		CHECK(flick && flick->property("contentHeight").toReal() <= flick->height() + 1);
+		CHECK(warnings == 0);
+		CHECK(!session.ready() && !session.connecting());
+		std::printf("QML layout checks=%u warnings=%u\n", checks, warnings);
+		return 0;
+	} catch (const std::exception& error) {
+		if (window)
+			window->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/failure.png"));
+		std::fprintf(stderr, "QML layout failed check=%u: %s (warnings=%u)\n", checks, error.what(),
+		             warnings);
+		return 1;
+	}
+}
