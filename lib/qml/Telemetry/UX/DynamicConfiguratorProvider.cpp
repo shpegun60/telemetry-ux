@@ -1,6 +1,7 @@
 // Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
 #include "DynamicConfiguratorProvider.hpp"
 #include "DynamicWatchlist.hpp"
+#include "DynamicBatch.hpp"
 #include "ScalarEditor.hpp"
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
@@ -258,6 +259,7 @@ struct DynamicConfiguratorProvider::Impl {
 	EndpointModel endpoints;
 	ValueModel values, responses;
 	DynamicWatchlist watch;
+	DynamicBatch batch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
 	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
@@ -295,13 +297,58 @@ struct DynamicConfiguratorProvider::Impl {
 
 	bool idle() const
 	{
-		return current() && !busy() && !watch.active() && !updating && !endpoints.changing() &&
-		       !values.changing() && !responses.changing();
+		return current() && !busy() && !watch.active() && !batch.active() && !updating &&
+		       !endpoints.changing() && !values.changing() && !responses.changing();
 	}
 
 	bool mutate() const
 	{
 		return idle() && allowed && binding->mutationsAllowed() && !state->staleData;
+	}
+
+	std::optional<BatchRow> batchRow(const QString& operation) const
+	{
+		if (!idle() || !invalid.isEmpty() || !state || state->staleData)
+			return {};
+		BatchRow row;
+		row.id = state->endpointId;
+		row.session = state->view.session();
+		row.name = selection;
+		if (operation == QStringLiteral("read") && category == 1) {
+			const auto bound = state->view.bindField(row.id);
+			if (!bound)
+				return {};
+			row.operation = cl::Operation::FieldRead;
+			row.responseType = bound.endpoint.responseType();
+			row.responseBytes = bound.endpoint.responseBytes();
+		} else if (operation == QStringLiteral("write") && category == 1 && state->view.editing()) {
+			const auto snapshot = state->view.snapshotInfo();
+			if (!snapshot.ready || snapshot.bytes > 4096)
+				return {};
+			row.operation = cl::Operation::FieldWrite;
+			row.requestType = snapshot.type;
+			row.request.resize(qsizetype(snapshot.bytes));
+		} else if (operation == QStringLiteral("command") && category == 2 &&
+		           state->view.canExecute()) {
+			const auto bound = state->view.bindCommand(row.id);
+			if (!bound)
+				return {};
+			row.operation = cl::Operation::Command;
+			row.requestType = bound.endpoint.requestType();
+			row.request.resize(bound.endpoint.requestBytes());
+		} else if (operation == QStringLiteral("service") && category == 3 &&
+		           state->view.canCallService()) {
+			const auto bound = state->view.bindService(row.id);
+			if (!bound)
+				return {};
+			row.operation = cl::Operation::Service;
+			row.requestType = bound.endpoint.requestType();
+			row.responseType = bound.endpoint.responseType();
+			row.responseBytes = bound.endpoint.responseBytes();
+			row.request.resize(bound.endpoint.requestBytes());
+		} else
+			return {};
+		return row;
 	}
 
 	QString history(const QString& value, std::uint32_t origin) const
@@ -374,6 +421,7 @@ struct DynamicConfiguratorProvider::Impl {
 			}
 			if (!current()) {
 				watch.retire();
+				batch.retire();
 				allowed = false;
 				category = 0;
 				selection.clear();
@@ -385,6 +433,7 @@ struct DynamicConfiguratorProvider::Impl {
 			} else if (state->dirty) {
 				if (state->staleData) {
 					watch.retire(false);
+					batch.invalidateValues();
 					values.clear();
 					responses.clear();
 					invalid.clear();
@@ -425,6 +474,23 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		    const auto p = weak.lock();
 		    return !p || p->busy() || p->updating || (p->state && p->state->view.editing());
 	    });
+	d->batch.setNotify(
+	    [weak] {
+		    if (auto p = weak.lock())
+			    p->notify();
+	    },
+	    [weak] {
+		    const auto p = weak.lock();
+		    return !p || p->busy() || p->watch.active() || p->updating;
+	    },
+	    [weak] {
+		    const auto p = weak.lock();
+		    return p && p->allowed && p->binding && p->binding->mutationsAllowed();
+	    },
+	    [weak] {
+		    if (auto p = weak.lock(); p && p->q)
+			    Q_EMIT p->q->batchFinished();
+	    });
 	setBinding(binding);
 }
 
@@ -446,6 +512,7 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	if (binding && binding->thread() != thread())
 		return;
 	p->watch.retire();
+	p->batch.retire();
 	if (!alive)
 		return;
 	// Host replacement settles the old owner first. Never move accepted work to
@@ -553,6 +620,114 @@ QAbstractItemModel* DynamicConfiguratorProvider::values() const
 QAbstractItemModel* DynamicConfiguratorProvider::responses() const
 {
 	return &d->responses;
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::batchItems() const
+{
+	return d->batch.model();
+}
+
+QAbstractItemModel* DynamicConfiguratorProvider::batchResponses() const
+{
+	return d->batch.responses();
+}
+
+bool DynamicConfiguratorProvider::batchSupported() const
+{
+	return d->batch.supported();
+}
+
+bool DynamicConfiguratorProvider::batchPending() const
+{
+	return d->batch.pending();
+}
+
+bool DynamicConfiguratorProvider::canExecuteBatch() const
+{
+	return d->batch.canExecute();
+}
+
+int DynamicConfiguratorProvider::batchCount() const
+{
+	return d->batch.count();
+}
+
+int DynamicConfiguratorProvider::batchSelection() const
+{
+	return d->batch.selection();
+}
+
+QString DynamicConfiguratorProvider::batchStatus() const
+{
+	return d->batch.status();
+}
+
+QString DynamicConfiguratorProvider::batchResponseEndpoint() const
+{
+	return d->batch.responseEndpoint();
+}
+
+bool DynamicConfiguratorProvider::canAddBatch(const QString& operation) const
+{
+	const auto row = d->batchRow(operation);
+	return row && d->batch.canAdd(*row);
+}
+
+bool DynamicConfiguratorProvider::addBatch(const QString& operation)
+{
+	auto p = d;
+	auto row = p->batchRow(operation);
+	if (!row || !p->batch.canAdd(*row))
+		return false;
+	if (row->operation != cl::Operation::FieldRead) {
+		const auto copied = p->state->view.copyDraft(
+		    {reinterpret_cast<std::byte*>(row->request.data()), std::size_t(row->request.size())});
+		if (!copied || copied.value != std::uint32_t(row->request.size()))
+			return false;
+	}
+	return p->batch.add(std::move(*row));
+}
+
+bool DynamicConfiguratorProvider::removeBatch(int row)
+{
+	auto p = d;
+	return p->batch.remove(row);
+}
+
+bool DynamicConfiguratorProvider::moveBatch(int row, int delta)
+{
+	auto p = d;
+	return p->batch.move(row, delta);
+}
+
+bool DynamicConfiguratorProvider::clearBatch()
+{
+	auto p = d;
+	return p->batch.clear();
+}
+
+bool DynamicConfiguratorProvider::selectBatch(int row)
+{
+	auto p = d;
+	return p->batch.select(row);
+}
+
+bool DynamicConfiguratorProvider::executeBatch()
+{
+	auto p = d;
+	return p->batch.execute();
+}
+
+void DynamicConfiguratorProvider::setBatchSource(BatchSource source)
+{
+	auto p = d;
+	p->batch.setSource(std::move(source));
+}
+
+void DynamicConfiguratorProvider::pollBatch()
+{
+	auto p = d;
+	p->batch.poll();
 }
 
 void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
@@ -678,7 +853,7 @@ bool DynamicConfiguratorProvider::connected() const
 
 bool DynamicConfiguratorProvider::busy() const
 {
-	return d->busy() || d->watch.pending();
+	return d->busy() || d->watch.pending() || d->batch.pending();
 }
 
 bool DynamicConfiguratorProvider::editing() const

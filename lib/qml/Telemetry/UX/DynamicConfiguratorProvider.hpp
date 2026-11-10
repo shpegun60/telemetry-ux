@@ -6,12 +6,22 @@
 
 namespace telemetry::ux {
 struct WatchlistSource;
+struct BatchSource;
 
 class DynamicConfiguratorProvider final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
+	Q_PROPERTY(QAbstractItemModel* batchItems READ batchItems CONSTANT)
+	Q_PROPERTY(QAbstractItemModel* batchResponses READ batchResponses CONSTANT)
+	Q_PROPERTY(bool batchSupported READ batchSupported NOTIFY stateChanged)
+	Q_PROPERTY(bool batchPending READ batchPending NOTIFY stateChanged)
+	Q_PROPERTY(bool canExecuteBatch READ canExecuteBatch NOTIFY stateChanged)
+	Q_PROPERTY(int batchCount READ batchCount NOTIFY stateChanged)
+	Q_PROPERTY(int batchSelection READ batchSelection NOTIFY stateChanged)
+	Q_PROPERTY(QString batchStatus READ batchStatus NOTIFY stateChanged)
+	Q_PROPERTY(QString batchResponseEndpoint READ batchResponseEndpoint NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
 	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported NOTIFY stateChanged)
 	Q_PROPERTY(bool watchRequiresExplicitIndividual READ watchRequiresExplicitIndividual CONSTANT)
@@ -50,6 +60,22 @@ public:
 	QAbstractItemModel* endpoints() const;
 	QAbstractItemModel* values() const;
 	QAbstractItemModel* responses() const;
+	QAbstractItemModel* batchItems() const;
+	QAbstractItemModel* batchResponses() const;
+	bool batchSupported() const;
+	bool batchPending() const;
+	bool canExecuteBatch() const;
+	int batchCount() const;
+	int batchSelection() const;
+	QString batchStatus() const;
+	QString batchResponseEndpoint() const;
+	Q_INVOKABLE bool canAddBatch(const QString& operation) const;
+	Q_INVOKABLE bool addBatch(const QString& operation);
+	Q_INVOKABLE bool removeBatch(int row);
+	Q_INVOKABLE bool moveBatch(int row, int delta);
+	Q_INVOKABLE bool clearBatch();
+	Q_INVOKABLE bool selectBatch(int row);
+	Q_INVOKABLE bool executeBatch();
 	QAbstractItemModel* watchlist() const;
 	bool watchReadManySupported() const;
 
@@ -108,12 +134,15 @@ Q_SIGNALS:
 	void applyFinished(bool confirmed);
 	void commandFinished(bool executed, bool accepted);
 	void serviceFinished(bool succeeded, bool published);
+	void batchFinished();
 
 private:
 	friend class QtConnectionBinding;
 	friend class ConnectionViews;
 	void setWatchSource(WatchlistSource source);
 	void pollWatch();
+	void setBatchSource(BatchSource source);
+	void pollBatch();
 	bool canSetPresentation() const;
 	void setPresentationOverlay(const PresentationOverlay& overlay);
 	struct Impl;

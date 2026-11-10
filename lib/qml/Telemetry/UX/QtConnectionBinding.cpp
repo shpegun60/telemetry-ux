@@ -1,12 +1,103 @@
 // One session-owned view registry with automatic retirement and rebinding. MIT.
 #include "QtConnectionBinding.hpp"
 #include "DynamicWatchlist.hpp"
+#include "DynamicBatch.hpp"
 #include <QtCore/QThread>
 #include <algorithm>
 #include <vector>
 
 namespace telemetry::ux {
 namespace {
+QString batchValueStatus(integration::batch::ValueStatus value)
+{
+	using Status = integration::batch::ValueStatus;
+	switch (value) {
+		case Status::Ok:
+			return QStringLiteral("Ok");
+		case Status::Stale:
+			return QStringLiteral("Stale");
+		case Status::NoValue:
+			return QStringLiteral("NoValue");
+		case Status::InvalidPayload:
+			return QStringLiteral("InvalidPayload");
+		case Status::TypeMismatch:
+			return QStringLiteral("TypeMismatch");
+	}
+	return QStringLiteral("InvalidPayload");
+}
+
+BatchSource batchSource(integration::qt::ConnectionSession* value)
+{
+	using Session = integration::qt::ConnectionSession;
+	namespace bt = integration::batch;
+	const QPointer<Session> session(value);
+	const auto storage = value ? value->storage() : nullptr;
+	BatchSource source;
+	source.storage = storage;
+	source.current = [session, storage] {
+		return session && storage && session->ready() && session->storage() == storage &&
+		       storage->inspector.isCurrent();
+	};
+	const auto current = source.current;
+	source.busy = [session] {
+		return !session || session->busy();
+	};
+	source.session = [storage, current] {
+		return current() ? storage->inspector.session() : 0;
+	};
+	source.schema = [storage, current] {
+		return current() ? storage->schema : runtime::RuntimeSchema{};
+	};
+	source.capability = [session, current]() -> std::optional<BatchSource::Limits> {
+		const auto cap = current() ? session->batchCapability() : std::nullopt;
+		if (!cap)
+			return {};
+		return BatchSource::Limits{cap->itemLimit, cap->requestLimit, cap->replyLimit};
+	};
+	source.submit = [session, current](std::span<const BatchSource::Request> items,
+	                                   BatchSource::Completion done) -> client::Submission {
+		if (!current())
+			return {client::Status::NotAdmitted, {}};
+		if (items.size() > 32)
+			return {client::Status::InvalidArgument, {}};
+		std::array<Session::BatchRequest, 32> requests{};
+		for (std::size_t i = 0; i < items.size(); ++i)
+			requests[i] = {items[i].operation, items[i].id, items[i].payload};
+		const auto origin = session->storage()->inspector.session();
+		return session->batch(
+		    std::span{requests}.first(items.size()),
+		    [done = std::move(done), origin](const bt::BatchResult& result) noexcept {
+			    BatchCompletion out;
+			    out.status = result.operation.status;
+			    out.succeeded = result.operation.succeeded();
+			    out.valueStatus = batchValueStatus(result.valueStatus);
+			    out.count = result.count <= out.rows.size() ? int(result.count) : 0;
+			    for (int i = 0; i < out.count; ++i) {
+				    const auto& item = result.items[std::size_t(i)];
+				    auto& row = out.rows[std::size_t(i)];
+				    row.id = item.id;
+				    row.operation = item.operation.operation;
+				    const auto valueStatus = batchValueStatus(item.valueStatus);
+				    row.result = {{QStringLiteral("status"), unsigned(item.operation.status)},
+				                  {QStringLiteral("dispatch"), item.operation.dispatch},
+				                  {QStringLiteral("endpointStatus"), item.operation.endpointStatus},
+				                  {QStringLiteral("succeeded"), item.operation.succeeded()},
+				                  {QStringLiteral("accepted"), item.operation.accepted()},
+				                  {QStringLiteral("executed"), item.operation.executed()},
+				                  {QStringLiteral("session"), origin},
+				                  {QStringLiteral("valueStatus"), valueStatus}};
+				    row.hasValue = item.hasValue();
+				    if (row.hasValue)
+					    row.payload =
+					        QByteArray(reinterpret_cast<const char*>(item.operation.payload.data()),
+					                   qsizetype(item.operation.payload.size()));
+			    }
+			    *done = std::move(out);
+		    });
+	};
+	return source;
+}
+
 WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 {
 	using Session = integration::qt::ConnectionSession;
@@ -130,6 +221,11 @@ public:
 		QObject::connect(&owner, &integration::qt::ConnectionSession::progressed, this, [this] {
 			poll();
 		});
+		QObject::connect(&owner, &integration::qt::ConnectionSession::dataInvalidated, this,
+		                 [this] {
+			                 if (current)
+				                 current->invalidateData();
+		                 });
 		QObject::connect(&owner, &integration::qt::ConnectionSession::admissionChanged, this,
 		                 [this] {
 			                 admit();
@@ -186,8 +282,11 @@ public:
 			return;
 		const auto watchers = providers;
 		for (const auto& provider : watchers) {
-			if (provider)
+			if (provider) {
 				provider->pollWatch();
+				if (provider)
+					provider->pollBatch();
+			}
 			if (!alive)
 				return;
 		}
@@ -233,6 +332,8 @@ public:
 				provider->setBinding(current.get());
 				if (provider)
 					provider->setWatchSource(watchSource(session));
+				if (provider)
+					provider->setBatchSource(batchSource(session));
 			}
 			if (!alive)
 				return;
@@ -275,6 +376,7 @@ DynamicConfiguratorProvider* QtConnectionBinding::createProvider(QObject* parent
 	if (registry)
 		registry->providers.emplace_back(provider);
 	provider->setWatchSource(watchSource(session_));
+	provider->setBatchSource(batchSource(session_));
 	providers_.removeIf([](const auto& value) {
 		return value.isNull();
 	});

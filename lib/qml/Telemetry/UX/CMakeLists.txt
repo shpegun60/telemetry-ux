@@ -4,7 +4,7 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
     URI Telemetry.UX VERSION 1.0 RESOURCE_PREFIX /qt-project.org/imports
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
-              EndpointPanel.qml PlainToolTip.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
+              EndpointPanel.qml BatchPanel.qml PlainToolTip.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
 target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp)
@@ -35,7 +35,7 @@ install(TARGETS telemetry_ux_configurator telemetry_ux_static_configurator ${_te
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     OBJECTS DESTINATION "${CMAKE_INSTALL_LIBDIR}/telemetry-ux/objects")
 install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
-    EndpointPanel.qml PlainToolTip.qml
+    EndpointPanel.qml BatchPanel.qml PlainToolTip.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
@@ -51,7 +51,8 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     add_library(telemetry_ux_dynamic_configurator STATIC
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
-        WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp)
+        WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp
+        DynamicBatch.cpp DynamicBatch.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
     set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
         EXPORT_NAME dynamic_configurator AUTOMOC ON)
@@ -68,7 +69,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     install(EXPORT TelemetryUXDynamicTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
-        WatchlistModel.hpp DynamicWatchlist.hpp
+        WatchlistModel.hpp DynamicWatchlist.hpp DynamicBatch.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
 

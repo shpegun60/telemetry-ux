@@ -23,8 +23,8 @@ namespace telemetry::ux {
 using Inspector = telemetry::integration::inspector::InspectorModel<8, 4096, 65536>;
 // ReadMany copies its bounded binding into the existing FIFO completion slot.
 // This opt-in GUI budget does not change the portable Workbench default.
-using Workbench = telemetry::integration::workbench::WorkbenchModel<8, 4096, 65536, 768>;
-using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, 4096, 65536, 768>;
+using Workbench = telemetry::integration::workbench::WorkbenchModel<8, 4096, 65536, 1536>;
+using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, 4096, 65536, 1536>;
 
 // All calls run on the Inspector owner thread. The Inspector object must outlive
 // these models. Materialized labels and values are Qt-owned copies; the controller
@@ -91,6 +91,8 @@ public:
 	void resetSnapshot(const Workbench& workbench);
 	void resetServiceResponse(const Workbench& workbench);
 	void resetSnapshot(const WorkbenchView& view);
+	// Read-only projection of a caller-owned, admission-guarded value snapshot.
+	void resetSnapshot(const telemetry::integration::inspector::SnapshotStore& snapshot);
 	void resetServiceResponse(const WorkbenchView& view);
 	[[nodiscard]] telemetry::integration::inspector::NodeResult
 	node(const QModelIndex& index) const;
@@ -113,7 +115,8 @@ private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 	void resetSource(const Inspector* inspector, const Workbench* workbench, bool response = false,
-	                 const WorkbenchView* view = nullptr);
+	                 const WorkbenchView* view = nullptr,
+	                 const telemetry::integration::inspector::SnapshotStore* snapshot = nullptr);
 };
 
 } // namespace telemetry::ux
