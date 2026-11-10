@@ -15,3 +15,8 @@ target_include_directories(telemetry_qt_connection_check PRIVATE ../../examples/
 target_link_libraries(telemetry_qt_connection_check PRIVATE TelemetryUX::qt_connection
     Telemetry::tcp_server Qt6::Quick Qt6::QuickControls2 Qt6::Test)
 qt_import_qml_plugins(telemetry_qt_connection_check)
+
+# Keep controlled watch scheduling in the maintained installed-Session gate.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_watchlist" watchlist-scheduling)
+set_target_properties(telemetry_dynamic_watchlist_check PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

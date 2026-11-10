@@ -50,7 +50,8 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     endif()
     add_library(telemetry_ux_dynamic_configurator STATIC
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
-        DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp)
+        DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
+        WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
     set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
         EXPORT_NAME dynamic_configurator AUTOMOC ON)
@@ -67,6 +68,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     install(EXPORT TelemetryUXDynamicTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
+        WatchlistModel.hpp DynamicWatchlist.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
 

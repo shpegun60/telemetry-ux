@@ -129,9 +129,52 @@ bytes, 65536 snapshot bytes and a 768-byte callback slot. Each panel additionall
 owns 65536 response bytes. These are opt-in host UI budgets, not changes to the
 portable defaults; memory grows with the number of panels. Qt model labels and
 rows use normal host allocations. Arrays materialize at most 128 children per
-fetch. Native view Watchlist/ReadMany/Batch presentation is not part of this slice;
-the renderer omits unsupported Watchlist controls instead of adding another
-scheduler or bypassing the Session/client.
+fetch. Native-only providers omit Watchlist controls. Providers created by
+`QtConnectionBinding` additionally expose the Session-backed Watchlist described
+below. Batch presentation remains separate.
+
+## Session-backed Watchlist
+
+Create providers through `QtConnectionBinding::createProvider()` to use the
+existing Configurator Watchlist. Select a readable scalar Field or enum and
+press **Add selected Field**. Membership and selection perform no I/O. Each
+panel owns its names, values and watch selection while all panels share the
+Session's single Workbench, client and FIFO.
+
+**Read once** reads the selected list sequentially. ReadMany uses at most 32
+Fields in one exchange and obeys both advertised request and response byte
+limits; a list of 65 U64 Fields normally needs 32 + 32 + 1. The UI list has no
+32-item limit and grows with available host memory, up to Qt's row-index limit.
+The list is not an atomic measurement snapshot.
+
+**Start polling** accepts intervals from 1 to 60000 milliseconds. This is a
+nominal scheduling interval, not a promised device update rate. A slow exchange
+or busy shared Session skips ticks instead of appending queued poll requests.
+Each panel retains at most one accepted watch request. Stop disables future
+submissions immediately and drains accepted work; membership, mode and timing
+remain locked until that completion. A read does not replace the panel's
+selected Field snapshot, request draft or Service response.
+
+ReadMany requires successful capability/session admission. An unavailable or
+too-small ReadMany capability reports the reason; select **Individual FieldRead**
+explicitly to perform separate snapshot-preserving reads. The provider never
+silently fans out a failed ReadMany request. Neither mode submits mutations.
+
+Callbacks copy scalar values and per-item statuses into Qt-owned strings before
+returning. Model updates happen only after native progress has returned. U64,
+S64 and unknown enum values retain their exact decimal representation; the
+shared scalar formatter also retains NaN payload bits and signed zero. Session
+retirement clears old displayed values, retains accepted callback storage until
+drain and starts no old watch cycle after new admission. Start again explicitly.
+
+The host-only `WatchlistSource` seam keeps optional native-only providers free of
+Qt Network dependencies. The Session adapter supplies it; it does not create a
+client, transport, admission loop or second FIFO. The Inspector and Session
+provider reuse the same Watchlist row model and scalar formatter.
+
+[Controlled scheduling checks](../tests/dynamic_watchlist/README.md) cover chunk
+and byte budgets, explicit fallback, busy ticks, drain, stale results and model
+reentrancy. These checks do not qualify physical transport timing.
 
 [Installed three-panel lifecycle tests](../tests/dynamic_qml_configurator/README.md)
 exercise real Encoded dispatch, deletion in flight, new admission, no replay,

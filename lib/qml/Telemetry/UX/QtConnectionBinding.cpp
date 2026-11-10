@@ -1,10 +1,117 @@
 // One session-owned view registry with automatic retirement and rebinding. MIT.
 #include "QtConnectionBinding.hpp"
+#include "DynamicWatchlist.hpp"
 #include <QtCore/QThread>
 #include <algorithm>
 #include <vector>
 
 namespace telemetry::ux {
+namespace {
+WatchlistSource watchSource(integration::qt::ConnectionSession* value)
+{
+	using Session = integration::qt::ConnectionSession;
+	namespace rm = integration::read_many;
+	const QPointer<Session> session(value);
+	const auto storage = value ? value->storage() : nullptr;
+	WatchlistSource source;
+	source.storage = storage;
+	source.current = [session, storage] {
+		return session && storage && session->ready() && session->storage() == storage &&
+		       storage->inspector.isCurrent();
+	};
+	const auto current = source.current;
+	source.busy = [session] {
+		return !session || session->busy();
+	};
+	source.capability = [session, current]() -> std::optional<WatchlistSource::Limits> {
+		const auto capability = current() ? session->readManyCapability() : std::nullopt;
+		if (!capability)
+			return {};
+		return WatchlistSource::Limits{capability->itemLimit, capability->requestLimit,
+		                               capability->replyLimit};
+	};
+	source.fieldBytes = [storage, current](quint32 id) -> std::optional<unsigned> {
+		if (!current())
+			return {};
+		const auto binding = storage->inspector.bindField(id);
+		const auto* type =
+		    binding ? storage->schema.type(binding.endpoint.responseType()) : nullptr;
+		if (!type || (type->kind != TypeKind::Scalar && type->kind != TypeKind::Enum) ||
+		    type->wireBytes == 0 || type->wireBytes > 8)
+			return {};
+		return type->wireBytes;
+	};
+	source.readMany = [session, current](std::span<const std::uint32_t> ids,
+	                                     WatchlistSource::Completion done) -> client::Submission {
+		if (!current())
+			return {client::Status::NotAdmitted, {}};
+		return session->readMany(
+		    ids, [done = std::move(done)](const rm::ReadManyResult& result) noexcept {
+			    WatchlistCompletion out;
+			    out.status = result.operation.status;
+			    if (out.status == client::Status::Ok &&
+			        (!result.operation.succeeded() || result.valueStatus != rm::ValueStatus::Ok))
+				    out.status = client::Status::CodecError;
+			    out.count = result.count;
+			    if (out.count > int(out.rows.size())) {
+				    out.status = client::Status::CodecError;
+				    out.count = 0;
+			    }
+			    for (int i = 0; i < out.count; ++i) {
+				    const auto& item = result.items[i];
+				    auto& row = out.rows[i];
+				    row.id = item.id;
+				    switch (item.status) {
+					    case rm::wire::ItemStatus::Ok:
+						    row.status =
+						        item.hasValue() ? QStringLiteral("Ok") : QStringLiteral("Stale");
+						    break;
+					    case rm::wire::ItemStatus::NotFound:
+						    row.status = QStringLiteral("NotFound");
+						    break;
+					    case rm::wire::ItemStatus::UnsupportedType:
+						    row.status = QStringLiteral("UnsupportedType");
+						    break;
+					    case rm::wire::ItemStatus::Unavailable:
+						    row.status = QStringLiteral("Unavailable");
+						    break;
+					    case rm::wire::ItemStatus::ReadError:
+						    row.status = QStringLiteral("ReadError");
+						    break;
+				    }
+				    if (item.hasValue())
+					    row.text = WatchlistModel::formatValue(item.value);
+			    }
+			    *done = std::move(out);
+		    });
+	};
+	source.readField = [session, current](quint32 id,
+	                                      WatchlistSource::Completion done) -> client::Submission {
+		if (!current())
+			return {client::Status::NotAdmitted, {}};
+		return session->readFieldValue(
+		    id, [id, done = std::move(done)](
+		            const integration::dynamic::DynamicResult& result) noexcept {
+			    WatchlistCompletion out;
+			    out.status = result.operation.status;
+			    out.count = 1;
+			    out.rows[0].id = id;
+			    out.rows[0].status =
+			        result.hasValue() ? QStringLiteral("Ok")
+			                          : QStringLiteral("Field refused (dispatch %1, endpoint %2)")
+			                                .arg(result.operation.dispatch)
+			                                .arg(result.operation.endpointStatus);
+			    if (result.operation.succeeded() && !result.hasValue())
+				    out.status = client::Status::CodecError;
+			    if (result.hasValue())
+				    out.rows[0].text = WatchlistModel::formatValue(result.value);
+			    *done = std::move(out);
+		    });
+	};
+	return source;
+}
+} // namespace
+
 class ConnectionViews final : public QObject {
 public:
 	QPointer<integration::qt::ConnectionSession> session;
@@ -77,6 +184,13 @@ public:
 			current->poll();
 		if (!alive)
 			return;
+		const auto watchers = providers;
+		for (const auto& provider : watchers) {
+			if (provider)
+				provider->pollWatch();
+			if (!alive)
+				return;
+		}
 		std::erase_if(retired, [](const auto& binding) {
 			return binding->drained();
 		});
@@ -115,8 +229,11 @@ public:
 		const auto liveProviders = providers;
 		const QPointer<ConnectionViews> alive(this);
 		for (const auto& provider : liveProviders) {
-			if (provider)
+			if (provider) {
 				provider->setBinding(current.get());
+				if (provider)
+					provider->setWatchSource(watchSource(session));
+			}
 			if (!alive)
 				return;
 		}
@@ -157,6 +274,7 @@ DynamicConfiguratorProvider* QtConnectionBinding::createProvider(QObject* parent
 	                                                 parent ? parent : this);
 	if (registry)
 		registry->providers.emplace_back(provider);
+	provider->setWatchSource(watchSource(session_));
 	providers_.removeIf([](const auto& value) {
 		return value.isNull();
 	});
