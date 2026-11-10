@@ -20,6 +20,12 @@ Pane {
     objectName: "watchlistPane"
     property bool expanded: false
     property real headerImplicitHeight: 0
+    // Preserve either the top, a keyboard-focused control, or the user's
+    // chosen relative scroll offset as the header resizes.
+    property string scrollAnchor: "top"
+    property real scrollOffset: 0
+    property bool adjustingScroll: false
+    property real seenHeaderHeight: 0
     implicitHeight: headerImplicitHeight + (expanded ? 120 : 0) + topPadding + bottomPadding
     background: Rectangle { color: "#17202b"; radius: 10 }
 
@@ -36,6 +42,10 @@ Pane {
             objectName: "watchlistScrollBar"
             policy: ScrollBar.AsNeeded
             active: true
+            onPressedChanged: if (pressed) {
+                panel.scrollAnchor = "free"
+                panel.scrollOffset = Math.max(0, watchList.contentY - watchList.originY)
+            }
             parent: watchScroll
             anchors.top: parent.top
             anchors.right: parent.right
@@ -45,11 +55,40 @@ Pane {
             id: watchList
             objectName: "watchlistView"
             clip: true
+            onContentYChanged: {
+                if (!panel.adjustingScroll && headerItem &&
+                        Math.abs(headerItem.height - panel.seenHeaderHeight) < 0.5) {
+                    panel.scrollOffset = Math.max(0, contentY - originY)
+                    panel.scrollAnchor = panel.scrollOffset <= 1 ? "top" : "free"
+                }
+            }
+            onMovementStarted: {
+                panel.scrollAnchor = "free"
+                panel.scrollOffset = Math.max(0, contentY - originY)
+            }
+            onMovementEnded: {
+                panel.scrollAnchor = atYBeginning ? "top" : "free"
+                panel.scrollOffset = Math.max(0, contentY - originY)
+            }
             model: panel.expanded ? panel.provider.watchlist : null
             header: ColumnLayout {
                 id: watchLayout
                 width: watchList.width
                 onImplicitHeightChanged: panel.headerImplicitHeight = implicitHeight
+                onHeightChanged: {
+                    // The inline header sits before row zero. Keep its top
+                    // anchored across layout changes only until user scrolls.
+                    if (!watchList.moving) {
+                        if (panel.scrollAnchor === "focus") {
+                            panel.revealFocusedControl()
+                        } else {
+                            panel.adjustingScroll = true
+                            watchList.contentY = -height + (panel.scrollAnchor === "free" ? panel.scrollOffset : 0)
+                            panel.adjustingScroll = false
+                        }
+                    }
+                    panel.seenHeaderHeight = height
+                }
                 Component.onCompleted: panel.headerImplicitHeight = implicitHeight
                 spacing: 6
                 Flow {
@@ -66,12 +105,16 @@ Pane {
                         onCheckedChanged: panel.expanded = checked
                     }
                     Button {
+                        id: addWatchControl
                         objectName: "addWatchButton"
                         text: "Add selected Field"
                         enabled: panel.provider.canAddWatch && !panel.provider.watchActive
                         onClicked: {
-                            if (panel.provider.addWatch())
+                            const reason = addWatchControl.focusReason
+                            if (panel.provider.addWatch()) {
                                 watchPanelExpanded.checked = true
+                                addWatchControl.forceActiveFocus(reason)
+                            }
                         }
                     }
                     Button {
@@ -227,25 +270,37 @@ Pane {
             }
         }
     }
+    function revealFocusedControl() {
+        const window = panel.Window.window
+        const focused = window ? window.activeFocusItem : null
+        if (!focused || focused === watchList.currentItem)
+            return false
+        let ancestor = focused
+        while (ancestor && ancestor !== watchList.contentItem)
+            ancestor = ancestor.parent
+        if (!ancestor)
+            return false
+        const position = focused.mapToItem(watchList.contentItem, 0, 0)
+        let offset = watchList.contentY
+        if (position.y < offset)
+            offset = position.y
+        else if (position.y + focused.height > offset + watchList.height)
+            offset = position.y + focused.height - watchList.height
+        const minimum = watchList.originY
+        const maximum = Math.max(minimum, minimum + watchList.contentHeight - watchList.height)
+        panel.adjustingScroll = true
+        watchList.contentY = Math.max(minimum, Math.min(offset, maximum))
+        panel.adjustingScroll = false
+        return true
+    }
     Connections {
         target: panel.Window.window
         function onActiveFocusItemChanged() {
             const focused = panel.Window.window.activeFocusItem
-            let ancestor = focused
-            while (ancestor && ancestor !== watchList.contentItem)
-                ancestor = ancestor.parent
-            if (!ancestor)
-                return
-            const viewport = watchList
-            const position = focused.mapToItem(watchList.contentItem, 0, 0)
-            let offset = viewport.contentY
-            if (position.y < offset)
-                offset = position.y
-            else if (position.y + focused.height > offset + viewport.height)
-                offset = position.y + focused.height - viewport.height
-            const minimum = viewport.originY
-            const maximum = Math.max(minimum, minimum + viewport.contentHeight - viewport.height)
-            viewport.contentY = Math.max(minimum, Math.min(offset, maximum))
+            if (panel.revealFocusedControl() && focused.objectName !== "addWatchButton" &&
+                    focused.objectName !== "watchlistExpanded") {
+                panel.scrollAnchor = "focus"
+            }
         }
     }
 }
