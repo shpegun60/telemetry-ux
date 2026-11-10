@@ -3,6 +3,8 @@
 #include <integration/qt/ConnectionSession.hpp>
 #include <QGuiApplication>
 #include <QImage>
+#include <QWheelEvent>
+#include <QtTest/qtestspontaneevent.h>
 #include <QQmlApplicationEngine>
 #include <QQmlError>
 #include <QQmlContext>
@@ -37,6 +39,16 @@ QQuickItem* item(QQuickItem* root, const QString& name)
 		if (auto* found = item(child, name))
 			return found;
 	return nullptr;
+}
+
+QQuickItem* itemWithText(QQuickItem* root, const QString& name, const QString& text)
+{
+    if (root->objectName() == name && root->property("text").toString() == text)
+        return root;
+    for (auto* child : root->childItems())
+        if (auto* found = itemWithText(child, name, text))
+            return found;
+    return nullptr;
 }
 
 QQuickItem* rowItem(QQuickItem* root, int row)
@@ -112,6 +124,9 @@ int main(int argc, char** argv)
 			watchToggle->setProperty("checked", false);
 			batchToggle->setProperty("checked", false);
 			settle();
+			auto* watchPanel = item(view, QStringLiteral("watchlistPane"));
+			CHECK(watchPanel);
+			const auto collapsedWatchHeight = watchPanel->property("implicitHeight").toReal();
 			// Both collapsed and expanded must preserve a usable primary workspace.
 			CHECK(tree->height() >= 200);
 			CHECK(values->height() >= 200);
@@ -121,6 +136,7 @@ int main(int argc, char** argv)
 			watchToggle->setProperty("checked", true);
 			batchToggle->setProperty("checked", true);
 			settle();
+			CHECK(watchPanel->property("implicitHeight").toReal() >= collapsedWatchHeight + 120);
 			std::printf("Layout %dx%d expanded endpoint=%.1f values=%.1f\n", size.width(),
 			            size.height(), tree->height(), values->height());
 			CHECK(tree->height() >= 200);
@@ -276,6 +292,114 @@ int main(int argc, char** argv)
         CHECK(shared->property("starts").toInt() == 1 && shared->property("stops").toInt() == 0);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
         CHECK(!shared->property("watchActive").toBool() && shared->property("stops").toInt() == 1);
+        CHECK(warnings == 0);
+        // A small standalone dock must wrap its controls and offer real wheel
+        // scrolling without changing the provider's polling state.
+        engine.setInitialProperties({});
+        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
+        auto* narrowWindow = engine.rootObjects().size() > 2
+            ? qobject_cast<QQuickWindow*>(engine.rootObjects().last()) : nullptr;
+        CHECK(narrowWindow != nullptr);
+        settle();
+        auto* narrowPanel = item(narrowWindow->contentItem(), QStringLiteral("narrowWatch"));
+        auto* narrowProvider = narrowPanel ? narrowPanel->property("provider").value<QObject*>() : nullptr;
+        auto* narrowScroll = item(narrowPanel, QStringLiteral("watchlistScroll"));
+        auto* narrowFlick = narrowScroll ? qobject_cast<QQuickItem*>(narrowScroll->property("contentItem").value<QObject*>()) : nullptr;
+        CHECK(narrowPanel && narrowProvider && narrowScroll && narrowFlick);
+        for (const auto* name : {"watchlistExpanded", "addWatchButton", "refreshWatchButton", "startWatchButton"}) {
+            auto* control = item(narrowPanel, QString::fromLatin1(name));
+            CHECK(control && rectangle(control).left() >= rectangle(narrowPanel).left());
+            CHECK(rectangle(control).right() <= rectangle(narrowPanel).right());
+        }
+        const qreal collapsedHeight = narrowPanel->property("implicitHeight").toReal();
+        click(narrowWindow, item(narrowPanel, QStringLiteral("watchlistExpanded")));
+        CHECK(narrowPanel->property("implicitHeight").toReal() >= collapsedHeight + 120);
+        click(narrowWindow, item(narrowPanel, QStringLiteral("watchlistExpanded")));
+        CHECK(narrowPanel->property("implicitHeight").toReal() <= collapsedHeight + 1);
+        click(narrowWindow, item(narrowPanel, QStringLiteral("addWatchButton")));
+        CHECK(narrowProvider->property("watchCount").toInt() == 1);
+        CHECK(narrowFlick->property("contentHeight").toReal() > narrowFlick->height());
+        narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-before-wheel.png"));
+        auto* narrowBar = item(narrowPanel, QStringLiteral("watchlistScrollBar"));
+        CHECK(narrowBar && narrowBar->isVisible());
+        const QRectF bar = rectangle(narrowBar);
+        CHECK(bar.height() > 100 && bar.right() <= rectangle(narrowPanel).right());
+        const QPoint press = QPointF(bar.center().x(), bar.bottom() - 5).toPoint();
+        QTest::mouseClick(narrowWindow, Qt::LeftButton, Qt::NoModifier, press);
+        settle();
+        const auto origin = narrowFlick->property("originY").toReal();
+        CHECK(narrowFlick->property("contentY").toReal() > origin);
+        narrowFlick->setProperty("contentY", origin);
+        settle();
+        // Match Qt Quick Test's event delivery: the event enters the window
+        // at a real pointer position, as a spontaneous input with a timestamp.
+        const auto wheelAt = [&](QPointF pos, int delta) {
+            static ulong timestamp = 100000;
+            QWheelEvent event(pos, narrowWindow->mapToGlobal(pos.toPoint()), {},
+                              QPoint(0, delta), Qt::NoButton, Qt::NoModifier,
+                              Qt::NoScrollPhase, false);
+            event.setTimestamp(++timestamp);
+            QSpontaneKeyEvent::setSpontaneous(&event);
+            qApp->notify(narrowWindow, &event);
+            settle();
+        };
+        wheelAt(QPointF(100, 40), -360);
+        CHECK(narrowFlick->property("contentY").toReal() > origin);
+        CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("stops").toInt() == 0);
+        narrowFlick->setProperty("contentY", origin + narrowFlick->property("contentHeight").toReal() - narrowFlick->height());
+        settle();
+        auto* value = item(narrowPanel, QStringLiteral("watchValueText"));
+        auto* rowStatus = item(narrowPanel, QStringLiteral("watchRowStatus"));
+        auto* remove = item(narrowPanel, QStringLiteral("removeWatchButton"));
+        auto* narrowList = item(narrowPanel, QStringLiteral("watchlistView"));
+        CHECK(value && rowStatus && remove && narrowList);
+        CHECK(value->property("text").toString() == QStringLiteral("18446744073709551615"));
+        CHECK(rowStatus->property("text").toString() == QStringLiteral("SubmissionRefused"));
+        for (auto* label : {value, rowStatus}) {
+            std::printf("label %s h=%.2f paint=%.2f w=%.2f paintw=%.2f\n", label->objectName().toUtf8().constData(), label->height(), label->property("paintedHeight").toReal(), label->width(), label->property("paintedWidth").toReal());
+            CHECK(label->property("paintedHeight").isValid());
+            CHECK(label->property("paintedHeight").toReal() <= label->height() + 1);
+            CHECK(label->property("paintedWidth").toReal() <= label->width() + 1);
+        }
+        for (auto* control : {value, rowStatus, remove}) {
+            CHECK(rectangle(control).left() >= rectangle(narrowList).left() - 1);
+            CHECK(rectangle(control).right() <= rectangle(narrowList).right() + 1);
+            CHECK(rectangle(control).top() >= rectangle(narrowList).top() - 1);
+            CHECK(rectangle(control).bottom() <= rectangle(narrowList).bottom() + 1);
+            CHECK(rectangle(control).top() >= rectangle(narrowPanel).top() - 1);
+            CHECK(rectangle(control).bottom() <= rectangle(narrowPanel).bottom() + 1);
+        }
+        CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-watchlist.png")));
+        narrowFlick->setProperty("contentY", origin);
+        settle();
+        auto* interval = item(narrowPanel, QStringLiteral("watchFrequency"));
+        auto* clear = item(narrowPanel, QStringLiteral("clearWatchButton"));
+        CHECK(interval && clear);
+        interval->forceActiveFocus(Qt::TabFocusReason);
+        settle();
+        QTest::keyClick(narrowWindow, Qt::Key_Tab);
+        settle();
+        CHECK(clear->hasActiveFocus());
+        CHECK(rectangle(clear).top() >= rectangle(narrowPanel).top() - 1);
+        CHECK(rectangle(clear).bottom() <= rectangle(narrowPanel).bottom() + 1);
+        CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("stops").toInt() == 0);
+        // A large watchlist stays a single virtualized viewport. Wheel input
+        // over the rows must scroll it without scheduling a read or polling.
+        CHECK(QMetaObject::invokeMethod(narrowProvider, "populate", Q_ARG(QVariant, 65)));
+        settle();
+        CHECK(narrowProvider->property("watchCount").toInt() == 65);
+        CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
+        settle();
+        auto* longStatus = itemWithText(narrowPanel, QStringLiteral("watchRowStatus"),
+            QStringLiteral("SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable"));
+        CHECK(longStatus && longStatus->property("paintedHeight").toReal() > 40);
+        CHECK(longStatus->property("paintedHeight").toReal() <= longStatus->height() + 1);
+        const qreal beforeWheelUp = narrowFlick->property("contentY").toReal();
+        wheelAt(QPointF(100, 175), 360);
+        CHECK(narrowFlick->property("contentY").toReal() < beforeWheelUp);
+        CHECK(narrowProvider->property("starts").toInt() == 0 &&
+              narrowProvider->property("stops").toInt() == 0 &&
+              narrowProvider->property("reads").toInt() == 0);
         CHECK(warnings == 0);
 		std::printf("QML layout checks=%u warnings=%u\n", checks, warnings);
 		return 0;
