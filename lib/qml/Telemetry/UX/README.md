@@ -158,8 +158,10 @@ Its steps are:
 Sizes are in points, which follow display scaling; the base follows the system font.
 Whether Windows' separate *Text size* setting reaches Qt is not established.
 
-`Type.fixedFamily` is the fixed-width family for values and codes. QML cannot read the
-system's fixed font, so a host sets it once, for example from
+`Type.fixedFamily` is the fixed-width family for values and codes. Its default is each
+platform's own: Consolas, Menlo or DejaVu Sans Mono, because `"monospace"` can fall back
+to a proportional face. QML cannot read the system's fixed font, so a host that wants
+exactly that sets it once from
 `QFontDatabase::systemFont(QFontDatabase::FixedFont).family()`.
 
 **Rules for panels:**
