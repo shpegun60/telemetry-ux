@@ -131,7 +131,8 @@ The defaults are a dark set. [tests/theme_contrast](../../../../tests/theme_cont
 checks every text pair at 4.5:1 or more and every outline and focus ring at 3:1 or
 more (WCAG 2.2).
 
-A host restyles everything by assigning roles before its window loads:
+A host restyles everything by assigning roles at startup; a later change reaches every
+binding too:
 
 ```qml
 import Telemetry.UX
@@ -144,7 +145,8 @@ later changes.
 
 ```cpp
 QFont font = QGuiApplication::font();
-font.setPointSizeF(12);          // a 16 px body
+// A 16 px body (Windows' 9 pt becomes 12 pt); a larger system font stays larger.
+font.setPointSizeF(std::max(12.0, font.pointSizeF() * 4.0 / 3.0));
 QGuiApplication::setFont(font);  // menus, docks and every panel follow
 ```
 
@@ -153,12 +155,29 @@ Its steps are:
 - `Type.heading`: the body times 1.125²;
 - `Type.body`: the body itself.
 
-Sizes are in points, so the system's text-size setting still enlarges them.
+Sizes are in points, which follow display scaling; the base follows the system font.
+Whether Windows' separate *Text size* setting reaches Qt is not established.
+
+`Type.fixedFamily` is the fixed-width family for values and codes. QML cannot read the
+system's fixed font, so a host sets it once, for example from
+`QFontDatabase::systemFont(QFontDatabase::FixedFont).family()`.
 
 **Rules for panels:**
 - Use at most three steps on one screen.
 - Use roles, never raw colours.
-- Never pair colour alone with a state; add text or a glyph.
+- Never let colour alone carry a state; add text or a glyph.
+- On a selected row, all of the row's text is `selectedForeground`; muted or secondary
+  text is not drawn on `stateSelected`, and none on `buttonFill`.
+- Draw a focus ring 3 px outside its control. Its contrast is then measured against
+  the surface around the control, not the control's own fill: the ring is the accent
+  colour, which a primary button is filled with.
+
+**Names.** `Theme` and `Type` are short. A host with a type of the same name imports
+the module under a qualifier, `import Telemetry.UX as UX`, and writes `UX.Theme.accent`.
+
+**Another body size.** `Type.body` defaults to the application font. A host whose
+controls take their font from `qtquickcontrols2.conf`, rather than from
+`QGuiApplication::setFont`, assigns `Type.body` once; `caption` and `heading` follow.
 
 **Status:** the panels in this module adopt the singletons in a following change; until
 then they keep their own colours.

@@ -1,6 +1,7 @@
 /* Actual installed Qt-only view: provider strings must not become rich text. MIT. */
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <QAbstractItemModel>
+#include <QColor>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -86,6 +87,20 @@ Item {
             check(watchPanel && watchPanel->property("provider").value<QObject*>() == owner);
             delete views;
         }
+        // The design singletons resolve through the relocated installed module.
+        QQmlComponent design(&engine);
+        design.setData(R"qml(import QtQuick
+import Telemetry.UX
+QtObject {
+    readonly property color accent: Theme.accent
+    readonly property real body: Type.body
+    readonly property real heading: Type.heading
+})qml", QUrl());
+        auto* tokens = design.create();
+        check(tokens && tokens->property("accent").value<QColor>() == QColor(QStringLiteral("#6fd4bf")));
+        check(tokens && tokens->property("body").toDouble() > 0 &&
+              tokens->property("heading").toDouble() > tokens->property("body").toDouble());
+        delete tokens;
 		auto* expanded = window->findChild<QObject*>("watchlistExpanded");
 		check(expanded && expanded->setProperty("checked", true));
 		drain();

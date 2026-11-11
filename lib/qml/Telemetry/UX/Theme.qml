@@ -14,6 +14,7 @@ QtObject {
     property color surface: "#17202b"         // popovers, panes
     property color surfaceBar: "#1a2533"      // header and status bar
     property color surfaceDisabled: "#1b2533" // disabled controls
+    property color surfaceAlternate: "#151d27" // every other row of a long list
 
     // Interaction states laid over a surface.
     property color stateHover: "#1f2b3a"
@@ -24,13 +25,14 @@ QtObject {
     // Text.
     property color textPrimary: "#e8edf5"
     property color textSecondary: "#9fb0c3"
-    property color textMuted: "#8597ab"       // section labels, times, descriptions, placeholders
+    property color textMuted: "#8c9fb3"       // section labels, times, descriptions, placeholders
     property color textDisabled: "#6b7a8c"
 
     // Lines.
     property color outline: "#647f9e"         // field and selector borders: 3:1 or more
     property color outlineVariant: "#2a3646"  // separators, disabled borders
-    property color focusRing: "#6fd4bf"       // 2 px focus frames
+    property color focusRing: "#6fd4bf"       // 2 px focus frames, drawn 3 px outside a
+                                              // control so they contrast with what surrounds it
 
     // The primary action, and secondary buttons.
     property color accent: "#6fd4bf"
@@ -50,5 +52,6 @@ QtObject {
     property color errorLink: "#ffd2d2"
     property color info: "#a8d4f5"
     property color infoContainer: "#1d3a52"
+    property color infoLink: "#d6ecff"
     property color neutralContainer: "#263244"
 }

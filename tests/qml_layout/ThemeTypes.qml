@@ -15,4 +15,6 @@ QtObject {
     Component.onCompleted: accentBefore = Theme.accent
     // A host restyles by assigning a role.
     function restyle() { Theme.accent = "#ff8800" }
+    // A host whose controls take another font sets the body; the steps follow.
+    function setBody(points) { Type.body = points }
 }

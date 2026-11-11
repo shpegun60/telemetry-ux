@@ -43,10 +43,13 @@ int main(int argc, char** argv)
     CHECK(root->property("rowHeight").toInt() == 32);
     // Theme: the defaults, then a host's role reaching an existing binding.
     CHECK(root->property("surfaceWindow").value<QColor>() == QColor(QStringLiteral("#11151c")));
-    CHECK(root->property("muted").value<QColor>() == QColor(QStringLiteral("#8597ab")));
+    CHECK(root->property("muted").value<QColor>() == QColor(QStringLiteral("#8c9fb3")));
     CHECK(root->property("accentBefore").value<QColor>() == QColor(QStringLiteral("#6fd4bf")));
     QMetaObject::invokeMethod(root, "restyle");
     CHECK(root->property("accentAfter").value<QColor>() == QColor(QStringLiteral("#ff8800")));
+    QMetaObject::invokeMethod(root, "setBody", Q_ARG(QVariant, 14.0));
+    CHECK(near(root->property("body").toDouble(), 14.0));
+    CHECK(near(root->property("caption").toDouble(), 14.0 / 1.125));
     std::printf("Theme checks=%d warnings=%d\n", checks, warnings);
     return warnings == 0 ? 0 : 1;
 }

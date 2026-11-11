@@ -17,24 +17,36 @@ GRAPHIC = 3.0
 
 # (foreground role, background roles, minimum ratio, why)
 PAIRS = [
-    ('textPrimary', ['surfaceWindow', 'surface', 'surfaceBar', 'stateHover', 'statePressed', 'buttonFill',
-                     'buttonFillPressed', 'neutralContainer'], TEXT, 'body text'),
-    ('textSecondary', ['surfaceWindow', 'surface', 'surfaceBar', 'stateHover', 'neutralContainer'], TEXT,
-     'secondary text'),
-    ('textMuted', ['surfaceWindow', 'surface', 'surfaceBar', 'stateHover'], TEXT,
-     'section labels, times, descriptions, placeholders'),
+    ('textPrimary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
+                     'stateSelected', 'buttonFill', 'buttonFillPressed', 'neutralContainer'], TEXT, 'body text'),
+    ('textSecondary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
+                       'buttonFill', 'neutralContainer'], TEXT, 'secondary text, links at rest, hovered, pressed'),
+    ('textMuted', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
+                   'neutralContainer'], TEXT, 'section labels, times, descriptions, placeholders'),
     ('selectedForeground', ['stateSelected'], TEXT, 'text on a selected row'),
     ('accentForeground', ['accent', 'accentPressed'], TEXT, 'the primary action'),
     ('success', ['successContainer', 'surfaceWindow'], TEXT, 'Connected'),
     ('warning', ['warningContainer', 'surfaceWindow', 'surface'], TEXT, 'Interrupted, changes allowed'),
-    ('error', ['errorContainer', 'surfaceWindow', 'surface'], TEXT, 'failures'),
-    ('errorLink', ['errorContainer'], TEXT, 'Retry in a failure chip'),
-    ('info', ['infoContainer', 'surfaceWindow'], TEXT, 'polling, connecting'),
+    ('error', ['errorContainer', 'surfaceWindow', 'surface', 'surfaceBar'], TEXT, 'failures, the error count'),
+    ('errorLink', ['errorContainer', 'stateHover', 'statePressed'], TEXT, 'Retry in a failure chip'),
+    ('info', ['infoContainer', 'surfaceWindow', 'stateHover'], TEXT, 'polling, connecting'),
+    ('infoLink', ['infoContainer', 'stateHover', 'statePressed'], TEXT, 'Stop in the polling chip'),
+    ('success', ['surface', 'surfaceAlternate'], GRAPHIC, 'the Ok dot'),
+    ('warning', ['surfaceAlternate'], GRAPHIC, 'a warning glyph'),
     ('outline', ['surfaceWindow', 'surface', 'surfaceBar'], GRAPHIC, 'field and selector borders'),
     ('focusRing', ['surfaceWindow', 'surface', 'surfaceBar', 'stateHover', 'stateSelected'], GRAPHIC,
      'focus frames'),
     ('accent', ['surfaceWindow', 'surfaceBar'], GRAPHIC, 'the primary button against its surroundings'),
 ]
+
+
+# Roles that are never measured, each with the reason. Every role of the Theme
+# must be in a checked pair or here: a new role cannot slip past unmeasured.
+EXEMPT = {
+    'textDisabled': 'text of inactive controls; WCAG 1.4.3 exempts inactive components',
+    'surfaceDisabled': 'fill of inactive controls; exempt likewise',
+    'outlineVariant': 'separators and disabled borders carry no information (1.4.11)',
+}
 
 
 def roles(text: str) -> dict:
@@ -64,6 +76,11 @@ def main() -> int:
         print('FAIL the negative control passed: the contrast formula is wrong')
         return 1
     colours = roles(THEME.read_text(encoding='utf-8'))
+    covered = {fg for fg, _, _, _ in PAIRS} | {bg for _, bgs, _, _ in PAIRS for bg in bgs} | set(EXEMPT)
+    uncovered = sorted(set(colours) - covered)
+    if uncovered:
+        print('FAIL roles neither measured nor exempt: ' + ', '.join(uncovered))
+        return 1
     failures = 0
     checked = 0
     for foreground, backgrounds, minimum, why in PAIRS:
