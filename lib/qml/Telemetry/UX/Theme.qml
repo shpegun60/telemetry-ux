@@ -13,6 +13,7 @@ QtObject {
     property color surfaceWindow: "#11151c"   // window, docks, cards, field fill
     property color surface: "#17202b"         // popovers, panes
     property color surfaceBar: "#1a2533"      // header and status bar
+    property color surfaceTitleBar: "#263b4c" // dock title bars
     property color surfaceDisabled: "#1b2533" // disabled controls
     property color surfaceAlternate: "#151d27" // every other row of a long list
     property color shadow: "#0b0f14"           // shadows and the deepest edge of controls

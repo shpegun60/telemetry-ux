@@ -17,9 +17,9 @@ GRAPHIC = 3.0
 
 # (foreground role, background roles, minimum ratio, why)
 PAIRS = [
-    ('textPrimary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
+    ('textPrimary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceTitleBar', 'surfaceAlternate', 'stateHover', 'statePressed',
                      'stateSelected', 'buttonFill', 'buttonFillPressed', 'neutralContainer'], TEXT, 'body text'),
-    ('textSecondary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
+    ('textSecondary', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceTitleBar', 'surfaceAlternate', 'stateHover', 'statePressed',
                        'buttonFill', 'neutralContainer'], TEXT, 'secondary text, links at rest, hovered, pressed'),
     ('textMuted', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
                    'neutralContainer'], TEXT, 'section labels, times, descriptions, placeholders'),

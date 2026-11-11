@@ -168,6 +168,9 @@ exactly that sets it once from
 - Use at most three steps on one screen.
 - Use roles, never raw colours.
 - Never let colour alone carry a state; add text or a glyph.
+- `textMuted` and `textSecondary` are close (about 1.2:1 against each other): never let
+  them alone carry a distinction. A section label is `textSecondary` in the heading
+  weight; descriptions and times are `textMuted` in the body weight.
 - On a selected row, all of the row's text is `selectedForeground`; muted or secondary
   text is not drawn on `stateSelected`, and none on `buttonFill`.
 - Draw a focus ring 3 px outside its control. Its contrast is then measured against
