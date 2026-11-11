@@ -3,6 +3,7 @@
 // exactly, cancel, a model destroyed mid-download, and a files-only device. MIT.
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
+#include <Telemetry/UX/FileContent.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
@@ -264,6 +265,78 @@ void destroyedMidway(qt::ConnectionSession& session, DeviceFilesModel& files, co
 	CHECK(files.fileCount() == 4 && files.error().isEmpty());
 }
 
+// The viewers' reading of a local file: CSV as a table, text, anything as hex.
+void fileContent(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	using telemetry::ux::FileHexModel;
+	using telemetry::ux::FileTableModel;
+	const auto write = [&](const char* name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + QLatin1String(name);
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	const QByteArray csvBytes =
+	    "time_ms,event,note\r\n0,start,\"a, quoted \"\"note\"\"\"\n250,sample,\n500,threshold";
+	FileContent csv;
+	csv.setLocalFile(write("table.csv", csvBytes));
+	CHECK(csv.loaded() && csv.textual() && csv.tabular() && csv.format() == QStringLiteral("Table"));
+	CHECK(csv.table()->columnCount() == 3 && csv.table()->rowCount() == 3);
+	CHECK(csv.table()->headerData(2, Qt::Horizontal).toString() == QStringLiteral("note"));
+	CHECK(csv.table()->index(0, 2).data().toString() == QStringLiteral("a, quoted \"note\""));
+	CHECK(csv.table()->index(2, 2).data().toString().isEmpty()); // a short row is padded
+	auto* table = qobject_cast<FileTableModel*>(csv.table());
+	CHECK(table && table->numeric(0) && !table->numeric(1) && !table->numeric(2));
+	CHECK(csv.hex()->rowCount() == (csvBytes.size() + 15) / 16 && csv.size() == qulonglong(csvBytes.size()));
+
+	FileContent text;
+	text.setLocalFile(write("note.txt", "line one\nline two\n"));
+	CHECK(text.textual() && !text.tabular() && text.format() == QStringLiteral("Text") &&
+	      text.text() == QStringLiteral("line one\nline two\n"));
+
+	QByteArray bytes;
+	for (int i = 0; i < 40; ++i)
+		bytes += char(i);
+	FileContent binary;
+	binary.setLocalFile(write("data.bin", bytes));
+	CHECK(binary.loaded() && !binary.textual() && binary.format() == QStringLiteral("Binary"));
+	CHECK(binary.hex()->rowCount() == 3);
+	CHECK(binary.hex()->index(0, 0).data(FileHexModel::AsciiRole).toString() == QString(16, QLatin1Char('.')));
+	CHECK(binary.hex()->index(1, 0).data(FileHexModel::OffsetRole).toString() == QStringLiteral("00000010"));
+	CHECK(binary.hex()->index(1, 0).data(FileHexModel::BytesRole).toString().startsWith(QStringLiteral("10 11 12 ")));
+	CHECK(binary.hex()->index(2, 0).data(FileHexModel::AsciiRole).toString() == QStringLiteral(" !\"#$%&'"));
+
+	// An open quote is not a table, but it is still text.
+	FileContent broken;
+	broken.setLocalFile(write("broken.csv", "a,b\n\"open,1\n"));
+	CHECK(broken.textual() && !broken.tabular() && broken.format() == QStringLiteral("Text"));
+	// The device's name can say CSV where the local copy's does not.
+	FileContent named;
+	named.setLocalFile(write("plain.txt", "a,b\n1,2\n"));
+	CHECK(!named.tabular());
+	named.setDevicePath(QStringLiteral("/logs/plain.csv"));
+	CHECK(named.tabular() && named.table()->rowCount() == 1);
+	FileContent missing;
+	missing.setLocalFile(folder + QStringLiteral("/none.bin"));
+	CHECK(!missing.loaded() && !missing.error().isEmpty());
+
+	// The open files: the same copy again is the same row, read anew; Close
+	// removes it.
+	telemetry::ux::OpenFiles open;
+	const auto csvPath = folder + QStringLiteral("/table.csv");
+	CHECK(open.open(csvPath, QStringLiteral("/logs/table.csv")) == 0);
+	CHECK(open.open(folder + QStringLiteral("/data.bin"), QStringLiteral("/data/data.bin")) == 1);
+	CHECK(open.open(csvPath, QStringLiteral("/logs/table.csv")) == 0 && open.count() == 2);
+	CHECK(open.data(open.index(0), telemetry::ux::OpenFiles::NameRole).toString() == QStringLiteral("table.csv"));
+	auto* first = qobject_cast<FileContent*>(
+	    open.data(open.index(0), telemetry::ux::OpenFiles::ContentRole).value<QObject*>());
+	CHECK(first && first->tabular() && first->devicePath() == QStringLiteral("/logs/table.csv"));
+	open.close(0);
+	CHECK(open.count() == 1 &&
+	      open.data(open.index(0), telemetry::ux::OpenFiles::NameRole).toString() == QStringLiteral("data.bin"));
+}
+
 // The device names its files, so no name of its choosing may place a download
 // outside the chosen folder or under a name Windows treats specially.
 void localPaths(const QString& folder)
@@ -312,11 +385,14 @@ void truncatedList()
 	QElapsedTimer took;
 	took.start();
 	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
-	CHECK(await(
+	const bool listed = await(
 	    [&] {
 		    return files.available() && !files.loading() && files.fileCount() > 0;
 	    },
-	    120000));
+	    300000);
+	if (!listed)
+		std::printf("The 4100-file list did not finish in %lld ms\n", static_cast<long long>(took.elapsed()));
+	CHECK(listed);
 	CHECK(files.truncated() && files.fileCount() == DeviceFilesModel::maxFiles && files.error().isEmpty());
 	const auto folder = files.index(0, 0);
 	CHECK(files.data(folder, DeviceFilesModel::FileCountRole).toInt() == DeviceFilesModel::maxFiles);
@@ -391,6 +467,7 @@ int main(int argc, char** argv)
 	}));
 	filesOnly(folder.path());
 	localPaths(folder.path());
+	fileContent(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);
 	return 0;

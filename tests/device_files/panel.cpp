@@ -3,6 +3,7 @@
 // with its progress and its result, and not one QML warning. MIT.
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
+#include <Telemetry/UX/FileContent.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
@@ -216,9 +217,11 @@ int main(int argc, char** argv)
 	qt::ConnectionSession session;
 	DeviceFilesModel files(&session);
 	DeviceFileTransfers transfers(&session);
+	telemetry::ux::FileContent viewerContent;
 	QQmlApplicationEngine engine;
 	engine.setInitialProperties({{QStringLiteral("filesModel"), QVariant::fromValue<QObject*>(&files)},
-	                             {QStringLiteral("transfersModel"), QVariant::fromValue<QObject*>(&transfers)}});
+	                             {QStringLiteral("transfersModel"), QVariant::fromValue<QObject*>(&transfers)},
+	                             {QStringLiteral("viewerContent"), QVariant::fromValue<QObject*>(&viewerContent)}});
 	engine.load(QUrl(QStringLiteral("qrc:/Panel.qml")));
 	CHECK(engine.rootObjects().size() == 1);
 	auto* root = engine.rootObjects().first();
@@ -362,6 +365,33 @@ int main(int argc, char** argv)
 		QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, now), Q_ARG(int, logsRow));
 		return now;
 	}));
+
+	// The viewer: a binary download opens as hex, a CSV as a table with its
+	// columns, and the switch moves to text; not one QML warning on the way.
+	auto* viewer = child(root, "viewer");
+	CHECK(viewer && viewer->property("shownMode").toString().isEmpty());
+	viewerContent.setLocalFile(folder.filePath(QStringLiteral("large.bin")));
+	CHECK(viewer->property("shownMode").toString() == QStringLiteral("hex"));
+	CHECK(await([&] {
+		auto* hex = child(root, "fileViewerHex");
+		return hex && hex->property("count").toInt() == static_cast<int>((largeBytes.size() + 15) / 16);
+	}));
+	const auto csvPath = folder.filePath(QStringLiteral("viewer.csv"));
+	{
+		QFile file(csvPath);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write("name,value\nGain,2.5\nPeriod,5\n") > 0);
+	}
+	viewerContent.setDevicePath(QStringLiteral("/config/viewer.csv"));
+	viewerContent.setLocalFile(csvPath);
+	CHECK(viewer->property("shownMode").toString() == QStringLiteral("table"));
+	CHECK(await([&] {
+		auto* table = child(root, "fileViewerTable");
+		return table && table->property("rows").toInt() == 2 && table->property("columns").toInt() == 2;
+	}));
+	CHECK(child(root, "fileViewerFooter")->property("text").toString().endsWith(QStringLiteral("/config/viewer.csv")));
+	CHECK(QMetaObject::invokeMethod(delegate(root, "fileViewerMode_text"), "clicked"));
+	CHECK(viewer->property("shownMode").toString() == QStringLiteral("text"));
+	CHECK(child(root, "fileViewerText")->property("text").toString().startsWith(QStringLiteral("name,value")));
 
 	// Disconnected: back to the words.
 	session.disconnect();

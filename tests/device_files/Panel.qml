@@ -11,6 +11,7 @@ ApplicationWindow {
 
     required property var filesModel
     required property var transfersModel
+    required property var viewerContent
     property var lastSelection: []
     property var lastOpened: null
     property string lastShown: ""
@@ -23,5 +24,13 @@ ApplicationWindow {
         onDownloadRequested: function(selection) { root.lastSelection = selection }
         onOpenRequested: function(file) { root.lastOpened = file }
         onShowInFolderRequested: function(localPath) { root.lastShown = localPath }
+    }
+
+    // The viewer, under the panel: the check sets its file and reads its state.
+    FileViewer {
+        objectName: "viewer"
+        z: -1
+        anchors.fill: parent
+        content: root.viewerContent
     }
 }
