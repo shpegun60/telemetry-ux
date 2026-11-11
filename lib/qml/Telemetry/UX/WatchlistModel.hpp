@@ -33,7 +33,7 @@ public:
 		StatusCodeRole   // int(WatchStatus), stable across providers
 	};
 	Q_ENUM(Role)
-	static constexpr int maxRows = std::numeric_limits<int>::max();
+	static constexpr int maxRows = watchlistRowLimit;
 	explicit WatchlistModel(QObject* parent = nullptr);
 	void bind(const Workbench& owner) noexcept;
 	void bind(std::function<bool()> current);

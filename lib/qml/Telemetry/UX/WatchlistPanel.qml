@@ -187,7 +187,9 @@ Pane {
                     SpinBox {
                         id: watchFrequency
                         objectName: "watchFrequency"
-                        from: 1
+                        // 0 (continuous) only where the provider accepts it.
+                        from: panel.provider.watchIntervalMinimumMs === undefined
+                              ? 1 : panel.provider.watchIntervalMinimumMs
                         to: 60000
                         stepSize: 1
                         editable: true
@@ -206,7 +208,9 @@ Pane {
                     objectName: "watchIntervalHint"
                     visible: panel.open
                     textFormat: Text.PlainText
-                    text: "Nominal interval. Fields are read sequentially."
+                    text: panel.provider.watchIntervalMs === 0
+                          ? "0 ms: read continuously, at low priority - other requests go first."
+                          : "Nominal interval. Fields are read sequentially."
                     color: "#99abbf"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap

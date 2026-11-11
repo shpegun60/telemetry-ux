@@ -40,6 +40,10 @@ struct WatchSample {
 	}
 };
 
+// The most Fields one Watchlist holds, in both providers. One polling cycle
+// then needs at most 32 ReadMany portions; adding past it reports "capacity".
+inline constexpr int watchlistRowLimit = 1024;
+
 // Stable codes beside a row's display status. Providers word their statuses
 // differently ("NotRead", "Not read", refusal texts); the codes do not differ.
 enum class WatchStatus : int { NotRead = 0, Pending = 1, Ok = 2, Stale = 3, Failed = 4 };

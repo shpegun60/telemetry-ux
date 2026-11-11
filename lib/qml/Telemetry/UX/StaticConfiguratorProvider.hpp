@@ -45,6 +45,8 @@ class StaticConfiguratorProvider final : public QObject {
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
 	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
+	// The smallest interval accepted: 0 reads continuously at low priority.
+	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
 public:
 	explicit StaticConfiguratorProvider(StaticConfiguratorBinding binding,
 	                                    QObject* parent = nullptr);
@@ -106,6 +108,7 @@ public:
 	}
 
 	int watchIntervalMs() const;
+	static constexpr int watchIntervalMinimumMs() noexcept { return 0; }
 	void setWatchIndividual(bool individual);
 	void setWatchIntervalMs(int interval);
 	Q_INVOKABLE bool addWatch();

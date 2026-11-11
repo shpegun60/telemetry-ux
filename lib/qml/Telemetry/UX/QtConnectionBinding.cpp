@@ -213,6 +213,9 @@ public:
 	std::unique_ptr<DynamicConfiguratorBinding> current;
 	std::vector<std::unique_ptr<DynamicConfiguratorBinding>> retired;
 	std::vector<QPointer<DynamicConfiguratorProvider>> providers;
+	// Each progress starts with the next provider, so Watchlists on one
+	// session take turns instead of the first one always going first.
+	std::size_t turn = 0;
 	std::vector<QPointer<QtConnectionBinding>> adapters;
 	bool allowed = false, publishing = false;
 
@@ -285,7 +288,9 @@ public:
 		if (!alive)
 			return;
 		const auto watchers = providers;
-		for (const auto& provider : watchers) {
+		const auto first = watchers.empty() ? 0 : turn++ % watchers.size();
+		for (std::size_t k = 0; k < watchers.size(); ++k) {
+			const auto& provider = watchers[(first + k) % watchers.size()];
 			if (provider) {
 				provider->pollWatch();
 				if (provider)
