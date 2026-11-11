@@ -57,9 +57,9 @@ def main():
                       '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF'])
     run('build', [tools['cmake'], '--build', build])
     suffix = '.exe' if os.name == 'nt' else ''
-    for name, pattern, floor in (('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 45),
-                                 ('telemetry_device_files_panel', r'Device files panel: (\d+) checks, warnings=0', 20)):
-        text = run(name, [build / (name + suffix)], cwd=build, timeout=180)
+    for name, pattern, floor in (('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 70),
+                                 ('telemetry_device_files_panel', r'Device files panel: (\d+) checks, warnings=0', 45)):
+        text = run(name, [build / (name + suffix)], cwd=build, timeout=300)
         found = re.findall(pattern, text)
         if len(found) != 1 or int(found[0]) < floor:
             raise RuntimeError(name + ' did not reach its assertion floor')

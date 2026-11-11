@@ -6,7 +6,8 @@
 // (DeviceFileTransfers). Download asks the host for a destination through
 // downloadRequested(selection) - a save dialog for one file, a folder for
 // several - and the host calls transfers.download(...). Open asks the host to
-// show a file through openRequested(file).
+// show a file through openRequested(file); Show in folder through
+// showInFolderRequested(localPath).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -23,10 +24,28 @@ Pane {
 
     signal downloadRequested(var selection)
     signal openRequested(var file)
+    signal showInFolderRequested(string localPath)
+
+    // DeviceFileTransfers.State, in its order.
+    readonly property int stateWaiting: 0
+    readonly property int stateReading: 1
+    readonly property int stateSaved: 2
+    readonly property int stateCancelled: 3
+    readonly property int stateFailed: 4
 
     readonly property var currentIndex: fileTree.selectionModel.currentIndex
     readonly property bool currentIsFile: files.isFile(currentIndex)
     readonly property string currentName: currentIsFile ? files.data(currentIndex, Qt.DisplayRole) : ""
+    readonly property int finishedTransfers: transfers.rowCount() - transfers.activeCount
+
+    // One width per column, shared by the heading and every row.
+    readonly property real sizeWidth: Math.ceil(sizeMetrics.advanceWidth) + 4
+    readonly property real accessWidth: Math.ceil(Math.max(accessMetrics.advanceWidth,
+                                                           countMetrics.advanceWidth)) + 4
+    readonly property bool accessShown: fileTree.width >= 360
+    TextMetrics { id: sizeMetrics; font.pointSize: Type.caption; text: "888.8 KiB" }
+    TextMetrics { id: accessMetrics; font.pointSize: Type.caption; text: qsTr("read, write") }
+    TextMetrics { id: countMetrics; font.pointSize: Type.caption; text: qsTr("%n file(s)", "", 4096) }
 
     function chosen() {
         return files.selection(currentIndex)
@@ -36,10 +55,20 @@ Pane {
         if (selection.length > 0)
             panel.downloadRequested(selection)
     }
+    function openIndex(index) {
+        const file = files.fileAt(index)
+        if (file.path !== undefined)
+            panel.openRequested(file)
+    }
     function openCurrent() {
-        const selection = files.selection(currentIndex)
-        if (currentIsFile && selection.length > 0)
-            panel.openRequested(selection[0])
+        openIndex(currentIndex)
+    }
+    // Enter: a file opens, a folder folds or unfolds.
+    function activateCurrent() {
+        if (currentIsFile)
+            openCurrent()
+        else if (fileTree.currentRow >= 0)
+            fileTree.toggleExpanded(fileTree.currentRow)
     }
 
     ColumnLayout {
@@ -58,7 +87,8 @@ Pane {
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
                 text: !panel.files.available ? ""
-                    : panel.files.loading ? qsTr("Reading the file list…")
+                    : panel.files.loading ? (panel.files.fileCount > 0 ? qsTr("Refreshing…")
+                                                                       : qsTr("Reading the file list…"))
                     : qsTr("%n file(s)", "", panel.files.fileCount)
             }
             Button {
@@ -132,6 +162,37 @@ Pane {
             text: qsTr("This device has no files.")
         }
 
+        // The columns' titles, at the rows' widths.
+        RowLayout {
+            objectName: "deviceFilesHeading"
+            visible: fileTree.visible
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: qsTr("Name")
+            }
+            Label {
+                Layout.preferredWidth: panel.sizeWidth
+                horizontalAlignment: Text.AlignRight
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: qsTr("Size")
+            }
+            Label {
+                visible: panel.accessShown
+                Layout.preferredWidth: panel.accessWidth
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: qsTr("Access")
+            }
+        }
+
         TreeView {
             id: fileTree
             objectName: "deviceFilesTree"
@@ -148,71 +209,33 @@ Pane {
             Keys.onSpacePressed: function(event) {
                 const index = fileTree.selectionModel.currentIndex
                 if (index.valid) {
+                    // The model leaves a file it cannot read unmarked.
                     panel.files.setMarked(index, !panel.files.isMarked(index))
                     event.accepted = true
                 }
             }
-            Keys.onReturnPressed: panel.openCurrent()
-            Keys.onEnterPressed: panel.openCurrent()
+            Keys.onReturnPressed: panel.activateCurrent()
+            Keys.onEnterPressed: panel.activateCurrent()
+            // Right unfolds and Left folds a folder on every Qt the panel runs on.
+            Keys.onRightPressed: function(event) {
+                const row = fileTree.currentRow
+                event.accepted = row >= 0 && !panel.currentIsFile && !fileTree.isExpanded(row)
+                if (event.accepted)
+                    fileTree.expand(row)
+            }
+            Keys.onLeftPressed: function(event) {
+                const row = fileTree.currentRow
+                event.accepted = row >= 0 && !panel.currentIsFile && fileTree.isExpanded(row)
+                if (event.accepted)
+                    fileTree.collapse(row)
+            }
 
-            delegate: TreeViewDelegate {
-                id: fileRow
-                objectName: "deviceFileRow"
-                required property string name
-                required property string path
-                required property bool isFolder
-                required property string sizeText
-                required property string accessText
-                required property int marked
-                readonly property var sourceIndex: fileTree.modelIndex(Qt.point(0, row))
-
-                implicitWidth: fileTree.width
-                implicitHeight: Type.rowHeight
-                text: name
-
-                // The device's name goes in last, under the highest number, so
-                // nothing in it is ever read as a placeholder.
-                Accessible.name: isFolder
-                    ? qsTr("%2, folder, %1").arg(sizeText).arg(name)
-                    : qsTr("%3, %1, %2").arg(sizeText).arg(accessText).arg(name)
-
-                contentItem: RowLayout {
-                    spacing: 8
-
-                    CheckBox {
-                        objectName: "deviceFileMark"
-                        focusPolicy: Qt.NoFocus
-                        tristate: fileRow.isFolder
-                        checkState: fileRow.marked
-                        Accessible.name: qsTr("Mark %1 for download").arg(fileRow.name)
-                        onClicked: panel.files.setMarked(fileRow.sourceIndex,
-                                                         fileRow.marked !== Qt.Checked)
-                    }
-                    // The device's own name, never replaced.
-                    Label {
-                        Layout.fillWidth: true
-                        textFormat: Text.PlainText
-                        elide: Text.ElideMiddle
-                        text: fileRow.name
-                        color: Theme.textPrimary
-                    }
-                    Label {
-                        objectName: "deviceFileSize"
-                        horizontalAlignment: Text.AlignRight
-                        font.pointSize: Type.caption
-                        color: fileRow.isFolder ? Theme.textMuted : Theme.textSecondary
-                        text: fileRow.sizeText
-                    }
-                    Label {
-                        objectName: "deviceFileAccess"
-                        visible: !fileRow.isFolder && fileTree.width >= 360
-                        Layout.preferredWidth: 72
-                        font.pointSize: Type.caption
-                        color: Theme.textSecondary
-                        text: fileRow.accessText
-                    }
-                }
-                onDoubleClicked: if (!isFolder) panel.openCurrent()
+            delegate: DeviceFileRow {
+                sizeWidth: panel.sizeWidth
+                accessWidth: panel.accessWidth
+                accessShown: panel.accessShown
+                onMarkRequested: function(index, value) { panel.files.setMarked(index, value) }
+                onOpenRequested: function(index) { panel.openIndex(index) }
             }
             ScrollBar.vertical: ScrollBar {}
             Component.onCompleted: Qt.callLater(function() {
@@ -225,6 +248,18 @@ Pane {
                     Qt.callLater(function() { if (fileTree) fileTree.expandRecursively() })
                 }
             }
+        }
+
+        Label {
+            objectName: "deviceFilesSystemOnly"
+            visible: panel.files.available && !panel.files.loading && panel.files.systemOnly
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            wrapMode: Text.Wrap
+            font.pointSize: Type.caption
+            color: Theme.textMuted
+            text: qsTr("Only system files so far. Logs and settings appear here when the firmware registers them.")
         }
 
         RowLayout {
@@ -268,18 +303,40 @@ Pane {
             id: transferList
             objectName: "deviceFilesTransfers"
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(contentHeight, 4 * (Type.rowHeight + 8))
+            Layout.preferredHeight: Math.min(contentHeight, 4 * (Type.rowHeight + 8) + 32)
             visible: count > 0
             clip: true
             model: panel.transfers
             spacing: 4
 
-            header: Label {
+            header: RowLayout {
                 width: transferList.width
-                leftPadding: 8
-                font.pointSize: Type.caption
-                color: Theme.textMuted
-                text: qsTr("Transfers")
+                spacing: 8
+
+                Label {
+                    objectName: "deviceFilesTransfersHeading"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8
+                    font.pointSize: Type.caption
+                    font.weight: Type.headingWeight
+                    color: Theme.textSecondary
+                    text: qsTr("Transfers")
+                }
+                LinkButton {
+                    objectName: "deviceFilesCancelAll"
+                    visible: panel.transfers.activeCount >= 2
+                    tint: Theme.accent
+                    text: qsTr("Cancel all")
+                    onClicked: panel.transfers.cancelAll()
+                }
+                LinkButton {
+                    objectName: "deviceFilesClearFinished"
+                    Layout.rightMargin: 8
+                    visible: panel.finishedTransfers > 0
+                    tint: Theme.accent
+                    text: qsTr("Clear finished")
+                    onClicked: panel.transfers.clearFinished()
+                }
             }
 
             delegate: ColumnLayout {
@@ -287,10 +344,15 @@ Pane {
                 objectName: "deviceFileTransfer"
                 required property int index
                 required property string name
+                required property string localPath
+                required property int state
                 required property string figures
                 required property string result
                 required property real progress
                 required property bool active
+
+                readonly property bool failed: state === panel.stateFailed
+                readonly property bool saved: state === panel.stateSaved
 
                 width: transferList.width
                 spacing: 2
@@ -313,24 +375,45 @@ Pane {
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                         font.pointSize: Type.caption
-                        color: transferRow.active ? Theme.textSecondary : Theme.textMuted
-                        text: transferRow.active ? transferRow.figures : transferRow.result
+                        color: transferRow.active ? Theme.textSecondary
+                             : transferRow.failed ? Theme.error
+                             : transferRow.saved ? Theme.textSecondary : Theme.textMuted
+                        text: transferRow.active ? transferRow.figures
+                            : transferRow.failed ? qsTr("! %1").arg(transferRow.result)
+                            : transferRow.result
                     }
-                    Button {
+                    LinkButton {
                         objectName: "deviceFileTransferCancel"
                         visible: transferRow.active
-                        flat: true
+                        tint: Theme.accent
                         text: qsTr("Cancel")
                         Accessible.name: qsTr("Cancel %1").arg(transferRow.name)
                         onClicked: panel.transfers.cancel(transferRow.index)
                     }
+                    LinkButton {
+                        objectName: "deviceFileTransferRetry"
+                        visible: transferRow.failed
+                        tint: Theme.accent
+                        text: qsTr("Retry")
+                        Accessible.name: qsTr("Retry %1").arg(transferRow.name)
+                        onClicked: panel.transfers.retry(transferRow.index)
+                    }
+                    LinkButton {
+                        objectName: "deviceFileTransferShow"
+                        visible: transferRow.saved
+                        tint: Theme.accent
+                        text: qsTr("Show in folder")
+                        Accessible.name: qsTr("Show %1 in its folder").arg(transferRow.name)
+                        onClicked: panel.showInFolderRequested(transferRow.localPath)
+                    }
                 }
+                // A waiting row has no bar: only the file being read has one.
                 ProgressLine {
                     Layout.fillWidth: true
                     Layout.leftMargin: 8
                     Layout.rightMargin: 8
                     progress: transferRow.progress
-                    running: transferRow.active
+                    running: transferRow.state === panel.stateReading
                     reducedMotion: panel.reducedMotion
                     description: qsTr("Downloading %1").arg(transferRow.name)
                     valueText: transferRow.figures

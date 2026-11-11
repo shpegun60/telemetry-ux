@@ -6,8 +6,12 @@
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QGuiApplication>
+#include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQuickItem>
@@ -159,6 +163,38 @@ QQuickItem* delegate(QObject* root, const char* name)
 	return visualChild(window ? window->contentItem() : qobject_cast<QQuickItem*>(root),
 	                   QString::fromLatin1(name));
 }
+
+void visualChildren(QQuickItem* from, const QString& name, QList<QQuickItem*>& into)
+{
+	if (!from)
+		return;
+	if (from->objectName() == name)
+		into << from;
+	for (auto* item : from->childItems())
+		visualChildren(item, name, into);
+}
+
+// The delegate named name whose property equals value: one transfer row, one
+// tree row, whatever the order the view made them in.
+QQuickItem* delegateWhere(QObject* root, const char* name, const char* property, const QVariant& value)
+{
+	auto* window = qobject_cast<QQuickWindow*>(root);
+	QList<QQuickItem*> found;
+	visualChildren(window ? window->contentItem() : qobject_cast<QQuickItem*>(root), QString::fromLatin1(name),
+	               found);
+	for (auto* item : found)
+		if (item->isVisible() && item->property(property) == value)
+			return item;
+	return nullptr;
+}
+
+void press(QObject* target, int key)
+{
+	QKeyEvent down(QEvent::KeyPress, key, Qt::NoModifier);
+	QKeyEvent up(QEvent::KeyRelease, key, Qt::NoModifier);
+	QCoreApplication::sendEvent(target, &down);
+	QCoreApplication::sendEvent(target, &up);
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -242,6 +278,90 @@ int main(int argc, char** argv)
 		warnings << QStringLiteral("transfer row shows: ") + shown + QStringLiteral(" / model result: ") +
 		                transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString();
 	CHECK(saved);
+
+	// The columns have titles, and the device has more than system files.
+	CHECK(child(root, "deviceFilesHeading")->property("visible").toBool());
+	CHECK(!child(root, "deviceFilesSystemOnly")->property("visible").toBool());
+
+	// A saved row offers its folder: the host gets the local file.
+	auto* savedRow = delegateWhere(root, "deviceFileTransfer", "index", row);
+	CHECK(savedRow);
+	auto* show = visualChild(savedRow, QStringLiteral("deviceFileTransferShow"));
+	CHECK(show && show->isVisible());
+	CHECK(QMetaObject::invokeMethod(show, "clicked"));
+	CHECK(await([&] {
+		return root->property("lastShown").toString() ==
+		       QDir::toNativeSeparators(folder.filePath(QStringLiteral("large.bin")));
+	}));
+
+	// A download that cannot be written fails in the error colour with Retry;
+	// once the obstacle is gone, Retry saves it in the same row.
+	const auto blocker = folder.filePath(QStringLiteral("blocked"));
+	{
+		QFile file(blocker);
+		CHECK(file.open(QIODevice::WriteOnly));
+	}
+	const auto events = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+	const auto failing = transfers.download(QStringLiteral("/logs/events.csv"),
+	                                        files.data(events, DeviceFilesModel::FileIndexRole).toInt(),
+	                                        eventsBytes.size(), blocker + QStringLiteral("/events.csv"));
+	CHECK(failing == 1);
+	QQuickItem* failedRow = nullptr;
+	CHECK(await([&] {
+		failedRow = delegateWhere(root, "deviceFileTransfer", "index", failing);
+		auto* retry = failedRow ? visualChild(failedRow, QStringLiteral("deviceFileTransferRetry")) : nullptr;
+		return retry && retry->isVisible();
+	}));
+	auto* failedText = visualChild(failedRow, QStringLiteral("deviceFileTransferFigures"));
+	CHECK(failedText->property("text").toString().startsWith(QStringLiteral("! Could not write")));
+	CHECK(QFile::remove(blocker));
+	CHECK(QMetaObject::invokeMethod(visualChild(failedRow, QStringLiteral("deviceFileTransferRetry")), "clicked"));
+	CHECK(await([&] {
+		return transfers.data(transfers.index(failing), DeviceFileTransfers::StateRole).toInt() ==
+		       static_cast<int>(DeviceFileTransfers::State::Saved);
+	}));
+	CHECK(QFile(blocker + QStringLiteral("/events.csv")).size() == static_cast<qint64>(eventsBytes.size()));
+
+	// Clear finished removes both ended rows.
+	auto* clear = delegate(root, "deviceFilesClearFinished");
+	CHECK(clear && clear->isVisible());
+	CHECK(QMetaObject::invokeMethod(clear, "clicked"));
+	CHECK(await([&] {
+		return transfers.rowCount() == 0 && !child(root, "deviceFilesTransfers")->property("visible").toBool();
+	}));
+
+	// The current row is highlighted and framed while the tree has the
+	// keyboard; Enter on a folder folds and unfolds it.
+	auto* tree = qobject_cast<QQuickItem*>(child(root, "deviceFilesTree"));
+	auto* selection = qvariant_cast<QItemSelectionModel*>(tree->property("selectionModel"));
+	CHECK(selection);
+	const auto logs2 = files.index(1, 0);
+	selection->setCurrentIndex(logs2, QItemSelectionModel::NoUpdate);
+	tree->forceActiveFocus();
+	QQuickItem* currentRow = nullptr;
+	CHECK(await([&] {
+		currentRow = delegateWhere(root, "deviceFileRow", "current", true);
+		return currentRow && currentRow->property("highlighted").toBool();
+	}));
+	CHECK(currentRow->property("name").toString() == QStringLiteral("logs"));
+	if (tree->hasActiveFocus())
+		CHECK(visualChild(currentRow, QStringLiteral("deviceFileFocusFrame"))->isVisible());
+	const int logsRow = tree->property("currentRow").toInt();
+	bool expanded = false;
+	CHECK(QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, expanded), Q_ARG(int, logsRow)));
+	CHECK(expanded);
+	press(tree, Qt::Key_Return);
+	CHECK(await([&] {
+		bool now = true;
+		QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, now), Q_ARG(int, logsRow));
+		return !now;
+	}));
+	press(tree, Qt::Key_Return);
+	CHECK(await([&] {
+		bool now = false;
+		QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, now), Q_ARG(int, logsRow));
+		return now;
+	}));
 
 	// Disconnected: back to the words.
 	session.disconnect();

@@ -3,6 +3,9 @@
 // It appears only once its work has lasted 400 ms, and once shown it stays at
 // least 500 ms, so fast work never flashes a bar. Colour is the info ramp,
 // never the accent, which means "you can press this".
+// It keeps its place in a layout while hidden - only its drawing comes and
+// goes - so nothing around it moves when work starts or ends; it fades in
+// over 150 ms and out over 200 ms, after showing the finished state.
 import QtQuick
 import QtQuick.Controls.Basic as Basic
 
@@ -27,10 +30,15 @@ Basic.ProgressBar {
     to: 1
     value: Math.max(0, Math.min(1, progress))
     indeterminate: progress < 0
-    visible: shown
+    opacity: shown ? 1 : 0
     implicitHeight: thickness
     padding: 0
 
+    Behavior on opacity {
+        OpacityAnimator { duration: line.reducedMotion ? 0 : line.shown ? 150 : 200 }
+    }
+
+    Accessible.ignored: !shown
     Accessible.name: description
     Accessible.description: indeterminate ? qsTr("in progress") : valueText
 
@@ -89,7 +97,7 @@ Basic.ProgressBar {
                 to: sweep.parent ? sweep.parent.width : 0
                 duration: 1200
                 loops: Animation.Infinite
-                running: line.indeterminate && line.visible && !line.reducedMotion
+                running: line.indeterminate && line.shown && line.visible && !line.reducedMotion
             }
         }
     }

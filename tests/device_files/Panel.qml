@@ -13,6 +13,7 @@ ApplicationWindow {
     required property var transfersModel
     property var lastSelection: []
     property var lastOpened: null
+    property string lastShown: ""
 
     DeviceFilesPanel {
         objectName: "panel"
@@ -21,5 +22,6 @@ ApplicationWindow {
         transfers: root.transfersModel
         onDownloadRequested: function(selection) { root.lastSelection = selection }
         onOpenRequested: function(file) { root.lastOpened = file }
+        onShowInFolderRequested: function(localPath) { root.lastShown = localPath }
     }
 }
