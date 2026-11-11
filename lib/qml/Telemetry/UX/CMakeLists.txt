@@ -1,10 +1,13 @@
 # One provider-neutral renderer, linked directly without a runtime plugin. MIT.
 # The older resource prefix is a default import path on Qt 6.4 as well as newer Qt.
+# Theme (colour roles) and Type (the type scale) are singletons a host may set.
+set_source_files_properties(Theme.qml Type.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
     URI Telemetry.UX VERSION 1.0 RESOURCE_PREFIX /qt-project.org/imports
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
-              EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
+              EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
+              Theme.qml Type.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
 target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp)
@@ -39,6 +42,7 @@ install(TARGETS telemetry_ux_configurator telemetry_ux_static_configurator ${_te
     OBJECTS DESTINATION "${CMAKE_INSTALL_LIBDIR}/telemetry-ux/objects")
 install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
+    Theme.qml Type.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")

@@ -115,6 +115,12 @@ def main():
         if not actions_match or int(actions_match[1]) < 60:
             raise RuntimeError('missing tree-actions UI contract')
         report['tree_actions'] = dict(checks=int(actions_match[1]), executable_sha256=digest(actions_binary))
+        theme_binary = output / 'build' / ('telemetry_qml_theme.exe' if os.name == 'nt' else 'telemetry_qml_theme')
+        theme_text = run('theme', [theme_binary])
+        theme_match = re.search(r'Theme checks=(\d+) warnings=0', theme_text)
+        if not theme_match or int(theme_match[1]) < 9:
+            raise RuntimeError('missing Theme and Type contract')
+        report['theme'] = dict(checks=int(theme_match[1]), executable_sha256=digest(theme_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:

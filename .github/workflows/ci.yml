@@ -163,6 +163,8 @@ jobs:
         run: |
           python3 -B tests/inspector_tcp/run.py --build-dir "$RUNNER_TEMP/ux-inspector-tcp" \
             --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Theme colour roles meet WCAG 2.2 contrast
+        run: python3 -B tests/theme_contrast/run.py
       # The panels' geometry, search, bulk selection, Trend and tree actions on
       # the distribution's Qt 6.4, the library's floor: an API newer than 6.4
       # fails here even when a newer desktop Qt passes.
