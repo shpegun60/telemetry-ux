@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 71 checks):
+- **Models** (`main.cpp`, 116 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -16,9 +16,20 @@ over localhost TCP to the SDK's native server. No board.
   - `localPathFor` keeps hostile device paths inside the chosen folder: `..`,
     backslashes, a drive, a UNC prefix, reserved Windows names, forbidden and
     control characters, trailing dots and spaces, an empty path.
-  - A device listing 4100 files is cut at 4096, in its order, and says so. This
-    takes about 70 s here (one request costs about 17 ms; see the SDK session's
-    timer), so the check allows two minutes.
+  - A device listing 4100 files is cut at 4096, in its order, and says so. With
+    the SDK session's event pump this takes under a second (0.6 s here); a
+    session that only pumps on its 5 ms timer takes about 40 s.
+  - Open in the viewer (`DeviceFileTransfers::openIn` into `OpenFiles`): the tab
+    is there before the first byte, reading, and then shows the file; a copy
+    that cannot be written leaves the reason in the tab; a cancelled read ends
+    its reading.
+  - `FileContent` and `OpenFiles`: a CSV with quoted fields as a table with
+    numeric columns, text, binary as hex rows, an open quote that is only text,
+    a CSV named by the device only, a missing file; the same copy opened twice is
+    one row.
+- The checks wait on the event loop as a program does, never with a sleep: on
+  Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
+  made the list above measure the loop instead of the session.
 - **Panel** (`panel.cpp` with `Panel.qml`, off screen, 47 checks):
   - the not-connected words, the tree once connected, the column headings;
   - the Download button and the marked line following the marks;

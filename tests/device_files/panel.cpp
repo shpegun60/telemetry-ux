@@ -22,6 +22,7 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
+
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +57,9 @@ void check(bool ok, int line)
 
 #define CHECK(...) check(bool(__VA_ARGS__), __LINE__)
 
+// The panel check measures no time, so it keeps the plain loop: waiting on
+// events here makes Qt Quick's animation driver report "stopAnimationDriver:
+// driver is not running" off screen. The model check waits on events instead.
 bool await(const std::function<bool()>& done, int milliseconds = 15000)
 {
 	QElapsedTimer deadline;

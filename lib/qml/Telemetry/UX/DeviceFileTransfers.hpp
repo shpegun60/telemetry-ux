@@ -26,6 +26,8 @@
 #include <vector>
 
 namespace telemetry::ux {
+class OpenFiles;
+
 class DeviceFileTransfers final : public QAbstractListModel {
 	Q_OBJECT
 	Q_PROPERTY(int activeCount READ activeCount NOTIFY summaryChanged)
@@ -52,7 +54,8 @@ public:
 		ProgressRole, // 0..1, or -1 while indeterminate
 		FiguresRole,  // "96 / 128 KiB · 42 KiB/s · about 1 s left"
 		ResultRole,   // the line that replaces the bar when it ends
-		ActiveRole
+		ActiveRole,
+		OpeningRole   // read to be shown in a viewer, not saved for the user
 	};
 	Q_ENUM(Role)
 
@@ -68,6 +71,13 @@ public:
 	// the file to write. Returns the row, or -1 when it cannot be queued.
 	Q_INVOKABLE int download(const QString& path, int fileIndex, qulonglong size,
 	                         const QString& localFile);
+	// The same, read to be shown: viewer gets a tab for it at once
+	// (OpenFiles::reading), which follows the read's progress and then shows the
+	// file, or says why it could not be read. The row reads "Opening".
+	Q_INVOKABLE int openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
+	                       const QString& localFile);
+	// Cancels the read that writes localFile, if one is running or waiting.
+	Q_INVOKABLE void cancelFor(const QString& localFile);
 	// The local file for a device path inside folder, keeping the device's own
 	// folders below it. Each segment becomes a plain local name (no drive, no
 	// "..", no reserved or forbidden characters); empty when the result would
@@ -77,6 +87,9 @@ public:
 	// local path download() takes, and a local path as a URL to open.
 	Q_INVOKABLE static QString localFileOf(const QUrl& url);
 	Q_INVOKABLE static QUrl urlOfLocalFile(const QString& path);
+	// Makes a local folder and its parents, for a host that offers or shows a
+	// place before anything is written there; true when it exists.
+	Q_INVOKABLE static bool makeFolder(const QString& path);
 	// The local file a row writes, as download() was given it; rows move when
 	// finished ones are cleared, so a host keys its own records by this.
 	Q_INVOKABLE QString localFileAt(int row) const;
@@ -103,6 +116,8 @@ Q_SIGNALS:
 
 private:
 	struct Job;
+	int queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
+	          OpenFiles* viewer);
 	void schedulePoll();
 	void poll();
 	void startNext();

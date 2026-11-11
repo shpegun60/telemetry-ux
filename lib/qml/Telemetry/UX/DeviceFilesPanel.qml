@@ -325,7 +325,6 @@ Pane {
                 LinkButton {
                     objectName: "deviceFilesCancelAll"
                     visible: panel.transfers.activeCount >= 2
-                    tint: Theme.accent
                     text: qsTr("Cancel all")
                     onClicked: panel.transfers.cancelAll()
                 }
@@ -333,7 +332,6 @@ Pane {
                     objectName: "deviceFilesClearFinished"
                     Layout.rightMargin: 8
                     visible: panel.finishedTransfers > 0
-                    tint: Theme.accent
                     text: qsTr("Clear finished")
                     onClicked: panel.transfers.clearFinished()
                 }
@@ -350,6 +348,8 @@ Pane {
                 required property string result
                 required property real progress
                 required property bool active
+                // Read to be shown in the Viewer, not saved for the user.
+                required property bool opening
 
                 readonly property bool failed: state === panel.stateFailed
                 readonly property bool saved: state === panel.stateSaved
@@ -378,14 +378,15 @@ Pane {
                         color: transferRow.active ? Theme.textSecondary
                              : transferRow.failed ? Theme.error
                              : transferRow.saved ? Theme.textSecondary : Theme.textMuted
-                        text: transferRow.active ? transferRow.figures
+                        text: transferRow.active && transferRow.opening
+                                  ? qsTr("Opening · %1").arg(transferRow.figures)
+                            : transferRow.active ? transferRow.figures
                             : transferRow.failed ? qsTr("! %1").arg(transferRow.result)
                             : transferRow.result
                     }
                     LinkButton {
                         objectName: "deviceFileTransferCancel"
                         visible: transferRow.active
-                        tint: Theme.accent
                         text: qsTr("Cancel")
                         Accessible.name: qsTr("Cancel %1").arg(transferRow.name)
                         onClicked: panel.transfers.cancel(transferRow.index)
@@ -393,15 +394,14 @@ Pane {
                     LinkButton {
                         objectName: "deviceFileTransferRetry"
                         visible: transferRow.failed
-                        tint: Theme.accent
                         text: qsTr("Retry")
                         Accessible.name: qsTr("Retry %1").arg(transferRow.name)
                         onClicked: panel.transfers.retry(transferRow.index)
                     }
                     LinkButton {
                         objectName: "deviceFileTransferShow"
-                        visible: transferRow.saved
-                        tint: Theme.accent
+                        // A copy read for the Viewer lives in the temporary folder.
+                        visible: transferRow.saved && !transferRow.opening
                         text: qsTr("Show in folder")
                         Accessible.name: qsTr("Show %1 in its folder").arg(transferRow.name)
                         onClicked: panel.showInFolderRequested(transferRow.localPath)

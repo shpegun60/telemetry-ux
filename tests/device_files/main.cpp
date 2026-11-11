@@ -16,6 +16,8 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
+#include <QEventLoop>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -42,14 +44,19 @@ void check(bool ok, int line)
 
 #define CHECK(...) check(bool(__VA_ARGS__), __LINE__)
 
+// Runs the event loop as a program does: it waits for the next event rather
+// than sleeping. A sleep between passes costs a whole Windows timer quantum
+// (about 15.6 ms) per pass and made the 4100-file list measure the loop, not
+// the session. A precise 5 ms timer keeps the wait bounded.
 bool await(const std::function<bool()>& done, int milliseconds = 15000)
 {
 	QElapsedTimer deadline;
 	deadline.start();
-	while (!done() && deadline.elapsed() < milliseconds) {
-		QCoreApplication::processEvents();
-		QThread::msleep(1);
-	}
+	QTimer wake;
+	wake.setTimerType(Qt::PreciseTimer);
+	wake.start(5);
+	while (!done() && deadline.elapsed() < milliseconds)
+		QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents);
 	return done();
 }
 
@@ -239,6 +246,70 @@ void downloads(qt::ConnectionSession& session, DeviceFilesModel& files, const QS
 	CHECK(transfers.rowCount() == 0);
 }
 
+// Open: the viewer's tab is there before the first byte, reading; it then
+// shows the file, or says why it could not be read.
+void openInViewer(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	using telemetry::ux::OpenFiles;
+	DeviceFileTransfers transfers(&session);
+	OpenFiles open;
+	const auto large = files.indexOfPath(QStringLiteral("/logs/large.bin"));
+	const auto local = folder + QStringLiteral("/open/large.bin");
+	const auto row = transfers.openIn(&open, QStringLiteral("/logs/large.bin"),
+	                                  files.data(large, DeviceFilesModel::FileIndexRole).toInt(),
+	                                  largeBytes.size(), local);
+	CHECK(row >= 0 && open.count() == 1 && open.rowOf(local) == 0);
+	auto* content = open.contentFor(local);
+	CHECK(content && content->loading() && !content->loaded());
+	CHECK(open.data(open.index(0), OpenFiles::LoadingRole).toBool());
+	CHECK(transfers.data(transfers.index(row), DeviceFileTransfers::OpeningRole).toBool());
+	bool sawProgress = false;
+	QElapsedTimer reading;
+	reading.start();
+	CHECK(await([&] {
+		sawProgress = sawProgress || (content->loading() && content->progress() > 0 && content->progress() < 1);
+		return !content->loading();
+	}));
+	// Progress is published at most every 500 ms; a quicker read shows none between.
+	CHECK((sawProgress || reading.elapsed() < 500) && content->loaded() && content->size() == largeBytes.size() &&
+	      content->error().isEmpty());
+	CHECK(transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString() ==
+	      QStringLiteral("Opened in the Viewer"));
+	CHECK(!open.data(open.index(0), OpenFiles::LoadingRole).toBool());
+
+	// A copy that cannot be written: the tab says why, and no reading is left.
+	const auto blocker = folder + QStringLiteral("/open-blocked");
+	{
+		QFile file(blocker);
+		CHECK(file.open(QIODevice::WriteOnly));
+	}
+	const auto events = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+	const auto blockedLocal = blocker + QStringLiteral("/events.csv");
+	CHECK(transfers.openIn(&open, QStringLiteral("/logs/events.csv"),
+	                       files.data(events, DeviceFilesModel::FileIndexRole).toInt(), eventsBytes.size(),
+	                       blockedLocal) >= 0);
+	auto* failed = open.contentFor(blockedLocal);
+	CHECK(failed && await([&] {
+		return !failed->loading();
+	}));
+	CHECK(!failed->loaded() && failed->error().startsWith(QStringLiteral("Could not read events.csv: Could not write")));
+
+	// Cancel while reading: the read stops; the host closes the tab.
+	const auto cancelLocal = folder + QStringLiteral("/open/again.bin");
+	CHECK(transfers.openIn(&open, QStringLiteral("/logs/large.bin"),
+	                       files.data(large, DeviceFilesModel::FileIndexRole).toInt(), largeBytes.size(),
+	                       cancelLocal) >= 0);
+	transfers.cancelFor(cancelLocal);
+	auto* cancelled = open.contentFor(cancelLocal);
+	CHECK(cancelled && await([&] {
+		return !cancelled->loading();
+	}));
+	CHECK(!cancelled->loaded() && transfers.activeCount() == 0);
+	open.close(open.rowOf(cancelLocal));
+	CHECK(open.count() == 2 && open.rowOf(cancelLocal) < 0);
+}
+
 void destroyedMidway(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
 {
 	auto transfers = std::make_unique<DeviceFileTransfers>(&session);
@@ -335,6 +406,83 @@ void fileContent(const QString& folder)
 	open.close(0);
 	CHECK(open.count() == 1 &&
 	      open.data(open.index(0), telemetry::ux::OpenFiles::NameRole).toString() == QStringLiteral("data.bin"));
+}
+
+// A codec: a file whose head says "DEMO" is read into a model and offered
+// first; one that claims it and cannot read it says why, and the file stays
+// text or hex. Re-reading makes a new model, and a file of another format is
+// not offered to it.
+void codecs(const QString& folder)
+{
+	using telemetry::ux::FileCodec;
+	using telemetry::ux::FileContent;
+	using telemetry::ux::FileIdentity;
+	const auto write = [&](const char* name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + QLatin1String(name);
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	int parses = 0;
+	QString seenPath;
+	telemetry::ux::OpenFiles open;
+	open.addCodec(FileCodec{
+	    QStringLiteral("Demo"),
+	    [&](const FileIdentity& identity) {
+		    seenPath = identity.devicePath;
+		    return identity.head.startsWith("DEMO");
+	    },
+	    [&](const QByteArray& bytes, QString& error) -> std::unique_ptr<QObject> {
+		    ++parses;
+		    if (bytes.size() < 8) {
+			    error = QStringLiteral("shorter than its header");
+			    return nullptr;
+		    }
+		    auto model = std::make_unique<QObject>();
+		    model->setObjectName(QString::fromLatin1(bytes.mid(4, 4)));
+		    return model;
+	    },
+	    QUrl(QStringLiteral("qrc:/Demo.qml"))});
+
+	const auto good = write("good.demo", "DEMOabcd\x01\x02");
+	const int row = open.open(good, QStringLiteral("/data/good.demo"));
+	auto* content = open.contentFor(good);
+	CHECK(content && content->loaded() && parses == 1 && seenPath == QStringLiteral("/data/good.demo"));
+	CHECK(content->decoded() && content->decoded()->objectName() == QStringLiteral("abcd"));
+	CHECK(content->decoded()->parent() == content && content->codecName() == QStringLiteral("Demo"));
+	CHECK(content->format() == QStringLiteral("Demo") && content->codecError().isEmpty());
+	CHECK(content->codecView() == QUrl(QStringLiteral("qrc:/Demo.qml")));
+	// Hex stays on offer under the codec's view.
+	CHECK(content->hex()->rowCount() == 1);
+
+	// Read again: a new model; the old one goes once the views had their turn.
+	QPointer<QObject> before = content->decoded();
+	write("good.demo", "DEMOwxyz");
+	CHECK(open.open(good, QStringLiteral("/data/good.demo")) == row && parses == 2);
+	CHECK(content->decoded() && content->decoded() != before.data() &&
+	      content->decoded()->objectName() == QStringLiteral("wxyz"));
+	CHECK(!before.isNull()); // not under a view that may still hold it
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	CHECK(before.isNull());
+
+	// Claimed and not readable: the reason, and the file as text.
+	const auto bad = write("bad.demo", "DEMO");
+	open.open(bad, QStringLiteral("/data/bad.demo"));
+	auto* broken = open.contentFor(bad);
+	CHECK(broken && broken->loaded() && !broken->decoded() && parses == 3);
+	CHECK(broken->codecError() == QStringLiteral("Not a valid Demo file: shorter than its header"));
+	CHECK(broken->format() == QStringLiteral("Text") && broken->codecName().isEmpty());
+
+	// Another format is never parsed by it.
+	const auto other = write("other.bin", QByteArray("\x00\x01\x02", 3));
+	open.open(other);
+	CHECK(open.contentFor(other) && !open.contentFor(other)->decoded() && parses == 3 &&
+	      open.contentFor(other)->format() == QStringLiteral("Binary"));
+
+	// A content outside OpenFiles knows no codecs.
+	FileContent alone;
+	alone.setLocalFile(good);
+	CHECK(alone.loaded() && !alone.decoded() && alone.format() == QStringLiteral("Text") && parses == 3);
 }
 
 // The device names its files, so no name of its choosing may place a download
@@ -460,6 +608,7 @@ int main(int argc, char** argv)
 	CHECK(session.ready());
 	tree(session, files);
 	downloads(session, files, folder.path());
+	openInViewer(session, files, folder.path());
 	destroyedMidway(session, files, folder.path());
 	session.disconnect();
 	CHECK(await([&] {
@@ -468,6 +617,7 @@ int main(int argc, char** argv)
 	filesOnly(folder.path());
 	localPaths(folder.path());
 	fileContent(folder.path());
+	codecs(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);
 	return 0;

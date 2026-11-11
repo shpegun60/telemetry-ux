@@ -6,6 +6,7 @@
  */
 #include "DeviceFileTransfers.hpp"
 #include "DeviceFilesModel.hpp"
+#include "FileContent.hpp"
 #include <integration/files/Client.hpp>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
@@ -41,6 +42,9 @@ struct DeviceFileTransfers::Job {
 	int fileIndex = -1;
 	quint64 size = 0, lastReceived = 0;
 	State state = State::Waiting;
+	// Read to be shown: the viewer's tab follows this job (openIn).
+	QPointer<OpenFiles> viewer;
+	bool opening = false, viewerTold = false;
 	QSaveFile file;
 	std::unique_ptr<Reader> reader;
 	qint64 startedMs = 0, sampleMs = 0, publishedMs = -1000, dataMs = 0;
@@ -244,6 +248,11 @@ QUrl DeviceFileTransfers::urlOfLocalFile(const QString& path)
 	return QUrl::fromLocalFile(path);
 }
 
+bool DeviceFileTransfers::makeFolder(const QString& path)
+{
+	return !path.isEmpty() && QDir().mkpath(path);
+}
+
 QString DeviceFileTransfers::localFileAt(int row) const
 {
 	if (row < 0 || row >= static_cast<int>(jobs_.size()))
@@ -254,6 +263,29 @@ QString DeviceFileTransfers::localFileAt(int row) const
 int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong size,
                                   const QString& localFile)
 {
+	return queue(path, fileIndex, size, localFile, nullptr);
+}
+
+int DeviceFileTransfers::openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
+                                const QString& localFile)
+{
+	auto* files = qobject_cast<OpenFiles*>(viewer);
+	if (!files)
+		return -1;
+	return queue(path, fileIndex, size, localFile, files);
+}
+
+void DeviceFileTransfers::cancelFor(const QString& localFile)
+{
+	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row)
+		if (jobs_[static_cast<std::size_t>(row)]->active() &&
+		    jobs_[static_cast<std::size_t>(row)]->localFile == localFile)
+			cancel(row);
+}
+
+int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
+                               OpenFiles* viewer)
+{
 	if (!session_ || !session_->filesSupported() || fileIndex < 0 || localFile.isEmpty())
 		return -1;
 	auto job = std::make_unique<Job>();
@@ -262,6 +294,12 @@ int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong
 	job->fileIndex = fileIndex;
 	job->size = size;
 	job->localFile = localFile;
+	if (viewer) {
+		// The tab is there before the first byte, reading.
+		viewer->reading(localFile, path);
+		job->viewer = viewer;
+		job->opening = true;
+	}
 	const auto row = static_cast<int>(jobs_.size());
 	beginInsertRows({}, row, row);
 	jobs_.push_back(std::move(job));
@@ -287,11 +325,13 @@ void DeviceFileTransfers::startNext()
 			end(job, State::Failed,
 			    tr("Could not write %1: %2").arg(QDir::toNativeSeparators(job.localFile),
 			                                     job.file.errorString()));
+			publish(static_cast<int>(row));
 			continue;
 		}
 		if (!session_) {
 			job.file.cancelWriting();
 			end(job, State::Failed, tr("Stopped: not connected"));
+			publish(static_cast<int>(row));
 			continue;
 		}
 		job.reader = std::make_unique<Job::Reader>(*session_, Job::Sink{&job});
@@ -347,7 +387,7 @@ void DeviceFileTransfers::poll()
 					        .arg(DeviceFilesModel::sizeText(received),
 					             DeviceFilesModel::sizeText(job.size)));
 				else
-					end(job, State::Saved, tr("Saved"));
+					end(job, State::Saved, job.opening ? tr("Opened in the Viewer") : tr("Saved"));
 			} else {
 				const auto writeError = job.file.errorString();
 				job.file.cancelWriting();
@@ -405,6 +445,18 @@ void DeviceFileTransfers::publish(int row)
 	const auto changed = index(row);
 	Q_EMIT dataChanged(changed, changed);
 	Q_EMIT summaryChanged();
+	// A file read to be shown: its tab follows, then shows it or says why not.
+	if (!job.opening || job.viewerTold || !job.viewer)
+		return;
+	auto* content = job.viewer->contentFor(job.localFile);
+	if (!content)
+		return;
+	if (job.active())
+		content->setReading(data(changed, ProgressRole).toReal(), data(changed, FiguresRole).toString());
+	else {
+		job.viewerTold = true;
+		content->finishReading(job.state == State::Saved, job.result);
+	}
 }
 
 void DeviceFileTransfers::cancel(int row)
@@ -531,6 +583,8 @@ QVariant DeviceFileTransfers::data(const QModelIndex& index, int role) const
 			return job.result;
 		case ActiveRole:
 			return job.active();
+		case OpeningRole:
+			return job.opening;
 		default:
 			return {};
 	}
@@ -541,6 +595,6 @@ QHash<int, QByteArray> DeviceFileTransfers::roleNames() const
 	return {{NameRole, "name"},         {PathRole, "path"},       {LocalPathRole, "localPath"},
 	        {StateRole, "state"},       {ReceivedRole, "received"}, {SizeRole, "size"},
 	        {ProgressRole, "progress"}, {FiguresRole, "figures"},   {ResultRole, "result"},
-	        {ActiveRole, "active"}};
+	        {ActiveRole, "active"},     {OpeningRole, "opening"}};
 }
 } // namespace telemetry::ux

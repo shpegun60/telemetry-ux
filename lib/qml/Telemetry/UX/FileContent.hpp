@@ -24,6 +24,8 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QObject>
 #include <QtCore/QStringList>
+#include <QtCore/QUrl>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -66,6 +68,25 @@ private:
 	std::vector<bool> numeric_;
 };
 
+// What a codec knows of a file before it parses it.
+struct FileIdentity {
+	QString devicePath; // empty for a file from disk
+	QString localFile;
+	QByteArray head;    // the first bytes, for a signature
+};
+
+// A format's codec: its name ("Descriptor"), a cheap guess from the identity,
+// the parse - the proof - that makes the view model, and the QML component
+// that shows it (given the model as its required property "decoded"). Tied to
+// a format, not to a file. A parse that fails leaves the file to Text or Hex,
+// with the codec's reason. Qt only here; the parser can be anything.
+struct FileCodec {
+	QString name;
+	std::function<bool(const FileIdentity&)> matches;
+	std::function<std::unique_ptr<QObject>(const QByteArray& bytes, QString& error)> decode;
+	QUrl view;
+};
+
 // Made by the host, usually through OpenFiles: the library is a static QML
 // module without a plugin, so it registers no C++ type for QML to create.
 class FileContent final : public QObject {
@@ -74,6 +95,12 @@ class FileContent final : public QObject {
 	// The device's own path, for the footer; empty for a file from disk.
 	Q_PROPERTY(QString devicePath READ devicePath WRITE setDevicePath NOTIFY changed)
 	Q_PROPERTY(bool loaded READ loaded NOTIFY changed)
+	// The device's file is being read into localFile; the viewer shows progress.
+	Q_PROPERTY(bool loading READ loading NOTIFY changed)
+	// 0..1, or negative while the size is not known.
+	Q_PROPERTY(qreal progress READ progress NOTIFY changed)
+	// "96 / 128 KiB · 42 KiB/s", from the read.
+	Q_PROPERTY(QString figures READ figures NOTIFY changed)
 	Q_PROPERTY(QString error READ error NOTIFY changed)
 	Q_PROPERTY(qulonglong size READ size NOTIFY changed)
 	// The size as the panels write it: exact bytes below 1 KiB, else IEC units.
@@ -81,8 +108,15 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QDateTime readAt READ readAt NOTIFY changed)
 	Q_PROPERTY(bool textual READ textual NOTIFY changed)
 	Q_PROPERTY(bool tabular READ tabular NOTIFY changed)
-	// What the viewer opens first: "Table", "Text" or "Binary".
+	// What the viewer opens first: a codec's name, "Table", "Text" or "Binary".
 	Q_PROPERTY(QString format READ format NOTIFY changed)
+	// The codec that read the file, its view model and the component showing
+	// it; empty and null when no codec read it.
+	Q_PROPERTY(QString codecName READ codecName NOTIFY changed)
+	Q_PROPERTY(QObject* decoded READ decoded NOTIFY changed)
+	Q_PROPERTY(QUrl codecView READ codecView NOTIFY changed)
+	// Why a codec that took the file for its own could not read it.
+	Q_PROPERTY(QString codecError READ codecError NOTIFY changed)
 	Q_PROPERTY(QString text READ text NOTIFY changed)
 	Q_PROPERTY(QAbstractItemModel* table READ table CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* hex READ hex CONSTANT)
@@ -99,7 +133,17 @@ public:
 	QString devicePath() const { return devicePath_; }
 	void setDevicePath(const QString& path);
 	bool loaded() const noexcept { return loaded_; }
+	bool loading() const noexcept { return loading_; }
+	qreal progress() const noexcept { return progress_; }
+	QString figures() const { return figures_; }
 	QString error() const { return error_; }
+
+	// The reading of a device's file, told by whoever reads it (a transfer):
+	// begun, progressing, then finished - read from localFile when it worked,
+	// else the reason, which the viewer shows with Read again.
+	void beginReading(const QString& localFile, const QString& devicePath);
+	void setReading(qreal progress, const QString& figures);
+	void finishReading(bool read, const QString& reason);
 	qulonglong size() const noexcept { return static_cast<qulonglong>(bytes_.size()); }
 	QString sizeText() const;
 	QDateTime readAt() const { return readAt_; }
@@ -109,6 +153,12 @@ public:
 	QString text() const { return text_; }
 	QAbstractItemModel* table() { return &table_; }
 	QAbstractItemModel* hex() { return &hex_; }
+	QString codecName() const { return codecName_; }
+	QObject* decoded() const noexcept { return decoded_; }
+	QUrl codecView() const { return codecView_; }
+	QString codecError() const { return codecError_; }
+	// The codecs tried on every read, in order; borrowed from OpenFiles.
+	void setCodecs(const std::vector<FileCodec>* codecs) noexcept { codecs_ = codecs; }
 
 	// Reads localFile again: after a new download, or Reload.
 	Q_INVOKABLE bool reload();
@@ -119,10 +169,19 @@ Q_SIGNALS:
 	void changed();
 
 private:
-	QString localFile_, devicePath_, error_, text_;
+	// Offers the bytes to the codecs; the first that reads them wins.
+	void decode();
+	// Drops the decoded model later than the views that still show it.
+	void forgetDecoded();
+
+	QString localFile_, devicePath_, error_, text_, figures_, codecName_, codecError_;
+	const std::vector<FileCodec>* codecs_ = nullptr;
+	QObject* decoded_ = nullptr; // a child of this
+	QUrl codecView_;
 	QByteArray bytes_;
 	QDateTime readAt_;
-	bool loaded_ = false, textual_ = false, tabular_ = false;
+	qreal progress_ = -1;
+	bool loaded_ = false, loading_ = false, textual_ = false, tabular_ = false;
 	FileHexModel hex_;
 	FileTableModel table_;
 };
@@ -133,14 +192,23 @@ class OpenFiles final : public QAbstractListModel {
 	Q_OBJECT
 	Q_PROPERTY(int count READ count NOTIFY countChanged)
 public:
-	enum Role { NameRole = Qt::UserRole + 1, DevicePathRole, LocalFileRole, ContentRole };
+	enum Role { NameRole = Qt::UserRole + 1, DevicePathRole, LocalFileRole, ContentRole, LoadingRole };
 	using QAbstractListModel::QAbstractListModel;
 
 	int count() const noexcept { return static_cast<int>(files_.size()); }
+	// A codec every file opened from now on is offered to, after those before it.
+	void addCodec(FileCodec codec);
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
 	// it again when that copy is already open; returns its row.
 	Q_INVOKABLE int open(const QString& localFile, const QString& devicePath = {});
+	// A tab for a device file whose copy is still being read into localFile:
+	// made at once (or reused), in its reading state; returns its row.
+	Q_INVOKABLE int reading(const QString& localFile, const QString& devicePath);
+	// The content that shows localFile, or null.
+	FileContent* contentFor(const QString& localFile) const;
 	Q_INVOKABLE void close(int row);
+	// The row showing localFile, or -1.
+	Q_INVOKABLE int rowOf(const QString& localFile) const;
 
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
@@ -150,6 +218,10 @@ Q_SIGNALS:
 	void countChanged();
 
 private:
+	// A new row with a new content that knows the codecs; returns the row.
+	int append();
+
+	std::vector<FileCodec> codecs_;
 	std::vector<std::unique_ptr<FileContent>> files_;
 };
 } // namespace telemetry::ux

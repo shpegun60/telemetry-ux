@@ -220,6 +220,46 @@ void FileContent::setDevicePath(const QString& path)
 	Q_EMIT changed();
 }
 
+void FileContent::beginReading(const QString& localFile, const QString& devicePath)
+{
+	devicePath_ = devicePath;
+	localFile_ = localFile;
+	loaded_ = textual_ = tabular_ = false;
+	loading_ = true;
+	progress_ = -1;
+	figures_.clear();
+	error_.clear();
+	text_.clear();
+	hex_.setBytes(nullptr);
+	bytes_.clear();
+	table_.clear();
+	forgetDecoded();
+	Q_EMIT changed();
+}
+
+void FileContent::setReading(qreal progress, const QString& figures)
+{
+	if (!loading_)
+		return;
+	progress_ = progress;
+	figures_ = figures;
+	Q_EMIT changed();
+}
+
+void FileContent::finishReading(bool read, const QString& reason)
+{
+	if (!loading_)
+		return;
+	loading_ = false;
+	if (read) {
+		reload();
+		return;
+	}
+	const auto name = QFileInfo(devicePath_.isEmpty() ? localFile_ : devicePath_).fileName();
+	error_ = tr("Could not read %1: %2").arg(name, reason);
+	Q_EMIT changed();
+}
+
 QString FileContent::sizeText() const
 {
 	if (bytes_.size() < 1024)
@@ -231,7 +271,46 @@ QString FileContent::format() const
 {
 	if (!loaded_)
 		return {};
+	if (decoded_)
+		return codecName_;
 	return tabular_ ? tr("Table") : textual_ ? tr("Text") : tr("Binary");
+}
+
+void FileContent::forgetDecoded()
+{
+	codecName_.clear();
+	codecError_.clear();
+	codecView_.clear();
+	if (decoded_) {
+		// A view may still hold a model of it until it hears changed().
+		decoded_->deleteLater();
+		decoded_ = nullptr;
+	}
+}
+
+void FileContent::decode()
+{
+	if (!codecs_ || !loaded_)
+		return;
+	// Enough for any signature; the codec's parse decides.
+	constexpr qsizetype headBytes = 64;
+	const FileIdentity identity{devicePath_, localFile_, bytes_.left(headBytes)};
+	for (const auto& codec : *codecs_) {
+		if (!codec.matches || !codec.decode || !codec.matches(identity))
+			continue;
+		QString reason;
+		if (auto model = codec.decode(bytes_, reason)) {
+			decoded_ = model.release();
+			decoded_->setParent(this);
+			codecName_ = codec.name;
+			codecView_ = codec.view;
+			codecError_.clear();
+			return;
+		}
+		// The first codec that took the file for its own says why it could not.
+		if (codecError_.isEmpty())
+			codecError_ = tr("Not a valid %1 file: %2").arg(codec.name, reason);
+	}
 }
 
 bool FileContent::looksLikeText(const QByteArray& bytes)
@@ -258,6 +337,7 @@ bool FileContent::reload()
 	bytes_.clear();
 	hex_.setBytes(nullptr);
 	table_.clear();
+	forgetDecoded();
 	if (localFile_.isEmpty()) {
 		Q_EMIT changed();
 		return false;
@@ -281,9 +361,29 @@ bool FileContent::reload()
 			if (name.endsWith(QStringLiteral(".csv")))
 				tabular_ = table_.setText(text_);
 		}
+		decode();
 	}
 	Q_EMIT changed();
 	return loaded_;
+}
+
+void OpenFiles::addCodec(FileCodec codec)
+{
+	codecs_.push_back(std::move(codec));
+}
+
+int OpenFiles::append()
+{
+	// Parented, so QML never takes it over when a script reaches it through
+	// data(); files_ still decides when it goes.
+	auto file = std::make_unique<FileContent>(this);
+	file->setCodecs(&codecs_);
+	const auto row = static_cast<int>(files_.size());
+	beginInsertRows({}, row, row);
+	files_.push_back(std::move(file));
+	endInsertRows();
+	Q_EMIT countChanged();
+	return row;
 }
 
 int OpenFiles::open(const QString& localFile, const QString& devicePath)
@@ -297,15 +397,48 @@ int OpenFiles::open(const QString& localFile, const QString& devicePath)
 			return static_cast<int>(row);
 		}
 	}
-	auto file = std::make_unique<FileContent>();
-	file->setDevicePath(devicePath);
-	file->setLocalFile(localFile);
-	const auto row = static_cast<int>(files_.size());
-	beginInsertRows({}, row, row);
-	files_.push_back(std::move(file));
-	endInsertRows();
-	Q_EMIT countChanged();
+	const auto row = append();
+	auto& file = *files_[static_cast<std::size_t>(row)];
+	file.setDevicePath(devicePath);
+	file.setLocalFile(localFile);
+	const auto changed = index(row);
+	Q_EMIT dataChanged(changed, changed);
 	return row;
+}
+
+int OpenFiles::reading(const QString& localFile, const QString& devicePath)
+{
+	auto row = rowOf(localFile);
+	if (row < 0)
+		row = append();
+	auto& file = *files_[static_cast<std::size_t>(row)];
+	file.beginReading(localFile, devicePath);
+	// A row's loading role follows its content.
+	QObject::disconnect(&file, nullptr, this, nullptr);
+	connect(&file, &FileContent::changed, this, [this, content = &file] {
+		for (std::size_t i = 0; i < files_.size(); ++i)
+			if (files_[i].get() == content) {
+				const auto changed = index(static_cast<int>(i));
+				Q_EMIT dataChanged(changed, changed, {LoadingRole});
+			}
+	});
+	const auto changed = index(row);
+	Q_EMIT dataChanged(changed, changed);
+	return row;
+}
+
+FileContent* OpenFiles::contentFor(const QString& localFile) const
+{
+	const auto row = rowOf(localFile);
+	return row < 0 ? nullptr : files_[static_cast<std::size_t>(row)].get();
+}
+
+int OpenFiles::rowOf(const QString& localFile) const
+{
+	for (std::size_t row = 0; row < files_.size(); ++row)
+		if (files_[row]->localFile() == localFile)
+			return static_cast<int>(row);
+	return -1;
 }
 
 void OpenFiles::close(int row)
@@ -313,10 +446,13 @@ void OpenFiles::close(int row)
 	if (row < 0 || row >= count())
 		return;
 	beginRemoveRows({}, row, row);
-	// The view lets go of the content in the removal; delete it after that.
-	files_[static_cast<std::size_t>(row)].release()->deleteLater();
+	auto* closing = files_[static_cast<std::size_t>(row)].release();
 	files_.erase(files_.begin() + row);
 	endRemoveRows();
+	// Only now that the views have let go of the row, and later than anything
+	// they posted while letting go: its table and hex models go with it.
+	QObject::disconnect(closing, nullptr, this, nullptr);
+	closing->deleteLater();
 	Q_EMIT countChanged();
 }
 
@@ -342,6 +478,8 @@ QVariant OpenFiles::data(const QModelIndex& index, int role) const
 			return file->localFile();
 		case ContentRole:
 			return QVariant::fromValue<QObject*>(file);
+		case LoadingRole:
+			return file->loading();
 		default:
 			return {};
 	}
@@ -349,6 +487,10 @@ QVariant OpenFiles::data(const QModelIndex& index, int role) const
 
 QHash<int, QByteArray> OpenFiles::roleNames() const
 {
-	return {{NameRole, "name"}, {DevicePathRole, "devicePath"}, {LocalFileRole, "localFile"}, {ContentRole, "content"}};
+	return {{NameRole, "name"},
+	        {DevicePathRole, "devicePath"},
+	        {LocalFileRole, "localFile"},
+	        {ContentRole, "content"},
+	        {LoadingRole, "loading"}};
 }
 } // namespace telemetry::ux
