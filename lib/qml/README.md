@@ -81,6 +81,15 @@ or showing a Watchlist panel does not stop or restart polling. If the applicatio
 wants to stop polling, it must request that explicitly via the provider. A new
 provider has its own presentation and polling state and must be chosen deliberately.
 
+`WatchlistPanel` shows its rows when `expanded` is true. A host that gives the
+Watchlist a dock of its own sets `collapsible: false`: the rows are then always
+shown and the expand box is hidden. From 500 px wide (`tableRows`) every Field is one 28 px row
+under Name, Value and Status titles: the value right-aligned on one line, `Ok` as
+a green dot, any other status in words (Stale and failures highlighted), and a
+small remove button clear of the scrollbar, framed when it has keyboard focus;
+cut text shows in full as a tooltip. Narrower panels wrap
+name, value and status over two lines instead.
+
 `EndpointTreePanel` includes case-insensitive search by endpoint name or path
 (for example, `measure.Voltage`). Results display their full path; choosing one
 passes its original model index to the provider. Searching only examines the

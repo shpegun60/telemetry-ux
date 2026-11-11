@@ -25,8 +25,12 @@ the advanced panels exceed the viewport; inner trees/lists retain their existing
 scrolling. Hiding panels or supplying host header/footer components changes only
 presentation and does not change provider ownership or its operation scheduling.
 
-The standalone 320 ? 240 Watchlist also checks wrapped controls, an exact U64
+The standalone 320 × 240 Watchlist also checks wrapped controls, an exact U64
 value and long error status, the visible scrollbar, window-delivered synthetic wheel events, Tab focus,
-and a 65-item virtualized list without issuing reads or starting polling. Rows
+and a 65-item virtualized list without issuing reads or starting polling. Widened
+to 720 px, the same list becomes one 28 px table row per Field: the value aligned
+under its column title, `Ok` a dot with the status word hidden, a failure in words
+under the Status title and a long one cut to one line, the small remove button
+inside its row (`wide-watchlist.png`); `collapsible: false` hides the expand box. Rows
 can have different heights when text wraps; as with Qt ListView in general, the
 scrollbar's size and position are estimates until more rows have been laid out.
