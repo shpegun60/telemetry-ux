@@ -266,6 +266,7 @@ int main(int argc, char** argv)
         CHECK(watchText.evaluate().value<QColor>() == QColor(QStringLiteral("#e38d27")) && !watchText.hasError());
 		// Real QQuickWindow, narrow panel and every action category. The fake
 		// records clicks without performing transport operations.
+		engine.setInitialProperties({});
 		engine.load(QUrl(QStringLiteral("qrc:/EndpointStates.qml")));
 		auto* stateWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
 		CHECK(stateWindow);
