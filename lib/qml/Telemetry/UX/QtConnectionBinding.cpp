@@ -170,8 +170,10 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 						    row.status = QStringLiteral("ReadError");
 						    break;
 				    }
-				    if (item.hasValue())
+				    if (item.hasValue()) {
 					    row.text = WatchlistModel::formatValue(item.value);
+					    row.sample = WatchlistModel::sampleOf(item.value);
+				    }
 			    }
 			    *done = std::move(out);
 		    });
@@ -194,8 +196,10 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 			                                .arg(result.operation.endpointStatus);
 			    if (result.operation.succeeded() && !result.hasValue())
 				    out.status = client::Status::CodecError;
-			    if (result.hasValue())
+			    if (result.hasValue()) {
 				    out.rows[0].text = WatchlistModel::formatValue(result.value);
+				    out.rows[0].sample = WatchlistModel::sampleOf(result.value);
+			    }
 			    *done = std::move(out);
 		    });
 	};

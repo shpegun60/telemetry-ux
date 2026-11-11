@@ -20,6 +20,7 @@ Window {
                 onClicked: connection.connectTcpReference(host.text, port.value)
             }
             Button { text: "Disconnect"; onClicked: connection.disconnect() }
+            Button { objectName: "openTrend"; text: "Watchlist and Trend"; onClicked: trendWindow.show() }
             Label { text: connection.lastError; color: "#ecb05a"; Layout.fillWidth: true }
         }
         RowLayout {
@@ -44,6 +45,18 @@ Window {
                 Layout.minimumWidth: 600; Layout.preferredWidth: 700
                 provider: measurements; watchlistVisible: false
             }
+        }
+    }
+    Window {
+        id: trendWindow
+        objectName: "trendWindow"
+        width: 680; height: 700
+        title: "Telemetry Watchlist and Trend"
+        color: "#11151c"
+        ColumnLayout {
+            anchors.fill: parent; anchors.margins: 8
+            WatchlistPanel { Layout.fillWidth: true; Layout.preferredHeight: 220; provider: measurements }
+            TrendPanel { Layout.fillWidth: true; Layout.fillHeight: true; provider: measurements; history: trendHistory }
         }
     }
 }

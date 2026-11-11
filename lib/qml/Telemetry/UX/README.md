@@ -68,6 +68,12 @@ Actions retain the existing provider signatures:
   view preserves invalid/intermediate text and uses the result to gate its input.
 - `addWatch() -> bool`, `removeWatch(int)`, `clearWatch()`, `refreshWatch()`,
   `startWatch()` and `stopWatch()`.
+- `watchCandidate(QModelIndex) -> bool` tells whether an `endpoints` row could be
+  watched, without selecting it. `addWatchMany(QVariantList of QModelIndex) ->
+  QVariantMap` adds several Fields in one model change, leaving the selected
+  endpoint and any open draft untouched and sending no request. The map holds
+  `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
+  `duplicate`, `unsupported` and `capacity`.
 
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt
@@ -77,6 +83,28 @@ Value roles are `name`, `detail`, `value`, `isAggregate`, `childCount`,
 `editable`/`editorText`; watchlist rows expose `name`, `status`, `text` (ListView
 supplies `index`). Scalar display/editor values are strings, including U64/S64
 and enum codes; the view never converts them through JavaScript Number.
+
+Watchlist rows also carry the facts of their last `Ok` reading, so a consumer
+never has to parse display text:
+
+| Role | Contract |
+| --- | --- |
+| `statusCode` | `int(WatchStatus)` from `WatchSample.hpp`: NotRead 0, Pending 1, Ok 2, Stale 3, Failed 4. Stable across providers, whose `status` wording differs |
+| `sampleText` | Display text of the last Ok reading; empty otherwise |
+| `sampleValue` | That reading as a `double` when it is exact; no value otherwise |
+| `sampleExact` | `true` only for a finite number a double holds exactly: an integer beyond 2^53 − 1, NaN or infinity is `false` and is not plotted. Enums give their code |
+| `sampleRevision`, `sampleEpoch` | Change counters: a new reading increments the revision; a new session or admission changes the epoch |
+
+Adding, group-adding and removing Fields inserts or removes rows (only Clear
+resets the model), so a persistent index — a view's current row, a Trend's
+selection — keeps following its Field. Each row has its own index identity: an
+index kept from before a removal reads nothing rather than another row's data.
+
+`TrendPanel` plots one watched Field from those roles. It needs `provider` and a
+host-created `TrendHistory` as `history` (making it creatable from QML is planned).
+The history holds at most 512 points stamped with host presentation time, not
+device time; it never starts, stops or issues a read, and records a gap when the
+Field goes stale, fails, changes session or cannot be plotted exactly.
 
 All model/provider display strings and tooltip details are rendered as plain
 text. Names or enum labels containing markup remain literal data and cannot

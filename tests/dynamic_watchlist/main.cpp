@@ -1,11 +1,13 @@
 // Controlled completions and ticks: no event-loop timing assumptions. MIT.
 #include <Telemetry/UX/DynamicWatchlist.hpp>
+#include <Telemetry/UX/TrendHistory.hpp>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEvent>
 #include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QSignalSpy>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 #include <utility>
 
@@ -92,6 +94,12 @@ struct Peer {
 			                        : pending[row] == 2 ? QStringLiteral("-9223372036854775808")
 			                        : pending[row] == 3 ? QStringLiteral("-123 (unknown)")
 			                                            : QString::number(pending[row]);
+			// The typed facts a real binding takes from the same value (sampleOf).
+			result.rows[row].sample =
+			    pending[row] == 1   ? ux::WatchSample::ofUnsigned(18446744073709551615ULL)
+			    : pending[row] == 2 ? ux::WatchSample::ofSigned(std::numeric_limits<long long>::min())
+			    : pending[row] == 3 ? ux::WatchSample::ofSigned(-123)
+			                        : ux::WatchSample::ofUnsigned(pending[row]);
 		}
 		if (malformed)
 			result.rows[0].id = 999;
@@ -161,6 +169,41 @@ void bulkPublication()
 	                 [&] { delete doomed.data(); });
 	const auto destruction = orphaned.addMany({{1, "one"}});
 	CHECK(!doomed && destruction.value("added").toInt() == 1 && deathPeer.calls.empty());
+}
+
+void trendCompletions()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	CHECK(watch.add(4, QStringLiteral("Field4")));
+	ux::TrendHistory trend;
+	trend.setSource(watch.model());
+	trend.setRow(0);
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		CHECK(watch.begin(false));
+		peer.finish();
+		watch.poll(); events();
+	}
+	CHECK(trend.points().size() == 2);
+	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+	CHECK(trend.points().last().toMap().value("value").toDouble() == 4.0);
+	const auto* model = watch.model();
+	const auto first = model->index(0, 0);
+	CHECK(model->data(first, ux::WatchlistModel::SampleValueRole).toDouble() == 4.0);
+	CHECK(model->data(first, ux::WatchlistModel::SampleExactRole).toBool());
+	CHECK(model->data(first, ux::WatchlistModel::StatusCodeRole).toInt() ==
+	      int(ux::WatchStatus::Ok));
+	watch.setIndividual(true);
+	CHECK(watch.begin(false));
+	peer.finish(); watch.poll(); events();
+	CHECK(trend.points().size() == 3 && peer.calls.size() == 3);
+	static_cast<ux::WatchlistModel*>(watch.model())->invalidateValues();
+	CHECK(watch.model()->data(watch.model()->index(0, 0), ux::WatchlistModel::SampleTextRole).toString().isEmpty());
+	CHECK(watch.begin(false));
+	peer.finish(); watch.poll(); events();
+	CHECK(trend.points().size() == 4 && trend.points().last().toMap().value("breakBefore").toBool());
 }
 
 void chunks()
@@ -389,6 +432,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	bulkPublication();
+	trendCompletions();
 	chunks();
 	budgetsAndFallback();
 	drainAndStale();

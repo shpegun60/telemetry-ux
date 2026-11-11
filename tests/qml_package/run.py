@@ -189,6 +189,11 @@ def main():
         check(match is not None and int(match[1]) == 38, 'Actual owned-provider and standalone panel UI checks did not complete warning-free')
         report['runtime_checks'] = int(match[1])
         report['binary_sha256'] = digest(binary)
+        trend_binary = consumer_build / ('telemetry_ux_trend_installed' + suffix)
+        trend_output = run('installed-trend', [trend_binary, consumer / 'TrendInstalled.qml'])
+        check('Installed Trend source and window passed' in trend_output,
+              'Relocated installed Trend did not bind its host source')
+        report['trend_binary_sha256'] = digest(trend_binary)
         # A real local HTTP counter proves that the unsafe Qt AutoText control
         # loads an image, while the installed Configurator treats every role as data.
         requests = []
