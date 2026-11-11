@@ -1,5 +1,6 @@
 // Installed owner and reusable UI: real TCP, single FIFO, no replay. MIT.
 #include <Telemetry/UX/QtConnectionBinding.hpp>
+#include <Telemetry/UX/TrendHistory.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
 #include <QtCore/QJsonArray>
@@ -160,14 +161,21 @@ void twoPanels()
 	presentation.setMutationsAllowed(true);
 	auto* first = presentation.createProvider();
 	auto* second = sibling.createProvider();
+	ux::TrendHistory trendHistory;
 	QQmlApplicationEngine engine;
 	engine.rootContext()->setContextProperty(QStringLiteral("connection"), &connection);
 	engine.rootContext()->setContextProperty(QStringLiteral("configuration"), first);
 	engine.rootContext()->setContextProperty(QStringLiteral("measurements"), second);
+	engine.rootContext()->setContextProperty(QStringLiteral("trendHistory"), &trendHistory);
 	engine.load(QUrl{QStringLiteral("qrc:/Main.qml")});
 	CHECK(engine.rootObjects().size() == 1);
 	auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
 	CHECK(window && QTest::qWaitForWindowExposed(window));
+	click(*window, *control(window->contentItem(), QStringLiteral("openTrend")));
+	auto* trendWindow = window->findChild<QQuickWindow*>(QStringLiteral("trendWindow"));
+	CHECK(trendWindow && QTest::qWaitForWindowExposed(trendWindow));
+	CHECK(control(trendWindow->contentItem(), QStringLiteral("trendPanel")));
+	trendWindow->hide();
 	CHECK(first->selection().isEmpty() && second->selection().isEmpty());
 	connect(connection, peer);
 	CHECK(first->connected() && second->connected());

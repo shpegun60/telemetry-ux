@@ -103,6 +103,12 @@ def main():
         if not bulk_match or int(bulk_match[1]) < 25:
             raise RuntimeError('missing bulk-selection UI contract')
         report['bulk_selection'] = dict(checks=int(bulk_match[1]), executable_sha256=digest(bulk_binary))
+        trend_binary = output / 'build' / ('telemetry_qml_trend.exe' if os.name == 'nt' else 'telemetry_qml_trend')
+        trend_text = run('trend', [trend_binary])
+        trend_match = re.search(r'Trend checks=\s*(\d+) warnings=0', trend_text)
+        if not trend_match or int(trend_match[1]) < 20:
+            raise RuntimeError('missing trend UI contract')
+        report['trend'] = dict(checks=int(trend_match[1]), executable_sha256=digest(trend_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:

@@ -1,6 +1,7 @@
 // Shared Qt presentation for generated APIs; no client or wire codec. MIT.
 #include "StaticConfiguratorProvider.hpp"
 #include "PresentationOverlay.hpp"
+#include "WatchSample.hpp"
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QSet>
 #include <QtCore/QThread>
@@ -128,6 +129,43 @@ QString scalarText(const StaticType& type, const QVariant& value, bool editor)
 				return entry.name + QStringLiteral(" (%1)").arg(code);
 	}
 	return code;
+}
+
+// The typed cached value as a number for plotting. Generated APIs pass U64/S64
+// as decimal text, so those are parsed as integers, never through a double.
+WatchSample scalarSample(const StaticConfiguratorBinding& binding, const StaticType& type,
+                         const QVariant& value)
+{
+	const auto* scalar =
+	    type.kind == StaticTypeKind::Enum ? typeAt(binding, type.underlyingTypeId) : &type;
+	if (!scalar || scalar->kind != StaticTypeKind::Scalar)
+		return {};
+	bool ok = false;
+	switch (scalar->scalarCode) {
+		case 1:
+			return WatchSample::ofUnsigned(value.toBool() ? 1u : 0u);
+		case 10:
+		case 11: {
+			const auto number = value.toDouble(&ok);
+			return ok ? WatchSample::ofFloating(number) : WatchSample{};
+		}
+		case 2:
+		case 4:
+		case 6:
+		case 8: {
+			const auto number = value.toString().toULongLong(&ok, 10);
+			return ok ? WatchSample::ofUnsigned(number) : WatchSample{};
+		}
+		case 3:
+		case 5:
+		case 7:
+		case 9: {
+			const auto number = value.toString().toLongLong(&ok, 10);
+			return ok ? WatchSample::ofSigned(number) : WatchSample{};
+		}
+		default:
+			return {};
+	}
 }
 
 bool parseText(const StaticConfiguratorBinding& binding, const StaticType& type,
@@ -438,12 +476,22 @@ public:
 		quint32 epoch = 0;
 		QString status = QStringLiteral("NotRead");
 		bool published = false;
+		quint64 sampleRevision = 0;
+		QString sampleText;
+		WatchSample sample;
+		quintptr token = 0; // per-row index identity, assigned by the model
 	};
 
 	enum Roles {
 		Name = Qt::UserRole + 1,
 		Status,
-		Text
+		Text,
+		SampleRevision,
+		SampleText,
+		SampleEpoch,
+		SampleValue,
+		SampleExact,
+		StatusCode
 	};
 
 	WatchList(const StaticConfiguratorBinding& binding, QObject* parent)
@@ -452,7 +500,10 @@ public:
 
 	QHash<int, QByteArray> roleNames() const override
 	{
-		return {{Name, "name"}, {Status, "status"}, {Text, "text"}};
+		return {{Name, "name"}, {Status, "status"}, {Text, "text"},
+		        {SampleRevision, "sampleRevision"}, {SampleText, "sampleText"},
+		        {SampleEpoch, "sampleEpoch"},       {SampleValue, "sampleValue"},
+		        {SampleExact, "sampleExact"},       {StatusCode, "statusCode"}};
 	}
 
 	int rowCount(const QModelIndex& parent = {}) const override
@@ -464,13 +515,14 @@ public:
 	{
 		return parent.isValid() || column != 0 || row < 0 || row >= rows.size()
 		           ? QModelIndex{}
-		           : createIndex(row, column, revision_);
+		           : createIndex(row, column, rows[row].token);
 	}
 
 	QVariant data(const QModelIndex& index, int role) const override
 	{
 		if (!index.isValid() || index.model() != this || index.column() != 0 ||
-		    index.internalId() != revision_ || index.row() < 0 || index.row() >= rows.size())
+		    index.row() < 0 || index.row() >= rows.size() ||
+		    index.internalId() != rows[index.row()].token)
 			return {};
 		const auto& row = rows[index.row()];
 		if (row.endpoint < 0 || row.endpoint >= binding_.endpoints.size())
@@ -482,6 +534,18 @@ public:
 		                     binding_.session && row.epoch == binding_.session(binding_.api);
 		if (role == Status)
 			return current ? row.status : QStringLiteral("Stale");
+		if (role == StatusCode)
+			return static_cast<int>(current ? watchStatusCode(row.status) : WatchStatus::Stale);
+		if (role == SampleRevision)
+			return QString::number(row.sampleRevision);
+		if (role == SampleText)
+			return current && row.status == QStringLiteral("Ok") ? row.sampleText : QString{};
+		if (role == SampleValue)
+			return current && row.status == QStringLiteral("Ok") ? row.sample.role() : QVariant();
+		if (role == SampleExact)
+			return current && row.status == QStringLiteral("Ok") && row.sample.exact;
+		if (role == SampleEpoch)
+			return QString::number(row.epoch);
 		if (role == Text) {
 			if (!current || !row.published || !e.cachedValid || !e.cachedValid(binding_.api) ||
 			    !e.cached)
@@ -494,15 +558,46 @@ public:
 
 	void replace(QVector<Row> replacement)
 	{
-		if (revision_ == std::numeric_limits<quintptr>::max())
+		if (!canTake(replacement.size()))
 			qFatal("Static Watchlist index space exhausted");
+		for (auto& row : replacement)
+			row.token = next_++;
 		QPointer<WatchList> alive(this);
 		beginResetModel();
 		if (!alive)
 			return;
-		++revision_;
 		rows = std::move(replacement);
 		endResetModel();
+	}
+
+	// Membership edits insert or remove rows, so persistent indexes (a Trend's
+	// selection, a view's current row) follow their Field instead of resetting.
+	// Qt itself still uses the model after it emits rowsAboutToBeInserted or
+	// rowsAboutToBeRemoved, so a host may destroy the provider only from the
+	// post-change signals (rowsInserted, rowsRemoved, modelReset) or deferred
+	// (deleteLater); nothing here can make deletion inside the "about to"
+	// signals safe, and no guard pretends to.
+	void append(QVector<Row> added)
+	{
+		if (added.isEmpty())
+			return;
+		if (!canTake(added.size()))
+			qFatal("Static Watchlist index space exhausted");
+		for (auto& row : added)
+			row.token = next_++;
+		const int first = static_cast<int>(rows.size());
+		beginInsertRows({}, first, first + static_cast<int>(added.size()) - 1);
+		rows += added;
+		endInsertRows();
+	}
+
+	void removeRow(int row)
+	{
+		if (row < 0 || row >= rows.size())
+			return;
+		beginRemoveRows({}, row, row);
+		rows.removeAt(row);
+		endRemoveRows();
 	}
 
 	void invalidate()
@@ -518,15 +613,22 @@ public:
 	{
 		if (!rows.isEmpty())
 			Q_EMIT dataChanged(index(0, 0), index(static_cast<int>(rows.size()) - 1, 0),
-			                   {Status, Text});
+			                   {Status, Text, SampleRevision, SampleText, SampleEpoch, SampleValue,
+			                    SampleExact, StatusCode});
 	}
 
 	QVector<Row> rows;
-	bool canReplace() const { return revision_ != std::numeric_limits<quintptr>::max(); }
+	// Each row takes one never-reused index token; a stale index cannot read
+	// another row's data after rows are removed, inserted or replaced.
+	bool canTake(qsizetype count) const
+	{
+		return count >= 0 &&
+		       static_cast<quintptr>(count) <= std::numeric_limits<quintptr>::max() - next_;
+	}
 
 private:
 	const StaticConfiguratorBinding& binding_;
-	quintptr revision_ = 1;
+	quintptr next_ = 1;
 };
 
 class EndpointTree final : public QAbstractItemModel {
@@ -822,11 +924,13 @@ struct StaticConfiguratorProvider::Impl {
 		       type->scalarCode <= 11;
 	}
 
-	void replaceWatch(QVector<WatchList::Row> rows)
+	// Every Watchlist membership change runs inside one publication.
+	template<class Change>
+	void changeWatch(Change&& change)
 	{
 		publishing = true;
 		QPointer<StaticConfiguratorProvider> alive(q);
-		watchModel.replace(std::move(rows));
+		change();
 		if (!alive)
 			return;
 		publishing = false;
@@ -1180,6 +1284,15 @@ struct StaticConfiguratorProvider::Impl {
 					row.published = false;
 					row.status = QStringLiteral("NoValue");
 				}
+				if (row.published && e.cached && row.sampleRevision != std::numeric_limits<quint64>::max()) {
+					const auto* sampleType = typeAt(binding, e.valueType);
+					if (sampleType) {
+						const auto cached = e.cached(binding.api);
+						row.sampleText = scalarText(*sampleType, cached, false);
+						row.sample = scalarSample(binding, *sampleType, cached);
+						++row.sampleRevision;
+					}
+				}
 				if (current && !success && error == QStringLiteral("Dispatch")) {
 					const auto dispatch = result.value(QStringLiteral("dispatchStatus")).toInt();
 					if (dispatch == 4)
@@ -1378,9 +1491,9 @@ bool StaticConfiguratorProvider::addWatch()
 {
 	if (!canAddWatch())
 		return false;
-	auto rows = d->watchModel.rows;
-	rows.push_back({d->selected, d->session(), QStringLiteral("NotRead"), false});
-	d->replaceWatch(std::move(rows));
+	const QVector<WatchList::Row> added{
+	    {d->selected, d->session(), QStringLiteral("NotRead"), false, 0, {}, {}, 0}};
+	d->changeWatch([&] { d->watchModel.append(added); });
 	return true;
 }
 
@@ -1418,10 +1531,11 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
-	auto rows = p->watchModel.rows;
+	QVector<WatchList::Row> rows;
 	QSet<int> seen;
-	for (const auto& row : rows)
+	for (const auto& row : p->watchModel.rows)
 		seen.insert(row.endpoint);
+	const auto existing = p->watchModel.rows.size();
 	int added = 0, duplicate = 0, unsupported = 0, capacity = 0;
 	for (const auto& value : indexes) {
 		if (!value.canConvert<QModelIndex>()) {
@@ -1436,8 +1550,8 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		if (seen.contains(n)) { ++duplicate; continue; }
 		seen.insert(n);
 		if (!p->watchEligible(n)) { ++unsupported; continue; }
-		if (rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
-		rows.push_back({n, epoch, QStringLiteral("NotRead"), false});
+		if (existing + rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
+		rows.push_back({n, epoch, QStringLiteral("NotRead"), false, 0, {}, {}, 0});
 		++added;
 	}
 	const auto now = p->session();
@@ -1446,7 +1560,7 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		return result;
 	}
 	const auto stillReady = p->ready();
-	if (!alive || !stillReady || p->deferredChanged || !p->watchModel.canReplace()) {
+	if (!alive || !stillReady || p->deferredChanged || !p->watchModel.canTake(rows.size())) {
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
@@ -1456,7 +1570,7 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 	result[QStringLiteral("unsupported")] = unsupported;
 	result[QStringLiteral("capacity")] = capacity;
 	if (added)
-		p->replaceWatch(std::move(rows));
+		p->changeWatch([&] { p->watchModel.append(rows); });
 	return result;
 }
 
@@ -1465,16 +1579,14 @@ void StaticConfiguratorProvider::removeWatch(int row)
 	if (!d->owner() || d->publishing || d->watchActive() || row < 0 ||
 	    row >= d->watchModel.rows.size())
 		return;
-	auto rows = d->watchModel.rows;
-	rows.removeAt(row);
-	d->replaceWatch(std::move(rows));
+	d->changeWatch([&] { d->watchModel.removeRow(row); });
 }
 
 void StaticConfiguratorProvider::clearWatch()
 {
 	if (!d->owner() || d->publishing || d->watchActive() || d->watchModel.rows.isEmpty())
 		return;
-	d->replaceWatch({});
+	d->changeWatch([&] { d->watchModel.replace({}); });
 }
 
 void StaticConfiguratorProvider::refreshWatch()

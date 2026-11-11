@@ -4,11 +4,14 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
     URI Telemetry.UX VERSION 1.0 RESOURCE_PREFIX /qt-project.org/imports
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
-              EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml PlainToolTip.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
+              EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
-target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp)
+target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp)
 target_compile_features(telemetry_ux_configurator PUBLIC cxx_std_17)
+target_include_directories(telemetry_ux_configurator PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_link_libraries(telemetry_ux_configurator PUBLIC Qt6::Quick Qt6::QuickControls2)
 
 # Generated bindings borrow the host's typed API; this shared Qt-only provider
@@ -35,11 +38,12 @@ install(TARGETS telemetry_ux_configurator telemetry_ux_static_configurator ${_te
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     OBJECTS DESTINATION "${CMAKE_INSTALL_LIBDIR}/telemetry-ux/objects")
 install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
-    EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml PlainToolTip.qml
+    EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
-install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp
+install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp
+    WatchSample.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 
 # Runtime providers are a separate optional export. Pure Qt/static consumers

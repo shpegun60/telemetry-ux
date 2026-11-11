@@ -268,7 +268,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 					publishing = true;
 					for (int i = 0; context && i < result.count; ++i)
 						model.setResult(cursor + i, std::move(result.rows[i].status),
-						                std::move(result.rows[i].text));
+						                std::move(result.rows[i].text), result.rows[i].sample);
 					publishing = false;
 					cursor += result.count;
 				}

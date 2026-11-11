@@ -1,4 +1,6 @@
 /* Actual installed Qt-only view: provider strings must not become rich text. MIT. */
+#include <Telemetry/UX/TrendHistory.hpp>
+#include <QAbstractItemModel>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -123,6 +125,36 @@ Item {
 			      content->property("text").toString() == tip->property("text").toString());
 			check(QMetaObject::invokeMethod(tip, "close"));
 		}
+		// A schema-supplied enum string reaches TrendHistory through the
+		// Watchlist. Its error status must remain literal, even when it looks
+		// like markup containing an HTTP image.
+		auto* source = owner ? qobject_cast<QAbstractItemModel*>(
+		                           owner->property("watchlist").value<QObject*>()) : nullptr;
+		auto* history = new telemetry::ux::TrendHistory(&app);
+		QQmlComponent trendComponent(&engine);
+		trendComponent.setData(R"qml(import QtQuick
+import Telemetry.UX
+TrendPanel {
+    required property var testProvider
+    required property var testHistory
+    provider: testProvider
+    history: testHistory
+    width: 500
+    height: 300
+})qml", QUrl());
+		auto* trend = qobject_cast<QQuickItem*>(trendComponent.createWithInitialProperties(
+		    {{"testProvider", QVariant::fromValue(owner)}, {"testHistory", QVariant::fromValue(history)}}));
+		if (check(source && trend)) {
+			trend->setParentItem(window->contentItem());
+			history->setRow(0);
+			check(QMetaObject::invokeMethod(owner, "publishTrendSample"));
+			drain();
+			auto* state = trend->findChild<QObject*>("trendState");
+			check(state && state->property("textFormat").toInt() == Qt::PlainText);
+			check(state && state->property("text").toString() == history->state());
+			check(history->state().contains(QStringLiteral("<b>marker-trendValue</b><img src=\"")));
+		}
+		delete trend;
 	}
 	drain();
 	check(!warnings);

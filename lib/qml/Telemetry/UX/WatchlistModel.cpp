@@ -73,6 +73,7 @@ WatchlistModel::WatchlistModel(QObject* parent) : QAbstractListModel(parent)
 void WatchlistModel::bind(const Workbench& owner) noexcept
 {
 	if (!changing_) {
+		++sampleEpoch_;
 		current_ = {};
 		owner_ = &owner;
 		session_ = owner.session();
@@ -83,6 +84,7 @@ void WatchlistModel::bind(const Workbench& owner) noexcept
 void WatchlistModel::bind(std::function<bool()> current)
 {
 	if (!changing_) {
+		++sampleEpoch_;
 		owner_ = nullptr;
 		current_ = std::move(current);
 	}
@@ -101,7 +103,7 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 		                  : std::max(qsizetype(4), rows_.capacity() * 2));
 	Mutation mutation{changing_};
 	beginInsertRows({}, count_, count_);
-	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}});
+	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0, {}});
 	++count_;
 	endInsertRows();
 	return true;
@@ -127,7 +129,7 @@ bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 	Mutation mutation{changing_};
 	beginInsertRows({}, first, last);
 	for (const auto& entry : entries)
-		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}});
+		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}, {}, 0, {}});
 	count_ += static_cast<int>(entries.size());
 	endInsertRows();
 	return true;
@@ -176,17 +178,27 @@ void WatchlistModel::invalidateValues()
 		rows_[row].status = QStringLiteral("Stale");
 		rows_[row].text.clear();
 	}
-	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {StatusRole, TextRole});
+	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
+	                   {StatusRole, TextRole, SampleTextRole, SampleValueRole, SampleExactRole,
+	                    StatusCodeRole});
 }
 
-bool WatchlistModel::setResult(int row, QString status, QString text)
+bool WatchlistModel::setResult(int row, QString status, QString text, WatchSample sample)
 {
 	if (changing_ || row < 0 || row >= count_)
 		return false;
 	Mutation mutation{changing_};
 	rows_[row].status = std::move(status);
 	rows_[row].text = std::move(text);
-	Q_EMIT dataChanged(index(row, 0), index(row, 0), {StatusRole, TextRole});
+	if (rows_[row].status == QStringLiteral("Ok") &&
+	    rows_[row].sampleRevision != std::numeric_limits<quint64>::max()) {
+		rows_[row].sampleText = rows_[row].text;
+		rows_[row].sample = sample;
+		++rows_[row].sampleRevision;
+	}
+	Q_EMIT dataChanged(index(row, 0), index(row, 0),
+	                   {StatusRole, TextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
+	                    SampleValueRole, SampleExactRole, StatusCodeRole});
 	return true;
 }
 
@@ -228,8 +240,14 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 	                owner_->snapshotInfo().admission != admission_))) {
 		if (role == StatusRole)
 			return QStringLiteral("Stale");
+		if (role == StatusCodeRole)
+			return static_cast<int>(WatchStatus::Stale);
 		if (role == TextRole)
 			return QString{};
+		if (role == SampleTextRole || role == SampleValueRole)
+			return role == SampleTextRole ? QVariant(QString{}) : QVariant();
+		if (role == SampleExactRole)
+			return false;
 	}
 	switch (role) {
 		case EndpointIdRole:
@@ -241,6 +259,18 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return row.status;
 		case TextRole:
 			return row.text;
+		case SampleRevisionRole:
+			return QString::number(row.sampleRevision);
+		case SampleTextRole:
+			return row.status == QStringLiteral("Ok") ? row.sampleText : QString{};
+		case SampleEpochRole:
+			return QString::number(sampleEpoch_);
+		case SampleValueRole:
+			return row.status == QStringLiteral("Ok") ? row.sample.role() : QVariant();
+		case SampleExactRole:
+			return row.status == QStringLiteral("Ok") && row.sample.exact;
+		case StatusCodeRole:
+			return static_cast<int>(watchStatusCode(row.status));
 		default:
 			return {};
 	}
@@ -251,7 +281,13 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	return {{EndpointIdRole, "endpointId"},
 	        {NameRole, "name"},
 	        {StatusRole, "status"},
-	        {TextRole, "text"}};
+	        {TextRole, "text"},
+	        {SampleRevisionRole, "sampleRevision"},
+	        {SampleTextRole, "sampleText"},
+	        {SampleEpochRole, "sampleEpoch"},
+	        {SampleValueRole, "sampleValue"},
+	        {SampleExactRole, "sampleExact"},
+	        {StatusCodeRole, "statusCode"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)
@@ -300,5 +336,50 @@ QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& 
 	           ? QString::fromUtf8(name.value.name.data(), qsizetype(name.value.name.size())) +
 	                 QStringLiteral(" (") + digits + QLatin1Char(')')
 	           : digits + QStringLiteral(" (unknown)");
+}
+
+WatchSample WatchlistModel::sampleOf(const telemetry::runtime::DynamicValueView& value)
+{
+	if (!value.valid())
+		return {};
+	if (const auto result = value.get<bool>(); result)
+		return WatchSample::ofUnsigned(result.value ? 1u : 0u);
+#define WATCH_SIGNED(T)                                                                            \
+	if (const auto result = value.get<T>(); result)                                                \
+	return WatchSample::ofSigned(result.value)
+#define WATCH_UNSIGNED(T)                                                                          \
+	if (const auto result = value.get<T>(); result)                                                \
+	return WatchSample::ofUnsigned(result.value)
+	WATCH_UNSIGNED(std::uint8_t);
+	WATCH_SIGNED(std::int8_t);
+	WATCH_UNSIGNED(std::uint16_t);
+	WATCH_SIGNED(std::int16_t);
+	WATCH_UNSIGNED(std::uint32_t);
+	WATCH_SIGNED(std::int32_t);
+	WATCH_UNSIGNED(std::uint64_t);
+	WATCH_SIGNED(std::int64_t);
+	if (const auto result = value.get<float>(); result)
+		return WatchSample::ofFloating(result.value);
+	if (const auto result = value.get<double>(); result)
+		return WatchSample::ofFloating(result.value);
+#undef WATCH_SIGNED
+#undef WATCH_UNSIGNED
+#define WATCH_ENUM_SIGNED(T)                                                                       \
+	if (const auto result = value.enumUnderlying<T>(); result)                                     \
+	return WatchSample::ofSigned(result.value)
+#define WATCH_ENUM_UNSIGNED(T)                                                                     \
+	if (const auto result = value.enumUnderlying<T>(); result)                                     \
+	return WatchSample::ofUnsigned(result.value)
+	WATCH_ENUM_UNSIGNED(std::uint8_t);
+	WATCH_ENUM_SIGNED(std::int8_t);
+	WATCH_ENUM_UNSIGNED(std::uint16_t);
+	WATCH_ENUM_SIGNED(std::int16_t);
+	WATCH_ENUM_UNSIGNED(std::uint32_t);
+	WATCH_ENUM_SIGNED(std::int32_t);
+	WATCH_ENUM_UNSIGNED(std::uint64_t);
+	WATCH_ENUM_SIGNED(std::int64_t);
+#undef WATCH_ENUM_SIGNED
+#undef WATCH_ENUM_UNSIGNED
+	return {};
 }
 } // namespace telemetry::ux

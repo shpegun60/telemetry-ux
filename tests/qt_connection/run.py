@@ -186,6 +186,13 @@ def main():
             raise RuntimeError('Bulk selection did not reach its warning-free assertion floor')
         report['bulk_selection'] = dict(checks=int(bulk_checks[1]), warnings=0,
             executable_sha256=digest(bulk_executable))
+        trend_executable = build / ('telemetry_qml_trend.exe' if os.name == 'nt' else 'telemetry_qml_trend')
+        trend_log = run('trend-runtime', [trend_executable])
+        trend_checks = re.search(r'Trend checks=\s*(\d+) warnings=0', trend_log)
+        if not trend_checks or int(trend_checks[1]) < 20:
+            raise RuntimeError('Trend did not reach its warning-free assertion floor')
+        report['trend'] = dict(checks=int(trend_checks[1]), warnings=0,
+            executable_sha256=digest(trend_executable))
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]

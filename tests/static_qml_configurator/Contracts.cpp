@@ -2,6 +2,9 @@
  * Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
  */
 #include <Telemetry/UX/StaticConfiguratorProvider.hpp>
+#include <Telemetry/UX/TrendHistory.hpp>
+#include <Telemetry/UX/WatchSample.hpp>
+#include <QAbstractItemModel>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QPersistentModelIndex>
@@ -774,6 +777,127 @@ static void watchTick(StaticConfiguratorProvider& p)
 	CHECK(timer && QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
 }
 
+static void staticTrend()
+{
+	Api api;
+	api.watched[0] = QStringLiteral("42");
+	StaticConfiguratorProvider p(watchBinding(api, 1));
+	p.selectEndpoint(endpoint(p, 0));
+	CHECK(p.addWatch());
+	TrendHistory trend;
+	trend.setSource(p.watchlist());
+	trend.setRow(0);
+	for (int i = 0; i < 2; ++i) {
+		p.refreshWatch();
+		CHECK(p.watchPending());
+		api.finish(true);
+		watchEvents();
+	}
+	CHECK(trend.points().size() == 2);
+	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+	p.refreshWatch();
+	api.finish(false, "Dispatch", false, {}, 9);
+	watchEvents();
+	p.refreshWatch();
+	api.finish(true);
+	watchEvents();
+	CHECK(trend.points().size() == 3);
+	CHECK(trend.points().last().toMap().value("breakBefore").toBool());
+}
+
+static int roleOf(const QAbstractItemModel* model, const QByteArray& name)
+{
+	return model ? model->roleNames().key(name, -1) : -1;
+}
+
+static void readWatched(StaticConfiguratorProvider& p, Api& api)
+{
+	p.refreshWatch();
+	for (int guard = 0; p.watchPending() && guard < 16; ++guard) {
+		api.finish(true);
+		watchEvents();
+	}
+	CHECK(!p.watchPending());
+}
+
+// Adding, group-adding and removing Watchlist rows inserts or removes model rows,
+// so a Trend keeps following its Field (the Static model used to reset itself on
+// every edit and the Trend lost its selection: review probe of 2026-11-11).
+static void staticTrendFollowsEdits()
+{
+	Api api;
+	api.watched[0] = QStringLiteral("42");
+	api.watched[1] = QStringLiteral("7");
+	StaticConfiguratorProvider p(watchBinding(api, 3));
+	auto* model = p.watchlist();
+	p.selectEndpoint(endpoint(p, 1));
+	CHECK(p.addWatch());
+	TrendHistory trend;
+	trend.setSource(model);
+	trend.setRow(0);
+	readWatched(p, api);
+	CHECK(trend.row() == 0 && trend.points().size() == 1);
+
+	p.selectEndpoint(endpoint(p, 0));
+	CHECK(p.addWatch());
+	CHECK(trend.row() == 0 && model->rowCount() == 2);
+	readWatched(p, api);
+	CHECK(trend.points().size() == 2);
+	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+
+	const auto bulk = p.addWatchMany({QVariant::fromValue(endpoint(p, 2))});
+	CHECK(bulk.value("added").toInt() == 1 && model->rowCount() == 3);
+	CHECK(trend.row() == 0);
+	readWatched(p, api);
+	CHECK(trend.points().size() == 3);
+
+	p.removeWatch(1);
+	CHECK(trend.row() == 0 && model->rowCount() == 2);
+	readWatched(p, api);
+	CHECK(trend.points().size() == 4);
+	CHECK(trend.points().last().toMap().value("value").toDouble() == 7.0);
+
+	// Removing a row above the selection moves the selection with its Field.
+	trend.setRow(1);
+	readWatched(p, api);
+	const auto before = trend.points().size();
+	CHECK(before == 1 && trend.points().last().toMap().value("value").toDouble() == -77.0);
+	p.removeWatch(0);
+	CHECK(trend.row() == 0 && model->rowCount() == 1);
+	readWatched(p, api);
+	CHECK(trend.points().size() == before + 1);
+
+	p.clearWatch();
+	CHECK(trend.row() == -1 && model->rowCount() == 0);
+}
+
+// The number a Trend plots comes from the typed value: U64/S64 beyond 2^53 - 1
+// are reported as not exact and carry no value; enums plot their code.
+static void staticSampleRoles()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api, 4));
+	auto* model = p.watchlist();
+	QVariantList all;
+	for (int i = 0; i < 4; ++i)
+		all.push_back(QVariant::fromValue(endpoint(p, i)));
+	CHECK(p.addWatchMany(all).value("added").toInt() == 4);
+	const int value = roleOf(model, "sampleValue"), exact = roleOf(model, "sampleExact"),
+	          code = roleOf(model, "statusCode");
+	CHECK(value >= 0 && exact >= 0 && code >= 0);
+	CHECK(model->data(model->index(0, 0), code).toInt() == int(WatchStatus::NotRead));
+	readWatched(p, api);
+	for (int row = 0; row < 4; ++row)
+		CHECK(model->data(model->index(row, 0), code).toInt() == int(WatchStatus::Ok));
+	CHECK(!model->data(model->index(0, 0), exact).toBool());
+	CHECK(!model->data(model->index(0, 0), value).isValid());
+	CHECK(!model->data(model->index(1, 0), exact).toBool());
+	CHECK(model->data(model->index(2, 0), exact).toBool());
+	CHECK(model->data(model->index(2, 0), value).toDouble() == -77.0);
+	CHECK(model->data(model->index(3, 0), exact).toBool());
+	CHECK(model->data(model->index(3, 0), value).toDouble() == 17.0);
+}
+
 static void watchLifecycle()
 {
 	Api api;
@@ -799,6 +923,10 @@ static void watchLifecycle()
 	CHECK(p.watchCount() == 3 && api.calls.isEmpty());
 	auto* model = p.watchlist();
 	const auto textRole = role(model, "text"), statusRole = role(model, "status");
+	const auto sampleTextRole = role(model, "sampleText"), sampleRevisionRole = role(model, "sampleRevision");
+	TrendHistory history;
+	history.setSource(model);
+	history.setRow(2);
 	p.refreshWatch();
 	CHECK(p.busy() && p.watchActive() && p.watchPending());
 	CHECK(api.calls == QStringList{"watch0"});
@@ -827,9 +955,14 @@ static void watchLifecycle()
 	watchEvents();
 	CHECK(!p.watchActive() && !p.busy());
 	CHECK(model->data(model->index(2, 0), textRole).toString() == "-77");
+	CHECK(history.points().size() == 1);
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString() == "18446744073709551615");
+	const auto sampleRevision = model->data(model->index(0, 0), sampleRevisionRole).toString();
 	api.watched[0] = QStringLiteral("9007199254740993");
 	api.changed();
 	CHECK(model->data(model->index(0, 0), textRole).toString() == "9007199254740993");
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString() == "18446744073709551615");
+	CHECK(model->data(model->index(0, 0), sampleRevisionRole).toString() == sampleRevision);
 	p.startWatch();
 	CHECK(p.watchActive() && p.watchPending());
 	p.stopWatch();
@@ -848,6 +981,7 @@ static void watchLifecycle()
 	CHECK(api.calls.last() == "watch1");
 	api.invalidate();
 	CHECK(model->data(model->index(0, 0), textRole).toString().isEmpty());
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString().isEmpty());
 	CHECK(model->data(model->index(0, 0), statusRole) == QStringLiteral("Stale"));
 	api.ready = api.valid = true;
 	++api.epoch;
@@ -921,7 +1055,7 @@ static void watchBoundsAndReentrancy()
 	QPointer<StaticConfiguratorProvider> doomed =
 	    new StaticConfiguratorProvider(watchBinding(other));
 	doomed->selectEndpoint(endpoint(*doomed));
-	QObject::connect(doomed->watchlist(), &QAbstractItemModel::modelAboutToBeReset, doomed,
+	QObject::connect(doomed->watchlist(), &QAbstractItemModel::rowsAboutToBeInserted, doomed,
 	                 [doomed] {
 		                 doomed->deleteLater();
 	                 });
@@ -947,13 +1081,16 @@ static void bulkWatch()
 		indices.push_back(QVariant::fromValue(endpoint(p, i)));
 	}
 	indices.push_back(QVariant::fromValue(endpoint(p, 0)));
-	int resets = 0;
+	int resets = 0, inserts = 0;
 	QObject::connect(p.watchlist(), &QAbstractItemModel::modelReset, &p, [&] { ++resets; });
+	QObject::connect(p.watchlist(), &QAbstractItemModel::rowsInserted, &p, [&] { ++inserts; });
 	const auto bad = p.addWatchMany({indices[0], QVariant::fromValue(endpoint(foreign))});
-	CHECK(bad.value("status") == "invalid" && p.watchCount() == 0 && resets == 0);
+	CHECK(bad.value("status") == "invalid" && p.watchCount() == 0 && inserts == 0);
 	const auto result = p.addWatchMany(indices);
 	CHECK(result.value("status") == "ok" && result.value("added").toInt() == 65);
-	CHECK(result.value("duplicate").toInt() == 1 && resets == 1 && api.calls.isEmpty());
+	// One group is one structural publication, and it inserts rather than resets.
+	CHECK(result.value("duplicate").toInt() == 1 && inserts == 1 && resets == 0 &&
+	      api.calls.isEmpty());
 	CHECK(p.selectedEndpointIndex() == oldSelection && p.editing());
 	CHECK(p.values()->data(value, role(p.values(), "editorText")).toString() == "42");
 	p.refreshWatch();
@@ -966,7 +1103,7 @@ static void bulkWatch()
 
 	Api changing;
 	StaticConfiguratorProvider live(watchBinding(changing));
-	QObject::connect(live.watchlist(), &QAbstractItemModel::modelAboutToBeReset, &live,
+	QObject::connect(live.watchlist(), &QAbstractItemModel::rowsAboutToBeInserted, &live,
 	                 [&] { changing.invalidate(); });
 	const auto committed = live.addWatchMany({QVariant::fromValue(endpoint(live))});
 	CHECK(committed.value("added").toInt() == 1);
@@ -995,7 +1132,7 @@ static void bulkWatch()
 	CHECK(sessionProvider.editing());
 	CHECK(!values->data(draftIndex, role(values, "editorText")).toString().isEmpty());
 	bool hiddenSynchronously = false;
-	QObject::connect(sessionProvider.watchlist(), &QAbstractItemModel::modelAboutToBeReset,
+	QObject::connect(sessionProvider.watchlist(), &QAbstractItemModel::rowsAboutToBeInserted,
 	                 &sessionProvider, [&] {
 		                 ++sessionChange.epoch; // The transport remains ready.
 		                 sessionChange.changed();
@@ -1010,7 +1147,9 @@ static void bulkWatch()
 	Api destroyed;
 	QObject observer;
 	QPointer<StaticConfiguratorProvider> doomed = new StaticConfiguratorProvider(watchBinding(destroyed));
-	QObject::connect(doomed->watchlist(), &QAbstractItemModel::modelAboutToBeReset, &observer,
+	// Qt still touches a model after emitting rowsAboutToBeInserted; rowsInserted
+	// is emitted last, so synchronous deletion is exercised from there.
+	QObject::connect(doomed->watchlist(), &QAbstractItemModel::rowsInserted, &observer,
 	                 [&] { delete doomed.data(); });
 	const auto sourceIndex = endpoint(*doomed);
 	const auto destruction = doomed->addWatchMany({QVariant::fromValue(sourceIndex)});
@@ -1075,6 +1214,9 @@ int main(int argc, char** argv)
 	readRefusalsAndQueuedReset();
 	staleCacheAfterWriteRefusal();
 	watchLifecycle();
+	staticTrend();
+	staticTrendFollowsEdits();
+	staticSampleRoles();
 	watchBoundsAndReentrancy();
 	bulkWatch();
 	largeWatchCycle();
