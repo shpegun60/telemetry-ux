@@ -23,6 +23,11 @@ QtObject {
     property color statePressed: "#233349"
     property color stateSelected: "#215a68"
     property color selectedForeground: "#ffffff"
+    // A selection whose fill is its only cue (the hex view): 3:1 on its own,
+    // where stateSelected is a row's quiet state.
+    property color selectionFill: "#2f7d91"
+    // A codec's region in the hex view: decorative, its name says what it is.
+    property color regionTint: "#1c2a3a"
 
     // Text.
     property color textPrimary: "#e8edf5"

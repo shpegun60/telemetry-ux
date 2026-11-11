@@ -4,9 +4,12 @@
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
 #include <Telemetry/UX/FileContent.hpp>
+#include <Telemetry/UX/HexView.hpp>
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <QClipboard>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -193,12 +196,194 @@ QQuickItem* delegateWhere(QObject* root, const char* name, const char* property,
 	return nullptr;
 }
 
-void press(QObject* target, int key)
+void press(QObject* target, int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
 {
-	QKeyEvent down(QEvent::KeyPress, key, Qt::NoModifier);
-	QKeyEvent up(QEvent::KeyRelease, key, Qt::NoModifier);
+	QKeyEvent down(QEvent::KeyPress, key, modifiers);
+	QKeyEvent up(QEvent::KeyRelease, key, modifiers);
 	QCoreApplication::sendEvent(target, &down);
 	QCoreApplication::sendEvent(target, &up);
+}
+
+// The hex grid on its own: its layout by width, the cursor and the selection
+// by key, Copy as in every form, Go to and Select block with their refusals,
+// the inspector in both byte orders, a codec's region, the copy limit, Tab
+// between the panes and the menu from the keyboard.
+void hexView()
+{
+	using telemetry::ux::HexView;
+	QByteArray bytes;
+	for (int i = 0; i < 300; ++i)
+		bytes.append(static_cast<char>(i));
+	HexView view;
+	view.setSize(QSizeF(3000, 600));
+	view.setBytes(bytes);
+	CHECK(view.bytesPerRow() == 32 && view.textColumn() && view.rowCount() == 10 && view.size() == 300);
+	view.setSize(QSizeF(160, 600));
+	CHECK(view.bytesPerRow() == 8 && !view.textColumn());
+	view.setSize(QSizeF(3000, 600));
+	CHECK(view.bytesPerRow() == 32);
+
+	// Find, in every kind: the match becomes the selection; next and previous
+	// go round once, and say so; the count and the match's place in it.
+	view.moveTo(0);
+	CHECK(view.find(QStringLiteral("0A 0B"), QStringLiteral("hex")).isEmpty());
+	CHECK(view.selectionStart() == 10 && view.selectionLength() == 2 && view.cursor() == 10);
+	CHECK(view.matchCount() == 2 && view.matchIndex() == 1 && !view.counting());
+	CHECK(view.find(QStringLiteral("0x0A,0x0B"), QStringLiteral("hex")).isEmpty() && view.selectionStart() == 266 &&
+	      view.matchIndex() == 2);
+	CHECK(view.find(QStringLiteral("0a0b"), QStringLiteral("hex")) == QStringLiteral("Wrapped to the start") &&
+	      view.selectionStart() == 10);
+	CHECK(view.find(QStringLiteral("0A 0B"), QStringLiteral("hex"), 4, false) == QStringLiteral("Wrapped to the end") &&
+	      view.selectionStart() == 266);
+	CHECK(view.find(QStringLiteral("ABC"), QStringLiteral("hex")).startsWith(QStringLiteral("Hex is pairs")));
+	CHECK(view.find(QStringLiteral("FF FF"), QStringLiteral("hex")) == QStringLiteral("Not found"));
+	view.moveTo(0);
+	CHECK(view.find(QStringLiteral("ABC"), QStringLiteral("text")).isEmpty() && view.selectionStart() == 65 &&
+	      view.selectionLength() == 3);
+	CHECK(view.find(QStringLiteral("70000"), QStringLiteral("integer"), 2).contains(QStringLiteral("does not fit")));
+	CHECK(view.find(QStringLiteral("x"), QStringLiteral("integer"), 2).startsWith(QStringLiteral("Not an integer")));
+	view.clearFind();
+	CHECK(view.matchCount() == 0 && view.matchIndex() == 0);
+	{
+		// Numbers in the inspector's byte order: 1000 is E8 03 little-endian,
+		// 03 E8 big-endian; 1.5f is 00 00 C0 3F.
+		QByteArray numbers(32, '\0');
+		numbers[8] = static_cast<char>(0xe8);
+		numbers[9] = 0x03;
+		numbers[20] = static_cast<char>(0xc0);
+		numbers[21] = 0x3f;
+		HexView probe;
+		probe.setSize(QSizeF(3000, 600));
+		probe.setBytes(numbers);
+		CHECK(probe.find(QStringLiteral("1000"), QStringLiteral("integer"), 2).isEmpty() && probe.selectionStart() == 8);
+		// The only match again: next goes round to it, and says so.
+		CHECK(probe.find(QStringLiteral("0x3E8"), QStringLiteral("integer"), 2) == QStringLiteral("Wrapped to the start") &&
+		      probe.selectionStart() == 8);
+		CHECK(probe.find(QStringLiteral("1.5"), QStringLiteral("float"), 4).isEmpty() && probe.selectionStart() == 18 &&
+		      probe.selectionLength() == 4);
+		probe.setBigEndian(true);
+		CHECK(probe.find(QStringLiteral("1000"), QStringLiteral("integer"), 2) == QStringLiteral("Not found"));
+		CHECK(probe.pattern(QStringLiteral("1000"), QStringLiteral("integer"), 4, nullptr) == QByteArray::fromHex("000003e8"));
+		CHECK(probe.pattern(QStringLiteral("-1"), QStringLiteral("integer"), 1, nullptr) == QByteArray::fromHex("ff"));
+	}
+
+	// Keys move the cursor; Shift extends the selection.
+	view.moveTo(0);
+	press(&view, Qt::Key_Right);
+	CHECK(view.cursor() == 1 && view.selectionLength() == 0);
+	for (int i = 0; i < 3; ++i)
+		press(&view, Qt::Key_Right, Qt::ShiftModifier);
+	CHECK(view.selectionStart() == 1 && view.selectionLength() == 4 && view.cursor() == 4);
+	CHECK(view.status() == QStringLiteral("0x0004 (4) · 4 bytes, 0x0001–0x0004"));
+	CHECK(view.accessibleText().contains(QStringLiteral("4 bytes selected, 1 to 4.")));
+	CHECK(view.textAs(QStringLiteral("hex")) == QStringLiteral("01 02 03 04"));
+	CHECK(view.textAs(QStringLiteral("hexCompact")) == QStringLiteral("01020304"));
+	CHECK(view.textAs(QStringLiteral("base64")) == QStringLiteral("AQIDBA=="));
+	CHECK(view.textAs(QStringLiteral("offset")) == QStringLiteral("0x0001"));
+	CHECK(view.textAs(QStringLiteral("offsetLength")) == QStringLiteral("0x0001, 4"));
+	CHECK(view.textAs(QStringLiteral("c")) == QStringLiteral("const uint8_t data[4] = {\n    0x01, 0x02, 0x03, 0x04\n};"));
+	press(&view, Qt::Key_Escape);
+	CHECK(view.selectionLength() == 0 && view.cursor() == 4);
+	press(&view, Qt::Key_Down);
+	CHECK(view.cursor() == 36);
+	press(&view, Qt::Key_Home);
+	CHECK(view.cursor() == 32);
+	press(&view, Qt::Key_End, Qt::ControlModifier);
+	CHECK(view.cursor() == 299);
+	press(&view, Qt::Key_A, Qt::ControlModifier);
+	CHECK(view.selectionStart() == 0 && view.selectionLength() == 300);
+
+	// Go to, in every form it takes, and its refusals.
+	CHECK(view.goTo(QStringLiteral("0x20")).isEmpty() && view.cursor() == 32 && view.selectionLength() == 0);
+	CHECK(view.goTo(QStringLiteral("40h")).isEmpty() && view.cursor() == 64);
+	CHECK(view.goTo(QStringLiteral("100")).isEmpty() && view.cursor() == 100);
+	CHECK(view.goTo(QStringLiteral("+0x10")).isEmpty() && view.cursor() == 116);
+	CHECK(view.goTo(QStringLiteral("-16")).isEmpty() && view.cursor() == 100);
+	CHECK(view.goTo(QStringLiteral("end-16")).isEmpty() && view.cursor() == 284);
+	CHECK(view.goTo(QStringLiteral("end")).isEmpty() && view.cursor() == 299);
+	CHECK(view.goTo(QStringLiteral("zz")).startsWith(QStringLiteral("Not an offset")) && view.cursor() == 299);
+	CHECK(view.goTo(QStringLiteral("0x999")) == QStringLiteral("Not in this file: 0 to 0x12B."));
+	CHECK(!view.goTo(QString()).isEmpty());
+
+	// Select a block by length or by its end.
+	CHECK(view.selectBlock(QStringLiteral("0x10"), QStringLiteral("8"), false).isEmpty() &&
+	      view.selectionStart() == 16 && view.selectionLength() == 8);
+	CHECK(view.selectBlock(QStringLiteral("0x10"), QStringLiteral("0x13"), true).isEmpty() &&
+	      view.selectionStart() == 16 && view.selectionLength() == 4);
+	CHECK(!view.selectBlock(QStringLiteral("0x10"), QStringLiteral("0x8"), true).isEmpty());
+	CHECK(!view.selectBlock(QStringLiteral("0x120"), QStringLiteral("100"), false).isEmpty());
+
+	// The inspector at E8 03 00 00: 1000 little-endian, its bytes the other way big-endian.
+	QByteArray value(16, '\0');
+	value[4] = static_cast<char>(0xe8);
+	value[5] = 0x03;
+	view.setBytes(value);
+	view.moveTo(4);
+	const auto read = [&](const QString& type) {
+		for (const auto& row : view.inspector())
+			if (row.toMap().value(QStringLiteral("type")).toString() == type)
+				return row.toMap().value(QStringLiteral("value")).toString();
+		return QStringLiteral("(none)");
+	};
+	CHECK(read(QStringLiteral("int16")) == QStringLiteral("1000") && read(QStringLiteral("uint32")) == QStringLiteral("1000"));
+	CHECK(read(QStringLiteral("int8")) == QStringLiteral("-24") && read(QStringLiteral("uint8")) == QStringLiteral("232"));
+	CHECK(read(QStringLiteral("bits")) == QStringLiteral("1110 1000"));
+	CHECK(read(QStringLiteral("time_t32")) == QStringLiteral("1970-01-01 00:16:40 UTC"));
+	view.setBigEndian(true);
+	CHECK(read(QStringLiteral("uint16")) == QStringLiteral("59395") && read(QStringLiteral("int16")) == QStringLiteral("-6141"));
+	view.moveTo(12);
+	CHECK(read(QStringLiteral("uint64")) == QStringLiteral("—") && read(QStringLiteral("uint32")) == QStringLiteral("0"));
+	view.setBigEndian(false);
+
+	// A codec's region names the bytes at the cursor.
+	view.setRegions({QVariantMap{{QStringLiteral("offset"), 0}, {QStringLiteral("length"), 8},
+	                             {QStringLiteral("name"), QStringLiteral("magic")},
+	                             {QStringLiteral("path"), QStringLiteral("header › magic")},
+	                             {QStringLiteral("kind"), QStringLiteral("field")}}});
+	view.moveTo(3);
+	CHECK(view.status().contains(QStringLiteral("In: header › magic · 8 bytes at 0x0000")));
+	CHECK(view.accessibleText().contains(QStringLiteral("In header › magic")));
+	view.moveTo(9);
+	CHECK(!view.status().contains(QStringLiteral("In:")));
+
+	// Copying more than 1 MiB is refused with a reason; less is copied.
+	view.setBytes(QByteArray(HexView::maxCopyBytes + 1, 'x'));
+	view.selectAll();
+	CHECK(!view.copy(QStringLiteral("hex")) && view.notice().startsWith(QStringLiteral("Copy is limited to 1 MiB")));
+	view.selectRange(0, 3);
+	CHECK(view.copy(QStringLiteral("text")) && view.notice().isEmpty());
+	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("xxx"));
+
+	// Tab: hex, then text, then out of the grid.
+	view.moveTo(0);
+	CHECK(!view.textPane());
+	QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+	QCoreApplication::sendEvent(&view, &tab);
+	CHECK(view.textPane() && tab.isAccepted());
+	QKeyEvent again(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+	QCoreApplication::sendEvent(&view, &again);
+	CHECK(view.textPane() && !again.isAccepted());
+	press(&view, Qt::Key_Backtab);
+	CHECK(!view.textPane());
+
+	// The Menu key and Shift+F10 ask for the context menu.
+	int menus = 0;
+	QObject::connect(&view, &HexView::contextMenuRequested, &view, [&](qreal, qreal) {
+		++menus;
+	});
+	press(&view, Qt::Key_Menu);
+	press(&view, Qt::Key_F10, Qt::ShiftModifier);
+	CHECK(menus == 2);
+
+	// Offsets in decimal: wider, and the status keeps the hex.
+	view.setBytes(bytes);
+	view.setDecimalOffsets(true);
+	CHECK(view.decimalOffsets() && view.textAs(QStringLiteral("offset")) == QStringLiteral("0x0000"));
+
+	// An empty file: nothing to move to, the status says so.
+	view.setBytes({});
+	press(&view, Qt::Key_Right);
+	CHECK(view.cursor() == 0 && view.rowCount() == 0 && view.status() == QStringLiteral("This file is empty."));
 }
 } // namespace
 
@@ -216,6 +401,8 @@ int main(int argc, char** argv)
 		largeBytes[i] = std::byte(i * 3);
 	QTemporaryDir folder;
 	CHECK(folder.isValid());
+	telemetry::ux::registerQmlTypes();
+	hexView();
 
 	Peer peer;
 	qt::ConnectionSession session;
@@ -378,8 +565,12 @@ int main(int argc, char** argv)
 	CHECK(viewer->property("shownMode").toString() == QStringLiteral("hex"));
 	CHECK(await([&] {
 		auto* hex = child(root, "fileViewerHex");
-		return hex && hex->property("count").toInt() == static_cast<int>((largeBytes.size() + 15) / 16);
+		return hex && hex->property("size").toLongLong() == static_cast<qint64>(largeBytes.size()) &&
+		       hex->property("rowCount").toLongLong() ==
+		           (static_cast<qint64>(largeBytes.size()) + hex->property("bytesPerRow").toInt() - 1) /
+		               hex->property("bytesPerRow").toInt();
 	}));
+	CHECK(!child(root, "hexStatus")->property("text").toString().isEmpty());
 	const auto csvPath = folder.filePath(QStringLiteral("viewer.csv"));
 	{
 		QFile file(csvPath);
