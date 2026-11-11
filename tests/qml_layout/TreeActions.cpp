@@ -346,6 +346,22 @@ int main(int argc, char** argv) {
         CHECK(QMetaObject::invokeMethod(staleDetails, "triggered"));
         settle();
         CHECK(provider->property("selections").toInt() == selectionsBefore);
+        // Watch all Fields: every Field of the tree in tree order, Commands left
+        // out, from any row's menu.
+        CHECK(provider->setProperty("watched", QVariant(QStringList())));
+        openOn(QStringLiteral("Voltage"));
+        CHECK(menuItem("endpointMenuWatchAll")->isEnabled());
+        click(window, menuItem("endpointMenuWatchAll"));
+        CHECK(watched(provider) == (QStringList{QStringLiteral("measure.Voltage"), QStringLiteral("measure.Current"),
+                                                QStringLiteral("device.config.Gain"), QStringLiteral("device.config.Offset"),
+                                                QStringLiteral("device.Name")}));
+        CHECK(status->property("text").toString().startsWith(QStringLiteral("Watching 5 from the device;")));
+        CHECK(provider->setProperty("watchActive", true));
+        openOn(QStringLiteral("Voltage"));
+        CHECK(!menuItem("endpointMenuWatchAll")->isEnabled());
+        QTest::keyClick(window, Qt::Key_Escape);
+        settle();
+        CHECK(provider->setProperty("watchActive", false));
         CHECK(warnings == 0);
         std::printf("QML tree-actions checks=%d warnings=0\n", checks);
         return 0;

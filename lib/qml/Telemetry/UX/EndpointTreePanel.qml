@@ -103,6 +103,12 @@ Pane {
     // The walk is bounded like search: depth 64 and 4096 visited rows; a
     // walk cut short says so.
     function groupCandidates(group) {
+        if (!group || !group.valid)
+            return { indexes: [], limited: false }
+        return candidatesUnder(group)
+    }
+    // The same walk from any parent; an invalid index is the whole tree.
+    function candidatesUnder(group) {
         const found = []
         let budget = groupWalkLimit
         const walk = function(parent, depth) {
@@ -116,7 +122,7 @@ Pane {
                     walk(child, depth + 1)
             }
         }
-        if (searchSource && group && group.valid)
+        if (searchSource)
             walk(group, 0)
         return { indexes: found, limited: budget <= 0 }
     }
@@ -157,6 +163,14 @@ Pane {
     function watchGroup(index) {
         const walk = groupCandidates(index)
         return watchIndexes(walk.indexes, pathOf(index), true, walk.limited)
+    }
+    // Every Field of the device the Watchlist can hold, in tree order, up to
+    // its row limit (the rest is counted as capacity). For a host's menu too.
+    function watchAll() {
+        if (!searchSource)
+            return false
+        const walk = candidatesUnder(searchSource.index(-1, -1))
+        return watchIndexes(walk.indexes, "the device", true, walk.limited)
     }
     function copyPath(index) {
         const path = pathOf(index)
@@ -339,6 +353,12 @@ Pane {
             text: "Watch this group"
             enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true
             onTriggered: { const target = panel.menuTarget(); if (target) panel.watchGroup(target) }
+        }
+        MenuItem {
+            objectName: "endpointMenuWatchAll"
+            text: "Watch all Fields"
+            enabled: panel.bulkWatchAvailable && panel.provider.watchActive !== true
+            onTriggered: panel.watchAll()
         }
         MenuItem {
             objectName: "endpointMenuDetails"
