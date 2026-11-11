@@ -38,8 +38,8 @@ jobs:
         uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
       - name: Install Qt without any Telemetry SDK checkout
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y cmake ninja-build qt6-base-dev qt6-declarative-dev \
             qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
       - name: Install, relocate and embed the view in an independent host
@@ -141,8 +141,8 @@ jobs:
         uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
       - name: Install Qt host development and QML runtime
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 cmake ninja-build qt6-base-dev qt6-declarative-dev libqt6serialport6-dev \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y clang-18 cmake ninja-build qt6-base-dev qt6-declarative-dev libqt6serialport6-dev \
             qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
       - name: Install and relocate the SDK prefix
@@ -222,8 +222,8 @@ jobs:
           export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/web-chromium"
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
-          sudo apt-get update
-          sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y clang-18 cmake ninja-build g++ python3-venv
           python -m venv "$RUNNER_TEMP/web-builder"
           "$RUNNER_TEMP/web-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1 playwright==1.63.0 websockets==15.0.1
           "$RUNNER_TEMP/web-builder/bin/python" -m playwright install --with-deps chromium
@@ -521,8 +521,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
-          sudo apt-get update
-          sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y clang-18 cmake ninja-build g++ python3-venv \
             qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
             qml6-module-qtquick-window qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
