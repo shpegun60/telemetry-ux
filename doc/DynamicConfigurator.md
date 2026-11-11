@@ -23,7 +23,7 @@ cmake --build /external/ux-build --target install
 Your application links installed targets, without adding Inspector sources:
 
 ```cmake
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS dynamic_configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS dynamic_configurator)
 target_link_libraries(my_app PRIVATE TelemetryUX::dynamic_configurator)
 ```
 

@@ -1,7 +1,7 @@
 # Application-owned descriptor export; no Qt or SDK checkout is needed. MIT.
 cmake_minimum_required(VERSION 3.21)
 project(TelemetryQmlDemoFixture LANGUAGES CXX)
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS core)
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS core)
 
 add_library(telemetry_qml_demo_fixture INTERFACE)
 target_compile_features(telemetry_qml_demo_fixture INTERFACE cxx_std_20)
