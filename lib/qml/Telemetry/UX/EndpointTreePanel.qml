@@ -32,6 +32,10 @@ Pane {
         ++watchMarkGeneration
         watchMarks = []
         watchMarkStatus = ""
+        // The open menu holds a plain index too: it never outlives a change.
+        if (endpointMenu.visible)
+            endpointMenu.close()
+        endpointMenu.target = undefined
     }
     function canMarkWatch(index) {
         return Boolean(bulkWatchAvailable && index && index.valid &&

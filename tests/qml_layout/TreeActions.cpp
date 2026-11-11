@@ -274,6 +274,21 @@ int main(int argc, char** argv) {
         CHECK(search->property("text").toString() == QStringLiteral("measure"));
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QString())));
         settle();
+        // A structural change closes an open menu and drops its index: no
+        // action can reach the provider with an index from before the change.
+        openOn(QStringLiteral("Name"));
+        CHECK(evaluate(menu, QStringLiteral("target !== undefined")).toBool());
+        model.removeRow(2);
+        settle();
+        CHECK(!menu->property("visible").toBool());
+        CHECK(evaluate(menu, QStringLiteral("target === undefined")).toBool());
+        const int submissionsBefore = provider->property("submissions").toInt();
+        // A closed menu's items are out of the scene; reach them through the menu.
+        auto* staleWatch = menu->findChild<QQuickItem*>(QStringLiteral("endpointMenuWatch"));
+        CHECK(staleWatch && !staleWatch->isEnabled());
+        CHECK(QMetaObject::invokeMethod(staleWatch, "triggered"));
+        settle();
+        CHECK(provider->property("submissions").toInt() == submissionsBefore);
         CHECK(warnings == 0);
         std::printf("QML tree-actions checks=%d warnings=0\n", checks);
         return 0;
