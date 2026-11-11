@@ -116,3 +116,49 @@ keeps the provider alive while the view or its deferred updates exist, and
 implements all lifecycle/permission/error rules. Buttons forward their action to that provider; text can also be revalidated
 on focus loss. The view supplies no automatic mutation replay or exactly-once
 guarantee. Existing lazy array fetching remains limited to 128 immediate rows.
+
+## Theme and Type
+
+Two singletons in `Telemetry.UX` give the panels, and the programs built on them, one
+look:
+
+- **`Theme`** holds colour roles. A role names what a colour does — `surface`,
+  `textMuted`, `outline`, `focusRing`, `warning` with `warningContainer` — not how it
+  looks.
+- **`Type`** holds the type scale and the row and control heights.
+
+The defaults are a dark set. [tests/theme_contrast](../../../../tests/theme_contrast)
+checks every text pair at 4.5:1 or more and every outline and focus ring at 3:1 or
+more (WCAG 2.2).
+
+A host restyles everything by assigning roles before its window loads:
+
+```qml
+import Telemetry.UX
+Component.onCompleted: Theme.accent = "#4fa3ff"
+```
+
+**The type scale.** `Type` takes its base from the application font, so a host sets the
+body size once in C++ before the engine loads. `Qt.application.font` does not notify
+later changes.
+
+```cpp
+QFont font = QGuiApplication::font();
+font.setPointSizeF(12);          // a 16 px body
+QGuiApplication::setFont(font);  // menus, docks and every panel follow
+```
+
+Its steps are:
+- `Type.caption`: the body divided by 1.125;
+- `Type.heading`: the body times 1.125²;
+- `Type.body`: the body itself.
+
+Sizes are in points, so the system's text-size setting still enlarges them.
+
+**Rules for panels:**
+- Use at most three steps on one screen.
+- Use roles, never raw colours.
+- Never pair colour alone with a state; add text or a glyph.
+
+**Status:** the panels in this module adopt the singletons in a following change; until
+then they keep their own colours.

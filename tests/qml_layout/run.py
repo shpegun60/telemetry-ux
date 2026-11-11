@@ -109,6 +109,12 @@ def main():
         if not trend_match or int(trend_match[1]) < 20:
             raise RuntimeError('missing trend UI contract')
         report['trend'] = dict(checks=int(trend_match[1]), executable_sha256=digest(trend_binary))
+        theme_binary = output / 'build' / ('telemetry_qml_theme.exe' if os.name == 'nt' else 'telemetry_qml_theme')
+        theme_text = run('theme', [theme_binary])
+        theme_match = re.search(r'Theme checks=(\d+) warnings=0', theme_text)
+        if not theme_match or int(theme_match[1]) < 9:
+            raise RuntimeError('missing Theme and Type contract')
+        report['theme'] = dict(checks=int(theme_match[1]), executable_sha256=digest(theme_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:
