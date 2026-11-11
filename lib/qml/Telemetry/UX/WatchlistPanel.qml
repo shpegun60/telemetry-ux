@@ -101,8 +101,11 @@ Pane {
                         id: watchPanelExpanded
                         objectName: "watchlistExpanded"
                         text: "Watchlist " + panel.provider.watchCount
-                        checked: false
-                        onCheckedChanged: panel.expanded = checked
+                        // One state, two ways in: a host may set `expanded`
+                        // (e.g. a program that opens the list by default) and
+                        // the box shows it; ticking the box sets it.
+                        checked: panel.expanded
+                        onCheckedChanged: if (panel.expanded !== checked) panel.expanded = checked
                     }
                     Button {
                         id: addWatchControl

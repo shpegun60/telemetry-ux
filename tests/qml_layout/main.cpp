@@ -431,6 +431,24 @@ int main(int argc, char** argv)
         auto* narrowScroll = item(narrowPanel, QStringLiteral("watchlistScroll"));
         auto* narrowFlick = narrowScroll ? qobject_cast<QQuickItem*>(narrowScroll->property("contentItem").value<QObject*>()) : nullptr;
         CHECK(narrowPanel && narrowProvider && narrowScroll && narrowFlick);
+        // The expand box and the panel's `expanded` are one state: a host that
+        // opens the list sees the box ticked, and unticking it closes the list.
+        {
+            auto* toggle = item(narrowPanel, QStringLiteral("watchlistExpanded"));
+            CHECK(toggle && !narrowPanel->property("expanded").toBool() && !toggle->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", true));
+            settle();
+            CHECK(toggle->property("checked").toBool());
+            CHECK(toggle->setProperty("checked", false));
+            settle();
+            CHECK(!narrowPanel->property("expanded").toBool());
+            CHECK(narrowPanel->setProperty("expanded", true));
+            settle();
+            CHECK(toggle->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(!toggle->property("checked").toBool());
+        }
         const auto controlsVisible = [&] {
             for (const auto* name : {"watchlistExpanded", "addWatchButton"}) {
                 auto* control = item(narrowPanel, QString::fromLatin1(name));
