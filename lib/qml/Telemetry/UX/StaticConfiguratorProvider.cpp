@@ -776,6 +776,11 @@ struct StaticConfiguratorProvider::Impl {
 	QTimer watchTimer;
 	bool watchRunning = false, watchCycle = false, watchContinuation = false;
 	int watchCursor = 0, pendingWatchRow = -1;
+	// 0 is continuous: cycles follow on a 10 ms timer. Each cycle still ends,
+	// so selection, Refresh and edits get their turn between cycles, and a
+	// cycle refused by a busy API cannot turn into a loop.
+	int watchIntervalMs = 1000;
+	static constexpr int continuousTickMs = 10;
 	QString watchStatus = QStringLiteral("Individual FieldRead; not started");
 	int selected = -1;
 	bool allowed = false, pending = false, publishing = false, draftActive = false, retired = false,
@@ -1446,7 +1451,7 @@ bool StaticConfiguratorProvider::watchPending() const
 bool StaticConfiguratorProvider::canAddWatch() const
 {
 	if (!d->idle() || d->watchActive() || !d->watchEligible(d->selected) ||
-	    d->watchModel.rows.size() >= std::numeric_limits<int>::max())
+	    d->watchModel.rows.size() >= watchlistRowLimit)
 		return false;
 	for (const auto& row : d->watchModel.rows)
 		if (row.endpoint == d->selected)
@@ -1466,7 +1471,7 @@ QString StaticConfiguratorProvider::watchStatus() const
 
 int StaticConfiguratorProvider::watchIntervalMs() const
 {
-	return d->watchTimer.interval();
+	return d->watchIntervalMs;
 }
 
 void StaticConfiguratorProvider::setWatchIndividual(bool individual)
@@ -1480,10 +1485,11 @@ void StaticConfiguratorProvider::setWatchIndividual(bool individual)
 
 void StaticConfiguratorProvider::setWatchIntervalMs(int interval)
 {
-	if (!d->owner() || d->publishing || d->watchActive() || interval < 1 || interval > 60000 ||
-	    interval == d->watchTimer.interval())
+	if (!d->owner() || d->publishing || d->watchActive() || interval < 0 || interval > 60000 ||
+	    interval == d->watchIntervalMs)
 		return;
-	d->watchTimer.setInterval(interval);
+	d->watchIntervalMs = interval;
+	d->watchTimer.setInterval(interval ? interval : Impl::continuousTickMs);
 	d->publish(false);
 }
 
@@ -1550,7 +1556,7 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		if (seen.contains(n)) { ++duplicate; continue; }
 		seen.insert(n);
 		if (!p->watchEligible(n)) { ++unsupported; continue; }
-		if (existing + rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
+		if (existing + rows.size() >= watchlistRowLimit) { ++capacity; continue; }
 		rows.push_back({n, epoch, QStringLiteral("NotRead"), false, 0, {}, {}, 0});
 		++added;
 	}

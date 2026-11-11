@@ -19,7 +19,7 @@ In a separate Qt application, add the installed prefix to `CMAKE_PREFIX_PATH`:
 
 ```cmake
 find_package(Qt6 6.4 REQUIRED COMPONENTS Quick QuickControls2)
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS configurator)
 target_link_libraries(my_app PRIVATE TelemetryUX::configurator Qt6::QuickControls2)
 ```
 
@@ -81,6 +81,22 @@ or showing a Watchlist panel does not stop or restart polling. If the applicatio
 wants to stop polling, it must request that explicitly via the provider. A new
 provider has its own presentation and polling state and must be chosen deliberately.
 
+`WatchlistPanel` shows its rows when `expanded` is true. A host that gives the
+Watchlist a dock of its own sets `collapsible: false`: the rows are then always
+shown and the expand box is hidden. From 500 px wide (`tableRows`) every Field is one 28 px row
+under Name, Value and Status titles: the value right-aligned on one line, `Ok` as
+a green dot, any other status in words (Stale and failures highlighted), and a
+small remove button clear of the scrollbar, framed when it has keyboard focus;
+cut text shows in full as a tooltip. Narrower panels wrap
+name, value and status over two lines instead.
+
+A writable Field is changed in its own row, as in Live Expressions: double-click
+the value (or press the pencil that appears on hover), type, and Enter writes; Esc
+or clicking elsewhere cancels, so nothing is written by accident. The editor opens
+with the exact number of the last reading. The outcome of the write shows under
+the toolbar in words. Rows are writable when the provider gives them a `writable`
+role and `canWriteWatch` is true; a provider without them shows no editor.
+
 `EndpointTreePanel` includes case-insensitive search by endpoint name or path
 (for example, `measure.Voltage`). Results display their full path; choosing one
 passes its original model index to the provider. Searching only examines the
@@ -89,6 +105,20 @@ Clear the search to return to the tree. Search scans incrementally and displays
 at most the first 500 matches, with a depth limit of 64 levels; the status says
 when traversal is limited, even if there are no additional matches. Refine the
 query to narrow the results.
+
+Every row and search result has actions on a right click, the Menu key or
+Shift+F10: **Watch** (one Field), **Watch this group** (every Field under a group,
+nested, in tree order; at most 4096 rows are visited), **Watch all Fields** (the
+same over the whole tree; `watchAll()` for a host's own menu), **Show details**
+(selects the endpoint, as a click does) and **Copy path** (the dotted path, for
+example `measure.Voltage`). Watching goes straight to the provider's `addWatchMany` and
+leaves the ticked marks alone; while the Watchlist polls, the Watch actions are
+disabled (Enter in the search says to stop polling first). In the search, Enter
+watches the first result (a Command, Service or Field the Watchlist cannot hold
+opens its details instead), the status says which, an Enter pressed before the
+search finishes acts when it does, and Down walks into the results. With no
+result, Enter is left to the host. A host binds its own
+Ctrl+K to `find(text)`, which focuses the search, optionally with a query.
 
 Results contain copied display names. If an external session invalidation does
 not immediately notify the view, already displayed names may remain until the

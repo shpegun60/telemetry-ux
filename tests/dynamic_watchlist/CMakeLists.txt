@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(telemetry_dynamic_watchlist_checks LANGUAGES CXX)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Test)
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS dynamic_configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS dynamic_configurator)
 qt_standard_project_setup(REQUIRES 6.4)
 qt_add_executable(telemetry_dynamic_watchlist_check main.cpp)
 target_compile_features(telemetry_dynamic_watchlist_check PRIVATE cxx_std_20)

@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.21)
 project(TelemetryQtDocking LANGUAGES CXX)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
 qt_standard_project_setup(REQUIRES 6.4)
 
 set(KDDOCKWIDGETS_QML_IMPORT_DIR "" CACHE PATH

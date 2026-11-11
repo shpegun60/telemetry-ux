@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 
@@ -610,6 +611,136 @@ int main(int argc, char** argv)
         CHECK(narrowProvider->property("starts").toInt() == 0 &&
               narrowProvider->property("stops").toInt() == 0 &&
               narrowProvider->property("reads").toInt() == 0);
+        // A wide dock shows one 28 px table row per Field under column titles:
+        // the value right-aligned, a good reading as a dot, a problem as its
+        // status word cut to one line, and a small remove button.
+        {
+            narrowWindow->resize(720, 360);
+            settle();
+            CHECK(narrowPanel->property("tableRows").toBool());
+            CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtBeginning"));
+            settle();
+            std::function<QQuickItem*(QQuickItem*, int)> rowAt = [&](QQuickItem* root, int index) -> QQuickItem* {
+                if (root->objectName() == QStringLiteral("watchlistRow") && root->property("index").toInt() == index)
+                    return root;
+                for (auto* child : root->childItems())
+                    if (auto* found = rowAt(child, index))
+                        return found;
+                return nullptr;
+            };
+            auto* model = narrowProvider->property("watchlist").value<QObject*>();
+            CHECK(model && QMetaObject::invokeMethod(model, "setProperty", Q_ARG(int, 0),
+                                                     Q_ARG(QString, QStringLiteral("status")),
+                                                     Q_ARG(QVariant, QStringLiteral("Ok"))));
+            settle();
+            auto* columns = item(narrowPanel, QStringLiteral("watchColumns"));
+            auto* valueTitle = item(narrowPanel, QStringLiteral("watchColumnValue"));
+            auto* statusTitle = item(narrowPanel, QStringLiteral("watchColumnStatus"));
+            auto* okRow = rowAt(narrowList, 0);
+            auto* failedRow = rowAt(narrowList, 1);
+            CHECK(columns && columns->isVisible() && valueTitle && statusTitle && okRow && failedRow);
+            for (auto* row : {okRow, failedRow}) {
+                auto* rowValue = item(row, QStringLiteral("watchValueText"));
+                auto* rowRemove = item(row, QStringLiteral("removeWatchButton"));
+                CHECK(rowValue && rowRemove);
+                CHECK(qAbs(row->height() - 28) < 0.5);
+                CHECK(rowValue->property("paintedHeight").toReal() <= row->height());
+                CHECK(rowValue->property("text").toString() == QStringLiteral("18446744073709551615"));
+                CHECK(rowValue->property("horizontalAlignment").toInt() == Qt::AlignRight);
+                CHECK(qAbs(rectangle(rowValue).right() - rectangle(valueTitle).right()) <= 1);
+                CHECK(rowRemove->property("text").toString() == QStringLiteral("×"));
+                CHECK(rectangle(rowRemove).right() <= rectangle(narrowList).right() + 1);
+                // The overlay scrollbar never covers the remove button.
+                CHECK(narrowBar->isVisible() && !rectangle(rowRemove).intersects(rectangle(narrowBar)));
+                CHECK(rectangle(rowRemove).top() >= rectangle(row).top() - 1);
+                CHECK(rectangle(rowRemove).bottom() <= rectangle(row).bottom() + 1);
+            }
+            auto* okStatus = item(okRow, QStringLiteral("watchRowStatus"));
+            auto* failedStatus = item(failedRow, QStringLiteral("watchRowStatus"));
+            CHECK(okStatus && !okStatus->isVisible());
+            CHECK(failedStatus && failedStatus->isVisible());
+            // A writable row is written in place: double-click the value, type,
+            // Enter writes; Esc or clicking elsewhere cancels; a read-only row
+            // offers nothing, and neither does a provider without permission.
+            {
+                auto* okValue = item(okRow, QStringLiteral("watchValueText"));
+                auto* editor = item(okRow, QStringLiteral("watchValueEditor"));
+                CHECK(okValue && editor && !editor->isVisible());
+                const auto doubleClick = [&](QQuickItem* target) {
+                    QTest::mouseDClick(narrowWindow, Qt::LeftButton, Qt::NoModifier,
+                                       rectangle(target).center().toPoint());
+                    settle();
+                };
+                doubleClick(okValue);
+                CHECK(editor->isVisible() && editor->hasActiveFocus() && !okValue->isVisible());
+                CHECK(editor->property("text").toString() == QStringLiteral("18446744073709551615"));
+                QTest::keyClick(narrowWindow, Qt::Key_A, Qt::ControlModifier);
+                QTest::keyClick(narrowWindow, '4');
+                QTest::keyClick(narrowWindow, '2');
+                QTest::keyClick(narrowWindow, Qt::Key_Return);
+                settle();
+                CHECK(!editor->isVisible() && okValue->isVisible());
+                CHECK(narrowProvider->property("writes").toStringList() == QStringList{QStringLiteral("0:42")});
+                auto* outcome = item(narrowPanel, QStringLiteral("watchWriteOutcome"));
+                CHECK(outcome && outcome->property("text").toString() == QStringLiteral("Writing measure.Field0"));
+                doubleClick(okValue);
+                CHECK(editor->isVisible());
+                QTest::keyClick(narrowWindow, Qt::Key_Escape);
+                settle();
+                CHECK(!editor->isVisible());
+                doubleClick(okValue);
+                CHECK(editor->isVisible());
+                item(narrowPanel, QStringLiteral("watchFrequency"))->forceActiveFocus();
+                settle();
+                CHECK(!editor->isVisible());
+                CHECK(narrowProvider->property("writes").toStringList().size() == 1);
+                auto* readOnlyValue = item(failedRow, QStringLiteral("watchValueText"));
+                doubleClick(readOnlyValue);
+                CHECK(!item(failedRow, QStringLiteral("watchValueEditor"))->isVisible());
+                CHECK(narrowProvider->setProperty("canWriteWatch", false));
+                settle();
+                doubleClick(okValue);
+                CHECK(!editor->isVisible());
+                CHECK(narrowProvider->setProperty("canWriteWatch", true));
+                CHECK(narrowProvider->setProperty("watchWriteOutcome", QString()));
+                settle();
+            }
+            auto* okDot = item(okRow, QStringLiteral("watchOkDot"));
+            auto* failedDot = item(failedRow, QStringLiteral("watchOkDot"));
+            CHECK(okDot && okDot->isVisible() && failedDot && !failedDot->isVisible());
+            CHECK(failedStatus->property("text").toString() == QStringLiteral("SubmissionRefused"));
+            CHECK(qAbs(rectangle(failedStatus).left() - rectangle(statusTitle).left()) <= 1);
+            CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/wide-watchlist.png")));
+            CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
+            settle();
+            auto* lastRow = rowAt(narrowList, 64);
+            auto* wideLongStatus = lastRow ? item(lastRow, QStringLiteral("watchRowStatus")) : nullptr;
+            CHECK(wideLongStatus && wideLongStatus->property("truncated").toBool());
+            CHECK(wideLongStatus->property("paintedHeight").toReal() < 24);
+            // A host that docks the list for good hides the expand box.
+            auto* expandBox = item(narrowPanel, QStringLiteral("watchlistExpanded"));
+            CHECK(expandBox && expandBox->isVisible());
+            CHECK(narrowPanel->setProperty("collapsible", false));
+            settle();
+            CHECK(!expandBox->isVisible() && narrowPanel->property("expanded").toBool());
+            // A list that cannot fold shows its rows even with `expanded` false.
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(columns->isVisible() && narrowList->property("count").toInt() == 65);
+            CHECK(narrowPanel->setProperty("collapsible", true));
+            settle();
+            CHECK(!columns->isVisible() && narrowList->property("count").toInt() == 0);
+            // Add opens the list through `expanded`, so a host that closes it
+            // later also unticks the box.
+            auto* wideAdd = item(narrowPanel, QStringLiteral("addWatchButton"));
+            CHECK(wideAdd && QMetaObject::invokeMethod(wideAdd, "clicked"));
+            settle();
+            CHECK(narrowPanel->property("expanded").toBool() && expandBox->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(!expandBox->property("checked").toBool());
+            CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("reads").toInt() == 0);
+        }
         // Keyboard activation keeps the focus indicator and both top actions.
         engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
         auto* keyboardWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());

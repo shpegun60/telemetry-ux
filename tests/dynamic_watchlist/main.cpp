@@ -171,6 +171,203 @@ void bulkPublication()
 	CHECK(!doomed && destruction.value("added").toInt() == 1 && deathPeer.calls.empty());
 }
 
+// One Watchlist holds at most watchlistRowLimit Fields. Past it nothing more is
+// added, in bulk or one at a time, and the bulk result counts the rest as
+// "capacity".
+void rowLimit()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	auto source = peer.source();
+	source.fieldBytes = [](quint32) -> std::optional<unsigned> { return 4; };
+	watch.setSource(std::move(source));
+	QVector<QPair<quint32, QString>> fields;
+	for (quint32 i = 1; i <= quint32(ux::watchlistRowLimit) + 5; ++i)
+		fields.push_back({i, QStringLiteral("field%1").arg(i)});
+	const auto result = watch.addMany(fields);
+	CHECK(result.value("status") == "ok");
+	CHECK(result.value("added").toInt() == ux::watchlistRowLimit);
+	CHECK(result.value("capacity").toInt() == 5);
+	CHECK(watch.count() == ux::watchlistRowLimit);
+	CHECK(!watch.canAdd(5000) && !watch.add(5000, QStringLiteral("over")));
+	const auto over = watch.addMany({{6000, QStringLiteral("over")}});
+	CHECK(over.value("added").toInt() == 0 && over.value("capacity").toInt() == 1);
+	CHECK(watch.count() == ux::watchlistRowLimit && peer.calls.empty());
+}
+
+// After a write while polling, the Watchlist reads again without waiting for
+// its timer. A Field this cycle already read, or had in flight while the write
+// waited, is read first; one not read yet waits for its turn. With no Field
+// named (a Command, Service or Batch) the next cycle follows this one at once,
+// and between cycles a wake starts the next one now.
+void wakeAfterWrites()
+{
+	const auto step = [](ux::DynamicWatchlist& watch, Peer& peer) {
+		peer.finish();
+		watch.poll();
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 65);
+	watch.setInterval(60000); // the timer never fires during this test
+	CHECK(watch.begin(true));
+	CHECK(peer.pending.size() == 32 && peer.pending.front() == 1);
+	step(watch, peer);
+	CHECK(peer.pending.size() == 32 && peer.pending.front() == 33); // in flight
+	watch.wake(5u);  // read earlier in this cycle
+	watch.wake(40u); // in flight: read before the write
+	watch.wake(65u); // not read yet: its turn comes after the write
+	watch.wake(5u);  // named twice, read once
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{5});
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{40});
+	CHECK(text(watch, 4) == QStringLiteral("5"));
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{65});
+	step(watch, peer);
+	CHECK(!peer.busy && !watch.pending()); // complete; the 60 s timer has not fired
+	const auto calls = peer.calls.size();
+	watch.wake();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(peer.calls.size() == calls + 1 && peer.pending.front() == 1);
+	step(watch, peer); // 33..64 in flight
+	watch.wake();      // a Command: whatever it changed is read in the next cycle
+	step(watch, peer); // 65
+	CHECK(peer.pending == std::vector<std::uint32_t>{65});
+	step(watch, peer); // complete, and the next cycle follows at once
+	CHECK(peer.busy && peer.pending.size() == 32 && peer.pending.front() == 1);
+	step(watch, peer);
+	step(watch, peer);
+	step(watch, peer);
+	CHECK(!peer.busy); // no further cycle without a new wake or tick
+	watch.stop();
+	// Not polling: a wake reads nothing.
+	const auto stopped = peer.calls.size();
+	watch.wake(5u);
+	watch.wake();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(peer.calls.size() == stopped);
+}
+
+// Interval 0 reads continuously, at low priority: each cycle follows the
+// last without the timer, and nothing is sent while other work is in flight.
+void continuousLowPriority()
+{
+	const auto settle = [] {
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 40);
+	watch.setInterval(0);
+	CHECK(watch.interval() == 0);
+	watch.setInterval(-1);
+	CHECK(watch.interval() == 0);
+	CHECK(watch.begin(true));
+	CHECK(peer.pending.size() == 32);
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(peer.pending.size() == 8 && peer.pending.front() == 33);
+	peer.finish();
+	peer.busy = true; // another panel's request is in flight
+	watch.poll();
+	settle();
+	CHECK(peer.calls.size() == 2); // nothing sent beside it
+	peer.busy = false;
+	watch.poll(); // its completion progresses the session
+	settle();
+	CHECK(peer.calls.size() == 3 && peer.pending.size() == 32 && peer.pending.front() == 1);
+	watch.stop();
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!watch.active() && peer.calls.size() == 3);
+}
+
+// A tick that finds the session busy (another panel's request) starts the
+// cycle anyway and sends when the session is free, instead of being skipped;
+// a wake between cycles does the same. Stop leaves no rerun behind.
+void busySessionTicks()
+{
+	const auto settle = [] {
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	watch.setInterval(60000);
+	CHECK(watch.begin(true));
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!peer.busy && !watch.pending()); // first cycle complete
+	peer.busy = true;                      // another panel's request
+	watch.tick();
+	CHECK(!watch.pending() && peer.calls.size() == 1);
+	peer.busy = false;
+	watch.poll(); // that request's completion progresses the session
+	settle();
+	CHECK(peer.calls.size() == 2 && peer.busy); // the cycle went out
+	peer.finish();
+	watch.poll();
+	settle();
+	peer.busy = true; // a write from another panel is still queued
+	watch.dataChanged();
+	settle();
+	CHECK(peer.calls.size() == 2);
+	peer.busy = false;
+	watch.poll();
+	settle();
+	CHECK(peer.calls.size() == 3); // read again after the write, not after a minute
+	watch.wake(); // a Command during this cycle: a rerun is due
+	watch.stop();
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(watch.begin(true));
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!peer.busy && peer.calls.size() == 4); // no leftover rerun after the restart
+	watch.stop();
+}
+
+// Start while a Read once runs turns that cycle into the first one of polling
+// rather than being refused; the timer then repeats it.
+void startDuringReadOnce()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	CHECK(watch.begin(false) && peer.calls.size() == 1);
+	CHECK(watch.begin(true) && watch.active());
+	peer.finish();
+	watch.poll();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(watch.active() && !watch.pending()); // polling, between cycles
+	watch.tick();
+	CHECK(peer.calls.size() == 2 && watch.pending());
+	watch.stop();
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -248,10 +445,12 @@ void chunks()
 	CHECK(watch.interval() == 1);
 	watch.setInterval(60000);
 	CHECK(watch.interval() == 60000);
-	watch.setInterval(0);
-	CHECK(watch.interval() == 60000);
 	watch.setInterval(60001);
 	CHECK(watch.interval() == 60000);
+	watch.setInterval(-1);
+	CHECK(watch.interval() == 60000);
+	watch.setInterval(0); // continuous
+	CHECK(watch.interval() == 0);
 }
 
 void budgetsAndFallback()
@@ -350,16 +549,21 @@ void schedulingAndReentrancy()
 	watch.poll();
 	events();
 	CHECK(watch.active() && !watch.pending());
+	// Ticks while the session is busy start one cycle that waits: nothing
+	// accumulates, and it goes out on the session's next progress once neither
+	// the session nor this panel holds it.
 	peer.busy = true;
 	for (int i = 0; i < 100; ++i)
 		watch.tick();
 	CHECK(peer.calls.size() == 1 && !watch.pending());
 	peer.busy = false;
 	blocked = true;
-	watch.tick();
+	watch.poll();
+	events();
 	CHECK(peer.calls.size() == 1);
 	blocked = false;
-	watch.tick();
+	watch.poll();
+	events();
 	CHECK(peer.calls.size() == 2 && watch.pending());
 	bool attempted = false;
 	QObject::connect(watch.model(), &QAbstractItemModel::dataChanged, &owner, [&] {
@@ -432,6 +636,11 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	bulkPublication();
+	rowLimit();
+	wakeAfterWrites();
+	continuousLowPriority();
+	busySessionTicks();
+	startDuringReadOnce();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();

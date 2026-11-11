@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
       # Pinned CI helper; independent of the UX revision checked out as the test input.
       - name: Bound Ubuntu package downloads
-        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
+        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
       - name: Install Qt without any Telemetry SDK checkout
         run: |
           sudo apt-get update
@@ -138,7 +138,7 @@ jobs:
           path: .ci/cobs
           persist-credentials: false
       - name: Bound Ubuntu package downloads
-        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
+        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
       - name: Install Qt host development and QML runtime
         run: |
           sudo apt-get update
@@ -163,6 +163,8 @@ jobs:
         run: |
           python3 -B tests/inspector_tcp/run.py --build-dir "$RUNNER_TEMP/ux-inspector-tcp" \
             --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      - name: Theme colour roles meet WCAG 2.2 contrast
+        run: python3 -B tests/theme_contrast/run.py
       # The panels' geometry, search, bulk selection, Trend and tree actions on
       # the distribution's Qt 6.4, the library's floor: an API newer than 6.4
       # fails here even when a newer desktop Qt passes.
@@ -215,7 +217,7 @@ jobs:
         with:
           node-version: "22"
       - name: Bound Ubuntu package downloads
-        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
+        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
       - name: Install headless compilers and pinned browser tooling
         run: |
           set -euo pipefail
@@ -516,7 +518,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Bound Ubuntu package downloads
-        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@13884dc941a04039e5d91c691480f79447ae9ed8
+        uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
       - name: Install Qt runtime, compilers and pinned wheel builders
         run: |
           set -euo pipefail

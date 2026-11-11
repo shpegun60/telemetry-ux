@@ -11,6 +11,6 @@
     "./configurator.css": "./web/Configurator.css",
     "./transports/websocket": {"types": "./web/WebSocketTransport.d.ts", "default": "./web/WebSocketTransport.js"}
   },
-  "dependencies": {"telemetry-sdk": "0.1.0"},
+  "dependencies": {"telemetry-sdk": "^0.1.0"},
   "files": ["VERSION", "LICENSE", "web"]
 }

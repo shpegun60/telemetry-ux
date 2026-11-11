@@ -105,7 +105,7 @@ def generate(schema):
     files['qml/ConfiguratorBinding.hpp'] = _binding(schema, groups)
     files['qml/CMakeLists.txt'] += '''
 # Only the opt-in Configurator starter needs the optional Telemetry UX provider.
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS static_configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS static_configurator)
 target_link_libraries(telemetry_qml_@TARGET@ PUBLIC TelemetryUX::static_configurator)
 '''.replace('@TARGET@', schema.namespace.replace('::', '__'))
     return GeneratedTarget(files, qml.symbol_mapping(schema, configurator=True))
