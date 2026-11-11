@@ -210,6 +210,27 @@ int main(int argc, char** argv) {
         CHECK(menu->property("visible").toBool());
         QTest::keyClick(window, Qt::Key_Escape);
         settle();
+        // A current row scrolled out of view still gets its menu: the tree
+        // brings the row into view first.
+        window->resize(600, 260);
+        settle();
+        tree->setProperty("contentY", tree->property("originY"));
+        settle();
+        const auto start = model.index(0, 0, model.index(2, 0));
+        // Fully expanded, "Start" is row 10: below the short tree's last row.
+        CHECK(tree->property("bottomRow").toInt() < 10);
+        selection->setCurrentIndex(start, QItemSelectionModel::NoUpdate);
+        tree->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Menu);
+        settle();
+        CHECK(menu->property("visible").toBool());
+        CHECK(tree->property("bottomRow").toInt() >= 10);
+        CHECK(evaluate(menu, QStringLiteral("target === treeActionsModel.index(0, 0, treeActionsModel.index(2, 0))")).toBool());
+        CHECK(!menuItem("endpointMenuWatch")->isEnabled() && menuItem("endpointMenuDetails")->isEnabled());
+        QTest::keyClick(window, Qt::Key_Escape);
+        settle();
+        window->resize(600, 700);
+        settle();
 
         // While polling the Watchlist cannot change: the actions say so.
         CHECK(provider->setProperty("watchActive", true));
@@ -234,14 +255,44 @@ int main(int argc, char** argv) {
         settle();
         CHECK(watched(provider).contains(QStringLiteral("measure.Current")));
         CHECK(status->property("text").toString() == QStringLiteral("Watching measure.Current."));
-        // A Command's first result opens its details instead.
+        // A Command's first result opens its details instead, and the status
+        // says so before Enter.
         const int selections = provider->property("selections").toInt();
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Start"))));
         QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 matching endpoints; Enter shows the first"));
         QTest::keyClick(window, Qt::Key_Enter);
         settle();
         CHECK(provider->property("selections").toInt() == selections + 1);
         CHECK(provider->property("selectedEndpointIndex").value<QModelIndex>() == model.index(0, 0, model.index(2, 0)));
+        // An Enter pressed before the search has finished acts when it does.
+        CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Offset"))));
+        QTest::keyClick(window, Qt::Key_Return);
+        CHECK(panel->property("enterPending").toBool());
+        QTest::qWait(250);
+        CHECK(!panel->property("enterPending").toBool());
+        CHECK(status->property("text").toString() == QStringLiteral("device.config.Offset is already watched."));
+        // With nothing to act on, Enter goes on to the host; with a result the
+        // panel keeps it.
+        auto* host = named(window->contentItem(), "treeActionsHost");
+        CHECK(host);
+        CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("no-such-endpoint"))));
+        QTest::qWait(250);
+        const int returns = host->property("returns").toInt();
+        QTest::keyClick(window, Qt::Key_Return);
+        settle();
+        CHECK(host->property("returns").toInt() == returns + 1);
+        CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Voltage"))));
+        QTest::qWait(250);
+        QTest::keyClick(window, Qt::Key_Return);
+        settle();
+        CHECK(host->property("returns").toInt() == returns + 1);
+        // While polling, Enter on a watchable result offers nothing in the hint.
+        CHECK(provider->setProperty("watchActive", true));
+        settle();
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 matching endpoints"));
+        CHECK(provider->setProperty("watchActive", false));
+        settle();
         // Down and Up walk from the field into the results and back.
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("measure"))));
         QTest::qWait(250);
@@ -289,6 +340,12 @@ int main(int argc, char** argv) {
         CHECK(QMetaObject::invokeMethod(staleWatch, "triggered"));
         settle();
         CHECK(provider->property("submissions").toInt() == submissionsBefore);
+        auto* staleDetails = menu->findChild<QQuickItem*>(QStringLiteral("endpointMenuDetails"));
+        CHECK(staleDetails && !staleDetails->isEnabled());
+        const int selectionsBefore = provider->property("selections").toInt();
+        CHECK(QMetaObject::invokeMethod(staleDetails, "triggered"));
+        settle();
+        CHECK(provider->property("selections").toInt() == selectionsBefore);
         CHECK(warnings == 0);
         std::printf("QML tree-actions checks=%d warnings=0\n", checks);
         return 0;

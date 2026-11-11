@@ -32,5 +32,12 @@ Window {
             return {status: "ok", added: added, duplicate: duplicate, unsupported: unsupported, capacity: 0}
         }
     }
-    EndpointTreePanel { objectName: "actionsTree"; anchors.fill: parent; provider: fake }
+    // Stands for a host dialog: counts the Return keys the panel leaves to it.
+    Item {
+        objectName: "treeActionsHost"
+        property int returns: 0
+        anchors.fill: parent
+        Keys.onReturnPressed: ++returns
+        EndpointTreePanel { objectName: "actionsTree"; anchors.fill: parent; provider: fake }
+    }
 }

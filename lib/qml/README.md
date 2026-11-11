@@ -95,9 +95,12 @@ Shift+F10: **Watch** (one Field), **Watch this group** (every Field under a grou
 nested, in tree order; at most 4096 rows are visited), **Show details** (selects
 the endpoint, as a click does) and **Copy path** (the dotted path, for example
 `measure.Voltage`). Watching goes straight to the provider's `addWatchMany` and
-leaves the ticked marks alone; while the Watchlist polls, the actions say to stop
-it first. In the search, Enter watches the first result (a Command or Service
-opens its details instead) and Down walks into the results. A host binds its own
+leaves the ticked marks alone; while the Watchlist polls, the Watch actions are
+disabled (Enter in the search says to stop polling first). In the search, Enter
+watches the first result (a Command, Service or Field the Watchlist cannot hold
+opens its details instead), the status says which, an Enter pressed before the
+search finishes acts when it does, and Down walks into the results. With no
+result, Enter is left to the host. A host binds its own
 Ctrl+K to `find(text)`, which focuses the search, optionally with a query.
 
 Results contain copied display names. If an external session invalidation does

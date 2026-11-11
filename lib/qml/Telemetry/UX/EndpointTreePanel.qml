@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import QtQml.Models
 
 Pane {
@@ -24,6 +25,8 @@ Pane {
     property var watchMarks: []
     property int watchMarkGeneration: 0
     property string watchMarkStatus: ""
+    property bool enterPending: false
+    readonly property int groupWalkLimit: 4096
     readonly property bool bulkWatchAvailable: provider &&
         typeof provider.addWatchMany === "function" &&
         typeof provider.watchCandidate === "function"
@@ -36,6 +39,13 @@ Pane {
         if (endpointMenu.visible)
             endpointMenu.close()
         endpointMenu.target = undefined
+        endpointMenu.targetIsEndpoint = false
+        endpointMenu.targetIsGroup = false
+    }
+    // The menu's index, or null once a change has dropped it.
+    function menuTarget() {
+        const target = endpointMenu.target
+        return target && target.valid ? target : null
     }
     function canMarkWatch(index) {
         return Boolean(bulkWatchAvailable && index && index.valid &&
@@ -90,10 +100,11 @@ Pane {
         return parts.join(".")
     }
     // Every Field under a group that the Watchlist accepts, in tree order.
-    // The walk is bounded like search: depth 64 and 4096 visited rows.
+    // The walk is bounded like search: depth 64 and 4096 visited rows; a
+    // walk cut short says so.
     function groupCandidates(group) {
         const found = []
-        let budget = 4096
+        let budget = groupWalkLimit
         const walk = function(parent, depth) {
             const count = searchSource.rowCount(parent)
             for (let row = 0; row < count && budget > 0; ++row) {
@@ -107,10 +118,10 @@ Pane {
         }
         if (searchSource && group && group.valid)
             walk(group, 0)
-        return found
+        return { indexes: found, limited: budget <= 0 }
     }
     // Adds Fields straight to the Watchlist, apart from the ticked marks.
-    function watchIndexes(indexes, label) {
+    function watchIndexes(indexes, label, group, limited) {
         if (!bulkWatchAvailable)
             return false
         if (provider.watchActive === true) {
@@ -129,21 +140,23 @@ Pane {
             watchMarkStatus = "Could not watch " + label + ": " + (result && result.status ? result.status : "invalid")
             return false
         }
-        if (indexes.length === 1)
+        if (!group)
             watchMarkStatus = result.added === 1 ? "Watching " + label + "." :
                               result.duplicate === 1 ? label + " is already watched." :
                               result.capacity === 1 ? "The Watchlist is full; " + label + " was not added." :
                               label + " cannot be watched."
         else
             watchMarkStatus = "Watching " + result.added + " from " + label + "; already watched " + result.duplicate +
-                              "; unsupported " + result.unsupported + "; capacity " + result.capacity
+                              "; unsupported " + result.unsupported + "; capacity " + result.capacity +
+                              (limited ? "; stopped after " + groupWalkLimit + " rows" : "")
         return result.added > 0
     }
     function watchIndex(index) {
-        return canMarkWatch(index) ? watchIndexes([index], pathOf(index)) : false
+        return canMarkWatch(index) ? watchIndexes([index], pathOf(index), false, false) : false
     }
     function watchGroup(index) {
-        return watchIndexes(groupCandidates(index), pathOf(index))
+        const walk = groupCandidates(index)
+        return watchIndexes(walk.indexes, pathOf(index), true, walk.limited)
     }
     function copyPath(index) {
         const path = pathOf(index)
@@ -166,6 +179,7 @@ Pane {
         endpointMenu.target = index
         endpointMenu.targetIsEndpoint = isEndpoint
         endpointMenu.targetIsGroup = isGroup(index)
+        endpointMenu.returnFocus = panel.Window.activeFocusItem
         endpointMenu.popup(anchor, x === undefined ? 16 : x, y === undefined ? anchor.height : y)
         return true
     }
@@ -176,8 +190,9 @@ Pane {
         searchInput.forceActiveFocus()
         searchInput.selectAll()
     }
-    // Enter in the search watches the first result; a Command or Service has
-    // no value to watch, so its details open instead.
+    // Enter in the search watches the first result; a Command, a Service or a
+    // Field the Watchlist cannot hold opens its details instead. Returns
+    // whether there was a result to act on.
     function activateFirstResult() {
         if (searchRunning || searchResults.length === 0)
             return false
@@ -185,14 +200,38 @@ Pane {
         if (first.generation !== searchGeneration || !first.index.valid)
             return false
         if (canMarkWatch(first.index))
-            return watchIndex(first.index)
-        return provider.selectEndpoint(first.index)
+            watchIndex(first.index)
+        else
+            provider.selectEndpoint(first.index)
+        return true
+    }
+    // Enter before the search has finished is kept and acted on when it does;
+    // with nothing to act on, the key goes on to the host (a default button).
+    function searchEnter(event) {
+        if (searchRunning) {
+            enterPending = true
+            event.accepted = true
+            return
+        }
+        event.accepted = activateFirstResult()
+    }
+    // What Enter will do, worded from the first result; empty when nothing.
+    function enterHint() {
+        if (!bulkWatchAvailable || !searchInput.activeFocus || searchRunning || searchResults.length === 0)
+            return ""
+        const first = searchResults[0]
+        if (!first.index || !first.index.valid)
+            return ""
+        if (!canMarkWatch(first.index))
+            return "; Enter shows the first"
+        return provider.watchActive === true ? "" : "; Enter watches the first"
     }
 
     // DelegateModel exposes named roles independently of their numeric IDs.
     // It does not create visual delegates for this traversal. Results retain
     // source indexes only until the next model change or search cancellation.
     function cancelSearch() {
+        enterPending = false
         ++searchGeneration
         searchTimer.stop()
         searchRunning = false
@@ -256,6 +295,10 @@ Pane {
             searchTimer.restart()
         } else {
             searchRunning = false
+            if (enterPending) {
+                enterPending = false
+                activateFirstResult()
+            }
         }
     }
     onProviderChanged: clearWatchMarks()
@@ -276,29 +319,38 @@ Pane {
         property var target
         property bool targetIsEndpoint: false
         property bool targetIsGroup: false
+        // Qt 6.4 does not hand focus back when a Menu closes; the keyboard
+        // returns to whatever had it when the menu opened.
+        property Item returnFocus: null
+        onClosed: {
+            const item = returnFocus
+            returnFocus = null
+            if (item && item.visible && !item.activeFocus)
+                item.forceActiveFocus()
+        }
         MenuItem {
             objectName: "endpointMenuWatch"
             text: "Watch"
             enabled: panel.provider.watchActive !== true && panel.canMarkWatch(endpointMenu.target)
-            onTriggered: panel.watchIndex(endpointMenu.target)
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.watchIndex(target) }
         }
         MenuItem {
             objectName: "endpointMenuWatchGroup"
             text: "Watch this group"
             enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true
-            onTriggered: panel.watchGroup(endpointMenu.target)
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.watchGroup(target) }
         }
         MenuItem {
             objectName: "endpointMenuDetails"
             text: "Show details"
             enabled: endpointMenu.targetIsEndpoint
-            onTriggered: panel.provider.selectEndpoint(endpointMenu.target)
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.provider.selectEndpoint(target) }
         }
         MenuSeparator {}
         MenuItem {
             objectName: "endpointMenuCopyPath"
             text: "Copy path"
-            onTriggered: panel.copyPath(endpointMenu.target)
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.copyPath(target) }
         }
     }
     Timer { id: searchTimer; repeat: false; onTriggered: panel.scanSearch() }
@@ -357,8 +409,8 @@ Pane {
                 placeholderText: "Search endpoints"
                 maximumLength: 256
                 onTextChanged: panel.scheduleSearch()
-                Keys.onReturnPressed: function(event) { panel.activateFirstResult(); event.accepted = true }
-                Keys.onEnterPressed: function(event) { panel.activateFirstResult(); event.accepted = true }
+                Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
+                Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
                 // Down moves into the results (or the tree) with the keyboard.
                 Keys.onDownPressed: function(event) {
                     if (searchList.visible && searchList.count > 0) {
@@ -388,8 +440,7 @@ Pane {
             text: panel.searchRunning ? "Searching…" :
                   panel.searchLimited ? "Search limited; refine search" :
                   panel.searchResults.length === 0 ? "No matching endpoints" :
-                  panel.searchResults.length + " matching endpoints" +
-                  (panel.bulkWatchAvailable && searchInput.activeFocus ? "; Enter watches the first" : "")
+                  panel.searchResults.length + " matching endpoints" + panel.enterHint()
         }
         Label {
             objectName: "endpointWatchSelectionStatus"
@@ -433,7 +484,17 @@ Pane {
                 if (event.key !== Qt.Key_Menu && !(event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)))
                     return
                 const index = endpointTree.selectionModel.currentIndex
-                const cell = index.valid ? endpointTree.itemAtIndex(endpointTree.index(endpointTree.rowAtIndex(index), 0)) : null
+                const row = index.valid ? endpointTree.rowAtIndex(index) : -1
+                if (row < 0)
+                    return
+                // itemAtCell, not itemAtIndex: the library's floor is Qt 6.4.
+                // A row scrolled out of view has no delegate until shown.
+                let cell = endpointTree.itemAtCell(Qt.point(0, row))
+                if (!cell) {
+                    endpointTree.positionViewAtRow(row, TableView.Contain)
+                    endpointTree.forceLayout()
+                    cell = endpointTree.itemAtCell(Qt.point(0, row))
+                }
                 if (cell && panel.openEndpointMenu(index, cell.isEndpoint, cell))
                     event.accepted = true
             }
