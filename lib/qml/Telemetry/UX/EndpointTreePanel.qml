@@ -106,11 +106,11 @@ Pane {
     palette.highlight: "#215a68"
     palette.highlightedText: "#ffffff"
     palette.placeholderText: "#718297"
-    background: Rectangle { color: "#17202b"; radius: 10 }
+    background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: 10 }
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
-        Label { textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: "#99abbf"; font.pixelSize: 11; font.letterSpacing: 1 }
+        Label { objectName: "endpointTreeTitle"; textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: panel.palette.text; font.pixelSize: 11; font.letterSpacing: 1 }
         RowLayout {
             Layout.fillWidth: true
             TextField {
@@ -133,7 +133,7 @@ Pane {
             visible: searchInput.text.trim().length > 0
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            color: "#b0bfd0"
+            color: panel.palette.text
             text: panel.searchRunning ? "Searching…" :
                   panel.searchLimited ? "Search limited; refine search" :
                   panel.searchResults.length === 0 ? "No matching endpoints" :
@@ -180,7 +180,7 @@ Pane {
                     objectName: "endpointFocusIndicator"
                     anchors.fill: parent
                     color: "transparent"
-                    border.color: "#8ce6d3"
+                    border.color: endpointDelegate.highlighted ? endpointDelegate.palette.highlightedText : panel.palette.text
                     border.width: 2
                     radius: 3
                     visible: endpointTree.activeFocus && endpointDelegate.current
@@ -221,6 +221,7 @@ Pane {
             clip: true
             model: panel.searchResults
             delegate: ItemDelegate {
+                id: searchDelegate
                 required property var modelData
                 objectName: "endpointSearchResult"
                 width: searchList.width
@@ -234,11 +235,23 @@ Pane {
                 onClicked: activateResult()
                 Keys.onReturnPressed: function(event) { activateResult(); event.accepted = true }
                 Keys.onEnterPressed: function(event) { activateResult(); event.accepted = true }
-                contentItem: Label { textFormat: Text.PlainText; text: parent.text; elide: Text.ElideLeft; color: parent.highlighted ? "white" : "#e8edf5" }
+                background: Rectangle {
+                    objectName: "endpointSearchResultBackground"
+                    radius: 3
+                    color: searchDelegate.highlighted ? searchDelegate.palette.highlight : "transparent"
+                    border.width: searchDelegate.activeFocus ? 2 : 0
+                    border.color: searchDelegate.highlighted ? searchDelegate.palette.highlightedText : searchDelegate.palette.text
+                }
+                contentItem: Label {
+                    textFormat: Text.PlainText
+                    text: searchDelegate.text
+                    elide: Text.ElideLeft
+                    color: searchDelegate.highlighted ? searchDelegate.palette.highlightedText : searchDelegate.palette.buttonText
+                }
             }
             ScrollBar.vertical: ScrollBar {}
         }
-        Label { textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: "#99abbf"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+        Label { objectName: "endpointTreeHelp"; textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: panel.palette.text; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
     }
     Connections {
         target: panel.provider.endpoints

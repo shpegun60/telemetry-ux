@@ -3,9 +3,15 @@ import QtQuick.Window
 import Telemetry.UX
 
 Window {
+    id: host
     visible: true
     width: 550
     height: 640
+    property color testHighlight: "#215a68"
+    property color testHighlightedText: "#ffffff"
+    property color testButtonText: "#e8edf5"
+    property color testBase: "#17202b"
+    property color testText: "#e8edf5"
     QtObject {
         id: fake
         objectName: "searchProvider"
@@ -20,5 +26,14 @@ Window {
             return true
         }
     }
-    EndpointTreePanel { objectName: "searchTree"; anchors.fill: parent; provider: fake }
+    EndpointTreePanel {
+        objectName: "searchTree"
+        anchors.fill: parent
+        provider: fake
+        palette.highlight: host.testHighlight
+        palette.highlightedText: host.testHighlightedText
+        palette.buttonText: host.testButtonText
+        palette.base: host.testBase
+        palette.text: host.testText
+    }
 }
