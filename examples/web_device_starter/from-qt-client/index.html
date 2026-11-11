@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telemetry · Local device</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./node_modules/telemetry-ux/web/Configurator.css">
+<style>
+body{margin:0;background:#101923;color:#edf4fc;font:16px system-ui}
+header,main{max-width:1320px;margin:auto;padding:24px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+h1{font-size:24px;margin:0 auto 0 0}button{padding:10px 16px;font:inherit;cursor:pointer}
+header button{min-height:40px;color:#edf2fa;background:#233349;border:1px solid #40556b;border-radius:6px}
+header button:hover:not(:disabled){background:#344d63}
+header button:disabled{color:#a4b4c5;background:#192532;border-color:#344457;cursor:default}
+header button:focus-visible{outline:2px solid #8ce6d3;outline-offset:3px}
+#connect:not(:disabled),#reconnect:not(:disabled){background:#215a68;border-color:#75baaf}
+#status,#error{width:100%;margin:0}#error{color:#ffb7a8}
+.hint{color:#b8cbde;line-height:1.5}#empty{border:1px solid #40556b;border-radius:10px;padding:24px}
+</style>
+<script type="importmap">{"imports":{
+"telemetry-sdk":"./node_modules/telemetry-sdk/web/index.js",
+"telemetry-sdk/client":"./node_modules/telemetry-sdk/lib/client/web/Client.js",
+"telemetry-sdk/runtime":"./node_modules/telemetry-sdk/web/telemetry.js",
+"telemetry-sdk/dynamic":"./node_modules/telemetry-sdk/web/DynamicClient.js",
+"telemetry-ux/web":"./node_modules/telemetry-ux/web/index.js"}}</script>
+</head><body>
+<header><h1>Telemetry · Local device</h1>
+<button id="connect">Connect</button><button id="disconnect" disabled>Disconnect</button>
+<button id="reconnect" disabled>Reconnect</button><button id="close" disabled>Close</button>
+<p id="status" role="status">Not connected</p><p id="error" role="alert"></p></header>
+<main><p class="hint">This page controls the separate Qt device emulator. The device accepts one TCP or browser session at a time. Changes affect the emulator's actual Model.</p>
+<p id="empty">Start the emulator, then connect to discover its Fields, Commands and Services. Watchlist and Batch use the same connection.</p>
+<div id="device"></div></main>
+<script type="module" src="./DeviceApp.js"></script></body></html>
