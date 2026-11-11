@@ -138,6 +138,7 @@ struct InspectorController::State : telemetry::integration::qt::ConnectionStorag
 		struct Row {
 			quint32 id = 0;
 			QString status, text;
+			telemetry::ux::WatchSample sample;
 		};
 
 		quint64 revision = 0;
@@ -1542,8 +1543,10 @@ bool InspectorController::submitWatch()
 						    out.status = QStringLiteral("ReadError");
 						    break;
 				    }
-				    if (item.hasValue())
+				    if (item.hasValue()) {
 					    out.text = WatchlistModel::formatValue(item.value);
+					    out.sample = WatchlistModel::sampleOf(item.value);
+				    }
 			    }
 			    // Only owned strings cross the callback boundary; no borrowed DTO view.
 			    owner->watched = std::move(completion);
@@ -1584,8 +1587,10 @@ bool InspectorController::submitWatch()
 			                           .arg(result.operation.endpointStatus)
 			                 : result.hasValue() ? QStringLiteral("Ok")
 			                                     : QStringLiteral("NoValue");
-			    if (result.hasValue())
+			    if (result.hasValue()) {
 				    out.text = WatchlistModel::formatValue(result.value);
+				    out.sample = WatchlistModel::sampleOf(result.value);
+			    }
 			    owner->watched = std::move(completion);
 		    },
 		    timeout);
@@ -1631,7 +1636,7 @@ bool InspectorController::consumeWatch(State& state)
 		} else {
 			for (int item = 0; item < completion.count; ++item)
 				watchlist_.setResult(watchCursor_ + item, completion.rows[item].status,
-				                     completion.rows[item].text);
+				                     completion.rows[item].text, completion.rows[item].sample);
 			watchCursor_ += completion.count;
 			if (watchCursor_ >= watchlist_.count()) {
 				watchCycle_ = false;

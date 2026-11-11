@@ -63,16 +63,20 @@ Window {
         function startWatch() { return false }
         function stopWatch() {}
         function publishTrendSample() {
+            // Markup is not a number: the typed sample is not exact, so the
+            // Trend reports the literal text instead of plotting it.
             watchlist.setProperty(0, "sampleText", host.hostile("trendValue"))
             watchlist.setProperty(0, "sampleRevision", "2")
+            watchlist.setProperty(0, "sampleExact", false)
             watchlist.setProperty(0, "status", "Ok")
+            watchlist.setProperty(0, "statusCode", 2)
         }
 
         Component.onCompleted: {
             endpoints.append({name: host.hostile("endpoint"), detail: host.hostile("endpointTip"), isEndpoint: true})
             values.append({name: host.hostile("member"), detail: host.hostile("valueTip"), value: host.hostile("enum"), isAggregate: false, childCount: 0, loadedCount: 0, editable: false, editorText: "0"})
             responses.append({name: host.hostile("responseMember"), detail: host.hostile("responseTip"), value: host.hostile("responseEnum"), isAggregate: false, childCount: 0, loadedCount: 0})
-            watchlist.append({name: host.hostile("watchName"), status: host.hostile("watchStatus"), text: host.hostile("watchValue"), sampleText: "", sampleRevision: "1", sampleEpoch: "1"})
+            watchlist.append({name: host.hostile("watchName"), status: host.hostile("watchStatus"), text: host.hostile("watchValue"), sampleText: "", sampleRevision: "1", sampleEpoch: "1", sampleValue: 0, sampleExact: false, statusCode: 0})
         }
     }
 

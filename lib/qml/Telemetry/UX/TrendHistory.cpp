@@ -1,8 +1,7 @@
 ﻿// Bounded host-presentation history over existing Watchlist results. MIT.
 #include "TrendHistory.hpp"
-#include <QtCore/QRegularExpression>
+#include "WatchSample.hpp"
 #include <QtCore/QThread>
-#include <cmath>
 
 namespace telemetry::ux {
 TrendHistory::TrendHistory(QObject* parent) : QObject(parent) { clock_.start(); }
@@ -112,17 +111,27 @@ void TrendHistory::clear()
 void TrendHistory::inspect()
 {
     if (!source_ || !selected_.isValid()) return;
-    const int statusRole = role("status"), revisionRole = role("sampleRevision"),
-              epochRole = role("sampleEpoch"), sampleRole = role("sampleText");
-    if (statusRole < 0 || revisionRole < 0 || epochRole < 0 || sampleRole < 0) {
+    // The number comes from the typed value (sampleValue/sampleExact), never from
+    // the display text, and the status from its stable code, never its wording.
+    const int statusRole = role("status"), codeRole = role("statusCode"),
+              revisionRole = role("sampleRevision"), epochRole = role("sampleEpoch"),
+              textRole = role("sampleText"), valueRole = role("sampleValue"),
+              exactRole = role("sampleExact");
+    if (statusRole < 0 || codeRole < 0 || revisionRole < 0 || epochRole < 0 || textRole < 0 ||
+        valueRole < 0 || exactRole < 0) {
         gap_ = true;
         if (setState(QStringLiteral("This provider has no sample history support"))) publish(StateChanged);
         return;
     }
-    const QString status = source_->data(selected_, statusRole).toString();
-    if (status != QStringLiteral("Ok")) {
-        if (status != QStringLiteral("Pending") && status != QStringLiteral("NotRead") &&
-            status != QStringLiteral("Not read")) gap_ = true;
+    // A missing or unknown code counts as a failure, so it breaks the line.
+    const QVariant codeValue = source_->data(selected_, codeRole);
+    bool codeOk = false;
+    const int codeNumber = codeValue.toInt(&codeOk);
+    const auto code = codeOk && codeNumber >= int(WatchStatus::NotRead) && codeNumber <= int(WatchStatus::Failed)
+                          ? static_cast<WatchStatus>(codeNumber) : WatchStatus::Failed;
+    if (code != WatchStatus::Ok) {
+        if (code != WatchStatus::Pending && code != WatchStatus::NotRead) gap_ = true;
+        const QString status = source_->data(selected_, statusRole).toString();
         if (setState(status.isEmpty() ? QStringLiteral("No reading") : status)) publish(StateChanged);
         return;
     }
@@ -131,21 +140,14 @@ void TrendHistory::inspect()
     if (revision.isEmpty() || (revision == revision_ && epoch == epoch_)) return;
     if (epoch != epoch_) gap_ = true;
     revision_ = revision; epoch_ = epoch;
-    const QString raw = source_->data(selected_, sampleRole).toString();
-    QString numeric = raw;
-    static const QRegularExpression zeroBits(QStringLiteral("^(-?0) \\(0x[0-9a-fA-F]+\\)$"));
-    const auto zeroMatch = zeroBits.match(numeric);
-    if (zeroMatch.hasMatch()) numeric = zeroMatch.captured(1);
-    static const QRegularExpression decimal(QStringLiteral("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"));
-    static const QRegularExpression integer(QStringLiteral("^[+-]?[0-9]+$"));
-    bool ok = false;
-    const double value = numeric.toDouble(&ok);
-    if (!decimal.match(numeric).hasMatch() || !ok || !std::isfinite(value) ||
-        (integer.match(numeric).hasMatch() && std::abs(value) > 9007199254740991.0)) {
+    const QString raw = source_->data(selected_, textRole).toString();
+    const QVariant sample = source_->data(selected_, valueRole);
+    if (!source_->data(selected_, exactRole).toBool() || !sample.isValid()) {
         gap_ = true;
-        if (setState(QStringLiteral("Value cannot be plotted without losing information: ") + raw)) publish(StateChanged);
+        if (setState(QStringLiteral("Not plotted: not a finite number a chart can show exactly: ") + raw)) publish(StateChanged);
         return;
     }
+    const double value = sample.toDouble();
     if (points_.size() == capacity_) points_.removeFirst();
     points_.push_back(QVariantMap{{QStringLiteral("ms"), clock_.elapsed()},
                                   {QStringLiteral("value"), value},

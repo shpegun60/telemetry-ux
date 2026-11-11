@@ -282,19 +282,37 @@ int main(int argc, char** argv)
 		auto* refresh = item(statePanel, QStringLiteral("refreshButton"));
 		auto* command = item(statePanel, QStringLiteral("executeButton"));
 		auto* service = item(statePanel, QStringLiteral("callServiceButton"));
-		CHECK(title && actions && edit && cancel && apply && refresh && command && service);
+		auto* values = item(statePanel, QStringLiteral("valueTree"));
+		CHECK(title && actions && edit && cancel && apply && refresh && command && service && values);
+		// Every visible action lies inside the panel's content area (not merely
+		// its outer frame) and no two overlap, at each narrow dock width. The
+		// window ends at the narrowest width, so the clicks below happen there.
 		const auto checkGeometry = [&] {
-			settle();
-			CHECK(rectangle(title).bottom() <= rectangle(actions).top() + 1);
-			QList<QQuickItem*> visibleButtons;
-			for (auto* button : {edit, cancel, apply, refresh, command, service})
-				if (button->isVisible()) visibleButtons.append(button);
-			for (int i = 0; i < visibleButtons.size(); ++i) {
-				const auto bounds = rectangle(visibleButtons[i]);
-				CHECK(bounds.left() >= rectangle(statePanel).left() - 1);
-				CHECK(bounds.right() <= rectangle(statePanel).right() + 1);
-				for (int j = i + 1; j < visibleButtons.size(); ++j)
-					CHECK(!bounds.intersects(rectangle(visibleButtons[j])));
+			for (const int width : {360, 320, 300, 280}) {
+				stateWindow->setWidth(width);
+				settle();
+				const auto frame = rectangle(statePanel);
+				const auto left = frame.left() + statePanel->property("leftPadding").toReal();
+				const auto right = frame.right() - statePanel->property("rightPadding").toReal();
+				CHECK(rectangle(title).bottom() <= rectangle(actions).top() + 1);
+				// The title and the value tree stay inside too: a fixed minimum
+				// width on the tree once pushed the whole panel past a 300 px dock.
+				CHECK(rectangle(title).left() >= left - 1 && rectangle(title).right() <= right + 1);
+				CHECK(rectangle(values).right() <= right + 1);
+				QList<QQuickItem*> visibleButtons;
+				for (auto* button : {edit, cancel, apply, refresh, command, service})
+					if (button->isVisible()) visibleButtons.append(button);
+				CHECK(!visibleButtons.isEmpty());
+				for (int i = 0; i < visibleButtons.size(); ++i) {
+					const auto bounds = rectangle(visibleButtons[i]);
+					if (bounds.left() < left - 1 || bounds.right() > right + 1)
+						qCritical() << "action outside the content at width" << width
+						            << visibleButtons[i]->objectName() << bounds << left << right;
+					CHECK(bounds.left() >= left - 1);
+					CHECK(bounds.right() <= right + 1);
+					for (int j = i + 1; j < visibleButtons.size(); ++j)
+						CHECK(!bounds.intersects(rectangle(visibleButtons[j])));
+				}
 			}
 		};
 		CHECK(edit->isVisible() && refresh->isVisible() && !cancel->isVisible() &&
@@ -304,6 +322,8 @@ int main(int argc, char** argv)
 		CHECK(stateProvider->property("edits").toInt() == 1 && stateProvider->property("editing").toBool());
 		CHECK(!edit->isVisible() && cancel->isVisible() && apply->isVisible() && refresh->isVisible());
 		checkGeometry();
+		CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) +
+		                                     QStringLiteral("/endpoint-edit-280.png")));
 		click(stateWindow, apply);
 		CHECK(stateProvider->property("applies").toInt() == 1);
 		click(stateWindow, cancel);
@@ -431,6 +451,24 @@ int main(int argc, char** argv)
         auto* narrowScroll = item(narrowPanel, QStringLiteral("watchlistScroll"));
         auto* narrowFlick = narrowScroll ? qobject_cast<QQuickItem*>(narrowScroll->property("contentItem").value<QObject*>()) : nullptr;
         CHECK(narrowPanel && narrowProvider && narrowScroll && narrowFlick);
+        // The expand box and the panel's `expanded` are one state: a host that
+        // opens the list sees the box ticked, and unticking it closes the list.
+        {
+            auto* toggle = item(narrowPanel, QStringLiteral("watchlistExpanded"));
+            CHECK(toggle && !narrowPanel->property("expanded").toBool() && !toggle->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", true));
+            settle();
+            CHECK(toggle->property("checked").toBool());
+            CHECK(toggle->setProperty("checked", false));
+            settle();
+            CHECK(!narrowPanel->property("expanded").toBool());
+            CHECK(narrowPanel->setProperty("expanded", true));
+            settle();
+            CHECK(toggle->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(!toggle->property("checked").toBool());
+        }
         const auto controlsVisible = [&] {
             for (const auto* name : {"watchlistExpanded", "addWatchButton"}) {
                 auto* control = item(narrowPanel, QString::fromLatin1(name));

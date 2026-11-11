@@ -13,6 +13,7 @@ struct WatchlistCompletion {
 	struct Row {
 		quint32 id = 0;
 		QString status, text;
+		WatchSample sample; // WatchlistModel::sampleOf() of the same value as text
 	};
 
 	client::Status status = client::Status::Ok;
