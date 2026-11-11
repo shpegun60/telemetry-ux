@@ -68,6 +68,10 @@ public:
 	// already read it (or its read was in flight); without one, the next cycle
 	// starts as soon as this one ends. Between cycles the next starts now.
 	void wake(std::optional<quint32> written = std::nullopt);
+	// Another panel changed data on the device. A polling Watchlist keeps
+	// polling and reads everything again right after this cycle; otherwise its
+	// values are marked stale.
+	void dataChanged();
 
 private:
 	struct Impl;

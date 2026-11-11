@@ -446,7 +446,9 @@ struct DynamicConfiguratorProvider::Impl {
 				endpoints.clear();
 			} else if (state->dirty) {
 				if (state->staleData) {
-					watch.retire(false);
+					// Polling goes on and reads again at once; a stopped list
+					// shows its values as stale.
+					watch.dataChanged();
 					batch.invalidateValues();
 					values.clear();
 					responses.clear();

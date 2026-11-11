@@ -85,8 +85,10 @@ Fields) in it, so a write waits behind one exchange at most, and while the write
 is in flight the Watchlist sends nothing. Afterwards the written Field is read
 again at once if this cycle had already read it (or had it in flight); after a
 Command, Service or Batch the next cycle follows immediately instead of waiting
-for the timer. A start refused because an operation is in flight leaves
-`watchStatus` saying so. One Watchlist holds at most 1024 Fields
+for the timer. A write from another panel on the same session does not stop
+it either: a polling Watchlist reads its list again right after the current
+cycle, a stopped one marks its values stale. A start refused because an
+operation is in flight leaves `watchStatus` saying so. One Watchlist holds at most 1024 Fields
 (`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
 
 The view consumes `readFinished(bool published)` and model `modelReset()`

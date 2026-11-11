@@ -461,6 +461,54 @@ void requestSelectionKeepsWatchlist()
 	connection.disconnect();
 }
 
+// A write from another panel on the same session does not stop this panel's
+// polling: it goes on and reads the list again.
+void siblingWriteKeepsPolling()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* watcher = presentation.createProvider();
+	auto* writer = presentation.createProvider();
+	connect(connection, peer);
+	watcher->setWatchIndividual(true);
+	const auto value = endpoint(watcher->endpoints(), QStringLiteral("Value_0"));
+	CHECK(watcher->addWatchMany({QVariant::fromValue(value)}).value("added").toInt() == 1);
+	watcher->setWatchIntervalMs(20);
+	watcher->startWatch();
+	auto polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
+	readConfig(*writer);
+	writer->setAllowMutations(true);
+	CHECK(writer->beginEdit());
+	CHECK(writer->setScalarText(member(writer->values(), QStringLiteral("Gain")), QStringLiteral("2.5")));
+	QSignalSpy applied(writer, &ux::DynamicConfiguratorProvider::applyFinished);
+	const auto writes = peer.nativeWrites();
+	CHECK(await([&] {
+		return writer->apply();
+	}));
+	CHECK(await([&] {
+		return applied.count() == 1;
+	}));
+	CHECK(peer.nativeWrites() == writes + 1);
+	CHECK(watcher->watchActive());
+	CHECK(!watcher->watchStatus().startsWith(QStringLiteral("Stopped")));
+	polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
+	watcher->stopWatch();
+	CHECK(await([&] {
+		return !watcher->watchPending() && !watcher->watchActive();
+	}));
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -741,6 +789,7 @@ int main(int argc, char** argv)
 	twoPanels();
 	bulkSessionWatch();
 	requestSelectionKeepsWatchlist();
+	siblingWriteKeepsPolling();
 	presentationPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));

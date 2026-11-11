@@ -676,6 +676,21 @@ void DynamicWatchlist::wake(std::optional<quint32> written)
 	p->continueCycle();
 }
 
+void DynamicWatchlist::dataChanged()
+{
+	auto p = d;
+	if (p->guarded())
+		return;
+	if (p->running) {
+		wake();
+		return;
+	}
+	p->publishing = true;
+	p->model.invalidateValues();
+	p->publishing = false;
+	p->changed();
+}
+
 void DynamicWatchlist::stop()
 {
 	auto p = d;
