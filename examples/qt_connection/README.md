@@ -12,6 +12,20 @@ Field independently in each panel and press Refresh. Neither panel requires a
 hard-coded endpoint or a programmatic selection before it can be used. Selecting
 an endpoint alone sends no request; refreshing one panel does not fill the other.
 
+Use **Watchlist and Trend** to open the second provider's watch controls and a
+single-Field chart. Add a scalar Field to Watchlist, choose it in Trend, and
+explicitly start Watchlist polling or press Read once. Trend does not issue any
+requests or own a client. `TrendHistory` is a separate QObject per chart; the
+host provides it to QML along with the existing provider. The chart stores at
+most 512 readings and uses the host's monotonic presentation time, not a device
+timestamp. It leaves gaps after stale/error values and changed sessions. Large
+integers that cannot be represented exactly as chart numbers are not plotted;
+their original text remains available in Watchlist. This is a host polling view,
+not an acquisition scope or a guarantee of sampling rate.
+Construct and access `TrendHistory` on the Qt owner thread; the Watchlist model
+and history must belong to that same thread. A source from another thread is
+refused. Keep the history alive until the QML panel has been destroyed.
+
 Connect to the maintained Inspector TCP reference server (default localhost:5577).
 This is the exclusive Resource-bootstrap/Encoded profile, not arbitrary TCP.
 Read-only is the initial UI policy; the example host allows explicit per-panel

@@ -73,6 +73,7 @@ WatchlistModel::WatchlistModel(QObject* parent) : QAbstractListModel(parent)
 void WatchlistModel::bind(const Workbench& owner) noexcept
 {
 	if (!changing_) {
+		++sampleEpoch_;
 		current_ = {};
 		owner_ = &owner;
 		session_ = owner.session();
@@ -83,6 +84,7 @@ void WatchlistModel::bind(const Workbench& owner) noexcept
 void WatchlistModel::bind(std::function<bool()> current)
 {
 	if (!changing_) {
+		++sampleEpoch_;
 		owner_ = nullptr;
 		current_ = std::move(current);
 	}
@@ -101,7 +103,7 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 		                  : std::max(qsizetype(4), rows_.capacity() * 2));
 	Mutation mutation{changing_};
 	beginInsertRows({}, count_, count_);
-	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}});
+	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0});
 	++count_;
 	endInsertRows();
 	return true;
@@ -127,7 +129,7 @@ bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 	Mutation mutation{changing_};
 	beginInsertRows({}, first, last);
 	for (const auto& entry : entries)
-		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}});
+		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}, {}, 0});
 	count_ += static_cast<int>(entries.size());
 	endInsertRows();
 	return true;
@@ -176,7 +178,7 @@ void WatchlistModel::invalidateValues()
 		rows_[row].status = QStringLiteral("Stale");
 		rows_[row].text.clear();
 	}
-	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {StatusRole, TextRole});
+	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {StatusRole, TextRole, SampleTextRole});
 }
 
 bool WatchlistModel::setResult(int row, QString status, QString text)
@@ -186,7 +188,13 @@ bool WatchlistModel::setResult(int row, QString status, QString text)
 	Mutation mutation{changing_};
 	rows_[row].status = std::move(status);
 	rows_[row].text = std::move(text);
-	Q_EMIT dataChanged(index(row, 0), index(row, 0), {StatusRole, TextRole});
+	if (rows_[row].status == QStringLiteral("Ok") &&
+	    rows_[row].sampleRevision != std::numeric_limits<quint64>::max()) {
+		rows_[row].sampleText = rows_[row].text;
+		++rows_[row].sampleRevision;
+	}
+	Q_EMIT dataChanged(index(row, 0), index(row, 0),
+	                   {StatusRole, TextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole});
 	return true;
 }
 
@@ -230,6 +238,8 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return QStringLiteral("Stale");
 		if (role == TextRole)
 			return QString{};
+		if (role == SampleTextRole)
+			return QString{};
 	}
 	switch (role) {
 		case EndpointIdRole:
@@ -241,6 +251,12 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return row.status;
 		case TextRole:
 			return row.text;
+		case SampleRevisionRole:
+			return QString::number(row.sampleRevision);
+		case SampleTextRole:
+			return row.status == QStringLiteral("Ok") ? row.sampleText : QString{};
+		case SampleEpochRole:
+			return QString::number(sampleEpoch_);
 		default:
 			return {};
 	}
@@ -251,7 +267,10 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	return {{EndpointIdRole, "endpointId"},
 	        {NameRole, "name"},
 	        {StatusRole, "status"},
-	        {TextRole, "text"}};
+	        {TextRole, "text"},
+	        {SampleRevisionRole, "sampleRevision"},
+	        {SampleTextRole, "sampleText"},
+	        {SampleEpochRole, "sampleEpoch"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

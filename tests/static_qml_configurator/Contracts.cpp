@@ -2,6 +2,7 @@
  * Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
  */
 #include <Telemetry/UX/StaticConfiguratorProvider.hpp>
+#include <Telemetry/UX/TrendHistory.hpp>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QPersistentModelIndex>
@@ -774,6 +775,34 @@ static void watchTick(StaticConfiguratorProvider& p)
 	CHECK(timer && QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
 }
 
+static void staticTrend()
+{
+	Api api;
+	api.watched[0] = QStringLiteral("42");
+	StaticConfiguratorProvider p(watchBinding(api, 1));
+	p.selectEndpoint(endpoint(p, 0));
+	CHECK(p.addWatch());
+	TrendHistory trend;
+	trend.setSource(p.watchlist());
+	trend.setRow(0);
+	for (int i = 0; i < 2; ++i) {
+		p.refreshWatch();
+		CHECK(p.watchPending());
+		api.finish(true);
+		watchEvents();
+	}
+	CHECK(trend.points().size() == 2);
+	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+	p.refreshWatch();
+	api.finish(false, "Dispatch", false, {}, 9);
+	watchEvents();
+	p.refreshWatch();
+	api.finish(true);
+	watchEvents();
+	CHECK(trend.points().size() == 3);
+	CHECK(trend.points().last().toMap().value("breakBefore").toBool());
+}
+
 static void watchLifecycle()
 {
 	Api api;
@@ -799,6 +828,10 @@ static void watchLifecycle()
 	CHECK(p.watchCount() == 3 && api.calls.isEmpty());
 	auto* model = p.watchlist();
 	const auto textRole = role(model, "text"), statusRole = role(model, "status");
+	const auto sampleTextRole = role(model, "sampleText"), sampleRevisionRole = role(model, "sampleRevision");
+	TrendHistory history;
+	history.setSource(model);
+	history.setRow(2);
 	p.refreshWatch();
 	CHECK(p.busy() && p.watchActive() && p.watchPending());
 	CHECK(api.calls == QStringList{"watch0"});
@@ -827,9 +860,14 @@ static void watchLifecycle()
 	watchEvents();
 	CHECK(!p.watchActive() && !p.busy());
 	CHECK(model->data(model->index(2, 0), textRole).toString() == "-77");
+	CHECK(history.points().size() == 1);
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString() == "18446744073709551615");
+	const auto sampleRevision = model->data(model->index(0, 0), sampleRevisionRole).toString();
 	api.watched[0] = QStringLiteral("9007199254740993");
 	api.changed();
 	CHECK(model->data(model->index(0, 0), textRole).toString() == "9007199254740993");
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString() == "18446744073709551615");
+	CHECK(model->data(model->index(0, 0), sampleRevisionRole).toString() == sampleRevision);
 	p.startWatch();
 	CHECK(p.watchActive() && p.watchPending());
 	p.stopWatch();
@@ -848,6 +886,7 @@ static void watchLifecycle()
 	CHECK(api.calls.last() == "watch1");
 	api.invalidate();
 	CHECK(model->data(model->index(0, 0), textRole).toString().isEmpty());
+	CHECK(model->data(model->index(0, 0), sampleTextRole).toString().isEmpty());
 	CHECK(model->data(model->index(0, 0), statusRole) == QStringLiteral("Stale"));
 	api.ready = api.valid = true;
 	++api.epoch;
@@ -1075,6 +1114,7 @@ int main(int argc, char** argv)
 	readRefusalsAndQueuedReset();
 	staleCacheAfterWriteRefusal();
 	watchLifecycle();
+	staticTrend();
 	watchBoundsAndReentrancy();
 	bulkWatch();
 	largeWatchCycle();

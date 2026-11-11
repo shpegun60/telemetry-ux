@@ -11,3 +11,8 @@ target_compile_features(telemetry_ux_package_check PRIVATE cxx_std_17)
 qt_add_executable(telemetry_ux_literal_check Literal.cpp)
 target_link_libraries(telemetry_ux_literal_check PRIVATE TelemetryUX::configurator)
 target_compile_features(telemetry_ux_literal_check PRIVATE cxx_std_17)
+
+qt_add_executable(telemetry_ux_trend_installed TrendInstalled.cpp)
+set_target_properties(telemetry_ux_trend_installed PROPERTIES AUTOMOC ON)
+target_link_libraries(telemetry_ux_trend_installed PRIVATE TelemetryUX::configurator)
+target_compile_features(telemetry_ux_trend_installed PRIVATE cxx_std_17)

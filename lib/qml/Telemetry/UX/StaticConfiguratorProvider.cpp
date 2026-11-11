@@ -438,12 +438,17 @@ public:
 		quint32 epoch = 0;
 		QString status = QStringLiteral("NotRead");
 		bool published = false;
+		quint64 sampleRevision = 0;
+		QString sampleText;
 	};
 
 	enum Roles {
 		Name = Qt::UserRole + 1,
 		Status,
-		Text
+		Text,
+		SampleRevision,
+		SampleText,
+		SampleEpoch
 	};
 
 	WatchList(const StaticConfiguratorBinding& binding, QObject* parent)
@@ -452,7 +457,9 @@ public:
 
 	QHash<int, QByteArray> roleNames() const override
 	{
-		return {{Name, "name"}, {Status, "status"}, {Text, "text"}};
+		return {{Name, "name"}, {Status, "status"}, {Text, "text"},
+		        {SampleRevision, "sampleRevision"}, {SampleText, "sampleText"},
+		        {SampleEpoch, "sampleEpoch"}};
 	}
 
 	int rowCount(const QModelIndex& parent = {}) const override
@@ -482,6 +489,12 @@ public:
 		                     binding_.session && row.epoch == binding_.session(binding_.api);
 		if (role == Status)
 			return current ? row.status : QStringLiteral("Stale");
+		if (role == SampleRevision)
+			return QString::number(row.sampleRevision);
+		if (role == SampleText)
+			return current && row.status == QStringLiteral("Ok") ? row.sampleText : QString{};
+		if (role == SampleEpoch)
+			return QString::number(row.epoch);
 		if (role == Text) {
 			if (!current || !row.published || !e.cachedValid || !e.cachedValid(binding_.api) ||
 			    !e.cached)
@@ -518,7 +531,7 @@ public:
 	{
 		if (!rows.isEmpty())
 			Q_EMIT dataChanged(index(0, 0), index(static_cast<int>(rows.size()) - 1, 0),
-			                   {Status, Text});
+			                   {Status, Text, SampleRevision, SampleText, SampleEpoch});
 	}
 
 	QVector<Row> rows;
@@ -1180,6 +1193,13 @@ struct StaticConfiguratorProvider::Impl {
 					row.published = false;
 					row.status = QStringLiteral("NoValue");
 				}
+				if (row.published && e.cached && row.sampleRevision != std::numeric_limits<quint64>::max()) {
+					const auto* sampleType = typeAt(binding, e.valueType);
+					if (sampleType) {
+						row.sampleText = scalarText(*sampleType, e.cached(binding.api), false);
+						++row.sampleRevision;
+					}
+				}
 				if (current && !success && error == QStringLiteral("Dispatch")) {
 					const auto dispatch = result.value(QStringLiteral("dispatchStatus")).toInt();
 					if (dispatch == 4)
@@ -1379,7 +1399,7 @@ bool StaticConfiguratorProvider::addWatch()
 	if (!canAddWatch())
 		return false;
 	auto rows = d->watchModel.rows;
-	rows.push_back({d->selected, d->session(), QStringLiteral("NotRead"), false});
+	rows.push_back({d->selected, d->session(), QStringLiteral("NotRead"), false, 0, {}});
 	d->replaceWatch(std::move(rows));
 	return true;
 }
@@ -1437,7 +1457,7 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		seen.insert(n);
 		if (!p->watchEligible(n)) { ++unsupported; continue; }
 		if (rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
-		rows.push_back({n, epoch, QStringLiteral("NotRead"), false});
+		rows.push_back({n, epoch, QStringLiteral("NotRead"), false, 0, {}});
 		++added;
 	}
 	const auto now = p->session();

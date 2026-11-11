@@ -1,5 +1,6 @@
 // Controlled completions and ticks: no event-loop timing assumptions. MIT.
 #include <Telemetry/UX/DynamicWatchlist.hpp>
+#include <Telemetry/UX/TrendHistory.hpp>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEvent>
 #include <QtTest/QAbstractItemModelTester>
@@ -161,6 +162,34 @@ void bulkPublication()
 	                 [&] { delete doomed.data(); });
 	const auto destruction = orphaned.addMany({{1, "one"}});
 	CHECK(!doomed && destruction.value("added").toInt() == 1 && deathPeer.calls.empty());
+}
+
+void trendCompletions()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	CHECK(watch.add(4, QStringLiteral("Field4")));
+	ux::TrendHistory trend;
+	trend.setSource(watch.model());
+	trend.setRow(0);
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		CHECK(watch.begin(false));
+		peer.finish();
+		watch.poll(); events();
+	}
+	CHECK(trend.points().size() == 2);
+	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+	watch.setIndividual(true);
+	CHECK(watch.begin(false));
+	peer.finish(); watch.poll(); events();
+	CHECK(trend.points().size() == 3 && peer.calls.size() == 3);
+	static_cast<ux::WatchlistModel*>(watch.model())->invalidateValues();
+	CHECK(watch.model()->data(watch.model()->index(0, 0), ux::WatchlistModel::SampleTextRole).toString().isEmpty());
+	CHECK(watch.begin(false));
+	peer.finish(); watch.poll(); events();
+	CHECK(trend.points().size() == 4 && trend.points().last().toMap().value("breakBefore").toBool());
 }
 
 void chunks()
@@ -389,6 +418,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	bulkPublication();
+	trendCompletions();
 	chunks();
 	budgetsAndFallback();
 	drainAndStale();

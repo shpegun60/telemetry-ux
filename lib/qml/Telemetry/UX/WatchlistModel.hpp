@@ -23,7 +23,10 @@ public:
 		EndpointIdRole = Qt::UserRole + 1,
 		NameRole,
 		StatusRole,
-		TextRole
+		TextRole,
+		SampleRevisionRole,
+		SampleTextRole,
+		SampleEpochRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = std::numeric_limits<int>::max();
@@ -51,7 +54,8 @@ private:
 	struct Row {
 		quint32 id = 0;
 		quintptr token = 0;
-		QString name, status, text;
+		QString name, status, text, sampleText;
+		quint64 sampleRevision = 0;
 	};
 
 	QVector<Row> rows_;
@@ -62,6 +66,7 @@ private:
 	std::function<bool()> current_;
 	std::uint32_t session_ = 0;
 	std::uint64_t admission_ = 0;
+	quint64 sampleEpoch_ = 0;
 };
 } // namespace telemetry::ux
 #endif
