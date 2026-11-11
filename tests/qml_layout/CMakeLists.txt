@@ -1,4 +1,4 @@
-# Geometry regression over the real disconnected Session presentation. MIT.
+﻿# Geometry regression over the real disconnected Session presentation. MIT.
 cmake_minimum_required(VERSION 3.21)
 project(telemetry_qml_layout LANGUAGES CXX)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
@@ -7,6 +7,6 @@ set(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR ON)
 set(TELEMETRY_UX_BUILD_QT_CONNECTION ON)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/qml" ux-qml)
 qt_add_executable(telemetry_qml_layout_check main.cpp)
-qt_add_resources(telemetry_qml_layout_check "layout-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES Main.qml Standalone.qml)
+qt_add_resources(telemetry_qml_layout_check "layout-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES Main.qml Standalone.qml Narrow.qml)
 target_compile_features(telemetry_qml_layout_check PRIVATE cxx_std_20)
 target_link_libraries(telemetry_qml_layout_check PRIVATE TelemetryUX::qt_connection Qt6::Test)
