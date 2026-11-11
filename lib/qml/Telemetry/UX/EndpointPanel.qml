@@ -28,9 +28,11 @@ Pane {
         visible: panel.selectionMatches
         spacing: 16
         Loader { Layout.fillWidth: true; active: panel.headerComponent !== null; sourceComponent: panel.headerComponent }
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
+            columns: width < 560 ? 1 : 2
             Label {
+                objectName: "endpointSelectionTitle"
                 textFormat: Text.PlainText
                 text: panel.provider.selection.length ? panel.provider.selection : "Select a Field"
                 font.pixelSize: 21
@@ -38,48 +40,51 @@ Pane {
                 Layout.fillWidth: true
                 elide: Text.ElideMiddle
             }
-            BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: 30; implicitHeight: 30 }
-            Button {
-                objectName: "editButton"
-                text: "Edit"
-                visible: !panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                enabled: panel.provider.canEdit
-                onClicked: panel.provider.beginEdit()
-            }
-            Button {
-                objectName: "cancelEditButton"
-                text: "Cancel"
-                visible: panel.provider.editing
-                enabled: !panel.provider.busy
-                onClicked: panel.provider.cancelEdit()
-            }
-            Button {
-                objectName: "applyButton"
-                text: "Apply + Refresh"
-                visible: panel.provider.editing
-                enabled: panel.provider.canApply
-                onClicked: panel.provider.apply()
-            }
-            Button {
-                objectName: "executeButton"
-                text: "Execute once"
-                visible: panel.provider.commandSelected
-                enabled: panel.provider.canExecute
-                onClicked: panel.provider.executeCommand()
-            }
-            Button {
-                objectName: "callServiceButton"
-                text: "Call once"
-                visible: panel.provider.serviceSelected
-                enabled: panel.provider.canCallService
-                onClicked: panel.provider.callService()
-            }
-            Button {
-                objectName: "refreshButton"
-                text: "Refresh"
-                visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
-                enabled: panel.provider.canRefresh
-                onClicked: panel.provider.refresh()
+            RowLayout {
+                objectName: "endpointSelectionActions"
+                BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: 30; implicitHeight: 30 }
+                Button {
+                    objectName: "editButton"
+                    text: "Edit"
+                    visible: !panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
+                    enabled: panel.provider.canEdit
+                    onClicked: panel.provider.beginEdit()
+                }
+                Button {
+                    objectName: "cancelEditButton"
+                    text: "Cancel"
+                    visible: panel.provider.editing
+                    enabled: !panel.provider.busy
+                    onClicked: panel.provider.cancelEdit()
+                }
+                Button {
+                    objectName: "applyButton"
+                    text: "Apply + Refresh"
+                    visible: panel.provider.editing
+                    enabled: panel.provider.canApply
+                    onClicked: panel.provider.apply()
+                }
+                Button {
+                    objectName: "executeButton"
+                    text: "Execute once"
+                    visible: panel.provider.commandSelected
+                    enabled: panel.provider.canExecute
+                    onClicked: panel.provider.executeCommand()
+                }
+                Button {
+                    objectName: "callServiceButton"
+                    text: "Call once"
+                    visible: panel.provider.serviceSelected
+                    enabled: panel.provider.canCallService
+                    onClicked: panel.provider.callService()
+                }
+                Button {
+                    objectName: "refreshButton"
+                    text: "Refresh"
+                    visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
+                    enabled: panel.provider.canRefresh
+                    onClicked: panel.provider.refresh()
+                }
             }
         }
         GridLayout {

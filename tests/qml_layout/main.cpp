@@ -155,6 +155,13 @@ int main(int argc, char** argv)
 			auto* watchToggle = item(view, QStringLiteral("watchlistExpanded"));
 			auto* batchToggle = item(view, QStringLiteral("batchToggle"));
 			CHECK(tree && values && watchToggle && batchToggle);
+			auto* selectionTitle = item(view, QStringLiteral("endpointSelectionTitle"));
+			auto* selectionActions = item(view, QStringLiteral("endpointSelectionActions"));
+			CHECK(selectionTitle && selectionActions && selectionTitle->parentItem());
+			if (selectionTitle->parentItem()->width() < 560) {
+				CHECK(rectangle(selectionTitle).bottom() <= rectangle(selectionActions).top());
+				CHECK(selectionTitle->property("paintedWidth").toReal() <= selectionTitle->width() + 1);
+			}
 			watchToggle->setProperty("checked", false);
 			batchToggle->setProperty("checked", false);
 			settle();
