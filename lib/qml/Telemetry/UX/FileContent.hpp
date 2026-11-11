@@ -75,15 +75,32 @@ struct FileIdentity {
 	QByteArray head;    // the first bytes, for a signature
 };
 
-// A format's codec: its name ("Descriptor"), a cheap guess from the identity,
-// the parse - the proof - that makes the view model, and the QML component
-// that shows it (given the model as its required property "decoded"). Tied to
-// a format, not to a file. A parse that fails leaves the file to Text or Hex,
-// with the codec's reason. Qt only here; the parser can be anything.
+// How surely a codec takes a file for its own, weakest first: by its place and
+// name ("/telemetry/descriptor.bin", "*.csv"), by a signature in its first
+// bytes ("TDS3"), by a format a device declared. The surest codec is tried
+// first, then the order of registration; a path with the wrong signature is
+// tried and its failed parse says why.
+enum class FileMatch : int { No = 0, Path = 1, Signature = 2, Format = 3 };
+
+// What a codec may ask for beyond the file's bytes.
+struct FileCodecContext {
+	// The bytes of a descriptor with this fingerprint - the connected
+	// device's, or one in a device's folder - or empty: values.bin needs it.
+	std::function<QByteArray(quint64 fingerprint)> descriptor;
+};
+
+// A format's codec: its name ("Descriptor"), how surely it takes a file, the
+// parse - the proof - that makes the view model, and the QML component that
+// shows it (given the model as its required property "decoded"). Tied to a
+// format, not to a file. The model may also offer `regions` (the parts of the
+// file, which the hex view tints and names) and `findings`. A parse that
+// fails leaves the file to Text or Hex, with the codec's reason. Qt only here;
+// the parser can be anything.
 struct FileCodec {
 	QString name;
-	std::function<bool(const FileIdentity&)> matches;
-	std::function<std::unique_ptr<QObject>(const QByteArray& bytes, QString& error)> decode;
+	std::function<FileMatch(const FileIdentity&)> match;
+	std::function<std::unique_ptr<QObject>(const QByteArray& bytes, const FileCodecContext& context, QString& error)>
+	    decode;
 	QUrl view;
 };
 
@@ -159,8 +176,15 @@ public:
 	QObject* decoded() const noexcept { return decoded_; }
 	QUrl codecView() const { return codecView_; }
 	QString codecError() const { return codecError_; }
-	// The codecs tried on every read, in order; borrowed from OpenFiles.
-	void setCodecs(const std::vector<FileCodec>* codecs) noexcept { codecs_ = codecs; }
+	// The codecs tried on every read, and what they may ask; borrowed from OpenFiles.
+	void setCodecs(const std::vector<FileCodec>* codecs, const FileCodecContext* context) noexcept
+	{
+		codecs_ = codecs;
+		context_ = context;
+	}
+	// A codec's parts of the file, for the hex view: the decoded model's
+	// `regions`, or empty.
+	Q_INVOKABLE QVariantList regions() const;
 
 	// Reads localFile again: after a new download, or Reload.
 	Q_INVOKABLE bool reload();
@@ -178,6 +202,7 @@ private:
 
 	QString localFile_, devicePath_, error_, text_, figures_, codecName_, codecError_;
 	const std::vector<FileCodec>* codecs_ = nullptr;
+	const FileCodecContext* context_ = nullptr;
 	QObject* decoded_ = nullptr; // a child of this
 	QUrl codecView_;
 	QByteArray bytes_;
@@ -200,6 +225,8 @@ public:
 	int count() const noexcept { return static_cast<int>(files_.size()); }
 	// A codec every file opened from now on is offered to, after those before it.
 	void addCodec(FileCodec codec);
+	// What the codecs may ask for (a descriptor by fingerprint).
+	void setContext(FileCodecContext context) { context_ = std::move(context); }
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
 	// it again when that copy is already open; returns its row.
 	Q_INVOKABLE int open(const QString& localFile, const QString& devicePath = {});
@@ -224,6 +251,7 @@ private:
 	int append();
 
 	std::vector<FileCodec> codecs_;
+	FileCodecContext context_;
 	std::vector<std::unique_ptr<FileContent>> files_;
 };
 } // namespace telemetry::ux

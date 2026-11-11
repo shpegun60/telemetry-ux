@@ -14,6 +14,8 @@ FocusScope {
     objectName: "hexPane"
 
     required property var content
+    // A codec's parts of the file ({offset, length, name, path, kind, depth}).
+    property var regions: []
     // Which bar is open under the toolbar: "", "find", "goto" or "block".
     property string bar: ""
     // Find's kinds and the widths a number can have, in bytes.
@@ -345,6 +347,7 @@ FocusScope {
                     anchors.fill: parent
                     anchors.rightMargin: scroll.width
                     content: pane.content
+                    regions: pane.regions
                     font.family: Type.fixedFamily
                     font.pointSize: Type.body
                     // From the font, so a smaller density still fits its text.

@@ -161,7 +161,9 @@ HexView::Columns HexView::columns(int bytesPerRow, bool withText) const
 	Columns at;
 	at.cell = metrics.horizontalAdvance(QLatin1Char('0'));
 	at.offset = padding;
-	at.hex = at.offset + (offsetDigits() + gutterGap) * at.cell;
+	// The gutter holds the offsets and its heading, whichever is wider.
+	const auto gutter = std::max(offsetDigits(), static_cast<int>(tr("Offset").size()));
+	at.hex = at.offset + (gutter + gutterGap) * at.cell;
 	// Two digits and a space a byte, one more space after every 8.
 	const int hexChars = bytesPerRow * 3 - 1 + (bytesPerRow / 8 - 1);
 	at.text = at.hex + (hexChars + gutterGap) * at.cell;

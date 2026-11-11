@@ -295,11 +295,20 @@ void FileContent::decode()
 	// Enough for any signature; the codec's parse decides.
 	constexpr qsizetype headBytes = 64;
 	const FileIdentity identity{devicePath_, localFile_, bytes_.left(headBytes)};
-	for (const auto& codec : *codecs_) {
-		if (!codec.matches || !codec.decode || !codec.matches(identity))
-			continue;
+	// The surest first; the order of registration among equals.
+	std::vector<std::pair<FileMatch, const FileCodec*>> candidates;
+	for (const auto& codec : *codecs_)
+		if (codec.match && codec.decode)
+			if (const auto how = codec.match(identity); how != FileMatch::No)
+				candidates.emplace_back(how, &codec);
+	std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+		return static_cast<int>(a.first) > static_cast<int>(b.first);
+	});
+	static const FileCodecContext none;
+	for (const auto& [how, candidate] : candidates) {
+		const auto& codec = *candidate;
 		QString reason;
-		if (auto model = codec.decode(bytes_, reason)) {
+		if (auto model = codec.decode(bytes_, context_ ? *context_ : none, reason)) {
 			decoded_ = model.release();
 			decoded_->setParent(this);
 			codecName_ = codec.name;
@@ -372,12 +381,17 @@ void OpenFiles::addCodec(FileCodec codec)
 	codecs_.push_back(std::move(codec));
 }
 
+QVariantList FileContent::regions() const
+{
+	return decoded_ ? decoded_->property("regions").toList() : QVariantList{};
+}
+
 int OpenFiles::append()
 {
 	// Parented, so QML never takes it over when a script reaches it through
 	// data(); files_ still decides when it goes.
 	auto file = std::make_unique<FileContent>(this);
-	file->setCodecs(&codecs_);
+	file->setCodecs(&codecs_, &context_);
 	const auto row = static_cast<int>(files_.size());
 	beginInsertRows({}, row, row);
 	files_.push_back(std::move(file));

@@ -325,6 +325,8 @@ Pane {
             HexPane {
                 id: hexPane
                 content: viewer.content
+                // A codec's parts of the file, tinted and named in the hex view.
+                regions: viewer.content && viewer.content.decoded ? viewer.content.regions() : []
             }
 
             // The codec's own view of its model, given as "decoded".
