@@ -75,6 +75,14 @@ Actions retain the existing provider signatures:
   `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
   `duplicate`, `unsupported` and `capacity`.
 
+While the Watchlist polls, selecting an endpoint, refreshing a Field into its
+Details and `cancelEdit()` still work: the Watchlist reads through the session
+and skips its tick while a foreground read is pending. Writes, Commands, Services,
+Batch and adding to the Watchlist wait until polling stops. Selecting a Command
+or Service opens its request editor (`editing` is true), which does not hold the
+Watchlist; only a Field edit or an operation in progress does, and then
+`refreshWatch()` / `startWatch()` leave `watchStatus` saying so.
+
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt
 index/fetchMore interface. Endpoint roles are `name`, `detail`, `isEndpoint`.

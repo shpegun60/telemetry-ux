@@ -171,6 +171,31 @@ void bulkPublication()
 	CHECK(!doomed && destruction.value("added").toInt() == 1 && deathPeer.calls.empty());
 }
 
+// One Watchlist holds at most watchlistRowLimit Fields. Past it nothing more is
+// added, in bulk or one at a time, and the bulk result counts the rest as
+// "capacity".
+void rowLimit()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	auto source = peer.source();
+	source.fieldBytes = [](quint32) -> std::optional<unsigned> { return 4; };
+	watch.setSource(std::move(source));
+	QVector<QPair<quint32, QString>> fields;
+	for (quint32 i = 1; i <= quint32(ux::watchlistRowLimit) + 5; ++i)
+		fields.push_back({i, QStringLiteral("field%1").arg(i)});
+	const auto result = watch.addMany(fields);
+	CHECK(result.value("status") == "ok");
+	CHECK(result.value("added").toInt() == ux::watchlistRowLimit);
+	CHECK(result.value("capacity").toInt() == 5);
+	CHECK(watch.count() == ux::watchlistRowLimit);
+	CHECK(!watch.canAdd(5000) && !watch.add(5000, QStringLiteral("over")));
+	const auto over = watch.addMany({{6000, QStringLiteral("over")}});
+	CHECK(over.value("added").toInt() == 0 && over.value("capacity").toInt() == 1);
+	CHECK(watch.count() == ux::watchlistRowLimit && peer.calls.empty());
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -432,6 +457,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	bulkPublication();
+	rowLimit();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();

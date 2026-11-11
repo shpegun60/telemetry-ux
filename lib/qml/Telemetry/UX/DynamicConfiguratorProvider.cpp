@@ -297,10 +297,19 @@ struct DynamicConfiguratorProvider::Impl {
 		return state && state->action != DynamicViewState::Action::None;
 	}
 
+	// Selecting an endpoint, reading it into Details and dropping a draft stay
+	// available while the Watchlist polls: the Watchlist reads through the
+	// session, skips its tick while a foreground read is pending, and holds
+	// no part of this view.
+	bool selectable() const
+	{
+		return current() && !busy() && !batch.active() && !updating && !endpoints.changing() &&
+		       !values.changing() && !responses.changing();
+	}
+
 	bool idle() const
 	{
-		return current() && !busy() && !watch.active() && !batch.active() && !updating &&
-		       !endpoints.changing() && !values.changing() && !responses.changing();
+		return selectable() && !watch.active();
 	}
 
 	bool mutate() const
@@ -475,7 +484,11 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	    },
 	    [weak] {
 		    const auto p = weak.lock();
-		    return !p || p->busy() || p->updating || (p->state && p->state->view.editing());
+		    // A selected Command or Service opens its request editor, which the
+		    // view also reports as editing; that draft never touches a watched
+		    // value, so only a Field edit holds the Watchlist.
+		    return !p || p->busy() || p->updating ||
+		           (p->state && p->state->view.editing() && p->category != 2 && p->category != 3);
 	    });
 	d->batch.setNotify(
 	    [weak] {
@@ -949,7 +962,7 @@ bool DynamicConfiguratorProvider::canApply() const
 
 bool DynamicConfiguratorProvider::canRefresh() const
 {
-	return d->idle() && d->category == 1;
+	return d->selectable() && d->category == 1;
 }
 
 bool DynamicConfiguratorProvider::commandSelected() const
@@ -995,7 +1008,7 @@ QString DynamicConfiguratorProvider::statusText() const
 bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 {
 	auto p = d;
-	if (!p->idle())
+	if (!p->selectable())
 		return false;
 	const auto endpoint = p->endpoints.endpoint(index);
 	if (endpoint.isEmpty())
@@ -1086,7 +1099,7 @@ bool DynamicConfiguratorProvider::beginEdit()
 void DynamicConfiguratorProvider::cancelEdit()
 {
 	auto p = d;
-	if (!p->idle())
+	if (!p->selectable())
 		return;
 	p->state->view.cancelEdit();
 	p->state->staleData = false;

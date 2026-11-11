@@ -547,8 +547,14 @@ void DynamicWatchlist::setInterval(int ms)
 bool DynamicWatchlist::begin(bool polling)
 {
 	auto p = d;
-	if (p->guarded() || p->active() || !p->current() || !p->model.count() || p->unavailable())
+	if (p->guarded() || p->active() || !p->current() || !p->model.count())
 		return false;
+	if (p->unavailable()) {
+		// Refused for a reason the operator can act on: say it.
+		p->status = QStringLiteral("Not started: a Field edit or an operation is in progress");
+		p->changed();
+		return false;
+	}
 	p->running = polling;
 	p->cycle = true;
 	p->cursor = 0;

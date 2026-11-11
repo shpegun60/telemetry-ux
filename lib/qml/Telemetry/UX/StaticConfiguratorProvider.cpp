@@ -1446,7 +1446,7 @@ bool StaticConfiguratorProvider::watchPending() const
 bool StaticConfiguratorProvider::canAddWatch() const
 {
 	if (!d->idle() || d->watchActive() || !d->watchEligible(d->selected) ||
-	    d->watchModel.rows.size() >= std::numeric_limits<int>::max())
+	    d->watchModel.rows.size() >= watchlistRowLimit)
 		return false;
 	for (const auto& row : d->watchModel.rows)
 		if (row.endpoint == d->selected)
@@ -1550,7 +1550,7 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 		if (seen.contains(n)) { ++duplicate; continue; }
 		seen.insert(n);
 		if (!p->watchEligible(n)) { ++unsupported; continue; }
-		if (existing + rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
+		if (existing + rows.size() >= watchlistRowLimit) { ++capacity; continue; }
 		rows.push_back({n, epoch, QStringLiteral("NotRead"), false, 0, {}, {}, 0});
 		++added;
 	}

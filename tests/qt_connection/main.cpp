@@ -296,6 +296,85 @@ void bulkSessionWatch()
 	connection.disconnect();
 }
 
+// Selecting a Command or Service opens its request editor, and the provider
+// then reports editing. That draft never touches a watched value: Read once and
+// polling go on. A Field edit still holds the Watchlist, and a refused start
+// says why instead of leaving the last status in place.
+void requestSelectionKeepsWatchlist()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	const auto value = endpoint(provider->endpoints(), QStringLiteral("Value_0"));
+	CHECK(value.isValid() && provider->addWatchMany({QVariant::fromValue(value)}).value("added").toInt() == 1);
+	const auto readOnce = [&] {
+		const auto before = peer.requests();
+		provider->refreshWatch();
+		const bool started = provider->watchPending();
+		CHECK(await([&] {
+			return !provider->watchPending() && !provider->watchActive();
+		}));
+		return started && peer.requests() > before;
+	};
+	CHECK(readOnce());
+	for (const auto* name : {"Execute", "Transform"}) {
+		const auto request = endpoint(provider->endpoints(), QString::fromLatin1(name));
+		CHECK(request.isValid() && provider->selectEndpoint(request));
+		CHECK(provider->editing()); // the request editor is open
+		CHECK(readOnce());
+		CHECK(!provider->watchStatus().startsWith(QStringLiteral("Not started")));
+	}
+	// Polling started while the Service is selected keeps reading on its timer.
+	provider->setWatchIntervalMs(20);
+	provider->startWatch();
+	CHECK(provider->watchActive());
+	auto polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
+	// While it polls, the tree still selects: a Command, then a Field whose
+	// Details refresh reads it once beside the Watchlist's own reads.
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
+	CHECK(provider->commandSelected() && provider->watchActive());
+	const auto field = endpoint(provider->endpoints(), QStringLiteral("Value_1"));
+	CHECK(await([&] {
+		return provider->selectEndpoint(field);
+	}));
+	CHECK(await([&] {
+		return provider->refresh();
+	}));
+	CHECK(await([&] {
+		return !provider->busy() && provider->values()->rowCount() == 1;
+	}));
+	CHECK(provider->watchActive());
+	polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
+	provider->stopWatch();
+	CHECK(await([&] {
+		return !provider->watchPending() && !provider->watchActive();
+	}));
+	// A Field edit holds the Watchlist, and the status names the reason.
+	readConfig(*provider);
+	provider->setAllowMutations(true);
+	CHECK(provider->beginEdit() && provider->editing());
+	const auto held = peer.requests();
+	provider->refreshWatch();
+	CHECK(!provider->watchPending() && peer.requests() == held);
+	CHECK(provider->watchStatus() ==
+	      QStringLiteral("Not started: a Field edit or an operation is in progress"));
+	provider->cancelEdit();
+	CHECK(readOnce());
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -575,6 +654,7 @@ int main(int argc, char** argv)
 	});
 	twoPanels();
 	bulkSessionWatch();
+	requestSelectionKeepsWatchlist();
 	presentationPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));
