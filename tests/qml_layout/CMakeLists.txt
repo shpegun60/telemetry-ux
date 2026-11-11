@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(telemetry_qml_layout LANGUAGES CXX)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection workbench core encoded_server encoded_backend)
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection workbench core encoded_server encoded_backend)
 set(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR ON)
 set(TELEMETRY_UX_BUILD_QT_CONNECTION ON)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/qml" ux-qml)

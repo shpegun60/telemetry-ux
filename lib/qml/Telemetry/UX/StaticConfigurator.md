@@ -9,7 +9,7 @@ telemetry-codegen generate Device.descriptor --output generated \
 
 The generated `qml/ConfiguratorBinding.hpp` adapts the existing generated API to
 `telemetry::ux::StaticConfiguratorProvider`. The host's CMake project calls
-`find_package(TelemetryUX 0.1.0 EXACT REQUIRED COMPONENTS static_configurator)`
+`find_package(TelemetryUX 0.1.0 REQUIRED COMPONENTS static_configurator)`
 before adding the generated QML subdirectory, and links
 `TelemetryUX::static_configurator` with its generated API target. Install prefixes
 belong in the host's normal `CMAKE_PREFIX_PATH`; no source checkout or manual QML

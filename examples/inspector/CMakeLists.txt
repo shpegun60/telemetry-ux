@@ -17,7 +17,7 @@ set(_inspector_components inspector workbench read_many_workbench encoded_backen
 if(INSPECTOR_ENABLE_SERIAL)
     list(APPEND _inspector_components qt_serial_transport)
 endif()
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS ${_inspector_components})
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS ${_inspector_components})
 foreach(_component IN LISTS _inspector_components)
     if(NOT TARGET Telemetry::${_component})
         message(FATAL_ERROR "Inspector requires Telemetry::${_component}; install all selected components in the chosen SDK prefix.")

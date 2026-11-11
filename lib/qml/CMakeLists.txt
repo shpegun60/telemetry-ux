@@ -17,7 +17,7 @@ configure_package_config_file("${CMAKE_CURRENT_SOURCE_DIR}/TelemetryUXConfig.cma
     INSTALL_DESTINATION "${_telemetry_ux_package_dir}"
     PATH_VARS TELEMETRY_UX_QML_INSTALL_DIR)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/TelemetryUXConfigVersion.cmake"
-    VERSION "${TELEMETRY_UX_VERSION}" COMPATIBILITY ExactVersion)
+    VERSION "${TELEMETRY_UX_VERSION}" COMPATIBILITY SameMinorVersion)
 install(EXPORT TelemetryUXTargets NAMESPACE TelemetryUX::
     DESTINATION "${_telemetry_ux_package_dir}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/TelemetryUXConfig.cmake"

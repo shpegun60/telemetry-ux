@@ -19,7 +19,7 @@ In a separate Qt application, add the installed prefix to `CMAKE_PREFIX_PATH`:
 
 ```cmake
 find_package(Qt6 6.4 REQUIRED COMPONENTS Quick QuickControls2)
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS configurator)
 target_link_libraries(my_app PRIVATE TelemetryUX::configurator Qt6::QuickControls2)
 ```
 

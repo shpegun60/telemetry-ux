@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(telemetry_codegen_qml_checks LANGUAGES CXX)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick Test)
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS
     core encoded_server encoded_backend rpc_backend rpc_sessions)
 qt_standard_project_setup(REQUIRES 6.4)
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml")

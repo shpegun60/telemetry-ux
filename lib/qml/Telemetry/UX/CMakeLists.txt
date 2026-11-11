@@ -50,7 +50,7 @@ install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp Prese
 # must not start discovering the native SDK or transport components.
 if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     if(NOT TARGET Telemetry::workbench)
-        find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS workbench)
+        find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS workbench)
     endif()
     add_library(telemetry_ux_dynamic_configurator STATIC
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
@@ -79,7 +79,7 @@ endif()
 
 if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     if(NOT TARGET Telemetry::qt_connection)
-        find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
+        find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
     endif()
     add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
