@@ -25,7 +25,13 @@ class DeviceFilesModel final : public QAbstractItemModel {
 	Q_PROPERTY(bool available READ available NOTIFY stateChanged)
 	Q_PROPERTY(bool loading READ loading NOTIFY stateChanged)
 	Q_PROPERTY(QString error READ error NOTIFY stateChanged)
+	// The device listed more than maxFiles files; the first maxFiles are shown.
+	Q_PROPERTY(bool truncated READ truncated NOTIFY stateChanged)
+	Q_PROPERTY(int maxFiles READ maxFileCount CONSTANT)
 	Q_PROPERTY(int fileCount READ fileCount NOTIFY stateChanged)
+	// Every file is the protocol's own, under /telemetry/: the firmware has not
+	// registered a log or a settings table yet.
+	Q_PROPERTY(bool systemOnly READ systemOnly NOTIFY stateChanged)
 	Q_PROPERTY(int markedCount READ markedCount NOTIFY marksChanged)
 	Q_PROPERTY(qulonglong markedBytes READ markedBytes NOTIFY marksChanged)
 public:
@@ -42,9 +48,14 @@ public:
 		AccessTextRole,
 		MarkedRole, // Qt::CheckState; a folder's is derived from its files
 		FileCountRole,
-		StatErrorRole
+		StatErrorRole,
+		SpokenSizeRole, // the size as a screen reader should say it
+		MarkableRole    // a file the device lets us read, or a folder with one
 	};
 	Q_ENUM(Role)
+
+	// The most files the tree holds; a longer list is cut there (truncated).
+	static constexpr int maxFiles = 4096;
 
 	explicit DeviceFilesModel(integration::qt::ConnectionSession* session, QObject* parent = nullptr);
 	~DeviceFilesModel() override;
@@ -52,7 +63,10 @@ public:
 	bool available() const;
 	bool loading() const noexcept;
 	QString error() const;
+	bool truncated() const noexcept;
+	static constexpr int maxFileCount() noexcept { return maxFiles; }
 	int fileCount() const noexcept;
+	bool systemOnly() const;
 	int markedCount() const noexcept;
 	qulonglong markedBytes() const noexcept;
 
@@ -68,8 +82,13 @@ public:
 	// Whether index is a file, and whether it is marked (a folder: all its files).
 	Q_INVOKABLE bool isFile(const QModelIndex& index) const;
 	Q_INVOKABLE bool isMarked(const QModelIndex& index) const;
+	// The file at index, as one map of selection(), whatever is marked; empty
+	// for a folder. What Open and a double-click act on.
+	Q_INVOKABLE QVariantMap fileAt(const QModelIndex& index) const;
 	// A size in the panel's words, for figures the panel composes itself.
 	Q_INVOKABLE QString formatSize(qulonglong bytes) const;
+	// The same size as a screen reader should say it: "4.2 kibibytes".
+	Q_INVOKABLE QString speakSize(qulonglong bytes) const;
 
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& child) const override;
@@ -80,6 +99,8 @@ public:
 
 	// Size as people read it: exact bytes below 1 KiB, else IEC units.
 	static QString sizeText(quint64 bytes);
+	// Size as people hear it: "300 bytes", "4.2 kibibytes".
+	static QString spokenSize(quint64 bytes);
 
 Q_SIGNALS:
 	void stateChanged();
@@ -107,7 +128,7 @@ private:
 	QString error_;
 	quint64 generation_ = 0;
 	std::size_t nextStat_ = 0;
-	bool loading_ = false, wasAvailable_ = false;
+	bool loading_ = false, wasAvailable_ = false, truncated_ = false;
 };
 } // namespace telemetry::ux
 #endif

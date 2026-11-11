@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <string_view>
+#include <utility>
 namespace qt = telemetry::integration::qt;
 namespace tcp = telemetry::integration::tcp;
 using telemetry::ux::DeviceFilesModel;
@@ -262,6 +264,73 @@ void destroyedMidway(qt::ConnectionSession& session, DeviceFilesModel& files, co
 	CHECK(files.fileCount() == 4 && files.error().isEmpty());
 }
 
+// The device names its files, so no name of its choosing may place a download
+// outside the chosen folder or under a name Windows treats specially.
+void localPaths(const QString& folder)
+{
+	const auto lands = [&](const QString& devicePath, const char* expected) {
+		return DeviceFileTransfers::localPathFor(folder, devicePath) ==
+		       folder + QLatin1Char('/') + QString::fromUtf8(expected);
+	};
+	CHECK(lands(QStringLiteral("/logs/events.csv"), "logs/events.csv"));
+	CHECK(lands(QStringLiteral("/../../outside.txt"), "outside.txt"));
+	CHECK(lands(QStringLiteral("/a\\..\\..\\b"), "a/b"));
+	CHECK(lands(QStringLiteral("C:/Windows/win.ini"), "C_/Windows/win.ini"));
+	CHECK(lands(QStringLiteral("//server/share/x"), "server/share/x"));
+	CHECK(lands(QStringLiteral("/CON"), "_CON"));
+	CHECK(lands(QStringLiteral("/logs/aux.txt"), "logs/_aux.txt"));
+	CHECK(lands(QStringLiteral("/name. . "), "name"));
+	CHECK(lands(QStringLiteral("/a<b>c:d\"e|f?g*h"), "a_b_c_d_e_f_g_h"));
+	CHECK(lands(QStringLiteral("/x") + QChar(1) + QStringLiteral("y"), "x_y"));
+	CHECK(lands(QStringLiteral("/..foo"), "..foo"));
+	CHECK(lands(QStringLiteral("/..."), "_"));
+	CHECK(lands(QString{}, "file"));
+	CHECK(lands(QStringLiteral("/"), "file"));
+}
+
+// A device listing more files than the tree holds: the first maxFiles are
+// shown, in the device's order, and the model says the list was cut.
+constexpr std::size_t manyFiles = DeviceFilesModel::maxFiles + 4;
+std::array<std::array<char, 16>, manyFiles> manyNames{};
+const resource::BytesFile tinyFile{settingsBytes};
+
+template<std::size_t... I>
+auto manyEntries(std::index_sequence<I...>)
+{
+	return resource::FileSystem<manyFiles>{std::array<resource::FileEntry, manyFiles>{
+	    resource::file(std::string_view(manyNames[I].data()), tinyFile)...}};
+}
+
+void truncatedList()
+{
+	for (std::size_t i = 0; i < manyFiles; ++i)
+		std::snprintf(manyNames[i].data(), manyNames[i].size(), "/many/f%04u", static_cast<unsigned>(i));
+	static const auto many = manyEntries(std::make_index_sequence<manyFiles>{});
+	Peer peer{many.view()};
+	qt::ConnectionSession session;
+	DeviceFilesModel files(&session);
+	QElapsedTimer took;
+	took.start();
+	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+	CHECK(await(
+	    [&] {
+		    return files.available() && !files.loading() && files.fileCount() > 0;
+	    },
+	    120000));
+	CHECK(files.truncated() && files.fileCount() == DeviceFilesModel::maxFiles && files.error().isEmpty());
+	const auto folder = files.index(0, 0);
+	CHECK(files.data(folder, DeviceFilesModel::FileCountRole).toInt() == DeviceFilesModel::maxFiles);
+	const auto last = files.index(DeviceFilesModel::maxFiles - 1, 0, folder);
+	CHECK(files.data(last, DeviceFilesModel::PathRole).toString() == QStringLiteral("/many/f4095"));
+	CHECK(files.data(last, DeviceFilesModel::SizeKnownRole).toBool());
+	std::printf("A list of %zu files cut at %d and examined in %lld ms\n", manyFiles,
+	            DeviceFilesModel::maxFiles, static_cast<long long>(took.elapsed()));
+	session.disconnect();
+	CHECK(await([&] {
+		return !files.available() && !files.truncated();
+	}));
+}
+
 void filesOnly(const QString& folder)
 {
 	Peer peer{withoutDescriptor.view()};
@@ -321,6 +390,8 @@ int main(int argc, char** argv)
 		return !files.available();
 	}));
 	filesOnly(folder.path());
+	localPaths(folder.path());
+	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);
 	return 0;
 }

@@ -109,6 +109,19 @@ Pane {
         }
 
         Label {
+            objectName: "deviceFilesTruncated"
+            visible: panel.files.available && !panel.files.loading && panel.files.truncated
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            wrapMode: Text.Wrap
+            font.pointSize: Type.caption
+            color: Theme.warning
+            text: qsTr("The device lists more files than the panel holds; the first %1 are shown.")
+                .arg(panel.files.maxFiles)
+        }
+
+        Label {
             objectName: "deviceFilesEmpty"
             visible: panel.files.available && !panel.files.loading
                 && panel.files.error.length === 0 && panel.files.fileCount === 0

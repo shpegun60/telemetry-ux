@@ -9,6 +9,9 @@
  * a truncated file under the real name. The bytes are the device's exactly.
  * This model owns its readers: a reader with a request in flight is never
  * destroyed; when the model goes first, the session keeps it until it ends.
+ * That relies on the session draining in its own destructor; destroying the
+ * session from inside one of its own callbacks is outside its lifecycle
+ * contract (the SDK's AsyncClient.md) and is not supported here either.
  */
 #ifndef TELEMETRY_UX_DEVICE_FILE_TRANSFERS_HPP
 #define TELEMETRY_UX_DEVICE_FILE_TRANSFERS_HPP
@@ -18,6 +21,7 @@
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
+#include <QtCore/QUrl>
 #include <memory>
 #include <vector>
 
@@ -65,9 +69,18 @@ public:
 	Q_INVOKABLE int download(const QString& path, int fileIndex, qulonglong size,
 	                         const QString& localFile);
 	// The local file for a device path inside folder, keeping the device's own
-	// folders below it.
+	// folders below it. Each segment becomes a plain local name (no drive, no
+	// "..", no reserved or forbidden characters); empty when the result would
+	// still leave the folder. The device's names never choose where files land.
 	Q_INVOKABLE static QString localPathFor(const QString& folder, const QString& devicePath);
+	// For hosts that pick places with QML file dialogs: a dialog's URL as the
+	// local path download() takes, and a local path as a URL to open.
+	Q_INVOKABLE static QString localFileOf(const QUrl& url);
+	Q_INVOKABLE static QUrl urlOfLocalFile(const QString& path);
 	Q_INVOKABLE void cancel(int row);
+	// Starts a failed or cancelled download again, in its own row, from the
+	// first byte. False when the row is still running, saved, or not connected.
+	Q_INVOKABLE bool retry(int row);
 	Q_INVOKABLE void cancelAll();
 	// Forgets the rows that have ended.
 	Q_INVOKABLE void clearFinished();

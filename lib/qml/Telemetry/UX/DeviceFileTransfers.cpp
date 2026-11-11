@@ -101,11 +101,20 @@ QString pairInUnit(quint64 received, quint64 total)
 	return QStringLiteral("%1 / %2 %3").arg(number(received), number(total), QString::fromLatin1(units[unit]));
 }
 
+// In the same units as every size the panel shows: B below 1 KiB.
 QString rateText(double bytesPerSecond)
 {
+	if (bytesPerSecond < 1024)
+		return DeviceFileTransfers::tr("%1 B/s").arg(static_cast<int>(bytesPerSecond));
 	return DeviceFileTransfers::tr("%1/s").arg(
 	    QLocale().formattedDataSize(static_cast<qint64>(bytesPerSecond), 0,
 	                                QLocale::DataSizeIecFormat));
+}
+
+// Two parts of a progress line, joined so a translator can reorder them.
+QString joined(const QString& first, const QString& second)
+{
+	return DeviceFileTransfers::tr("%1 · %2", "joins two parts of a progress line").arg(first, second);
 }
 
 QString leftText(double seconds)
@@ -160,12 +169,14 @@ QString DeviceFileTransfers::summary() const
 	const auto& job = **running;
 	const auto others = activeCount() - 1;
 	const auto progress = summaryProgress();
-	QString text = progress < 0 ? tr("Downloading %1").arg(job.name)
-	                            : tr("Downloading %1 · %2 %").arg(job.name).arg(
-	                                  static_cast<int>(std::floor(progress * 100)));
-	if (others > 0)
-		text += tr(" · %n more", nullptr, others);
-	return text;
+	// Whole patterns, one per case; the device's name goes in through a single
+	// arg() call, so nothing in it is ever read as a placeholder.
+	if (progress < 0)
+		return others > 0 ? tr("Downloading %1 · %n more", nullptr, others).arg(job.name)
+		                  : tr("Downloading %1").arg(job.name);
+	const auto percent = QString::number(static_cast<int>(std::floor(progress * 100)));
+	return others > 0 ? tr("Downloading %1 · %2 % · %n more", nullptr, others).arg(job.name, percent)
+	                  : tr("Downloading %1 · %2 %").arg(job.name, percent);
 }
 
 qreal DeviceFileTransfers::summaryProgress() const
@@ -182,12 +193,55 @@ qreal DeviceFileTransfers::summaryProgress() const
 
 QString DeviceFileTransfers::localPathFor(const QString& folder, const QString& devicePath)
 {
-	auto relative = devicePath;
-	while (relative.startsWith(QLatin1Char('/')))
-		relative.remove(0, 1);
-	// The device's own folders below the chosen one; never above it.
-	relative.replace(QStringLiteral(".."), QStringLiteral("_"));
-	return QDir(folder).filePath(relative);
+	// The device names its files, so its names decide nothing about where they
+	// land: every segment is made a plain local name, and the result must stay
+	// inside the chosen folder.
+	static const QStringList reserved{
+	    QStringLiteral("CON"),  QStringLiteral("PRN"),  QStringLiteral("AUX"),  QStringLiteral("NUL"),
+	    QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"), QStringLiteral("COM4"),
+	    QStringLiteral("COM5"), QStringLiteral("COM6"), QStringLiteral("COM7"), QStringLiteral("COM8"),
+	    QStringLiteral("COM9"), QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+	    QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"), QStringLiteral("LPT7"),
+	    QStringLiteral("LPT8"), QStringLiteral("LPT9")};
+	static const QString forbidden = QStringLiteral("<>:\"|?*");
+	auto normalized = devicePath;
+	normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+	QStringList safe;
+	for (auto segment : normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+		if (segment == QStringLiteral(".") || segment == QStringLiteral(".."))
+			continue;
+		for (auto& character : segment)
+			if (character.unicode() < 0x20 || forbidden.contains(character))
+				character = QLatin1Char('_');
+		// Windows drops trailing dots and spaces, which could merge two names.
+		while (segment.endsWith(QLatin1Char('.')) || segment.endsWith(QLatin1Char(' ')))
+			segment.chop(1);
+		if (segment.isEmpty())
+			segment = QStringLiteral("_");
+		if (reserved.contains(segment.section(QLatin1Char('.'), 0, 0).toUpper()))
+			segment.prepend(QLatin1Char('_'));
+		safe << segment;
+	}
+	if (safe.isEmpty())
+		safe << QStringLiteral("file");
+	const QDir root(folder);
+	const auto path = QDir::cleanPath(root.filePath(safe.join(QLatin1Char('/'))));
+	const auto relative = root.relativeFilePath(path);
+	// "..foo" is a name; only ".." itself, or a path through it, leaves the folder.
+	if (relative.isEmpty() || relative == QStringLiteral("..") ||
+	    relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative))
+		return {};
+	return path;
+}
+
+QString DeviceFileTransfers::localFileOf(const QUrl& url)
+{
+	return url.isLocalFile() ? url.toLocalFile() : QString{};
+}
+
+QUrl DeviceFileTransfers::urlOfLocalFile(const QString& path)
+{
+	return QUrl::fromLocalFile(path);
 }
 
 int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong size,
@@ -306,8 +360,10 @@ void DeviceFileTransfers::poll()
 						end(job, State::Failed, tr("Stopped: the device does not allow reading it"));
 						break;
 					case files::ReadState::Malformed:
-					case files::ReadState::Stalled:
 						end(job, State::Failed, tr("Stopped: the device's answers were not valid"));
+						break;
+					case files::ReadState::Stalled:
+						end(job, State::Failed, tr("Stopped: the device stopped sending the file"));
 						break;
 					default:
 						end(job, State::Failed,
@@ -359,6 +415,26 @@ void DeviceFileTransfers::cancel(int row)
 	}
 }
 
+bool DeviceFileTransfers::retry(int row)
+{
+	if (row < 0 || row >= static_cast<int>(jobs_.size()))
+		return false;
+	auto& job = *jobs_[static_cast<std::size_t>(row)];
+	if (job.active() || job.state == State::Saved || !session_ || !session_->filesSupported())
+		return false;
+	// The same row starts again from the first byte, under the same name.
+	job.state = State::Waiting;
+	job.result.clear();
+	job.lastReceived = 0;
+	job.pieces = 0;
+	job.rate = 0;
+	job.shownLeft = -1;
+	job.publishedMs = -1000;
+	publish(row);
+	startNext();
+	return true;
+}
+
 void DeviceFileTransfers::cancelAll()
 {
 	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row)
@@ -385,9 +461,9 @@ QString DeviceFileTransfers::figures(quint64 received, quint64 size, double rate
 		    .arg(DeviceFilesModel::sizeText(received), DeviceFilesModel::sizeText(size));
 	QString text = size != 0 ? pairInUnit(received, size) : DeviceFilesModel::sizeText(received);
 	if (rateTrusted && rate > 0)
-		text += tr(" · %1").arg(rateText(rate));
+		text = joined(text, rateText(rate));
 	if (secondsLeft > 0)
-		text += tr(" · %1").arg(leftText(secondsLeft));
+		text = joined(text, leftText(secondsLeft));
 	return text;
 }
 
@@ -429,8 +505,7 @@ QVariant DeviceFileTransfers::data(const QModelIndex& index, int role) const
 				return job.state == State::Waiting ? tr("waiting") : QString{};
 			const auto now = clock_.elapsed();
 			if (now - job.dataMs >= 3000 && job.pieces > 0)
-				return tr("%1 · waiting for the device…")
-				    .arg(figures(received, job.size, 0, -1, false));
+				return joined(figures(received, job.size, 0, -1, false), tr("waiting for the device…"));
 			const bool trusted = now - job.startedMs >= 2000 && job.pieces >= 3 && job.rate > 0;
 			double left = -1;
 			if (trusted && job.size > received) {
