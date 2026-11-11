@@ -90,6 +90,16 @@ at most the first 500 matches, with a depth limit of 64 levels; the status says
 when traversal is limited, even if there are no additional matches. Refine the
 query to narrow the results.
 
+Every row and search result has actions on a right click, the Menu key or
+Shift+F10: **Watch** (one Field), **Watch this group** (every Field under a group,
+nested, in tree order; at most 4096 rows are visited), **Show details** (selects
+the endpoint, as a click does) and **Copy path** (the dotted path, for example
+`measure.Voltage`). Watching goes straight to the provider's `addWatchMany` and
+leaves the ticked marks alone; while the Watchlist polls, the actions say to stop
+it first. In the search, Enter watches the first result (a Command or Service
+opens its details instead) and Down walks into the results. A host binds its own
+Ctrl+K to `find(text)`, which focuses the search, optionally with a query.
+
 Results contain copied display names. If an external session invalidation does
 not immediately notify the view, already displayed names may remain until the
 provider resets or updates its model; selection still goes through the provider's

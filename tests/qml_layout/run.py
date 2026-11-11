@@ -103,6 +103,12 @@ def main():
         if not bulk_match or int(bulk_match[1]) < 25:
             raise RuntimeError('missing bulk-selection UI contract')
         report['bulk_selection'] = dict(checks=int(bulk_match[1]), executable_sha256=digest(bulk_binary))
+        actions_binary = output / 'build' / ('telemetry_qml_tree_actions.exe' if os.name == 'nt' else 'telemetry_qml_tree_actions')
+        actions_text = run('tree-actions', [actions_binary])
+        actions_match = re.search(r'QML tree-actions checks=(\d+) warnings=0', actions_text)
+        if not actions_match or int(actions_match[1]) < 60:
+            raise RuntimeError('missing tree-actions UI contract')
+        report['tree_actions'] = dict(checks=int(actions_match[1]), executable_sha256=digest(actions_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:

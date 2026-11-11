@@ -30,3 +30,11 @@ value and long error status, the visible scrollbar, window-delivered synthetic w
 and a 65-item virtualized list without issuing reads or starting polling. Rows
 can have different heights when text wraps; as with Qt ListView in general, the
 scrollbar's size and position are estimates until more rows have been laid out.
+
+`TreeActions.cpp` drives the tree's row actions over a nested fixture (groups,
+Fields, Commands) and a provider that records what it is asked to watch: Watch
+and its duplicate, Watch this group across nesting in tree order, a group with
+nothing to watch, Show details on a Command, Copy path through the clipboard,
+the Menu key and Shift+F10, the actions refused while polling, and `find()` with
+Enter (a Field is watched, a Command opens its details) and the arrow keys
+between the search field and its results.
