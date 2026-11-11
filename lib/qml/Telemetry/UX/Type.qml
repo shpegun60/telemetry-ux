@@ -29,9 +29,10 @@ QtObject {
     // ms(2): card titles and panel headings.
     readonly property real heading: body * ratio * ratio
 
-    // Weights: Medium for headings, section labels and the primary action;
-    // Regular elsewhere, never Bold inside running text.
-    readonly property int headingWeight: Font.Medium
+    // Weights: DemiBold for headings, section labels and the primary action;
+    // Regular elsewhere, never Bold inside running text. (Medium, 500, renders
+    // as Regular with Segoe UI, which has no 500 face.)
+    readonly property int headingWeight: Font.DemiBold
     readonly property int bodyWeight: Font.Normal
 
     // The fixed-width family for values and codes. QML cannot read the system's
