@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchlistModel.hpp"
+#include <QtCore/QSet>
 #include <array>
 #include <algorithm>
 #include <charconv>
@@ -102,6 +103,32 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 	beginInsertRows({}, count_, count_);
 	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}});
 	++count_;
+	endInsertRows();
+	return true;
+}
+
+bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
+{
+	if (changing_ || entries.isEmpty() || entries.size() > maxRows - count_ || nextToken_ == 0 ||
+	    static_cast<quintptr>(entries.size() - 1) >
+	        std::numeric_limits<quintptr>::max() - nextToken_)
+		return false;
+	QSet<quint32> seen;
+	for (const auto& row : rows_)
+		seen.insert(row.id);
+	for (const auto& entry : entries) {
+		if (entry.second.isEmpty() || seen.contains(entry.first))
+			return false;
+		seen.insert(entry.first);
+	}
+	rows_.reserve(qsizetype(count_) + entries.size());
+	const int first = count_;
+	const int last = first + static_cast<int>(entries.size()) - 1;
+	Mutation mutation{changing_};
+	beginInsertRows({}, first, last);
+	for (const auto& entry : entries)
+		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}});
+	count_ += static_cast<int>(entries.size());
 	endInsertRows();
 	return true;
 }

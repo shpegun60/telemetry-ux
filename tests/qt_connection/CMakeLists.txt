@@ -11,6 +11,7 @@ qt_add_resources(telemetry_qt_connection_check "entry" PREFIX "/"
     BASE "../../examples/qt_connection" FILES ../../examples/qt_connection/Main.qml)
 target_compile_features(telemetry_qt_connection_check PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qt_connection_check PRIVATE QT_NO_KEYWORDS QT_NO_FOREACH)
+target_compile_definitions(telemetry_qt_connection_check PRIVATE TELEMETRY_TEST_BULK_WRITABLE)
 target_include_directories(telemetry_qt_connection_check PRIVATE ../../examples/inspector)
 target_link_libraries(telemetry_qt_connection_check PRIVATE TelemetryUX::qt_connection
     Telemetry::tcp_server Qt6::Quick Qt6::QuickControls2 Qt6::Test)
@@ -27,5 +28,5 @@ set_target_properties(telemetry_dynamic_batch_check PROPERTIES
 
 # Geometry over the same installed Session/view, without opening a connection.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml_layout" layout)
-set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers PROPERTIES
+set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers telemetry_qml_bulk_selection PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

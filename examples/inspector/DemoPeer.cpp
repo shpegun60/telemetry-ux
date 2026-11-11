@@ -417,7 +417,13 @@ demo::WritableDevice writablePrototype;
 constexpr telemetry::FieldTable writableFields{
     telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
                                                                                 writablePrototype)};
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+// Test-only peer: one writable configuration and 65 independent scalar Fields.
+constexpr telemetry::FieldCatalogTable writableCatalogs{telemetry::group("device", writableFields),
+                                                         telemetry::group("scaling", extendedFields)};
+#else
 constexpr telemetry::FieldCatalogTable writableCatalogs{telemetry::group("device", writableFields)};
+#endif
 constexpr telemetry::CommandTable writableCommands{
     telemetry::command<&demo::WritableDevice::execute>("Execute", writablePrototype),
     telemetry::command<&demo::WritableDevice::accept>("Accept", writablePrototype),
@@ -448,7 +454,11 @@ struct DemoPeer::Impl {
 	decltype(writableFields) fields{
 	    telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
 	                                                                                device)};
-	decltype(writableCatalogs) catalogs{telemetry::group("device", fields)};
+	decltype(writableCatalogs) catalogs{telemetry::group("device", fields)
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+	                                    , telemetry::group("scaling", extendedFields)
+#endif
+	};
 	decltype(writableCommands) commands{
 	    telemetry::command<&demo::WritableDevice::execute>("Execute", device),
 	    telemetry::command<&demo::WritableDevice::accept>("Accept", device),

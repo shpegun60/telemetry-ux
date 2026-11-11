@@ -97,6 +97,12 @@ def main():
         if not search_match or int(search_match[1]) < 29:
             raise RuntimeError('missing native-provider search contract')
         report['search_providers'] = dict(checks=int(search_match[1]), executable_sha256=digest(search_binary))
+        bulk_binary = output / 'build' / ('telemetry_qml_bulk_selection.exe' if os.name == 'nt' else 'telemetry_qml_bulk_selection')
+        bulk_text = run('bulk-selection', [bulk_binary])
+        bulk_match = re.search(r'QML bulk-selection checks=(\d+) warnings=0', bulk_text)
+        if not bulk_match or int(bulk_match[1]) < 25:
+            raise RuntimeError('missing bulk-selection UI contract')
+        report['bulk_selection'] = dict(checks=int(bulk_match[1]), executable_sha256=digest(bulk_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:

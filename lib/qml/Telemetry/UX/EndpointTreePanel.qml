@@ -19,6 +19,54 @@ Pane {
     property int searchGeneration: 0
     readonly property int searchLimit: 500
     readonly property int searchDepthLimit: 64
+    // These are source-model indexes, independent of the endpoint editor.
+    // Never retain them across structural changes to the source model.
+    property var watchMarks: []
+    property int watchMarkGeneration: 0
+    property string watchMarkStatus: ""
+    readonly property bool bulkWatchAvailable: provider &&
+        typeof provider.addWatchMany === "function" &&
+        typeof provider.watchCandidate === "function"
+
+    function clearWatchMarks() {
+        ++watchMarkGeneration
+        watchMarks = []
+        watchMarkStatus = ""
+    }
+    function canMarkWatch(index) {
+        return bulkWatchAvailable && index && index.valid &&
+               provider.watchCandidate(index)
+    }
+    function isWatchMarked(index) {
+        return watchMarks.some(function(item) { return item === index })
+    }
+    function toggleWatchMark(index) {
+        if (!canMarkWatch(index)) return
+        const marks = watchMarks.slice()
+        const position = marks.findIndex(function(item) { return item === index })
+        if (position < 0) marks.push(index)
+        else marks.splice(position, 1)
+        ++watchMarkGeneration
+        watchMarks = marks
+        watchMarkStatus = ""
+    }
+    function addMarkedWatches() {
+        if (!bulkWatchAvailable || watchMarks.length === 0 || provider.watchActive === true) return
+        const generation = watchMarkGeneration
+        const originalProvider = provider
+        const originalSource = searchSource
+        const result = originalProvider.addWatchMany(watchMarks.slice())
+        if (generation !== watchMarkGeneration || provider !== originalProvider || searchSource !== originalSource)
+            return
+        if (!result || result.status !== "ok") {
+            watchMarkStatus = "Could not add fields: " + (result && result.status ? result.status : "invalid")
+            return
+        }
+        const summary = "Added " + result.added + "; already watched " + result.duplicate +
+                        "; unsupported " + result.unsupported + "; capacity " + result.capacity
+        clearWatchMarks()
+        watchMarkStatus = summary
+    }
 
     // DelegateModel exposes named roles independently of their numeric IDs.
     // It does not create visual delegates for this traversal. Results retain
@@ -89,7 +137,8 @@ Pane {
             searchRunning = false
         }
     }
-    onSearchSourceChanged: scheduleSearch()
+    onProviderChanged: clearWatchMarks()
+    onSearchSourceChanged: { clearWatchMarks(); scheduleSearch() }
     DelegateModel {
         id: searchModel
         model: panel.searchSource
@@ -110,7 +159,27 @@ Pane {
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
-        Label { objectName: "endpointTreeTitle"; textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: panel.palette.text; font.pixelSize: 11; font.letterSpacing: 1 }
+        RowLayout {
+            Layout.fillWidth: true
+            Label { objectName: "endpointTreeTitle"; Layout.fillWidth: true; textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: panel.palette.text; font.pixelSize: 11; font.letterSpacing: 1 }
+            Button {
+                objectName: "endpointAddSelectedWatches"
+                visible: panel.bulkWatchAvailable
+                text: "Add " + panel.watchMarks.length
+                enabled: panel.watchMarks.length > 0 && panel.provider.watchActive !== true
+                onClicked: panel.addMarkedWatches()
+                Accessible.name: "Add selected fields to Watchlist"
+                ToolTip.visible: hovered
+                ToolTip.text: "Add selected scalar and enum fields to Watchlist; unsupported fields are skipped."
+            }
+            ToolButton {
+                objectName: "endpointClearWatchSelection"
+                visible: panel.bulkWatchAvailable && panel.watchMarks.length > 0
+                text: "Clear"
+                onClicked: panel.clearWatchMarks()
+                Accessible.name: "Clear selected Watchlist fields"
+            }
+        }
         RowLayout {
             Layout.fillWidth: true
             TextField {
@@ -139,6 +208,14 @@ Pane {
                   panel.searchResults.length === 0 ? "No matching endpoints" :
                   panel.searchResults.length + " matching endpoints"
         }
+        Label {
+            objectName: "endpointWatchSelectionStatus"
+            visible: text.length > 0
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: panel.palette.text
+            text: panel.watchMarkStatus
+        }
         TreeView {
             id: endpointTree
             objectName: "endpointTree"
@@ -161,6 +238,13 @@ Pane {
                 if (index.valid)
                     panel.provider.selectEndpoint(index)
             }
+            Keys.onSpacePressed: function(event) {
+                const index = endpointTree.selectionModel.currentIndex
+                if (panel.canMarkWatch(index)) {
+                    panel.toggleWatchMark(index)
+                    event.accepted = true
+                }
+            }
             columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
             onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
             delegate: TreeViewDelegate {
@@ -169,6 +253,7 @@ Pane {
                 required property string name
                 required property string detail
                 required property bool isEndpoint
+                readonly property var sourceIndex: endpointTree.modelIndex(Qt.point(0, row))
                 implicitWidth: endpointTree.width
                 implicitHeight: 38
                 text: name
@@ -196,9 +281,21 @@ Pane {
                     textFormat: Text.PlainText
                     text: endpointDelegate.name
                     elide: Text.ElideRight
+                    leftPadding: treeWatchCheck.visible ? treeWatchCheck.implicitWidth + 4 : 0
                     color: endpointDelegate.highlighted
                         ? endpointDelegate.palette.highlightedText
                         : endpointDelegate.palette.buttonText
+                    CheckBox {
+                        id: treeWatchCheck
+                        objectName: "endpointWatchCheck"
+                        focusPolicy: Qt.NoFocus
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: panel.canMarkWatch(endpointDelegate.sourceIndex)
+                        checked: panel.isWatchMarked(endpointDelegate.sourceIndex)
+                        onClicked: panel.toggleWatchMark(endpointDelegate.sourceIndex)
+                        Accessible.name: "Select " + endpointDelegate.name + " for Watchlist"
+                    }
                 }
                 onClicked: {
                     if (isEndpoint)
@@ -235,6 +332,12 @@ Pane {
                 onClicked: activateResult()
                 Keys.onReturnPressed: function(event) { activateResult(); event.accepted = true }
                 Keys.onEnterPressed: function(event) { activateResult(); event.accepted = true }
+                Keys.onSpacePressed: function(event) {
+                    if (modelData.generation === panel.searchGeneration && panel.canMarkWatch(modelData.index)) {
+                        panel.toggleWatchMark(modelData.index)
+                        event.accepted = true
+                    }
+                }
                 background: Rectangle {
                     objectName: "endpointSearchResultBackground"
                     radius: 3
@@ -246,7 +349,20 @@ Pane {
                     textFormat: Text.PlainText
                     text: searchDelegate.text
                     elide: Text.ElideLeft
+                    leftPadding: searchWatchCheck.visible ? searchWatchCheck.implicitWidth + 4 : 0
                     color: searchDelegate.highlighted ? searchDelegate.palette.highlightedText : searchDelegate.palette.buttonText
+                    CheckBox {
+                        id: searchWatchCheck
+                        objectName: "endpointSearchWatchCheck"
+                        focusPolicy: Qt.NoFocus
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: searchDelegate.modelData.generation === panel.searchGeneration &&
+                                 panel.canMarkWatch(searchDelegate.modelData.index)
+                        checked: panel.isWatchMarked(searchDelegate.modelData.index)
+                        onClicked: panel.toggleWatchMark(searchDelegate.modelData.index)
+                        Accessible.name: "Select " + searchDelegate.text + " for Watchlist"
+                    }
                 }
             }
             ScrollBar.vertical: ScrollBar {}
@@ -256,20 +372,20 @@ Pane {
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
-        function onModelAboutToBeReset() { panel.cancelSearch() }
+        function onModelAboutToBeReset() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onModelReset() {
             panel.scheduleSearch()
             Qt.callLater(function() { if (endpointTree) endpointTree.expandRecursively(0, 2) })
         }
-        function onRowsAboutToBeRemoved() { panel.cancelSearch() }
+        function onRowsAboutToBeRemoved() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsRemoved() { panel.scheduleSearch() }
-        function onRowsAboutToBeInserted() { panel.cancelSearch() }
+        function onRowsAboutToBeInserted() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsInserted() { panel.scheduleSearch() }
-        function onRowsAboutToBeMoved() { panel.cancelSearch() }
+        function onRowsAboutToBeMoved() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsMoved() { panel.scheduleSearch() }
-        function onLayoutAboutToBeChanged() { panel.cancelSearch() }
+        function onLayoutAboutToBeChanged() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onLayoutChanged() { panel.scheduleSearch() }
         function onDataChanged() { panel.scheduleSearch() }
-        function onDestroyed() { panel.cancelSearch() }
+        function onDestroyed() { panel.clearWatchMarks(); panel.cancelSearch() }
     }
 }

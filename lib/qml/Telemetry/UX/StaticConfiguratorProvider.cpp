@@ -522,6 +522,7 @@ public:
 	}
 
 	QVector<Row> rows;
+	bool canReplace() const { return revision_ != std::numeric_limits<quintptr>::max(); }
 
 private:
 	const StaticConfiguratorBinding& binding_;
@@ -678,6 +679,7 @@ struct StaticConfiguratorProvider::Impl {
 	bool allowed = false, pending = false, publishing = false, draftActive = false, retired = false,
 	     blocked = false, supported = false, needsReset = false, resetScheduled = false,
 	     priorRetired = false;
+	bool deferredChanged = false;
 	quint32 epoch = 0, pendingEpoch = 0, writeEpoch = 0, commandEpoch = 0, serviceEpoch = 0;
 	Operation operation = Operation::None;
 	QString token, status = QStringLiteral("Not connected"), write, command, service,
@@ -727,7 +729,7 @@ struct StaticConfiguratorProvider::Impl {
 	          binding,
 	          [this] {
 		          return RootValue{responseType, response,
-		                           ready() && response.isValid() && operation != Operation::Write &&
+		                           !deferredChanged && ready() && response.isValid() && operation != Operation::Write &&
 		                               operation != Operation::Command &&
 		                               operation != Operation::Service,
 		                           false};
@@ -918,7 +920,7 @@ struct StaticConfiguratorProvider::Impl {
 	RootValue currentValue() const
 	{
 		const auto* e = endpoint();
-		if (!e || !ready() || !supported)
+		if (!e || deferredChanged || !ready() || !supported)
 			return {};
 		if (draftActive)
 			return {e->category == 1 ? e->valueType : e->requestType, draft, true,
@@ -1013,6 +1015,16 @@ struct StaticConfiguratorProvider::Impl {
 
 	void changed()
 	{
+		if (publishing) {
+			if (!deferredChanged) {
+				deferredChanged = true;
+				QMetaObject::invokeMethod(q, [this] {
+					deferredChanged = false;
+					changed();
+				}, Qt::QueuedConnection);
+			}
+			return;
+		}
 		const auto now = session();
 		if (now != epoch || !ready()) {
 			epoch = now;
@@ -1370,6 +1382,82 @@ bool StaticConfiguratorProvider::addWatch()
 	rows.push_back({d->selected, d->session(), QStringLiteral("NotRead"), false});
 	d->replaceWatch(std::move(rows));
 	return true;
+}
+
+bool StaticConfiguratorProvider::watchCandidate(const QModelIndex& index) const
+{
+	if (!d->owner())
+		return false;
+	const auto n = d->endpointModel.endpointIndex(index);
+	if (n < 0)
+		return false;
+	const auto& e = d->binding.endpoints[n];
+	return e.category == 1 && e.readable;
+}
+
+QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes)
+{
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
+	                   {QStringLiteral("unsupported"), 0}, {QStringLiteral("capacity"), 0}};
+	auto* p = d.get();
+	if (!p->owner() || p->pending || p->publishing || p->watchActive())
+		return result;
+	QPointer<StaticConfiguratorProvider> alive(this);
+	p->publishing = true;
+	struct Publication {
+		QPointer<StaticConfiguratorProvider> owner;
+		Impl* state;
+		~Publication() { if (owner) state->publishing = false; }
+	} publication{this, p};
+	const auto ready = p->ready();
+	if (!alive || !ready)
+		return result;
+	const auto epoch = p->session();
+	if (!alive || p->deferredChanged || epoch != p->epoch) {
+		result[QStringLiteral("status")] = QStringLiteral("stale");
+		return result;
+	}
+	auto rows = p->watchModel.rows;
+	QSet<int> seen;
+	for (const auto& row : rows)
+		seen.insert(row.endpoint);
+	int added = 0, duplicate = 0, unsupported = 0, capacity = 0;
+	for (const auto& value : indexes) {
+		if (!value.canConvert<QModelIndex>()) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		const int n = p->endpointModel.endpointIndex(value.value<QModelIndex>());
+		if (n < 0) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		if (seen.contains(n)) { ++duplicate; continue; }
+		seen.insert(n);
+		if (!p->watchEligible(n)) { ++unsupported; continue; }
+		if (rows.size() >= std::numeric_limits<int>::max()) { ++capacity; continue; }
+		rows.push_back({n, epoch, QStringLiteral("NotRead"), false});
+		++added;
+	}
+	const auto now = p->session();
+	if (!alive || now != epoch || p->deferredChanged) {
+		result[QStringLiteral("status")] = QStringLiteral("stale");
+		return result;
+	}
+	const auto stillReady = p->ready();
+	if (!alive || !stillReady || p->deferredChanged || !p->watchModel.canReplace()) {
+		result[QStringLiteral("status")] = QStringLiteral("stale");
+		return result;
+	}
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	result[QStringLiteral("added")] = added;
+	result[QStringLiteral("duplicate")] = duplicate;
+	result[QStringLiteral("unsupported")] = unsupported;
+	result[QStringLiteral("capacity")] = capacity;
+	if (added)
+		p->replaceWatch(std::move(rows));
+	return result;
 }
 
 void StaticConfiguratorProvider::removeWatch(int row)

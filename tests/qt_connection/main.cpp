@@ -130,6 +130,28 @@ void click(QQuickWindow& window, QQuickItem& item)
 
 void twoPanels()
 {
+	QByteArray controlPayload;
+	{
+		inspector_qml::TcpDemoServer control;
+		control.setWritableDemo(true);
+		CHECK(control.listen());
+		host::ConnectionSession session;
+		ux::QtConnectionBinding binding{&session};
+		binding.setMutationsAllowed(true);
+		auto* provider = binding.createProvider();
+		connect(session, control);
+		readConfig(*provider);
+		provider->setAllowMutations(true);
+		CHECK(provider->beginEdit());
+		CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")),
+		                              QStringLiteral("4.25")));
+		QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+		CHECK(provider->apply() && await([&] { return applied.count() == 1; }));
+		CHECK(applied.last().at(0).toBool());
+		controlPayload = control.lastWritePayload();
+		CHECK(!controlPayload.isEmpty());
+		session.disconnect();
+	}
 	inspector_qml::TcpDemoServer peer;
 	peer.setWritableDemo(true);
 	CHECK(peer.listen());
@@ -190,12 +212,38 @@ void twoPanels()
 	CHECK(first->beginEdit());
 	CHECK(first->setScalarText(member(first->values(), QStringLiteral("Gain")),
 	                           QStringLiteral("4.25")));
+	const auto oldSelection = first->selectedEndpointIndex();
+	const auto gain = member(first->values(), QStringLiteral("Gain"));
+	const auto draftText = first->values()->data(gain, ux::ValueModel::EditorTextRole);
+	QVariantList fields;
+	for (int i = 0; i < 65; ++i) {
+		const auto index = endpoint(first->endpoints(), QStringLiteral("Value_%1").arg(i));
+		CHECK(index.isValid() && first->watchCandidate(index));
+		fields.push_back(QVariant::fromValue(index));
+	}
+	const auto requestsBeforeBulk = peer.requests();
+	QSignalSpy inserted(first->watchlist(), &QAbstractItemModel::rowsInserted);
+	const auto added = first->addWatchMany(fields);
+	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 65);
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+	QCoreApplication::processEvents();
+	CHECK(first->watchCount() == 65 && second->watchCount() == 0 && inserted.count() == 1);
+	CHECK(peer.requests() == requestsBeforeBulk && connection.workbench()->pending() == 0);
+	CHECK(first->editing() && first->selectedEndpointIndex() == oldSelection);
+	CHECK(first->values()->data(gain, ux::ValueModel::EditorTextRole) == draftText);
+	first->refreshWatch();
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+	QCoreApplication::processEvents();
+	CHECK(peer.requests() == requestsBeforeBulk && !first->watchPending());
 	QSignalSpy applied(first, &ux::DynamicConfiguratorProvider::applyFinished);
 	CHECK(first->apply());
 	CHECK(await([&] {
 		return applied.count() == 1;
 	}));
 	CHECK(applied.last().at(0).toBool() && peer.nativeWrites() == 1);
+	CHECK(peer.lastWritePayload() == controlPayload); // Entire canonical write payload, byte for byte.
+	CHECK(first->values()->data(member(first->values(), QStringLiteral("Gain")),
+	                            ux::ValueModel::ValueRole).toString() == "4.25");
 	CHECK(second->values()->rowCount() ==
 	      0); // Shared registry invalidates sibling, even other adapter.
 	connection.disconnect();
@@ -204,6 +252,40 @@ void twoPanels()
 	connect(connection, peer);
 	CHECK(first->connected() && second->connected() && peer.nativeWrites() == 1);
 	CHECK(first->values()->rowCount() == 0 && first->selection().isEmpty());
+}
+
+void bulkSessionWatch()
+{
+	inspector_qml::TcpDemoServer peer;
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* first = presentation.createProvider();
+	auto* second = presentation.createProvider();
+	connect(connection, peer);
+	const auto voltage = endpoint(first->endpoints(), QStringLiteral("Offset"));
+	const auto counter = endpoint(first->endpoints(), QStringLiteral("Counter"));
+	const auto samples = endpoint(first->endpoints(), QStringLiteral("Samples"));
+	const auto foreign = endpoint(second->endpoints(), QStringLiteral("Counter"));
+	CHECK(voltage.isValid() && counter.isValid() && samples.isValid() && foreign.isValid());
+	const auto requests = peer.requests();
+	QSignalSpy inserted(first->watchlist(), &QAbstractItemModel::rowsInserted);
+	const auto invalid = first->addWatchMany({QVariant::fromValue(voltage), QVariant::fromValue(foreign)});
+	CHECK(invalid.value("status") == "invalid" && first->watchCount() == 0);
+	const auto added = first->addWatchMany({QVariant::fromValue(voltage), QVariant::fromValue(counter),
+	                                        QVariant::fromValue(counter), QVariant::fromValue(samples)});
+	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2);
+	CHECK(added.value("duplicate").toInt() == 1 && added.value("unsupported").toInt() == 1);
+	CHECK(first->watchCount() == 2 && inserted.count() == 1 && peer.requests() == requests);
+	CHECK(first->selection().isEmpty() && connection.workbench()->pending() == 0);
+	QPointer<ux::DynamicConfiguratorProvider> doomed = presentation.createProvider();
+	QObject observer;
+	const auto doomedIndex = endpoint(doomed->endpoints(), QStringLiteral("Counter"));
+	QObject::connect(doomed->watchlist(), &QAbstractItemModel::rowsAboutToBeInserted, &observer,
+	                 [&] { delete doomed.data(); });
+	const auto destroyed = doomed->addWatchMany({QVariant::fromValue(doomedIndex)});
+	CHECK(!doomed && destroyed.value("added").toInt() == 1 && peer.requests() == requests);
+	connection.disconnect();
 }
 
 void presentationPanels()
@@ -484,6 +566,7 @@ int main(int argc, char** argv)
 		std::fprintf(stderr, "%s\n", qPrintable(text));
 	});
 	twoPanels();
+	bulkSessionWatch();
 	presentationPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));

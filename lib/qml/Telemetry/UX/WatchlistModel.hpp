@@ -31,6 +31,7 @@ public:
 	void bind(const Workbench& owner) noexcept;
 	void bind(std::function<bool()> current);
 	bool add(quint32 id, QString name);
+	bool addMany(const QVector<QPair<quint32, QString>>& entries);
 	bool remove(int row);
 	void clear();
 	void invalidateValues();

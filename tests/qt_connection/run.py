@@ -154,7 +154,7 @@ def main():
         scheduling_executable = build / ('telemetry_dynamic_watchlist_check.exe' if os.name == 'nt' else 'telemetry_dynamic_watchlist_check')
         scheduling = run('watchlist-scheduling-runtime', [scheduling_executable], env=headless_environment)
         scheduled_checks = re.search(r'Dynamic Watchlist checks=(\d+) chunks=32,32,1 no_native_callback_signals=1', scheduling)
-        if not scheduled_checks or int(scheduled_checks[1]) < 264:
+        if not scheduled_checks or int(scheduled_checks[1]) < 280:
             raise RuntimeError('Controlled Watchlist scheduling did not reach its assertion floor')
         report['watchlist_scheduling'] = dict(checks=int(scheduled_checks[1]),
             executable_sha256=digest(scheduling_executable), chunks=[32,32,1],
@@ -179,6 +179,13 @@ def main():
             raise RuntimeError('Native provider search did not reach its warning-free assertion floor')
         report['search_providers'] = dict(checks=int(search_checks[1]),
             executable_sha256=digest(search_executable))
+        bulk_executable = build / ('telemetry_qml_bulk_selection.exe' if os.name == 'nt' else 'telemetry_qml_bulk_selection')
+        bulk_log = run('bulk-selection-runtime', [bulk_executable])
+        bulk_checks = re.search(r'QML bulk-selection checks=(\d+) warnings=0', bulk_log)
+        if not bulk_checks or int(bulk_checks[1]) < 25:
+            raise RuntimeError('Bulk selection did not reach its warning-free assertion floor')
+        report['bulk_selection'] = dict(checks=int(bulk_checks[1]), warnings=0,
+            executable_sha256=digest(bulk_executable))
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]
@@ -186,7 +193,7 @@ def main():
             executable_sha256=digest(layout_executable), sizes=[[1160,800], [820,620]], network=False,
             screenshots_sha256={image.name: digest(image) for image in layout_images})
         count = re.search(r'Qt owned connection checks=(\d+) warnings=(\d+)', log)
-        if not count or int(count[1]) < 250 or int(count[2]) != 0:
+        if not count or int(count[1]) < 300 or int(count[2]) != 0:
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
         report.update(checks=int(count[1]), warnings=int(count[2]), executable_sha256=digest(executable))
         if args.sanitize:
