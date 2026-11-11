@@ -910,6 +910,8 @@ static void watchContinuous()
 		p.selectEndpoint(endpoint(p, i));
 		CHECK(p.addWatch());
 	}
+	auto* timer = p.findChild<QTimer*>(QStringLiteral("staticConfiguratorWatchTimer"));
+	CHECK(timer && timer->interval() == 10);
 	p.startWatch();
 	CHECK(api.calls == QStringList{"watch0"});
 	api.finish(true);
@@ -918,7 +920,13 @@ static void watchContinuous()
 	api.finish(true);
 	watchEvents();
 	watchEvents();
-	CHECK(api.calls == QStringList({"watch0", "watch1", "watch0"})); // no timer tick
+	// The cycle ended: the panel selects between cycles, and the next cycle
+	// follows on the short timer.
+	CHECK(api.calls.size() == 2 && !p.busy());
+	p.selectEndpoint(endpoint(p, 2));
+	CHECK(p.selection().endsWith("Field2"));
+	watchTick(p);
+	CHECK(api.calls == QStringList({"watch0", "watch1", "watch0"}));
 	p.stopWatch();
 	api.finish(true);
 	watchEvents();

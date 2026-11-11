@@ -59,6 +59,7 @@ The provider exposes notifying properties:
 | `watchActive`, `watchPending`, `canAddWatch`, `watchCount` | Watchlist state and gates |
 | `watchStatus`, `writeOutcome`, `commandOutcome`, `serviceOutcome`, `statusText` | Already-classified display text; the view does not infer execution certainty |
 | `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval (0 to 60000 ms; 0 reads continuously at low priority); the provider validates changes |
+| `watchIntervalMinimumMs` | The smallest interval the provider accepts (0 here); the interval box starts there, at 1 for a provider that does not say |
 
 Actions retain the existing provider signatures:
 
@@ -88,7 +89,11 @@ Command, Service or Batch the next cycle follows immediately instead of waiting
 for the timer. A write from another panel on the same session does not stop
 it either: a polling Watchlist reads its list again right after the current
 cycle, a stopped one marks its values stale. A start refused because an
-operation is in flight leaves `watchStatus` saying so. One Watchlist holds at most 1024 Fields
+operation is in flight leaves `watchStatus` saying so. `busy` is this view's own work (an operation, a Batch)
+and leaves the Watchlist's reads out, so Cancel and Batch editing stay available
+while it polls. Several Watchlists on one session take turns: each session
+progress starts with the next panel, and a Batch is never refused because the
+session is busy. One Watchlist holds at most 1024 Fields
 (`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
 
 The view consumes `readFinished(bool published)` and model `modelReset()`

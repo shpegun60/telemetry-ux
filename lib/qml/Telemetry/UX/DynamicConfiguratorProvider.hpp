@@ -37,6 +37,8 @@ class DynamicConfiguratorProvider final : public QObject {
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
 	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
+	// The smallest interval accepted: 0 reads continuously at low priority.
+	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
 	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
@@ -95,6 +97,7 @@ public:
 	QString watchStatus() const;
 	bool watchIndividual() const;
 	int watchIntervalMs() const;
+	static constexpr int watchIntervalMinimumMs() noexcept { return 0; }
 	void setWatchIndividual(bool individual);
 	void setWatchIntervalMs(int milliseconds);
 	Q_INVOKABLE bool addWatch();

@@ -12,6 +12,7 @@ namespace f = dynamic_qml_fixture;
 namespace {
 struct Peer {
 	bool current = true, busy = false, supported = true, permitted = true, blocked = false;
+	bool otherBusy = false; // another panel's request (a polling Watchlist) in the session
 	cl::Status refusal = cl::Status::Ok;
 	quint32 session = 17;
 	unsigned payloadBytes = 8;
@@ -29,7 +30,7 @@ struct Peer {
 			return current;
 		};
 		source.busy = [this] {
-			return busy;
+			return busy || otherBusy;
 		};
 		source.session = [this] {
 			return session;
@@ -324,6 +325,23 @@ void externalModelInvalidation()
 }
 } // namespace
 
+// A request of another panel in the session (a continuous Watchlist keeps one
+// almost always) blocks neither editing the Batch nor running it: the session's
+// FIFO orders them.
+void busySessionKeepsBatch()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	peer.otherBusy = true;
+	auto row = readRow(peer);
+	CHECK(batch.add(row) && batch.add(row) && batch.move(1, -1) && batch.remove(1));
+	CHECK(batch.canExecute() && batch.execute() && peer.calls == 1);
+	peer.finish();
+	batch.poll();
+	CHECK(!batch.pending());
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -332,6 +350,7 @@ int main(int argc, char** argv)
 	reentrantDetach();
 	reentrantInvalidation();
 	externalModelInvalidation();
+	busySessionKeepsBatch();
 	std::printf("Dynamic Batch checks=%u no_native_callback_signals=1 bounded_items=32\n",
 	            f::checks);
 }

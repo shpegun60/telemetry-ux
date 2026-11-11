@@ -114,7 +114,7 @@ jobs:
   inspector:
     name: Installed SDK Inspector (Linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '4c0fa737c6c5d699cc1469462a1b9da5d48753ea' }}
@@ -163,6 +163,13 @@ jobs:
         run: |
           python3 -B tests/inspector_tcp/run.py --build-dir "$RUNNER_TEMP/ux-inspector-tcp" \
             --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+      # The panels' geometry, search, bulk selection, Trend and tree actions on
+      # the distribution's Qt 6.4, the library's floor: an API newer than 6.4
+      # fails here even when a newer desktop Qt passes.
+      - name: Panel layout and interaction on Qt 6.4
+        run: |
+          python3 -B tests/qml_layout/run.py --build-dir "$RUNNER_TEMP/ux-qml-layout" \
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja --jobs 2
       - name: Retain separate UX and installed SDK evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -172,6 +179,9 @@ jobs:
           path: |
             ${{ runner.temp }}/ux-inspector-qml/
             ${{ runner.temp }}/ux-inspector-tcp/
+            ${{ runner.temp }}/ux-qml-layout/summary.json
+            ${{ runner.temp }}/ux-qml-layout/*.log
+            ${{ runner.temp }}/ux-qml-layout/*.png
             ${{ runner.temp }}/sdk-prefix/share/telemetry/SDKMetadata.json
 
   web-configurator:

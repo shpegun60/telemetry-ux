@@ -296,6 +296,57 @@ void continuousLowPriority()
 	CHECK(!watch.active() && peer.calls.size() == 3);
 }
 
+// A tick that finds the session busy (another panel's request) starts the
+// cycle anyway and sends when the session is free, instead of being skipped;
+// a wake between cycles does the same. Stop leaves no rerun behind.
+void busySessionTicks()
+{
+	const auto settle = [] {
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	watch.setInterval(60000);
+	CHECK(watch.begin(true));
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!peer.busy && !watch.pending()); // first cycle complete
+	peer.busy = true;                      // another panel's request
+	watch.tick();
+	CHECK(!watch.pending() && peer.calls.size() == 1);
+	peer.busy = false;
+	watch.poll(); // that request's completion progresses the session
+	settle();
+	CHECK(peer.calls.size() == 2 && peer.busy); // the cycle went out
+	peer.finish();
+	watch.poll();
+	settle();
+	peer.busy = true; // a write from another panel is still queued
+	watch.dataChanged();
+	settle();
+	CHECK(peer.calls.size() == 2);
+	peer.busy = false;
+	watch.poll();
+	settle();
+	CHECK(peer.calls.size() == 3); // read again after the write, not after a minute
+	watch.wake(); // a Command during this cycle: a rerun is due
+	watch.stop();
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(watch.begin(true));
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!peer.busy && peer.calls.size() == 4); // no leftover rerun after the restart
+	watch.stop();
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -477,16 +528,21 @@ void schedulingAndReentrancy()
 	watch.poll();
 	events();
 	CHECK(watch.active() && !watch.pending());
+	// Ticks while the session is busy start one cycle that waits: nothing
+	// accumulates, and it goes out on the session's next progress once neither
+	// the session nor this panel holds it.
 	peer.busy = true;
 	for (int i = 0; i < 100; ++i)
 		watch.tick();
 	CHECK(peer.calls.size() == 1 && !watch.pending());
 	peer.busy = false;
 	blocked = true;
-	watch.tick();
+	watch.poll();
+	events();
 	CHECK(peer.calls.size() == 1);
 	blocked = false;
-	watch.tick();
+	watch.poll();
+	events();
 	CHECK(peer.calls.size() == 2 && watch.pending());
 	bool attempted = false;
 	QObject::connect(watch.model(), &QAbstractItemModel::dataChanged, &owner, [&] {
@@ -562,6 +618,7 @@ int main(int argc, char** argv)
 	rowLimit();
 	wakeAfterWrites();
 	continuousLowPriority();
+	busySessionTicks();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();
