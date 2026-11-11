@@ -62,12 +62,17 @@ Window {
         function refreshWatch() { return false }
         function startWatch() { return false }
         function stopWatch() {}
+        function publishTrendSample() {
+            watchlist.setProperty(0, "sampleText", host.hostile("trendValue"))
+            watchlist.setProperty(0, "sampleRevision", "2")
+            watchlist.setProperty(0, "status", "Ok")
+        }
 
         Component.onCompleted: {
             endpoints.append({name: host.hostile("endpoint"), detail: host.hostile("endpointTip"), isEndpoint: true})
             values.append({name: host.hostile("member"), detail: host.hostile("valueTip"), value: host.hostile("enum"), isAggregate: false, childCount: 0, loadedCount: 0, editable: false, editorText: "0"})
             responses.append({name: host.hostile("responseMember"), detail: host.hostile("responseTip"), value: host.hostile("responseEnum"), isAggregate: false, childCount: 0, loadedCount: 0})
-            watchlist.append({name: host.hostile("watchName"), status: host.hostile("watchStatus"), text: host.hostile("watchValue")})
+            watchlist.append({name: host.hostile("watchName"), status: host.hostile("watchStatus"), text: host.hostile("watchValue"), sampleText: "", sampleRevision: "1", sampleEpoch: "1"})
         }
     }
 

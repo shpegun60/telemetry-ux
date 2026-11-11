@@ -34,6 +34,7 @@ Pane {
             objectName: "trendState"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
+            textFormat: Text.PlainText
             text: panel.history.state
         }
         Canvas {
