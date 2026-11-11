@@ -170,8 +170,10 @@ most 1024 Fields (32 ReadMany portions per cycle); adding past it reports
 `capacity`.
 The list is not an atomic measurement snapshot.
 
-**Start polling** accepts intervals from 1 to 60000 milliseconds. This is a
-nominal scheduling interval, not a promised device update rate. A slow exchange
+**Start polling** accepts intervals from 0 to 60000 milliseconds. This is a
+nominal scheduling interval, not a promised device update rate. 0 reads
+continuously: each cycle follows the last, still one portion at a time and only
+while nothing else is in flight, so other requests always go first. A slow exchange
 or busy shared Session skips ticks instead of appending queued poll requests.
 While another request of this panel is in flight the Watchlist sends nothing.
 After a write the written Field is read again at once when this cycle already

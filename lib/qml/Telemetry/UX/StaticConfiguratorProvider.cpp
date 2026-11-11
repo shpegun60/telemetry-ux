@@ -776,6 +776,7 @@ struct StaticConfiguratorProvider::Impl {
 	QTimer watchTimer;
 	bool watchRunning = false, watchCycle = false, watchContinuation = false;
 	int watchCursor = 0, pendingWatchRow = -1;
+	int watchIntervalMs = 1000; // 0: each cycle follows the last
 	QString watchStatus = QStringLiteral("Individual FieldRead; not started");
 	int selected = -1;
 	bool allowed = false, pending = false, publishing = false, draftActive = false, retired = false,
@@ -960,6 +961,13 @@ struct StaticConfiguratorProvider::Impl {
 			watchCycle = false;
 			watchStatus = watchRunning ? QStringLiteral("Individual polling")
 			                           : QStringLiteral("Individual cycle completed");
+			if (watchRunning && watchIntervalMs == 0) {
+				// Continuous: the next cycle follows at once, one read at a time
+				// and never beside foreground work, as every cycle.
+				watchCycle = true;
+				watchCursor = 0;
+				continueWatch();
+			}
 			publish(false);
 			return;
 		}
@@ -1466,7 +1474,7 @@ QString StaticConfiguratorProvider::watchStatus() const
 
 int StaticConfiguratorProvider::watchIntervalMs() const
 {
-	return d->watchTimer.interval();
+	return d->watchIntervalMs;
 }
 
 void StaticConfiguratorProvider::setWatchIndividual(bool individual)
@@ -1480,10 +1488,11 @@ void StaticConfiguratorProvider::setWatchIndividual(bool individual)
 
 void StaticConfiguratorProvider::setWatchIntervalMs(int interval)
 {
-	if (!d->owner() || d->publishing || d->watchActive() || interval < 1 || interval > 60000 ||
-	    interval == d->watchTimer.interval())
+	if (!d->owner() || d->publishing || d->watchActive() || interval < 0 || interval > 60000 ||
+	    interval == d->watchIntervalMs)
 		return;
-	d->watchTimer.setInterval(interval);
+	d->watchIntervalMs = interval;
+	d->watchTimer.setInterval(interval ? interval : 1000);
 	d->publish(false);
 }
 

@@ -37,6 +37,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// next cycle follows this one at once.
 	std::vector<quint32> urgent;
 	bool rerun = false;
+	// 0 reads continuously: each cycle follows the last, still one portion at
+	// a time and only while nothing else is in flight. The timer then only
+	// backs it up.
+	int intervalMs = 1000;
 
 	explicit Impl(QObject* owner) : context(owner)
 	{
@@ -229,7 +233,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			                             : QStringLiteral("ReadMany"))
 			             .arg(model.count());
 			changed();
-			if (rerun && running && !guarded()) {
+			if ((rerun || intervalMs == 0) && running && !guarded()) {
 				rerun = false;
 				cycle = true;
 				cursor = 0;
@@ -607,14 +611,15 @@ void DynamicWatchlist::setIndividual(bool value)
 
 int DynamicWatchlist::interval() const
 {
-	return d->timer.interval();
+	return d->intervalMs;
 }
 
 void DynamicWatchlist::setInterval(int ms)
 {
 	auto p = d;
-	if (!p->guarded() && !p->active() && ms >= 1 && ms <= 60000) {
-		p->timer.setInterval(ms);
+	if (!p->guarded() && !p->active() && ms >= 0 && ms <= 60000) {
+		p->intervalMs = ms;
+		p->timer.setInterval(ms ? ms : 1000);
 		p->changed();
 	}
 }

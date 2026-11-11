@@ -257,6 +257,45 @@ void wakeAfterWrites()
 	CHECK(peer.calls.size() == stopped);
 }
 
+// Interval 0 reads continuously, at low priority: each cycle follows the
+// last without the timer, and nothing is sent while other work is in flight.
+void continuousLowPriority()
+{
+	const auto settle = [] {
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 40);
+	watch.setInterval(0);
+	CHECK(watch.interval() == 0);
+	watch.setInterval(-1);
+	CHECK(watch.interval() == 0);
+	CHECK(watch.begin(true));
+	CHECK(peer.pending.size() == 32);
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(peer.pending.size() == 8 && peer.pending.front() == 33);
+	peer.finish();
+	peer.busy = true; // another panel's request is in flight
+	watch.poll();
+	settle();
+	CHECK(peer.calls.size() == 2); // nothing sent beside it
+	peer.busy = false;
+	watch.poll(); // its completion progresses the session
+	settle();
+	CHECK(peer.calls.size() == 3 && peer.pending.size() == 32 && peer.pending.front() == 1);
+	watch.stop();
+	peer.finish();
+	watch.poll();
+	settle();
+	CHECK(!watch.active() && peer.calls.size() == 3);
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -334,10 +373,12 @@ void chunks()
 	CHECK(watch.interval() == 1);
 	watch.setInterval(60000);
 	CHECK(watch.interval() == 60000);
-	watch.setInterval(0);
-	CHECK(watch.interval() == 60000);
 	watch.setInterval(60001);
 	CHECK(watch.interval() == 60000);
+	watch.setInterval(-1);
+	CHECK(watch.interval() == 60000);
+	watch.setInterval(0); // continuous
+	CHECK(watch.interval() == 0);
 }
 
 void budgetsAndFallback()
@@ -520,6 +561,7 @@ int main(int argc, char** argv)
 	bulkPublication();
 	rowLimit();
 	wakeAfterWrites();
+	continuousLowPriority();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();

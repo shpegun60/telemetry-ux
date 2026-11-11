@@ -898,6 +898,33 @@ static void staticSampleRoles()
 	CHECK(model->data(model->index(3, 0), value).toDouble() == 17.0);
 }
 
+// Interval 0 reads continuously: the next cycle follows the last without the
+// timer, still one read at a time.
+static void watchContinuous()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api));
+	p.setWatchIntervalMs(0);
+	CHECK(p.watchIntervalMs() == 0);
+	for (int i = 0; i < 2; ++i) {
+		p.selectEndpoint(endpoint(p, i));
+		CHECK(p.addWatch());
+	}
+	p.startWatch();
+	CHECK(api.calls == QStringList{"watch0"});
+	api.finish(true);
+	watchEvents();
+	CHECK(api.calls == QStringList({"watch0", "watch1"}));
+	api.finish(true);
+	watchEvents();
+	watchEvents();
+	CHECK(api.calls == QStringList({"watch0", "watch1", "watch0"})); // no timer tick
+	p.stopWatch();
+	api.finish(true);
+	watchEvents();
+	CHECK(!p.watchActive() && api.calls.size() == 3);
+}
+
 static void watchLifecycle()
 {
 	Api api;
@@ -908,9 +935,11 @@ static void watchLifecycle()
 	CHECK(p.watchIntervalMs() == 60000);
 	p.setWatchIntervalMs(1);
 	CHECK(p.watchIntervalMs() == 1);
-	p.setWatchIntervalMs(0);
+	p.setWatchIntervalMs(0); // continuous
+	CHECK(p.watchIntervalMs() == 0);
 	p.setWatchIntervalMs(60001);
-	CHECK(p.watchIntervalMs() == 1);
+	p.setWatchIntervalMs(-1);
+	CHECK(p.watchIntervalMs() == 0);
 	p.setWatchIntervalMs(99);
 	CHECK(p.watchIntervalMs() == 99);
 	p.setWatchIntervalMs(60000);
@@ -1214,6 +1243,7 @@ int main(int argc, char** argv)
 	readRefusalsAndQueuedReset();
 	staleCacheAfterWriteRefusal();
 	watchLifecycle();
+	watchContinuous();
 	staticTrend();
 	staticTrendFollowsEdits();
 	staticSampleRoles();

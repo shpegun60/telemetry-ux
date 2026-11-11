@@ -58,7 +58,7 @@ The provider exposes notifying properties:
 | `commandSelected`, `canExecute`, `serviceSelected`, `canCallService` | Operation selection and action gates |
 | `watchActive`, `watchPending`, `canAddWatch`, `watchCount` | Watchlist state and gates |
 | `watchStatus`, `writeOutcome`, `commandOutcome`, `serviceOutcome`, `statusText` | Already-classified display text; the view does not infer execution certainty |
-| `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval; the provider validates changes |
+| `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval (0 to 60000 ms; 0 reads continuously at low priority); the provider validates changes |
 
 Actions retain the existing provider signatures:
 
