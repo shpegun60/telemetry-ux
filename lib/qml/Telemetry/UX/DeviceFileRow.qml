@@ -32,6 +32,8 @@ TreeViewDelegate {
 
     signal markRequested(var index, bool value)
     signal openRequested(var index)
+    // A right click on the row: the panel opens its menu there.
+    signal contextMenuRequested(var index, real x, real y)
 
     implicitWidth: treeView.width
     implicitHeight: Type.rowHeight
@@ -103,4 +105,10 @@ TreeViewDelegate {
     }
 
     onDoubleClicked: if (!isFolder) fileRow.openRequested(sourceIndex)
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        onTapped: function(point) {
+            fileRow.contextMenuRequested(fileRow.sourceIndex, point.position.x, point.position.y)
+        }
+    }
 }

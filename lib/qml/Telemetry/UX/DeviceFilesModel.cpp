@@ -480,7 +480,8 @@ void DeviceFilesModel::collect(const Node* from, QVariantList& into) const
 		                           {QStringLiteral("fileIndex"), from->fileIndex},
 		                           {QStringLiteral("size"), QVariant::fromValue<qulonglong>(from->size)},
 		                           {QStringLiteral("sizeKnown"), from->sizeKnown},
-		                           {QStringLiteral("readable"), from->readable}});
+		                           {QStringLiteral("readable"), from->readable},
+		                           {QStringLiteral("access"), !from->sizeKnown ? QString{} : from->readable && from->writable ? tr("read, write") : from->readable ? tr("read") : from->writable ? tr("write only") : tr("no access")}});
 		return;
 	}
 	for (const auto& child : from->children)
@@ -518,6 +519,28 @@ QVariantMap DeviceFilesModel::fileAt(const QModelIndex& index) const
 	QVariantList one;
 	collect(at, one);
 	return one.front().toMap();
+}
+
+QString DeviceFilesModel::pathAt(const QModelIndex& index) const
+{
+	const auto* at = node(index);
+	return index.isValid() && at ? at->path : QString{};
+}
+
+QVariantList DeviceFilesModel::filesUnder(const QModelIndex& index) const
+{
+	const auto* from = index.isValid() ? node(index) : root_.get();
+	QVariantList found;
+	if (!from)
+		return found;
+	collect(from, found);
+	// Only what can be read: a write-only file is listed, never downloaded.
+	QVariantList readable;
+	for (const auto& entry : found)
+		if (entry.toMap().value(QStringLiteral("readable")).toBool() ||
+		    !entry.toMap().value(QStringLiteral("sizeKnown")).toBool())
+			readable.push_back(entry);
+	return readable;
 }
 
 QString DeviceFilesModel::formatSize(qulonglong bytes) const
@@ -613,7 +636,7 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 			return at->writable;
 		case AccessTextRole:
 			if (at->folder)
-				return tr("%n file(s)", nullptr, files);
+				return files == 1 ? tr("1 file") : tr("%n files", nullptr, files);
 			if (!at->sizeKnown)
 				return QString{};
 			if (at->readable && at->writable)
@@ -634,7 +657,7 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 			return at->statError;
 		case SpokenSizeRole:
 			if (at->folder)
-				return tr("%n file(s), %1", nullptr, files).arg(spokenSize(bytes));
+				return (files == 1 ? tr("1 file, %1") : tr("%n files, %1", nullptr, files)).arg(spokenSize(bytes));
 			if (!at->statError.isEmpty())
 				return tr("size unavailable");
 			return at->sizeKnown ? spokenSize(at->size) : tr("size not read yet");

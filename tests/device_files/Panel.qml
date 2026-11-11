@@ -14,7 +14,9 @@ ApplicationWindow {
     required property var viewerContent
     property var lastSelection: []
     property var lastOpened: null
+    property var lastOpenWith: null
     property string lastShown: ""
+    property string lastSaveAs: ""
 
     DeviceFilesPanel {
         objectName: "panel"
@@ -23,6 +25,7 @@ ApplicationWindow {
         transfers: root.transfersModel
         onDownloadRequested: function(selection) { root.lastSelection = selection }
         onOpenRequested: function(file) { root.lastOpened = file }
+        onOpenWithRequested: function(file, view) { root.lastOpenWith = { path: file.path, view: view } }
         onShowInFolderRequested: function(localPath) { root.lastShown = localPath }
     }
 
@@ -32,5 +35,6 @@ ApplicationWindow {
         z: -1
         anchors.fill: parent
         content: root.viewerContent
+        onSaveAsRequested: function(localFile) { root.lastSaveAs = localFile }
     }
 }

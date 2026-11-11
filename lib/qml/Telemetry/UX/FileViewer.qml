@@ -5,8 +5,9 @@
 // The host gives `content`, a FileContent - usually a row of OpenFiles, whose
 // role of that name fills it in a view's delegate - and answers the requests:
 // reloadRequested() to read the device's file again, cancelRequested() while
-// it is being read, openExternallyRequested and showInFolderRequested with the
-// local file, closeRequested.
+// it is being read, openExternallyRequested, showInFolderRequested and
+// saveAsRequested with the local file, closeRequested. The file's actions are
+// in its `⋯` menu (and the host's tab menu), not in a row of buttons.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -42,7 +43,13 @@ Pane {
     signal cancelRequested()
     signal openExternallyRequested(string localFile)
     signal showInFolderRequested(string localFile)
+    signal saveAsRequested(string localFile)
     signal closeRequested()
+
+    // The device's path, or the local file's for one from disk.
+    readonly property string shownPath: !content ? ""
+        : content.devicePath.length > 0 ? content.devicePath : content.localFile
+    function openMenu() { moreMenu.popup(moreButton, 0, moreButton.height) }
 
     // The keyboard into the file: the table, the hex rows or the text, or
     // Cancel while it is being read.
@@ -100,32 +107,61 @@ Pane {
                 }
             }
             Item { Layout.fillWidth: true }
-            LinkButton {
+            // The file's actions, as the tab's menu has them.
+            ToolButton {
+                id: moreButton
+                objectName: "fileViewerMore"
+                flat: true
+                implicitWidth: Math.max(32, implicitContentWidth + 16)
+                font.pointSize: Type.body * 1.25
+                text: qsTr("⋯")
+                Accessible.name: qsTr("More actions")
+                Accessible.description: viewer.fileName
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.text: qsTr("More actions")
+                onClicked: viewer.openMenu()
+            }
+        }
+
+        Menu {
+            id: moreMenu
+            objectName: "fileViewerMenu"
+            MenuItem {
                 objectName: "fileViewerReload"
-                visible: viewer.reloadable && !viewer.reading
-                tint: Theme.textSecondary
-                text: qsTr("Reload")
-                onClicked: viewer.reloadRequested()
+                text: qsTr("&Reload%1\tCtrl+R").arg(viewer.reloadable ? "" : qsTr(" (not connected)"))
+                enabled: viewer.reloadable && !viewer.reading
+                onTriggered: viewer.reloadRequested()
             }
-            LinkButton {
-                objectName: "fileViewerExternal"
-                visible: viewer.ready
-                tint: Theme.textSecondary
-                text: qsTr("Open in another program")
-                onClicked: viewer.openExternallyRequested(viewer.content.localFile)
+            MenuItem {
+                objectName: "fileViewerSaveAs"
+                text: qsTr("&Save as…\tCtrl+Shift+S")
+                enabled: viewer.ready
+                onTriggered: viewer.saveAsRequested(viewer.content.localFile)
             }
-            LinkButton {
+            MenuSeparator {}
+            MenuItem {
+                objectName: "fileViewerCopyPath"
+                text: qsTr("Copy &path\tAlt+Shift+C")
+                enabled: viewer.shownPath.length > 0
+                onTriggered: Clipboard.setText(viewer.shownPath)
+            }
+            MenuItem {
                 objectName: "fileViewerShow"
-                visible: viewer.ready
-                tint: Theme.textSecondary
-                text: qsTr("Show in folder")
-                onClicked: viewer.showInFolderRequested(viewer.content.localFile)
+                text: qsTr("Show in &folder\tAlt+Shift+R")
+                enabled: viewer.ready
+                onTriggered: viewer.showInFolderRequested(viewer.content.localFile)
             }
-            LinkButton {
+            MenuItem {
+                objectName: "fileViewerExternal"
+                text: qsTr("Open in another pro&gram")
+                enabled: viewer.ready
+                onTriggered: viewer.openExternallyRequested(viewer.content.localFile)
+            }
+            MenuSeparator {}
+            MenuItem {
                 objectName: "fileViewerClose"
-                tint: Theme.textSecondary
-                text: qsTr("Close")
-                onClicked: viewer.closeRequested()
+                text: qsTr("&Close\tCtrl+W")
+                onTriggered: viewer.closeRequested()
             }
         }
 

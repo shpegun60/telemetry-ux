@@ -93,6 +93,9 @@ public:
 	// A folder that exists and holds something, without making it: whether a
 	// host's "show the files" has anything to show.
 	Q_INVOKABLE static bool folderHasFiles(const QString& path);
+	// Save as: copies a local file to another place, replacing what is there,
+	// written whole or not at all. Empty when done; otherwise why not, in words.
+	Q_INVOKABLE static QString copyFile(const QString& from, const QString& to);
 	// The connected device's folder under root, made when missing; empty when
 	// it cannot be. "<name> [<id>]" from the device's identity file, or the id
 	// alone for a device without a name; a folder of the same id under an

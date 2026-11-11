@@ -524,6 +524,63 @@ int main(int argc, char** argv)
 		return transfers.rowCount() == 0 && !child(root, "deviceFilesTransfers")->property("visible").toBool();
 	}));
 
+	// Actions are in a context menu, as in a file explorer: no Open button.
+	// The menu on a file: Open in bold first, Open with, Download, Copy path,
+	// Properties; Copy path reaches the clipboard; Properties shows the path,
+	// the exact size and the access; Open with hands the host the view.
+	CHECK(!child(root, "deviceFilesOpen"));
+	auto* pane = child(root, "panel");
+	auto* treeItem = qobject_cast<QQuickItem*>(child(root, "deviceFilesTree"));
+	const auto eventsIndex = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+	CHECK(QMetaObject::invokeMethod(pane, "openMenu", Q_ARG(QVariant, QVariant::fromValue(eventsIndex)),
+	                                Q_ARG(QVariant, QVariant::fromValue<QObject*>(treeItem)), Q_ARG(QVariant, 10),
+	                                Q_ARG(QVariant, 10)));
+	auto* fileMenu = child(root, "deviceFileMenu");
+	CHECK(await([&] {
+		return fileMenu->property("visible").toBool();
+	}));
+	CHECK(fileMenu->property("kind").toString() == QStringLiteral("file"));
+	auto* openItem = child(root, "deviceFileMenuOpen");
+	CHECK(openItem->property("text").toString().startsWith(QStringLiteral("&Open\t")) &&
+	      openItem->property("enabled").toBool());
+	CHECK(child(root, "deviceFileMenuDownload")->property("enabled").toBool());
+	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuCopyPath"), "triggered"));
+	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("/logs/events.csv"));
+	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuOpenHex"), "triggered"));
+	CHECK(root->property("lastOpenWith").toMap().value(QStringLiteral("view")).toString() == QStringLiteral("hex") &&
+	      root->property("lastOpenWith").toMap().value(QStringLiteral("path")).toString() == QStringLiteral("/logs/events.csv"));
+	fileMenu->setProperty("visible", false);
+	CHECK(QMetaObject::invokeMethod(pane, "showProperties", Q_ARG(QVariant, QVariant::fromValue(eventsIndex))));
+	CHECK(await([&] {
+		auto* properties = child(root, "deviceFileProperties");
+		return properties && properties->property("visible").toBool();
+	}));
+	CHECK(child(root, "deviceFilePropertiesPath")->property("text").toString() == QStringLiteral("/logs/events.csv"));
+	CHECK(child(root, "deviceFilePropertiesSize")->property("text").toString() ==
+	      QStringLiteral("%1 bytes").arg(eventsBytes.size()));
+	CHECK(child(root, "deviceFilePropertiesAccess")->property("text").toString() == QStringLiteral("read"));
+	child(root, "deviceFileProperties")->setProperty("visible", false);
+	// A folder's menu, and the menu for empty space.
+	const auto logsFolder = files.index(1, 0);
+	CHECK(QMetaObject::invokeMethod(pane, "openMenu", Q_ARG(QVariant, QVariant::fromValue(logsFolder)),
+	                                Q_ARG(QVariant, QVariant::fromValue<QObject*>(treeItem)), Q_ARG(QVariant, 10),
+	                                Q_ARG(QVariant, 10)));
+	CHECK(fileMenu->property("kind").toString() == QStringLiteral("folder"));
+	CHECK(child(root, "deviceFileMenuDownloadFolder")->property("enabled").toBool());
+	fileMenu->setProperty("visible", false);
+	CHECK(QMetaObject::invokeMethod(pane, "openMenu", Q_ARG(QVariant, QVariant()),
+	                                Q_ARG(QVariant, QVariant::fromValue<QObject*>(treeItem)), Q_ARG(QVariant, 10),
+	                                Q_ARG(QVariant, 10)));
+	CHECK(fileMenu->property("kind").toString() == QStringLiteral("empty") &&
+	      child(root, "deviceFileMenuRefresh")->property("enabled").toBool());
+	fileMenu->setProperty("visible", false);
+	// Keys on the tree: Ctrl+A marks everything readable, Ctrl+Shift+A clears.
+	treeItem->forceActiveFocus();
+	press(treeItem, Qt::Key_A, Qt::ControlModifier);
+	CHECK(files.markedCount() == files.fileCount());
+	press(treeItem, Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier);
+	CHECK(files.markedCount() == 0);
+
 	// The current row is highlighted and framed while the tree has the
 	// keyboard; Enter on a folder folds and unfolds it.
 	auto* tree = qobject_cast<QQuickItem*>(child(root, "deviceFilesTree"));
@@ -587,6 +644,18 @@ int main(int argc, char** argv)
 	CHECK(QMetaObject::invokeMethod(delegate(root, "fileViewerMode_text"), "clicked"));
 	CHECK(viewer->property("shownMode").toString() == QStringLiteral("text"));
 	CHECK(child(root, "fileViewerText")->property("text").toString().startsWith(QStringLiteral("name,value")));
+	// The file's actions are in its ⋯ menu: Save as hands the host the local
+	// copy, Copy path the device's path.
+	CHECK(child(root, "fileViewerMore") && !child(root, "fileViewerMore")->property("text").toString().isEmpty());
+	CHECK(QMetaObject::invokeMethod(viewer, "openMenu"));
+	CHECK(await([&] {
+		return child(root, "fileViewerMenu")->property("visible").toBool();
+	}));
+	CHECK(QMetaObject::invokeMethod(child(root, "fileViewerSaveAs"), "triggered"));
+	CHECK(root->property("lastSaveAs").toString() == csvPath);
+	CHECK(QMetaObject::invokeMethod(child(root, "fileViewerCopyPath"), "triggered"));
+	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("/config/viewer.csv"));
+	child(root, "fileViewerMenu")->setProperty("visible", false);
 
 	// Disconnected: back to the words.
 	session.disconnect();
