@@ -34,7 +34,7 @@ PAIRS = [
     ('success', ['surface', 'surfaceAlternate'], GRAPHIC, 'the Ok dot'),
     ('warning', ['surfaceAlternate'], GRAPHIC, 'a warning glyph'),
     ('outline', ['surfaceWindow', 'surface', 'surfaceBar'], GRAPHIC, 'field and selector borders'),
-    ('focusRing', ['surfaceWindow', 'surface', 'surfaceBar', 'stateHover', 'stateSelected'], GRAPHIC,
+    ('focusRing', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceTitleBar', 'stateHover', 'stateSelected'], GRAPHIC,
      'focus frames'),
     ('accent', ['surfaceWindow', 'surfaceBar'], GRAPHIC, 'the primary button against its surroundings'),
 ]
