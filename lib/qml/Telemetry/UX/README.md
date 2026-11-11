@@ -115,6 +115,19 @@ never has to parse display text:
 | `sampleValue` | That reading as a `double` when it is exact; no value otherwise |
 | `sampleExact` | `true` only for a finite number a double holds exactly: an integer beyond 2^53 − 1, NaN or infinity is `false` and is not plotted. Enums give their code |
 | `sampleRevision`, `sampleEpoch` | Change counters: a new reading increments the revision; a new session or admission changes the epoch |
+| `writable` | The Field accepts writes, taken from the device's endpoint table when the row is added |
+
+`writeWatch(row, text)` writes a watched Field from its row, as Details would: its
+own read, an exact draft of `text`, the write and a confirming read. It runs on a
+second view of the provider, so it never moves the Details selection or touches
+its draft (the Details snapshot is marked stale, as after any write). It is
+refused without permission (`canWriteWatch` false), for a read-only Field, or
+while another row write is in flight (`watchWriting`). `watchWriteOutcome` says
+what happened in words (confirmed, written but unconfirmed, an invalid text, the
+device's refusal), `watchWriteFinished(confirmed)` signals the end, and the
+Watchlist reads the row again at once: within the running cycle, or as a Read
+once when it is not polling. Start during a Read once turns that cycle into the
+first one of polling.
 
 Adding, group-adding and removing Fields inserts or removes rows (only Clear
 resets the model), so a persistent index — a view's current row, a Trend's

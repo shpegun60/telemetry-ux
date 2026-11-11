@@ -499,8 +499,9 @@ struct DynamicConfiguratorProvider::Impl {
 			watch.wake(state->endpointId);
 		else if (commandDone || serviceDone)
 			watch.wake();
-		if (watchWriteDone) {
-			// The written row shows the device's value: read it again at once
+		if (watchWriteDone.has_value()) {
+			// After any finished write attempt (confirmed, refused or of unknown
+			// outcome) the row shows the device's value: read it again at once
 			// while a cycle runs, otherwise read the list once.
 			if (watch.active())
 				watch.wake(writeId);

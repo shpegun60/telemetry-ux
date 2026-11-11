@@ -567,6 +567,9 @@ void watchRowWrite()
 	CHECK(await([&] {
 		return text(0) == QStringLiteral("1234");
 	}));
+	CHECK(await([&] {
+		return !provider->watchActive(); // the Read once after the write finishes
+	}));
 	CHECK(provider->selectedEndpointIndex() == selected && provider->selection().endsWith(QStringLiteral("Value_1")));
 	// An invalid text is read, refused locally and never written.
 	writes = peer.nativeWrites();
@@ -586,6 +589,7 @@ void watchRowWrite()
 	// While polling: the write goes through and polling goes on.
 	provider->setWatchIntervalMs(20);
 	provider->startWatch();
+	CHECK(provider->watchActive());
 	CHECK(await([&] {
 		return provider->canWriteWatch();
 	}));
@@ -599,9 +603,10 @@ void watchRowWrite()
 	}));
 	CHECK(provider->watchActive());
 	const auto polling = peer.requests();
-	CHECK(await([&] {
+	const bool kept = await([&] {
 		return peer.requests() >= polling + 3;
-	}));
+	});
+	CHECK(kept);
 	provider->stopWatch();
 	CHECK(await([&] {
 		return !provider->watchPending() && !provider->watchActive();

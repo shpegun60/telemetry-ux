@@ -22,6 +22,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	QPointer<QObject> context;
 	WatchlistModel model;
 	QTimer timer;
+	// A cycle that waits for a busy session or panel looks again shortly. The
+	// session's progress usually resumes it first, but the last completion can
+	// arrive while the cycle still saw it busy, and then nothing else would.
+	QTimer retry;
 	WatchlistSource source;
 	std::optional<WatchlistSource> desired;
 	std::shared_ptr<Request> request;
@@ -47,6 +51,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		timer.setInterval(1000);
 		timer.setTimerType(Qt::PreciseTimer);
 		timer.setObjectName(QStringLiteral("dynamicConfiguratorWatchTimer"));
+		retry.setSingleShot(true);
+		retry.setInterval(10);
 	}
 
 	bool current() const
@@ -252,8 +258,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			                                 std::move(complete));
 			if (!submitted) {
 				if (submitted.status == client::Status::Busy ||
-				    submitted.status == client::Status::QueueFull)
-					return true; // tried again on the next progress
+				    submitted.status == client::Status::QueueFull) {
+					retry.start(); // tried again shortly
+					return true;
+				}
 				urgent.erase(urgent.begin());
 				continue;
 			}
@@ -278,15 +286,21 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void next()
 	{
-		if (guarded() || !cycle || request || unavailable())
+		if (guarded() || !cycle || request)
 			return;
+		if (unavailable()) {
+			retry.start();
+			return;
+		}
 		if (!current()) {
 			retire(true);
 			changed();
 			return;
 		}
-		if (source.busy && source.busy())
-			return; // No accumulation behind foreground/other panels.
+		if (source.busy && source.busy()) {
+			retry.start(); // No accumulation behind foreground/other panels.
+			return;
+		}
 		if (submitUrgent())
 			return;
 		if (cursor >= model.count()) {
@@ -355,6 +369,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			if (submitted.status == client::Status::Busy ||
 			    submitted.status == client::Status::QueueFull) {
 				status = QStringLiteral("Waiting for the shared session");
+				retry.start();
 				changed();
 			} else
 				fail(
@@ -448,6 +463,10 @@ DynamicWatchlist::DynamicWatchlist(QObject* context) : d(std::make_shared<Impl>(
 	QObject::connect(&d->timer, &QTimer::timeout, context, [weak] {
 		if (auto p = weak.lock())
 			p->tick();
+	});
+	QObject::connect(&d->retry, &QTimer::timeout, context, [weak] {
+		if (auto p = weak.lock())
+			p->next();
 	});
 }
 
@@ -700,6 +719,14 @@ void DynamicWatchlist::setInterval(int ms)
 bool DynamicWatchlist::begin(bool polling)
 {
 	auto p = d;
+	if (polling && p->cycle && !p->running && !p->guarded() && p->current()) {
+		// Start while a Read once runs: that cycle becomes the first one of
+		// polling instead of the Start being refused.
+		p->running = true;
+		p->timer.start();
+		p->changed();
+		return true;
+	}
 	if (p->guarded() || p->active() || !p->current() || !p->model.count())
 		return false;
 	if (p->unavailable()) {
