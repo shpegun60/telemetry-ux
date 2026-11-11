@@ -650,6 +650,8 @@ int main(int argc, char** argv)
                 CHECK(qAbs(rectangle(rowValue).right() - rectangle(valueTitle).right()) <= 1);
                 CHECK(rowRemove->property("text").toString() == QStringLiteral("×"));
                 CHECK(rectangle(rowRemove).right() <= rectangle(narrowList).right() + 1);
+                // The overlay scrollbar never covers the remove button.
+                CHECK(narrowBar->isVisible() && !rectangle(rowRemove).intersects(rectangle(narrowBar)));
                 CHECK(rectangle(rowRemove).top() >= rectangle(row).top() - 1);
                 CHECK(rectangle(rowRemove).bottom() <= rectangle(row).bottom() + 1);
             }
@@ -657,6 +659,9 @@ int main(int argc, char** argv)
             auto* failedStatus = item(failedRow, QStringLiteral("watchRowStatus"));
             CHECK(okStatus && !okStatus->isVisible());
             CHECK(failedStatus && failedStatus->isVisible());
+            auto* okDot = item(okRow, QStringLiteral("watchOkDot"));
+            auto* failedDot = item(failedRow, QStringLiteral("watchOkDot"));
+            CHECK(okDot && okDot->isVisible() && failedDot && !failedDot->isVisible());
             CHECK(failedStatus->property("text").toString() == QStringLiteral("SubmissionRefused"));
             CHECK(qAbs(rectangle(failedStatus).left() - rectangle(statusTitle).left()) <= 1);
             CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/wide-watchlist.png")));
@@ -672,6 +677,22 @@ int main(int argc, char** argv)
             CHECK(narrowPanel->setProperty("collapsible", false));
             settle();
             CHECK(!expandBox->isVisible() && narrowPanel->property("expanded").toBool());
+            // A list that cannot fold shows its rows even with `expanded` false.
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(columns->isVisible() && narrowList->property("count").toInt() == 65);
+            CHECK(narrowPanel->setProperty("collapsible", true));
+            settle();
+            CHECK(!columns->isVisible() && narrowList->property("count").toInt() == 0);
+            // Add opens the list through `expanded`, so a host that closes it
+            // later also unticks the box.
+            auto* wideAdd = item(narrowPanel, QStringLiteral("addWatchButton"));
+            CHECK(wideAdd && QMetaObject::invokeMethod(wideAdd, "clicked"));
+            settle();
+            CHECK(narrowPanel->property("expanded").toBool() && expandBox->property("checked").toBool());
+            CHECK(narrowPanel->setProperty("expanded", false));
+            settle();
+            CHECK(!expandBox->property("checked").toBool());
             CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("reads").toInt() == 0);
         }
         // Keyboard activation keeps the focus indicator and both top actions.

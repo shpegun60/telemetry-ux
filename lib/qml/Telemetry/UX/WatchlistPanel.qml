@@ -22,11 +22,16 @@ Pane {
     // A host that gives the Watchlist its own dock sets this false: the list is
     // then always open and the fold box is not shown.
     property bool collapsible: true
+    // The rows show when the list is expanded, or always when it cannot fold.
+    readonly property bool open: expanded || !collapsible
     // Wide panels show one line per Field as a table; narrow ones wrap.
     readonly property bool tableRows: watchList.width >= 500
     readonly property real nameColumnWidth: Math.min(280, Math.max(140, watchList.width * 0.38))
     readonly property real statusColumnWidth: 130
     readonly property real removeColumnWidth: 30
+    // Table rows end left of the overlay scrollbar, so the remove button
+    // never sits under it.
+    readonly property real scrollReserve: tableRows ? Math.max(watchScrollBar.width, 10) + 2 : 0
     property real headerImplicitHeight: 0
     // Preserve either the top, a keyboard-focused control, or the user's
     // chosen relative scroll offset as the header resizes.
@@ -34,7 +39,7 @@ Pane {
     property real scrollOffset: 0
     property bool adjustingScroll: false
     property real seenHeaderHeight: 0
-    implicitHeight: headerImplicitHeight + (expanded ? 120 : 0) + topPadding + bottomPadding
+    implicitHeight: headerImplicitHeight + (open ? 120 : 0) + topPadding + bottomPadding
     background: Rectangle { color: "#17202b"; radius: 10 }
 
     // A dock can be much narrower or shorter than the Configurator. Wrap the
@@ -47,6 +52,7 @@ Pane {
         contentWidth: availableWidth
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
         ScrollBar.vertical: ScrollBar {
+            id: watchScrollBar
             objectName: "watchlistScrollBar"
             policy: ScrollBar.AsNeeded
             active: true
@@ -78,7 +84,7 @@ Pane {
                 panel.scrollAnchor = atYBeginning ? "top" : "free"
                 panel.scrollOffset = Math.max(0, contentY - originY)
             }
-            model: panel.expanded ? panel.provider.watchlist : null
+            model: panel.open ? panel.provider.watchlist : null
             header: ColumnLayout {
                 id: watchLayout
                 width: watchList.width
@@ -124,7 +130,9 @@ Pane {
                         onClicked: {
                             const reason = addWatchControl.focusReason
                             if (panel.provider.addWatch()) {
-                                watchPanelExpanded.checked = true
+                                // Through the property: setting the box here
+                                // would break its binding to `expanded`.
+                                panel.expanded = true
                                 addWatchControl.forceActiveFocus(reason)
                             }
                         }
@@ -154,7 +162,7 @@ Pane {
                 }
                 Flow {
                     objectName: "watchSettings"
-                    visible: panel.expanded
+                    visible: panel.open
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
                     spacing: 6
@@ -196,7 +204,7 @@ Pane {
                 }
                 Label {
                     objectName: "watchIntervalHint"
-                    visible: panel.expanded
+                    visible: panel.open
                     textFormat: Text.PlainText
                     text: "Nominal interval. Fields are read sequentially."
                     color: "#99abbf"
@@ -206,14 +214,14 @@ Pane {
                 // Column titles over the one-line table rows.
                 RowLayout {
                     objectName: "watchColumns"
-                    visible: panel.expanded && panel.tableRows && panel.provider.watchCount > 0
+                    visible: panel.open && panel.tableRows && panel.provider.watchCount > 0
                     Layout.fillWidth: true
                     Layout.topMargin: 4
                     spacing: 8
                     Label { objectName: "watchColumnName"; text: "Name"; color: "#8597ab"; font.pixelSize: 12; Layout.leftMargin: 8; Layout.preferredWidth: panel.nameColumnWidth - 8 }
                     Label { objectName: "watchColumnValue"; text: "Value"; color: "#8597ab"; font.pixelSize: 12; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
                     Label { objectName: "watchColumnStatus"; text: "Status"; color: "#8597ab"; font.pixelSize: 12; Layout.preferredWidth: panel.statusColumnWidth }
-                    Item { Layout.preferredWidth: panel.removeColumnWidth }
+                    Item { Layout.preferredWidth: panel.removeColumnWidth; Layout.rightMargin: panel.scrollReserve }
                 }
             }
             delegate: Item {
@@ -233,6 +241,7 @@ Pane {
                 height: compact ? rowLayout.implicitHeight + 8 : 28
                 Rectangle {
                     anchors.fill: parent
+                    anchors.rightMargin: panel.scrollReserve
                     visible: !watchRow.compact
                     radius: 3
                     color: rowHover.hovered ? "#22303f" : (watchRow.index % 2 ? "#151d27" : "transparent")
@@ -242,6 +251,7 @@ Pane {
                     id: rowLayout
                     anchors.left: parent.left
                     anchors.right: parent.right
+                    anchors.rightMargin: watchRow.compact ? 0 : panel.scrollReserve
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 2
                     Label {
@@ -289,6 +299,7 @@ Pane {
                             Layout.preferredWidth: panel.statusColumnWidth
                             implicitHeight: 16
                             Rectangle {
+                                objectName: "watchOkDot"
                                 width: 8
                                 height: 8
                                 radius: 4
@@ -324,6 +335,15 @@ Pane {
                             Accessible.name: "Remove " + watchRow.name
                             ToolTip.visible: hovered && !watchRow.compact
                             ToolTip.text: "Remove from the Watchlist"
+                            // A flat button shows no frame; keyboard focus needs one.
+                            Rectangle {
+                                anchors.fill: parent
+                                color: "transparent"
+                                radius: 3
+                                border.width: 1
+                                border.color: "#83e1ce"
+                                visible: !watchRow.compact && parent.visualFocus
+                            }
                         }
                     }
                 }
@@ -335,7 +355,7 @@ Pane {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.Wrap
-                visible: panel.expanded && panel.provider.watchCount === 0
+                visible: panel.open && panel.provider.watchCount === 0
                 text: "Select a scalar Field and add it to the watchlist."
                 color: "#718297"
             }
