@@ -100,6 +100,13 @@ int main(int argc, char** argv) {
         const auto addRect = add->mapRectToScene(QRectF(0, 0, add->width(), add->height()));
         CHECK(!titleRect.intersects(addRect));
         CHECK(titleRect.right() <= panel->mapRectToScene(QRectF(0, 0, panel->width(), panel->height())).right());
+        auto* help = named(panel, "endpointTreeHelp");
+        CHECK(help && help->isVisible());
+        window->setHeight(280); settle();
+        CHECK(!help->isVisible());
+        CHECK(tree->height() >= 60);
+        window->setHeight(700); settle();
+        CHECK(help->isVisible());
         window->setWidth(600); settle();
         CHECK(provider->property("selections").toInt() == 0 && provider->property("submissions").toInt() == 0);
         CHECK(provider->property("draft").toString() == QStringLiteral("untouched"));

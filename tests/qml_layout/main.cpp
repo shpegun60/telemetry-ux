@@ -264,7 +264,65 @@ int main(int argc, char** argv)
                                  QStringLiteral("palette.buttonText"));
         CHECK(treeText.evaluate().value<QColor>() == QColor(QStringLiteral("#e38d27")) && !treeText.hasError());
         CHECK(watchText.evaluate().value<QColor>() == QColor(QStringLiteral("#e38d27")) && !watchText.hasError());
-        CHECK(warnings == 0);
+		// Real QQuickWindow, narrow panel and every action category. The fake
+		// records clicks without performing transport operations.
+		engine.load(QUrl(QStringLiteral("qrc:/EndpointStates.qml")));
+		auto* stateWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+		CHECK(stateWindow);
+		settle();
+		auto* statePanel = item(stateWindow->contentItem(), QStringLiteral("endpointStatePanel"));
+		auto* stateProvider = stateWindow->findChild<QObject*>(QStringLiteral("endpointStateProvider"));
+		CHECK(statePanel && stateProvider);
+		auto* title = item(statePanel, QStringLiteral("endpointSelectionTitle"));
+		auto* actions = item(statePanel, QStringLiteral("endpointSelectionActions"));
+		auto* edit = item(statePanel, QStringLiteral("editButton"));
+		auto* cancel = item(statePanel, QStringLiteral("cancelEditButton"));
+		auto* apply = item(statePanel, QStringLiteral("applyButton"));
+		auto* refresh = item(statePanel, QStringLiteral("refreshButton"));
+		auto* command = item(statePanel, QStringLiteral("executeButton"));
+		auto* service = item(statePanel, QStringLiteral("callServiceButton"));
+		CHECK(title && actions && edit && cancel && apply && refresh && command && service);
+		const auto checkGeometry = [&] {
+			settle();
+			CHECK(rectangle(title).bottom() <= rectangle(actions).top() + 1);
+			QList<QQuickItem*> visibleButtons;
+			for (auto* button : {edit, cancel, apply, refresh, command, service})
+				if (button->isVisible()) visibleButtons.append(button);
+			for (int i = 0; i < visibleButtons.size(); ++i) {
+				const auto bounds = rectangle(visibleButtons[i]);
+				CHECK(bounds.left() >= rectangle(statePanel).left() - 1);
+				CHECK(bounds.right() <= rectangle(statePanel).right() + 1);
+				for (int j = i + 1; j < visibleButtons.size(); ++j)
+					CHECK(!bounds.intersects(rectangle(visibleButtons[j])));
+			}
+		};
+		CHECK(edit->isVisible() && refresh->isVisible() && !cancel->isVisible() &&
+		      !apply->isVisible() && !command->isVisible() && !service->isVisible());
+		checkGeometry();
+		click(stateWindow, edit);
+		CHECK(stateProvider->property("edits").toInt() == 1 && stateProvider->property("editing").toBool());
+		CHECK(!edit->isVisible() && cancel->isVisible() && apply->isVisible() && refresh->isVisible());
+		checkGeometry();
+		click(stateWindow, apply);
+		CHECK(stateProvider->property("applies").toInt() == 1);
+		click(stateWindow, cancel);
+		CHECK(stateProvider->property("cancels").toInt() == 1 && !stateProvider->property("editing").toBool());
+		CHECK(stateProvider->setProperty("commandSelected", true));
+		settle();
+		CHECK(command->isVisible() && !service->isVisible() && !edit->isVisible() && !refresh->isVisible());
+		checkGeometry();
+		click(stateWindow, command);
+		CHECK(stateProvider->property("commands").toInt() == 1);
+		CHECK(stateProvider->setProperty("commandSelected", false));
+		CHECK(stateProvider->setProperty("serviceSelected", true));
+		settle();
+		CHECK(service->isVisible() && !command->isVisible() && !edit->isVisible() && !refresh->isVisible());
+		checkGeometry();
+		click(stateWindow, service);
+		CHECK(stateProvider->property("services").toInt() == 1);
+		delete stateWindow;
+		QCoreApplication::processEvents();
+		CHECK(warnings == 0);
         // Independently embedded panels share one caller-owned provider.
         // The fake provider records intent without creating a transport.
         engine.setInitialProperties({});
