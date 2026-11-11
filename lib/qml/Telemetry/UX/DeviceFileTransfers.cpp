@@ -253,6 +253,30 @@ bool DeviceFileTransfers::makeFolder(const QString& path)
 	return !path.isEmpty() && QDir().mkpath(path);
 }
 
+QString DeviceFileTransfers::copyFile(const QString& from, const QString& to)
+{
+	if (from.isEmpty() || to.isEmpty())
+		return tr("No file to save.");
+	if (QFileInfo(from).canonicalFilePath() == QFileInfo(to).canonicalFilePath() && QFileInfo::exists(to))
+		return {};
+	QFile source(from);
+	if (!source.open(QIODevice::ReadOnly))
+		return tr("Could not read %1: %2").arg(QFileInfo(from).fileName(), source.errorString());
+	QSaveFile target(to);
+	if (!target.open(QIODevice::WriteOnly))
+		return tr("Could not write %1: %2").arg(QFileInfo(to).fileName(), target.errorString());
+	while (!source.atEnd()) {
+		const auto piece = source.read(1024 * 1024);
+		if (piece.isEmpty() && source.error() != QFileDevice::NoError)
+			return tr("Could not read %1: %2").arg(QFileInfo(from).fileName(), source.errorString());
+		if (target.write(piece) != piece.size())
+			return tr("Could not write %1: %2").arg(QFileInfo(to).fileName(), target.errorString());
+	}
+	if (!target.commit())
+		return tr("Could not write %1: %2").arg(QFileInfo(to).fileName(), target.errorString());
+	return {};
+}
+
 bool DeviceFileTransfers::folderHasFiles(const QString& path)
 {
 	return !path.isEmpty() && QDir(path).exists() && !QDir(path).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot);

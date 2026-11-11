@@ -85,6 +85,11 @@ public:
 	// The file at index, as one map of selection(), whatever is marked; empty
 	// for a folder. What Open and a double-click act on.
 	Q_INVOKABLE QVariantMap fileAt(const QModelIndex& index) const;
+	// The device path of a file or folder ("/logs" for a folder), for Copy path.
+	Q_INVOKABLE QString pathAt(const QModelIndex& index) const;
+	// Every readable file below index - the whole tree for an invalid index -
+	// as maps of selection(), whatever is marked: Download folder, Download all.
+	Q_INVOKABLE QVariantList filesUnder(const QModelIndex& index = {}) const;
 	// A size in the panel's words, for figures the panel composes itself.
 	Q_INVOKABLE QString formatSize(qulonglong bytes) const;
 	// The same size as a screen reader should say it: "4.2 kibibytes".

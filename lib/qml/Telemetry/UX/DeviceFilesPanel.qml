@@ -6,8 +6,16 @@
 // (DeviceFileTransfers). Download asks the host for a destination through
 // downloadRequested(selection) - a save dialog for one file, a folder for
 // several - and the host calls transfers.download(...). Open asks the host to
-// show a file through openRequested(file); Show in folder through
+// show a file through openRequested(file) - a double-click, Enter, or the
+// menu's first item - and Open with through openWithRequested(file, view),
+// view being "table", "text", "hex" or "external"; Show in folder through
 // showInFolderRequested(localPath).
+//
+// As in a file explorer, the actions are in a context menu (right click, the
+// Menu key, Shift+F10) rather than buttons. Keys on the tree: Enter opens,
+// Space marks, Ctrl+S downloads, Alt+Shift+C copies the path, Alt+Enter shows
+// the properties, Ctrl+A marks all, Ctrl+Shift+A clears the marks, Ctrl+R
+// refreshes. The host calls registerQmlTypes() first (Clipboard).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -24,6 +32,7 @@ Pane {
 
     signal downloadRequested(var selection)
     signal openRequested(var file)
+    signal openWithRequested(var file, string view)
     signal showInFolderRequested(string localPath)
 
     // DeviceFileTransfers.State, in its order.
@@ -45,7 +54,7 @@ Pane {
     readonly property bool accessShown: fileTree.width >= 360
     TextMetrics { id: sizeMetrics; font.pointSize: Type.caption; text: "888.8 KiB" }
     TextMetrics { id: accessMetrics; font.pointSize: Type.caption; text: qsTr("read, write") }
-    TextMetrics { id: countMetrics; font.pointSize: Type.caption; text: qsTr("%n file(s)", "", 4096) }
+    TextMetrics { id: countMetrics; font.pointSize: Type.caption; text: qsTr("%n files", "", 4096) }
 
     function chosen() {
         return files.selection(currentIndex)
@@ -70,6 +79,80 @@ Pane {
         else if (fileTree.currentRow >= 0)
             fileTree.toggleExpanded(fileTree.currentRow)
     }
+    function rowOf(index) {
+        return fileTree.rowAtIndex(index)
+    }
+    function isExpanded(index) {
+        const row = index ? rowOf(index) : -1
+        return row >= 0 && fileTree.isExpanded(row)
+    }
+    function toggleFolder(index) {
+        const row = rowOf(index)
+        if (row >= 0)
+            fileTree.toggleExpanded(row)
+    }
+    function allReadable() {
+        return files.filesUnder()
+    }
+    // Copy path on a file or folder; on a marked set, every marked path, one a line.
+    function copyPaths(kind, file) {
+        if (kind === "marked") {
+            const marked = files.selection(currentIndex)
+            Clipboard.setText(marked.map(function(entry) { return entry.path }).join("\n"))
+        } else {
+            Clipboard.setText(kind === "file" ? file.path : files.pathAt(fileMenu.index))
+        }
+    }
+    function showProperties(index) {
+        const file = files.fileAt(index)
+        if (file.path === undefined)
+            return
+        propertiesPopup.file = file
+        const row = rowOf(index)
+        const item = row >= 0 ? fileTree.itemAtCell(Qt.point(0, row)) : null
+        const at = item ? item.mapToItem(panel, 24, item.height) : Qt.point(24, 48)
+        propertiesPopup.x = Math.min(at.x, Math.max(0, panel.width - propertiesPopup.width - 8))
+        propertiesPopup.y = at.y
+        propertiesPopup.open()
+    }
+    // The keyboard goes back to the tree after a menu or the properties.
+    function returnFocus() {
+        Qt.callLater(function() { if (fileTree.visible) fileTree.forceActiveFocus() })
+    }
+    // The menu for the row at index, or for empty space with an invalid index;
+    // at x, y in `from`'s coordinates. Right-clicking makes that row current,
+    // as in a file explorer; a marked row among two or more marked acts on the set.
+    function openMenu(index, from, x, y) {
+        let kind = "empty"
+        if (index && index.valid) {
+            fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
+            kind = !files.isFile(index) ? "folder"
+                 : files.isMarked(index) && files.markedCount > 1 ? "marked" : "file"
+        }
+        fileMenu.kind = kind
+        fileMenu.index = index
+        fileMenu.file = kind === "file" || kind === "marked" ? files.fileAt(index) : ({})
+        fileMenu.popup(from, x, y)
+    }
+    // The Menu key and Shift+F10: the menu under the current row.
+    function openMenuForCurrent() {
+        const row = fileTree.currentRow
+        const item = row >= 0 ? fileTree.itemAtCell(Qt.point(0, row)) : null
+        if (item)
+            openMenu(currentIndex, item, 16, item.height)
+        else
+            openMenu(null, fileTree, 16, 16)
+    }
+
+    DeviceFileMenu {
+        id: fileMenu
+        panel: panel
+    }
+    DeviceFileProperties {
+        id: propertiesPopup
+        files: panel.files
+        onClosedBack: panel.returnFocus()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -89,7 +172,7 @@ Pane {
                 text: !panel.files.available ? ""
                     : panel.files.loading ? (panel.files.fileCount > 0 ? qsTr("Refreshing…")
                                                                        : qsTr("Reading the file list…"))
-                    : qsTr("%n file(s)", "", panel.files.fileCount)
+                    : panel.files.fileCount === 1 ? qsTr("1 file") : qsTr("%n files", "", panel.files.fileCount)
             }
             Button {
                 objectName: "deviceFilesRefresh"
@@ -214,8 +297,36 @@ Pane {
                     event.accepted = true
                 }
             }
-            Keys.onReturnPressed: panel.activateCurrent()
+            Keys.onReturnPressed: function(event) {
+                if (event.modifiers & Qt.AltModifier)
+                    panel.showProperties(panel.currentIndex)
+                else
+                    panel.activateCurrent()
+            }
             Keys.onEnterPressed: panel.activateCurrent()
+            Keys.onPressed: function(event) {
+                const control = event.modifiers & Qt.ControlModifier
+                const shift = event.modifiers & Qt.ShiftModifier
+                const alt = event.modifiers & Qt.AltModifier
+                if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
+                    panel.openMenuForCurrent()
+                } else if (control && event.key === Qt.Key_S) {
+                    panel.download()
+                } else if (alt && shift && event.key === Qt.Key_C) {
+                    panel.copyPaths(panel.files.isMarked(panel.currentIndex) && panel.files.markedCount > 1 ? "marked"
+                                    : panel.currentIsFile ? "file" : "folder", panel.files.fileAt(panel.currentIndex))
+                } else if (control && shift && event.key === Qt.Key_A) {
+                    panel.files.markAll(false)
+                } else if (control && event.key === Qt.Key_A) {
+                    panel.files.markAll(true)
+                } else if (control && event.key === Qt.Key_R) {
+                    if (panel.files.available && !panel.files.loading)
+                        panel.files.refresh()
+                } else {
+                    return
+                }
+                event.accepted = true
+            }
             // Right unfolds and Left folds a folder on every Qt the panel runs on.
             Keys.onRightPressed: function(event) {
                 const row = fileTree.currentRow
@@ -236,6 +347,15 @@ Pane {
                 accessShown: panel.accessShown
                 onMarkRequested: function(index, value) { panel.files.setMarked(index, value) }
                 onOpenRequested: function(index) { panel.openIndex(index) }
+                onContextMenuRequested: function(index, x, y) { panel.openMenu(index, this, x, y) }
+            }
+            // A right click below the rows: the menu for the whole list.
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: function(point) {
+                    if (fileTree.cellAtPosition(point.position.x, point.position.y, true).y < 0)
+                        panel.openMenu(null, fileTree, point.position.x, point.position.y)
+                }
             }
             ScrollBar.vertical: ScrollBar {}
             Component.onCompleted: Qt.callLater(function() {
@@ -279,12 +399,6 @@ Pane {
                     ? qsTr("%n marked · %1", "", panel.files.markedCount)
                           .arg(panel.files.formatSize(panel.files.markedBytes))
                     : ""
-            }
-            Button {
-                objectName: "deviceFilesOpen"
-                text: qsTr("Open")
-                enabled: panel.currentIsFile
-                onClicked: panel.openCurrent()
             }
             Button {
                 objectName: "deviceFilesDownload"
