@@ -4,6 +4,9 @@
 // tree to the matches and their parents. Copy takes a node's path, its value
 // line, or its whole subtree as indented text, JSON or TSV. MIT.
 //
+// An index is taken from the selection when it is used, never kept: Find
+// changes the shown rows under it.
+//
 // FileViewer loads it with `decoded`, a DescriptorContent.
 import QtQuick
 import QtQuick.Controls
@@ -19,14 +22,46 @@ FocusScope {
     readonly property real typeWidth: Math.min(220, Math.max(120, width * 0.3))
     readonly property real accessWidth: 120
     readonly property bool accessShown: width >= 480
-    readonly property var currentIndex: tree.selectionModel.currentIndex
+    // For enabling the menu only; actions read current() when they run.
+    readonly property bool hasCurrent: tree.currentRow >= 0
 
     function focusContent() { tree.forceActiveFocus() }
-    // Copies the current node (or the whole tree) in a format: "text", "json", "tsv".
+    function current() { return tree.selectionModel.currentIndex }
+    // Copies the current node (or everything shown) in a format: "text", "json", "tsv".
     function copyAs(format, whole) {
-        const text = view.decoded.textOf(whole ? null : view.currentIndex, format)
+        const text = whole ? view.decoded.textOfAll(format) : view.decoded.textOf(view.current(), format)
         if (text.length > 0)
             Clipboard.setText(text)
+    }
+    // After Find: the matches' parents open, the matches folded. Cleared: the
+    // first look again - categories open - with the current row in view.
+    function showFound() {
+        if (!tree)
+            return
+        if (view.findText.length === 0) {
+            tree.collapseRecursively()
+            for (let row = tree.rows - 1; row >= 0; --row)
+                if (tree.depth(row) === 0)
+                    tree.expand(row)
+            const index = view.current()
+            if (index.valid) {
+                tree.expandToIndex(index)
+                tree.positionViewAtIndex(index, TableView.Contain)
+            }
+            return
+        }
+        // A shown row that is not a match leads to one; below a match, leave it folded.
+        let matchDepth = -1
+        for (let row = 0; row < tree.rows; ++row) {
+            const depth = tree.depth(row)
+            if (matchDepth >= 0 && depth > matchDepth)
+                continue
+            matchDepth = -1
+            if (view.decoded.matches(tree.index(row, 0)))
+                matchDepth = depth
+            else if (!tree.isExpanded(row))
+                tree.expand(row)
+        }
     }
     function openMenu(index, from, x, y) {
         if (index && index.valid)
@@ -41,14 +76,14 @@ FocusScope {
         MenuItem {
             objectName: "descriptorCopyPath"
             text: qsTr("Copy &path\tAlt+Shift+C")
-            enabled: !!view.currentIndex && view.currentIndex.valid
-            onTriggered: Clipboard.setText(view.decoded.pathOf(view.currentIndex))
+            enabled: view.hasCurrent
+            onTriggered: Clipboard.setText(view.decoded.pathOf(view.current()))
         }
         MenuItem {
             objectName: "descriptorCopyRow"
             text: qsTr("Copy &row")
-            enabled: !!view.currentIndex && view.currentIndex.valid
-            onTriggered: Clipboard.setText(view.decoded.rowOf(view.currentIndex))
+            enabled: view.hasCurrent
+            onTriggered: Clipboard.setText(view.decoded.rowOf(view.current()))
         }
         Menu {
             title: qsTr("Copy &as")
@@ -131,10 +166,9 @@ FocusScope {
                 placeholderText: qsTr("Find by name or path (Ctrl+F)")
                 Accessible.name: qsTr("Find by name or path")
                 onTextChanged: {
-                    matches.text = text.length === 0 ? "" : qsTr("%n matches", "", view.decoded.setFilter(text))
-                    if (text.length === 0)
-                        view.decoded.setFilter("")
-                    Qt.callLater(function() { tree.expandRecursively() })
+                    const found = view.decoded.setFilter(text)
+                    matches.text = text.length === 0 ? "" : found === 1 ? qsTr("1 match") : qsTr("%1 matches").arg(found)
+                    Qt.callLater(view.showFound)
                 }
                 Keys.onEscapePressed: { text = ""; tree.forceActiveFocus() }
             }
@@ -182,11 +216,11 @@ FocusScope {
                 const alt = event.modifiers & Qt.AltModifier
                 if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
                     const item = tree.itemAtCell(Qt.point(0, tree.currentRow))
-                    view.openMenu(view.currentIndex, item ? item : tree, 16, item ? item.height : 16)
+                    view.openMenu(view.current(), item ? item : tree, 16, item ? item.height : 16)
                 } else if (control && shift && event.key === Qt.Key_C) {
                     view.copyAs("text", false)
                 } else if (alt && shift && event.key === Qt.Key_C) {
-                    Clipboard.setText(view.decoded.pathOf(view.currentIndex))
+                    Clipboard.setText(view.decoded.pathOf(view.current()))
                 } else if (control && event.key === Qt.Key_C) {
                     // A leaf: its line; a container: its subtree as text.
                     view.copyAs("text", false)

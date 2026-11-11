@@ -17,6 +17,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
+#include "TreeFilter.hpp"
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -33,8 +34,9 @@ public:
 		KindRole,   // "category", "group", "endpoint", "member"
 		TypeRole,   // the type in words: "u32", "f32[8]", "struct, 3 members"
 		AccessRole, // "read, write" for a Field; "request → response" for a call
-		CountRole,   // endpoints below a category or group
-		CategoryRole // 0 Fields, 1 Commands, 2 Services
+		CountRole,    // endpoints below a category or group
+		CategoryRole, // 0 Fields, 1 Commands, 2 Services
+		PathRole      // the names below the category joined by "."
 	};
 	Q_ENUM(Role)
 
@@ -44,13 +46,15 @@ public:
 		int count = 0;
 		// 0 Fields, 1 Commands, 2 Services: the word a count is in.
 		int category = 0;
+		// Its place among its parent's children.
+		int row = 0;
 		Node* parent = nullptr;
 		std::vector<std::unique_ptr<Node>> children;
-		int row() const noexcept;
 	};
 
 	explicit DescriptorTreeModel(QObject* parent = nullptr);
 	~DescriptorTreeModel() override;
+	// Once: the tree never changes after, so no index into it goes stale.
 	void setRoot(std::unique_ptr<Node> root);
 	const Node* nodeAt(const QModelIndex& index) const noexcept { return node(index); }
 
@@ -83,6 +87,8 @@ class DescriptorContent final : public QObject {
 	Q_PROPERTY(int typeCount READ typeCount CONSTANT)
 	// "4 Fields in 2 groups · 3 Commands · 1 Service · 23 types"
 	Q_PROPERTY(QString summary READ summary CONSTANT)
+	// The tree as shown: everything, or what Find keeps. Its indexes are the
+	// ones the methods below take.
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
 public:
 	// Parses bytes with the SDK's RuntimeSchema; invalid() with error() when
@@ -94,23 +100,28 @@ public:
 	QString fingerprint() const { return fingerprint_; }
 	QString fingerprintGroups() const;
 	QVariantList regions() const { return regions_; }
-	// Find: only what matches (by name or path, ignoring case) and its parents;
-	// empty shows everything again. Returns the matches.
+	// Find: what matches (by name or path, ignoring case), its parents and
+	// everything below it; empty shows everything again. Returns the matches,
+	// a match inside a match not counted.
 	Q_INVOKABLE int setFilter(const QString& text);
-	// A node's path, its row (name, type, access with tabs), or a node with
-	// everything below it - the whole tree shown for an invalid index - as
-	// "text" (indented), "json" (nested by name) or "tsv" (path, kind, type,
-	// access).
+	// Whether the shown row matches Find itself, not only through a child.
+	Q_INVOKABLE bool matches(const QModelIndex& index) const;
+	// A shown node's path, its row (name, type, access with tabs), or the node
+	// with everything below it as "text" (indented), "json" (nested by name)
+	// or "tsv" (path, kind, type, access). Empty for an index that is not one
+	// of endpoints' current rows.
 	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
 	Q_INVOKABLE QString rowOf(const QModelIndex& index) const;
 	Q_INVOKABLE QString textOf(const QModelIndex& index, const QString& format) const;
+	// Everything shown, the same three ways.
+	Q_INVOKABLE QString textOfAll(const QString& format) const;
 	int fieldCount() const noexcept { return counts_[0]; }
 	int commandCount() const noexcept { return counts_[1]; }
 	int serviceCount() const noexcept { return counts_[2]; }
 	int groupCount() const noexcept { return groups_; }
 	int typeCount() const noexcept { return types_; }
 	QString summary() const;
-	QAbstractItemModel* endpoints() { return &tree_; }
+	QAbstractItemModel* endpoints() { return &shown_; }
 
 	// Whether a device path names the descriptor: the protocol's own file.
 	static bool names(const QString& devicePath);
@@ -118,14 +129,17 @@ public:
 	static QVariantList headerRegions(std::span<const std::byte> bytes);
 
 private:
+	// The node a shown index stands for, or null for any other index.
+	const DescriptorTreeModel::Node* nodeOf(const QModelIndex& index) const;
+
 	bool valid_ = false;
 	QString error_, fingerprint_;
 	QVariantList regions_;
-	// Everything parsed; the model shows it, or what a filter keeps of it.
-	std::unique_ptr<DescriptorTreeModel::Node> full_;
 	int counts_[3] = {0, 0, 0};
 	int groups_ = 0, types_ = 0;
+	// Everything parsed, built once; Find shows it through shown_.
 	DescriptorTreeModel tree_;
+	TreeFilter shown_;
 };
 } // namespace telemetry::ux
 #endif

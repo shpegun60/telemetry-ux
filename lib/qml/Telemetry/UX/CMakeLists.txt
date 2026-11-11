@@ -92,7 +92,8 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     endif()
     add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp
         DeviceFilesModel.cpp DeviceFilesModel.hpp DeviceFileTransfers.cpp DeviceFileTransfers.hpp
-        DescriptorContent.cpp DescriptorContent.hpp TelemetryCodecs.cpp TelemetryCodecs.hpp)
+        DescriptorContent.cpp DescriptorContent.hpp TelemetryCodecs.cpp TelemetryCodecs.hpp
+        TreeFilter.cpp TreeFilter.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
     set_target_properties(telemetry_ux_qt_connection PROPERTIES EXPORT_NAME qt_connection AUTOMOC ON)
     target_compile_features(telemetry_ux_qt_connection PUBLIC cxx_std_20)
@@ -106,6 +107,6 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     install(EXPORT TelemetryUXConnectionTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES QtConnectionBinding.hpp DeviceFilesModel.hpp DeviceFileTransfers.hpp DescriptorContent.hpp
-        TelemetryCodecs.hpp
+        TelemetryCodecs.hpp TreeFilter.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()

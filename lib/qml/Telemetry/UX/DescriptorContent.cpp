@@ -10,20 +10,11 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <functional>
 #include <span>
 
 namespace telemetry::ux {
 namespace rt = telemetry::runtime;
-
-int DescriptorTreeModel::Node::row() const noexcept
-{
-	if (!parent)
-		return 0;
-	for (std::size_t i = 0; i < parent->children.size(); ++i)
-		if (parent->children[i].get() == this)
-			return static_cast<int>(i);
-	return 0;
-}
 
 DescriptorTreeModel::DescriptorTreeModel(QObject* parent)
     : QAbstractItemModel(parent), root_(std::make_unique<Node>())
@@ -56,7 +47,7 @@ QModelIndex DescriptorTreeModel::parent(const QModelIndex& child) const
 	const auto* at = node(child);
 	if (!child.isValid() || !at || !at->parent || at->parent == root_.get())
 		return {};
-	return createIndex(at->parent->row(), 0, at->parent);
+	return createIndex(at->parent->row, 0, at->parent);
 }
 
 int DescriptorTreeModel::rowCount(const QModelIndex& parentIndex) const
@@ -89,6 +80,8 @@ QVariant DescriptorTreeModel::data(const QModelIndex& index, int role) const
 			return at->count;
 		case CategoryRole:
 			return at->category;
+		case PathRole:
+			return at->path;
 		default:
 			return {};
 	}
@@ -96,8 +89,8 @@ QVariant DescriptorTreeModel::data(const QModelIndex& index, int role) const
 
 QHash<int, QByteArray> DescriptorTreeModel::roleNames() const
 {
-	return {{NameRole, "name"},     {KindRole, "kind"},   {TypeRole, "typeText"}, {AccessRole, "access"},
-	        {CountRole, "count"},   {CategoryRole, "category"}};
+	return {{NameRole, "name"},   {KindRole, "kind"},         {TypeRole, "typeText"}, {AccessRole, "access"},
+	        {CountRole, "count"}, {CategoryRole, "category"}, {PathRole, "path"}};
 }
 
 namespace {
@@ -180,6 +173,7 @@ void addMembers(const rt::RuntimeSchema& schema, TypeId id, Node& under, int dep
 		child->kind = QStringLiteral("member");
 		child->type = typeText(schema, member.typeId);
 		child->parent = &under;
+		child->row = static_cast<int>(under.children.size());
 		addMembers(schema, member.typeId, *child, depth + 1);
 		under.children.push_back(std::move(child));
 	}
@@ -205,8 +199,10 @@ bool DescriptorContent::names(const QString& devicePath)
 	return devicePath == QStringLiteral("/telemetry/descriptor.bin");
 }
 
-DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent) : QObject(parent), tree_(this)
+DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
+    : QObject(parent), tree_(this), shown_(DescriptorTreeModel::NameRole, DescriptorTreeModel::PathRole, this)
 {
+	shown_.setSourceModel(&tree_);
 	const std::span<const std::byte> input{reinterpret_cast<const std::byte*>(bytes.constData()),
 	                                       static_cast<std::size_t>(bytes.size())};
 	rt::RuntimeSchemaWorkspace sizing{{}, {}, {}, {}, {}};
@@ -257,6 +253,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent) :
 		categoryNode->kind = QStringLiteral("category");
 		categoryNode->count = counts_[c];
 		categoryNode->parent = root.get();
+		categoryNode->row = static_cast<int>(root->children.size());
 		for (const auto& catalog : schema.catalogs(category)) {
 			++groups_;
 			auto group = std::make_unique<Node>();
@@ -266,6 +263,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent) :
 			group->kind = QStringLiteral("group");
 			group->count = static_cast<int>(catalog.endpointCount);
 			group->parent = categoryNode.get();
+			group->row = static_cast<int>(categoryNode->children.size());
 			for (const auto& endpoint : all.subspan(catalog.firstEndpoint, catalog.endpointCount)) {
 				auto item = std::make_unique<Node>();
 				item->name = text(endpoint.name);
@@ -274,6 +272,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent) :
 				item->type = typeText(schema, endpoint.typeId);
 				item->access = accessText(category, schema, endpoint);
 				item->parent = group.get();
+				item->row = static_cast<int>(group->children.size());
 				addMembers(schema, endpoint.typeId, *item, 0);
 				group->children.push_back(std::move(item));
 			}
@@ -281,8 +280,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent) :
 		}
 		root->children.push_back(std::move(categoryNode));
 	}
-	full_ = std::move(root);
-	setFilter({});
+	tree_.setRoot(std::move(root));
 	regions_ = headerRegions(input);
 }
 
@@ -296,73 +294,71 @@ QString DescriptorContent::fingerprintGroups() const
 }
 
 namespace {
-// A copy of what matches below `from`, with the ancestors that lead there;
-// null when nothing does. Counts the matching nodes.
-std::unique_ptr<Node> keep(const Node& from, Node* parent, const QString& filter, int& matches)
+// A name or type as one cell: a tab or line break in it cannot split a row.
+QString cell(QString text)
 {
-	auto copy = std::make_unique<Node>();
-	copy->name = from.name;
-	copy->kind = from.kind;
-	copy->type = from.type;
-	copy->access = from.access;
-	copy->path = from.path;
-	copy->count = from.count;
-	copy->category = from.category;
-	copy->parent = parent;
-	const bool hit = !filter.isEmpty() && (from.name.contains(filter, Qt::CaseInsensitive) ||
-	                                       from.path.contains(filter, Qt::CaseInsensitive));
-	if (hit && from.kind != QStringLiteral("category"))
-		++matches;
-	for (const auto& child : from.children)
-		if (auto kept = keep(*child, copy.get(), filter, matches))
-			copy->children.push_back(std::move(kept));
-	if (filter.isEmpty() || hit || !copy->children.empty())
-		return copy;
-	return nullptr;
+	text.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+	text.replace(QLatin1Char('\t'), QStringLiteral("\\t"));
+	text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+	text.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+	return text;
 }
 
-QString lines(const Node& node, int depth, bool withSelf)
-{
-	QString out;
-	if (withSelf) {
-		out += QString(depth * 2, QLatin1Char(' ')) + node.name;
-		if (!node.type.isEmpty())
-			out += QStringLiteral(": ") + node.type;
-		if (!node.access.isEmpty())
-			out += QStringLiteral(" (") + node.access + QLatin1Char(')');
-		out += QLatin1Char('\n');
+// The shown rows below an index, with the node each stands for.
+struct Walk {
+	const QAbstractItemModel& model;
+	std::function<const Node*(const QModelIndex&)> node;
+
+	QString lines(const QModelIndex& index, int depth, bool withSelf) const
+	{
+		QString out;
+		if (withSelf) {
+			const auto* at = node(index);
+			out += QString(depth * 2, QLatin1Char(' ')) + cell(at->name);
+			if (!at->type.isEmpty())
+				out += QStringLiteral(": ") + cell(at->type);
+			if (!at->access.isEmpty())
+				out += QStringLiteral(" (") + cell(at->access) + QLatin1Char(')');
+			out += QLatin1Char('\n');
+		}
+		for (int row = 0; row < model.rowCount(index); ++row)
+			out += lines(model.index(row, 0, index), withSelf ? depth + 1 : depth, true);
+		return out;
 	}
-	for (const auto& child : node.children)
-		out += lines(*child, withSelf ? depth + 1 : depth, true);
-	return out;
-}
 
-QJsonValue json(const Node& node)
-{
-	if (node.children.empty() && !node.type.isEmpty()) {
-		QJsonObject leaf{{QStringLiteral("type"), node.type}};
-		if (!node.access.isEmpty())
-			leaf.insert(QStringLiteral("access"), node.access);
-		return leaf;
+	// A category or group: its children by name. An endpoint or member: its
+	// type and access, and its members under "members" - no name can collide.
+	QJsonValue json(const QModelIndex& index) const
+	{
+		const auto* at = node(index);
+		QJsonObject children;
+		for (int row = 0; row < model.rowCount(index); ++row) {
+			const auto child = model.index(row, 0, index);
+			children.insert(node(child)->name, json(child));
+		}
+		if (at->type.isEmpty())
+			return children;
+		QJsonObject object{{QStringLiteral("type"), at->type}};
+		if (!at->access.isEmpty())
+			object.insert(QStringLiteral("access"), at->access);
+		if (!children.isEmpty())
+			object.insert(QStringLiteral("members"), children);
+		return object;
 	}
-	QJsonObject object;
-	for (const auto& child : node.children)
-		object.insert(child->name, json(*child));
-	if (!node.type.isEmpty())
-		object.insert(QStringLiteral("_type"), node.type);
-	return object;
-}
 
-QString tsv(const Node& node, bool withSelf)
-{
-	QString out;
-	if (withSelf)
-		out += node.path + QLatin1Char('\t') + node.kind + QLatin1Char('\t') + node.type + QLatin1Char('\t') +
-		       node.access + QLatin1Char('\n');
-	for (const auto& child : node.children)
-		out += tsv(*child, true);
-	return out;
-}
+	QString tsv(const QModelIndex& index, bool withSelf) const
+	{
+		QString out;
+		if (withSelf) {
+			const auto* at = node(index);
+			out += cell(at->path) + QLatin1Char('\t') + at->kind + QLatin1Char('\t') + cell(at->type) +
+			       QLatin1Char('\t') + cell(at->access) + QLatin1Char('\n');
+		}
+		for (int row = 0; row < model.rowCount(index); ++row)
+			out += tsv(model.index(row, 0, index), true);
+		return out;
+	}
+};
 
 quint32 readU32(std::span<const std::byte> bytes, std::size_t at)
 {
@@ -425,41 +421,63 @@ QVariantList DescriptorContent::headerRegions(std::span<const std::byte> bytes)
 
 int DescriptorContent::setFilter(const QString& text)
 {
-	if (!full_)
-		return 0;
-	int matches = 0;
-	const auto filter = text.trimmed();
-	auto shown = keep(*full_, nullptr, filter, matches);
-	tree_.setRoot(shown ? std::move(shown) : std::make_unique<Node>());
-	return matches;
+	return valid_ ? shown_.setText(text) : 0;
+}
+
+bool DescriptorContent::matches(const QModelIndex& index) const
+{
+	return shown_.matches(index);
+}
+
+const DescriptorTreeModel::Node* DescriptorContent::nodeOf(const QModelIndex& index) const
+{
+	// Only a shown row: an index of another model, or none, names nothing.
+	if (!index.isValid() || index.model() != &shown_)
+		return nullptr;
+	return tree_.nodeAt(shown_.mapToSource(index));
 }
 
 QString DescriptorContent::pathOf(const QModelIndex& index) const
 {
-	const auto* at = index.isValid() ? tree_.nodeAt(index) : nullptr;
+	const auto* at = nodeOf(index);
 	return at ? at->path : QString{};
 }
 
 QString DescriptorContent::rowOf(const QModelIndex& index) const
 {
-	const auto* at = index.isValid() ? tree_.nodeAt(index) : nullptr;
-	return at ? at->name + QLatin1Char('\t') + at->type + QLatin1Char('\t') + at->access : QString{};
+	const auto* at = nodeOf(index);
+	return at ? cell(at->name) + QLatin1Char('\t') + cell(at->type) + QLatin1Char('\t') + cell(at->access)
+	          : QString{};
 }
 
 QString DescriptorContent::textOf(const QModelIndex& index, const QString& format) const
 {
-	const auto* at = index.isValid() ? tree_.nodeAt(index) : tree_.nodeAt({});
+	const auto* at = nodeOf(index);
 	if (!at)
 		return {};
-	const bool whole = !index.isValid();
+	const Walk walk{shown_, [this](const QModelIndex& shown) { return nodeOf(shown); }};
+	if (format == QStringLiteral("json"))
+		return QString::fromUtf8(
+		    QJsonDocument(QJsonObject{{at->name, walk.json(index)}}).toJson(QJsonDocument::Indented));
+	if (format == QStringLiteral("tsv"))
+		return QStringLiteral("path\tkind\ttype\taccess\n") + walk.tsv(index, true);
+	return walk.lines(index, 0, true);
+}
+
+QString DescriptorContent::textOfAll(const QString& format) const
+{
+	const Walk walk{shown_, [this](const QModelIndex& shown) { return nodeOf(shown); }};
 	if (format == QStringLiteral("json")) {
-		// A subtree under its own name; the whole tree as it is.
-		const auto object = whole ? json(*at).toObject() : QJsonObject{{at->name, json(*at)}};
+		QJsonObject object;
+		for (int row = 0; row < shown_.rowCount(); ++row) {
+			const auto child = shown_.index(row, 0);
+			object.insert(nodeOf(child)->name, walk.json(child));
+		}
 		return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
 	}
 	if (format == QStringLiteral("tsv"))
-		return QStringLiteral("path\tkind\ttype\taccess\n") + tsv(*at, !whole);
-	return lines(*at, 0, !whole);
+		return QStringLiteral("path\tkind\ttype\taccess\n") + walk.tsv({}, false);
+	return walk.lines({}, 0, false);
 }
 
 QString DescriptorContent::summary() const

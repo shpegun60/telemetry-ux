@@ -749,15 +749,30 @@ void descriptorCodec(const QString& folder)
 	CHECK(model->data(group).toString() == QStringLiteral("test") && model->data(value).toString() == QStringLiteral("Value"));
 	CHECK(decoded->pathOf(value) == QStringLiteral("test.Value"));
 	CHECK(decoded->rowOf(value) == QStringLiteral("Value\tu32\tread"));
-	CHECK(decoded->textOf(QModelIndex(), QStringLiteral("tsv")).contains(QStringLiteral("test.Value\tendpoint\tu32\tread")));
+	CHECK(decoded->textOfAll(QStringLiteral("tsv")).contains(QStringLiteral("test.Value\tendpoint\tu32\tread")));
+	// An endpoint's JSON: its type and access by name, members (none here) apart.
+	CHECK(decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"access\": \"read\"")));
 	CHECK(decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"Value\"")) &&
 	      decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"u32\"")));
 	CHECK(decoded->textOf(group, QStringLiteral("text")) == QStringLiteral("test\n  Value: u32 (read)\n"));
 
 	// Find keeps the matches and their parents; nothing matching leaves nothing.
+	// The tree under it is never rebuilt: a kept index follows its row through
+	// a find that keeps it, and is gone - naming nothing - once it is hidden.
+	const QPersistentModelIndex kept(value);
 	CHECK(decoded->setFilter(QStringLiteral("val")) == 1 && model->rowCount() == 1);
+	CHECK(kept.isValid() && decoded->pathOf(kept) == QStringLiteral("test.Value") &&
+	      decoded->matches(kept) && !decoded->matches(model->index(0, 0)));
 	CHECK(decoded->setFilter(QStringLiteral("nothing here")) == 0 && model->rowCount() == 0);
+	CHECK(!kept.isValid() && decoded->textOf(kept, QStringLiteral("text")).isEmpty() &&
+	      decoded->pathOf(kept).isEmpty() && decoded->textOfAll(QStringLiteral("text")).isEmpty());
 	CHECK(decoded->setFilter(QString()) == 0 && model->rowCount() == 1);
+	// A match inside a match counts once: the group, not also its endpoint.
+	CHECK(decoded->setFilter(QStringLiteral("test")) == 1);
+	CHECK(decoded->setFilter(QString()) == 0);
+	// An index of another model names nothing here.
+	CHECK(decoded->textOf(open.index(0, 0), QStringLiteral("text")).isEmpty() &&
+	      decoded->rowOf(open.index(0, 0)).isEmpty());
 
 	// A renamed copy is still a descriptor, by its signature.
 	const auto renamed = write("copy.dat", bytes);

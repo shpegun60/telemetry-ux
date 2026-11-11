@@ -26,7 +26,6 @@ TreeViewDelegate {
     property real accessWidth: 120
     property bool accessShown: true
 
-    readonly property var sourceIndex: treeView.modelIndex(Qt.point(0, row.row))
     readonly property bool container: kind === "category" || kind === "group"
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
@@ -86,6 +85,7 @@ TreeViewDelegate {
 
     TapHandler {
         acceptedButtons: Qt.RightButton
-        onTapped: function(point) { row.contextMenuRequested(row.sourceIndex, point.position.x, point.position.y) }
+        // The index of this row now: a delegate is reused for other rows.
+        onTapped: function(point) { row.contextMenuRequested(row.treeView.index(row.row, 0), point.position.x, point.position.y) }
     }
 }
