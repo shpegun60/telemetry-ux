@@ -170,7 +170,9 @@ Pane {
                     SpinBox {
                         id: watchFrequency
                         objectName: "watchFrequency"
-                        from: 0
+                        // 0 (continuous) only where the provider accepts it.
+                        from: panel.provider.watchIntervalMinimumMs === undefined
+                              ? 1 : panel.provider.watchIntervalMinimumMs
                         to: 60000
                         stepSize: 1
                         editable: true

@@ -940,7 +940,9 @@ bool DynamicConfiguratorProvider::connected() const
 
 bool DynamicConfiguratorProvider::busy() const
 {
-	return d->busy() || d->watch.pending() || d->batch.pending();
+	// The Watchlist's own reads are not this view's work: Cancel, Batch editing
+	// and the busy indicator stay as they are while it polls.
+	return d->busy() || d->batch.pending();
 }
 
 bool DynamicConfiguratorProvider::editing() const

@@ -345,6 +345,12 @@ void requestSelectionKeepsWatchlist()
 	CHECK(await([&] {
 		return peer.requests() >= polling + 3;
 	}));
+	// The view's busy leaves the Watchlist's reads out: Cancel and Batch editing
+	// stay enabled while it polls.
+	CHECK(await([&] {
+		return provider->watchPending();
+	}));
+	CHECK(!provider->busy());
 	// While it polls, the tree still selects: a Command, then a Field whose
 	// Details refresh reads it once beside the Watchlist's own reads.
 	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
@@ -477,11 +483,12 @@ void siblingWriteKeepsPolling()
 	watcher->setWatchIndividual(true);
 	const auto value = endpoint(watcher->endpoints(), QStringLiteral("Value_0"));
 	CHECK(watcher->addWatchMany({QVariant::fromValue(value)}).value("added").toInt() == 1);
-	watcher->setWatchIntervalMs(20);
+	// A minute between cycles: only the wake can explain a read soon after.
+	watcher->setWatchIntervalMs(60000);
 	watcher->startWatch();
-	auto polling = peer.requests();
 	CHECK(await([&] {
-		return peer.requests() >= polling + 3;
+		return !watcher->watchPending() &&
+		       watcher->watchStatus().contains(QStringLiteral("complete"));
 	}));
 	readConfig(*writer);
 	writer->setAllowMutations(true);
@@ -489,6 +496,7 @@ void siblingWriteKeepsPolling()
 	CHECK(writer->setScalarText(member(writer->values(), QStringLiteral("Gain")), QStringLiteral("2.5")));
 	QSignalSpy applied(writer, &ux::DynamicConfiguratorProvider::applyFinished);
 	const auto writes = peer.nativeWrites();
+	const auto reads = peer.fieldReads();
 	CHECK(await([&] {
 		return writer->apply();
 	}));
@@ -498,9 +506,9 @@ void siblingWriteKeepsPolling()
 	CHECK(peer.nativeWrites() == writes + 1);
 	CHECK(watcher->watchActive());
 	CHECK(!watcher->watchStatus().startsWith(QStringLiteral("Stopped")));
-	polling = peer.requests();
+	// The writer's confirming read plus the watcher reading its list again.
 	CHECK(await([&] {
-		return peer.requests() >= polling + 3;
+		return peer.fieldReads() >= reads + 2;
 	}));
 	watcher->stopWatch();
 	CHECK(await([&] {

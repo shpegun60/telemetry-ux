@@ -92,6 +92,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	void retire(bool clearRows)
 	{
 		running = cycle = false;
+		urgent.clear();
+		rerun = false;
 		timer.stop();
 		++revision;
 		if (clearRows)
@@ -155,6 +157,65 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		    Qt::QueuedConnection);
 	}
 
+	void wake(std::optional<quint32> written)
+	{
+		// A Read once in progress still reads a written Field again; only
+		// polling starts or repeats cycles.
+		if (guarded() || !current() || (!running && !cycle))
+			return;
+		if (!cycle) {
+			// Between cycles: the next one starts now, not on the timer. It sends
+			// nothing while the session is busy (a write that caused this wake is
+			// often still queued); the session's progress drives it on.
+			cycle = true;
+			cursor = 0;
+			continueCycle();
+			return;
+		}
+		if (written) {
+			// Rows before the cursor were read before the write; so was a portion
+			// in flight, sent while the write waited. Later rows are read after it.
+			const auto row = rowOf(*written);
+			const int reached = cursor + (request && !request->urgent ? request->count : 0);
+			if (row >= 0 && row < reached &&
+			    std::find(urgent.begin(), urgent.end(), *written) == urgent.end())
+				urgent.push_back(*written);
+		} else if (running) {
+			rerun = true;
+		}
+		continueCycle();
+	}
+
+	void dataChanged()
+	{
+		if (guarded()) {
+			// Called inside a publication: try again once it has returned.
+			const std::weak_ptr<Impl> weak = shared_from_this();
+			if (context)
+				QMetaObject::invokeMethod(
+				    context,
+				    [weak] {
+					    if (auto p = weak.lock())
+						    p->dataChanged();
+				    },
+				    Qt::QueuedConnection);
+			return;
+		}
+		if (running) {
+			wake(std::nullopt);
+			return;
+		}
+		// A Read once in progress drops a portion sent before the change (its
+		// completion is drained) and reads those rows again; rows it has
+		// already read are shown as stale.
+		if (cycle && request)
+			++revision;
+		publishing = true;
+		model.invalidateValues();
+		publishing = false;
+		changed();
+	}
+
 	int rowOf(quint32 id) const
 	{
 		for (int row = 0; row < model.count(); ++row)
@@ -207,6 +268,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void fail(QString message)
 	{
+		urgent.clear();
+		rerun = false;
 		running = cycle = false;
 		timer.stop();
 		status = std::move(message);
@@ -327,6 +390,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 					model.setResult(row, std::move(result.rows[0].status),
 					                std::move(result.rows[0].text), result.rows[0].sample);
 					publishing = false;
+				} else if (running) {
+					rerun = true; // the next cycle reads it again at once
 				}
 			} else {
 				bool valid = result.status == client::Status::Ok &&
@@ -363,10 +428,13 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		continueCycle();
 	}
 
+	// A tick starts the next cycle even while the session or this panel is
+	// busy: next() sends nothing until it is free, and the session's progress
+	// resumes it. Skipping the tick instead would starve a Watchlist that
+	// shares the session with a continuous one.
 	void tick()
 	{
-		if (guarded() || !running || cycle || request || unavailable() || !current() ||
-		    (source.busy && source.busy()))
+		if (guarded() || !running || cycle || request || !current())
 			return;
 		cycle = true;
 		cursor = 0;
@@ -635,6 +703,8 @@ bool DynamicWatchlist::begin(bool polling)
 		p->changed();
 		return false;
 	}
+	p->urgent.clear();
+	p->rerun = false;
 	p->running = polling;
 	p->cycle = true;
 	p->cursor = 0;
@@ -647,48 +717,13 @@ bool DynamicWatchlist::begin(bool polling)
 void DynamicWatchlist::wake(std::optional<quint32> written)
 {
 	auto p = d;
-	if (p->guarded() || !p->running || !p->current())
-		return;
-	if (!p->cycle) {
-		// Between cycles: the next one starts now, not on the timer.
-		const std::weak_ptr<Impl> weak = p;
-		QMetaObject::invokeMethod(
-		    p->context,
-		    [weak] {
-			    if (auto self = weak.lock())
-				    self->tick();
-		    },
-		    Qt::QueuedConnection);
-		return;
-	}
-	if (written) {
-		// Rows before the cursor were read before the write; so was a portion in
-		// flight, sent while the write waited. Later rows are read after it.
-		const auto row = p->rowOf(*written);
-		const int reached =
-		    p->cursor + (p->request && !p->request->urgent ? p->request->count : 0);
-		if (row >= 0 && row < reached &&
-		    std::find(p->urgent.begin(), p->urgent.end(), *written) == p->urgent.end())
-			p->urgent.push_back(*written);
-	} else {
-		p->rerun = true;
-	}
-	p->continueCycle();
+	p->wake(written);
 }
 
 void DynamicWatchlist::dataChanged()
 {
 	auto p = d;
-	if (p->guarded())
-		return;
-	if (p->running) {
-		wake();
-		return;
-	}
-	p->publishing = true;
-	p->model.invalidateValues();
-	p->publishing = false;
-	p->changed();
+	p->dataChanged();
 }
 
 void DynamicWatchlist::stop()
@@ -697,6 +732,8 @@ void DynamicWatchlist::stop()
 	if (p->guarded())
 		return;
 	p->running = p->cycle = false;
+	p->urgent.clear();
+	p->rerun = false;
 	p->timer.stop();
 	++p->revision;
 	p->status = p->request ? QStringLiteral("Stopping - draining accepted read")
