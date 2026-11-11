@@ -159,12 +159,21 @@ Pane {
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
+        Label {
+            objectName: "endpointTreeTitle"
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: "DEVICE ENDPOINTS"
+            elide: Text.ElideRight
+            color: panel.palette.text
+            font.pixelSize: 11
+            font.letterSpacing: 1
+        }
         RowLayout {
             Layout.fillWidth: true
-            Label { objectName: "endpointTreeTitle"; Layout.fillWidth: true; textFormat: Text.PlainText; text: "DEVICE ENDPOINTS"; color: panel.palette.text; font.pixelSize: 11; font.letterSpacing: 1 }
+            visible: panel.bulkWatchAvailable && panel.watchMarks.length > 0
             Button {
                 objectName: "endpointAddSelectedWatches"
-                visible: panel.bulkWatchAvailable
                 text: "Add " + panel.watchMarks.length
                 enabled: panel.watchMarks.length > 0 && panel.provider.watchActive !== true
                 onClicked: panel.addMarkedWatches()
@@ -174,7 +183,6 @@ Pane {
             }
             ToolButton {
                 objectName: "endpointClearWatchSelection"
-                visible: panel.bulkWatchAvailable && panel.watchMarks.length > 0
                 text: "Clear"
                 onClicked: panel.clearWatchMarks()
                 Accessible.name: "Clear selected Watchlist fields"
@@ -367,7 +375,7 @@ Pane {
             }
             ScrollBar.vertical: ScrollBar {}
         }
-        Label { objectName: "endpointTreeHelp"; textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: panel.palette.text; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+        Label { objectName: "endpointTreeHelp"; visible: panel.height >= 360; textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: panel.palette.text; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
     }
     Connections {
         target: panel.provider.endpoints
