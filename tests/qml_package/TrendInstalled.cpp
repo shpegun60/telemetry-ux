@@ -16,7 +16,8 @@ int main(int argc, char** argv) {
     Provider p;
     p.model.setItemRoleNames({{Qt::UserRole + 1, "name"}, {Qt::UserRole + 2, "status"},
                               {Qt::UserRole + 3, "sampleRevision"}, {Qt::UserRole + 4, "sampleText"},
-                              {Qt::UserRole + 5, "sampleEpoch"}});
+                              {Qt::UserRole + 5, "sampleEpoch"}, {Qt::UserRole + 6, "sampleValue"},
+                              {Qt::UserRole + 7, "sampleExact"}, {Qt::UserRole + 8, "statusCode"}});
     telemetry::ux::TrendHistory history;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("testProvider", &p);
