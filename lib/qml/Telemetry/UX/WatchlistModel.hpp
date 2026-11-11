@@ -30,13 +30,16 @@ public:
 		SampleEpochRole,
 		SampleValueRole, // double of the last Ok reading when exact, else no value
 		SampleExactRole, // whether that reading is a finite number a double holds exactly
-		StatusCodeRole   // int(WatchStatus), stable across providers
+		StatusCodeRole,  // int(WatchStatus), stable across providers
+		WritableRole     // the Field can be written from its row
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
 	explicit WatchlistModel(QObject* parent = nullptr);
 	void bind(const Workbench& owner) noexcept;
 	void bind(std::function<bool()> current);
+	// Asked once per row as it is added: whether the Field accepts writes.
+	void setWritable(std::function<bool(quint32)> writable);
 	bool add(quint32 id, QString name);
 	bool addMany(const QVector<QPair<quint32, QString>>& entries);
 	bool remove(int row);
@@ -65,6 +68,7 @@ private:
 		QString name, status, text, sampleText;
 		quint64 sampleRevision = 0;
 		WatchSample sample;
+		bool writable = false;
 	};
 
 	QVector<Row> rows_;
@@ -73,6 +77,7 @@ private:
 	bool changing_ = false;
 	const Workbench* owner_ = nullptr;
 	std::function<bool()> current_;
+	std::function<bool(quint32)> writable_;
 	std::uint32_t session_ = 0;
 	std::uint64_t admission_ = 0;
 	quint64 sampleEpoch_ = 0;

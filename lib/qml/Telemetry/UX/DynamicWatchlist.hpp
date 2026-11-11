@@ -43,6 +43,7 @@ public:
 	~DynamicWatchlist();
 	void setNotify(std::function<void()> notify, std::function<bool()> blocked);
 	void setSource(WatchlistSource source);
+	void setWritable(std::function<bool(quint32)> writable);
 	void retire(bool clearRows = true);
 	void poll(); // Only after native callback/progress has returned.
 	void tick(); // Local scheduler tick, also usable with a controlled test clock.

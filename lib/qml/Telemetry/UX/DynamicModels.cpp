@@ -531,6 +531,16 @@ QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
 	    {QStringLiteral("name"), row->name},         {QStringLiteral("path"), row->path}};
 }
 
+bool EndpointModel::fieldWritable(std::uint32_t id) const
+{
+	if (!impl_->current() || impl_->tree.changing)
+		return false;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row && row->endpoint && row->category == 1 && row->endpointId == id)
+			return row->writable;
+	return false;
+}
+
 bool EndpointModel::matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const
 {
 	if (!impl_->current() || impl_->tree.changing)

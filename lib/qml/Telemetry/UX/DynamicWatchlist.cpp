@@ -584,6 +584,11 @@ void DynamicWatchlist::clear()
 	}
 }
 
+void DynamicWatchlist::setWritable(std::function<bool(quint32)> writable)
+{
+	d->model.setWritable(std::move(writable));
+}
+
 int DynamicWatchlist::count() const
 {
 	return d->model.count();
@@ -647,7 +652,9 @@ bool DynamicWatchlist::begin(bool polling)
 void DynamicWatchlist::wake(std::optional<quint32> written)
 {
 	auto p = d;
-	if (p->guarded() || !p->running || !p->current())
+	// A Read once in progress still reads a written Field again; only polling
+	// starts or repeats cycles.
+	if (p->guarded() || !p->current() || (!p->running && !p->cycle))
 		return;
 	if (!p->cycle) {
 		// Between cycles: the next one starts now, not on the timer.
@@ -670,7 +677,7 @@ void DynamicWatchlist::wake(std::optional<quint32> written)
 		if (row >= 0 && row < reached &&
 		    std::find(p->urgent.begin(), p->urgent.end(), *written) == p->urgent.end())
 			p->urgent.push_back(*written);
-	} else {
+	} else if (p->running) {
 		p->rerun = true;
 	}
 	p->continueCycle();

@@ -90,6 +90,11 @@ void WatchlistModel::bind(std::function<bool()> current)
 	}
 }
 
+void WatchlistModel::setWritable(std::function<bool(quint32)> writable)
+{
+	writable_ = std::move(writable);
+}
+
 bool WatchlistModel::add(quint32 endpoint, QString name)
 {
 	if (changing_ || count_ == maxRows || nextToken_ == 0 || name.isEmpty())
@@ -103,7 +108,9 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 		                  : std::max(qsizetype(4), rows_.capacity() * 2));
 	Mutation mutation{changing_};
 	beginInsertRows({}, count_, count_);
-	rows_.push_back({endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0, {}});
+	const bool writable = writable_ && writable_(endpoint);
+	rows_.push_back(
+	    {endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0, {}, writable});
 	++count_;
 	endInsertRows();
 	return true;
@@ -128,8 +135,11 @@ bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 	const int last = first + static_cast<int>(entries.size()) - 1;
 	Mutation mutation{changing_};
 	beginInsertRows({}, first, last);
-	for (const auto& entry : entries)
-		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}, {}, 0, {}});
+	for (const auto& entry : entries) {
+		const bool writable = writable_ && writable_(entry.first);
+		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}, {}, 0,
+		                 {}, writable});
+	}
 	count_ += static_cast<int>(entries.size());
 	endInsertRows();
 	return true;
@@ -271,6 +281,8 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return row.status == QStringLiteral("Ok") && row.sample.exact;
 		case StatusCodeRole:
 			return static_cast<int>(watchStatusCode(row.status));
+		case WritableRole:
+			return row.writable;
 		default:
 			return {};
 	}
@@ -287,7 +299,8 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {SampleEpochRole, "sampleEpoch"},
 	        {SampleValueRole, "sampleValue"},
 	        {SampleExactRole, "sampleExact"},
-	        {StatusCodeRole, "statusCode"}};
+	        {StatusCodeRole, "statusCode"},
+	        {WritableRole, "writable"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

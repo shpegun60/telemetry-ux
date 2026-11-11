@@ -30,6 +30,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool canAddWatch READ canAddWatch NOTIFY stateChanged)
 	Q_PROPERTY(int watchCount READ watchCount NOTIFY stateChanged)
 	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
+	Q_PROPERTY(bool canWriteWatch READ canWriteWatch NOTIFY stateChanged)
+	Q_PROPERTY(bool watchWriting READ watchWriting NOTIFY stateChanged)
+	Q_PROPERTY(QString watchWriteOutcome READ watchWriteOutcome NOTIFY stateChanged)
 	Q_PROPERTY(
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -102,6 +105,14 @@ public:
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();
+	// Writes `text` to the watched Field in `row`, as Details would: its own
+	// read, an exact draft, the write and a confirming read. Never moves the
+	// Details selection. Refused without permission, for a Field that is not
+	// writable, or while another row write is in flight.
+	Q_INVOKABLE bool writeWatch(int row, const QString& text);
+	bool canWriteWatch() const;
+	bool watchWriting() const;
+	QString watchWriteOutcome() const;
 	QString selection() const;
 	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;
@@ -139,6 +150,9 @@ Q_SIGNALS:
 	void commandFinished(bool executed, bool accepted);
 	void serviceFinished(bool succeeded, bool published);
 	void batchFinished();
+	// A write from a Watchlist row finished; `confirmed` when the device
+	// accepted it and a fresh read published the value.
+	void watchWriteFinished(bool confirmed);
 
 private:
 	friend class QtConnectionBinding;
