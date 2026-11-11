@@ -186,3 +186,28 @@ controls take their font from `qtquickcontrols2.conf`, rather than from
 
 **Status:** the panels in this module adopt the singletons in a following change; until
 then they keep their own colours.
+
+## Device files
+
+`DeviceFilesPanel` shows the device's files as a tree of their own paths - the
+device's names, never renamed - with marks, Open, Download and the running
+transfers, each with a `ProgressLine`. The host owns the models, the dialogs and
+every write to disk:
+
+- `DeviceFilesModel` (C++, the `qt_connection` component) lists and states the
+  files of a `ConnectionSession` on its own queue, with or without telemetry
+  (a files-only connection lists them too), and refreshes on every new
+  connection.
+- `DeviceFileTransfers` (C++, the same component) downloads one file at a time
+  with the SDK's `FileReader`, writes it through `QSaveFile` so a cancelled or
+  failed download never leaves a truncated file under the real name, and reports
+  progress, rate and time left in the designer's words. It owns its readers: one
+  whose request is still in flight is handed to the session when the model goes.
+- The panel asks for a destination with `downloadRequested(selection)` - a save
+  dialog for one file, a folder for several, kept below by the device's folders
+  (`DeviceFileTransfers.localPathFor`) - and for a viewer with
+  `openRequested(file)`.
+
+`ProgressLine` is the one progress pattern: determinate for 0..1, indeterminate
+for a negative value, shown only after 400 ms and kept at least 500 ms, in the
+info colours, never the accent. See telemetry-qt-client `doc/DEVICE_FILES.md`.
