@@ -90,6 +90,9 @@ public:
 	// Makes a local folder and its parents, for a host that offers or shows a
 	// place before anything is written there; true when it exists.
 	Q_INVOKABLE static bool makeFolder(const QString& path);
+	// A folder that exists and holds something, without making it: whether a
+	// host's "show the files" has anything to show.
+	Q_INVOKABLE static bool folderHasFiles(const QString& path);
 	// The connected device's folder under root, made when missing; empty when
 	// it cannot be. "<name> [<id>]" from the device's identity file, or the id
 	// alone for a device without a name; a folder of the same id under an

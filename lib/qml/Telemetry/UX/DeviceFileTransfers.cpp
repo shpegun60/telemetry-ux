@@ -253,6 +253,11 @@ bool DeviceFileTransfers::makeFolder(const QString& path)
 	return !path.isEmpty() && QDir().mkpath(path);
 }
 
+bool DeviceFileTransfers::folderHasFiles(const QString& path)
+{
+	return !path.isEmpty() && QDir(path).exists() && !QDir(path).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot);
+}
+
 QString DeviceFileTransfers::deviceFolder(const QString& root, const QString& fallbackLabel, QObject* viewer) const
 {
 	const auto made = [](const QString& path) {
