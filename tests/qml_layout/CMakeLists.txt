@@ -16,3 +16,8 @@ target_compile_features(telemetry_qml_search_providers PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qml_search_providers PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(telemetry_qml_search_providers PRIVATE TelemetryUX::dynamic_configurator
     TelemetryUX::static_configurator Telemetry::core Telemetry::encoded_server Telemetry::encoded_backend Qt6::Test)
+qt_add_executable(telemetry_qml_bulk_selection Bulk.cpp)
+set_target_properties(telemetry_qml_bulk_selection PROPERTIES AUTOMOC ON)
+qt_add_resources(telemetry_qml_bulk_selection "bulk-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES Bulk.qml)
+target_compile_features(telemetry_qml_bulk_selection PRIVATE cxx_std_20)
+target_link_libraries(telemetry_qml_bulk_selection PRIVATE TelemetryUX::qt_connection Qt6::Test)

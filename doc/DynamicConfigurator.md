@@ -144,6 +144,24 @@ press **Add selected Field**. Membership and selection perform no I/O. Each
 panel owns its names, values and watch selection while all panels share the
 Session's single Workbench, client and FIFO.
 
+The endpoint tree also supports marking several readable Fields independently
+of the Field open in the editor, then adding them together. Adding does not
+start a read or change the selected Field or its draft. Scalar Fields and
+enums can be watched; duplicate and unsupported choices are reported and
+skipped. An active draft on the same provider prevents a watch read or poll
+from starting until the draft is finished or cancelled. An independent panel
+may use the same Session and FIFO.
+
+The optional Qt provider API `addWatchMany(QVariantList sourceIndexes)` accepts
+indexes from that provider's `endpoints` model. Its result map has `status`
+(`ok`, `refused`, `invalid`, or `stale`) and counts `added`, `duplicate`,
+`unsupported`, and `capacity`. `ok` can include skipped items; other statuses
+publish none. A successful group is published in one Qt model change. All
+indexes and the session must still be current at the publication boundary;
+retirement after that boundary is drained normally. Static schema navigation
+is available offline, but adding watches requires an admitted connection.
+The 32-Field bound applies to a ReadMany request, not the watch list.
+
 **Read once** reads the selected list sequentially. ReadMany uses at most 32
 Fields in one exchange and obeys both advertised request and response byte
 limits; a list of 65 U64 Fields normally needs 32 + 32 + 1. The UI list has no

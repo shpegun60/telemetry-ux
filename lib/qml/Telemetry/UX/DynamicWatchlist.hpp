@@ -51,6 +51,7 @@ public:
 	bool pending() const;
 	bool canAdd(quint32 id) const;
 	bool add(quint32 id, QString name);
+	QVariantMap addMany(const QVector<QPair<quint32, QString>>& entries);
 	void remove(int row);
 	void clear();
 	int count() const;

@@ -85,6 +85,9 @@ struct TcpDemoServer::Impl {
 	QTimer writer;
 	std::unique_ptr<Connection> connection;
 	QByteArray descriptorOverride, previousEncodedReply;
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+	QByteArray lastWritePayload;
+#endif
 	QString descriptorPath = QStringLiteral("/telemetry/descriptor.bin");
 	std::optional<QByteArray> replyOverride;
 	qsizetype fragmentBytes = 0, closeRequestBytes = 0, closeReplyBytes = 0, descriptorChunk = 256;
@@ -215,9 +218,13 @@ struct TcpDemoServer::Impl {
 				retire();
 				return;
 			}
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+			state.requestPrefix += state.pending.left(used);
+#else
 			if (state.requestPrefix.size() < 32)
 				state.requestPrefix +=
 				    state.pending.left(std::min(used, 32 - state.requestPrefix.size()));
+#endif
 			state.pending.remove(0, used);
 			state.requestBytes += static_cast<quint64>(used);
 			received += static_cast<quint64>(used);
@@ -236,7 +243,12 @@ struct TcpDemoServer::Impl {
 				if (encoded && state.requestPrefix.size() >= 7 &&
 				    state.requestPrefix[6] ==
 				        static_cast<char>(telemetry::protocol::encoded::Operation::FieldWrite))
+				{
 					++totalWrites;
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+					lastWritePayload = state.requestPrefix.mid(32);
+#endif
+				}
 				if (encoded && state.requestPrefix.size() >= 7 &&
 				    state.requestPrefix[6] ==
 				        static_cast<char>(telemetry::protocol::encoded::Operation::Service))
@@ -431,6 +443,13 @@ void TcpDemoServer::setWritableDemo(bool writable)
 	impl_->retire();
 	impl_->writableDemo = writable;
 }
+
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+QByteArray TcpDemoServer::lastWritePayload() const
+{
+	return impl_->lastWritePayload;
+}
+#endif
 
 void TcpDemoServer::setRejectWrites(bool reject)
 {

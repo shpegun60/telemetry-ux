@@ -810,6 +810,56 @@ bool DynamicConfiguratorProvider::addWatch()
 	return canAddWatch() && p->watch.add(p->state->endpointId, p->selection);
 }
 
+bool DynamicConfiguratorProvider::watchCandidate(const QModelIndex& index) const
+{
+	auto p = d;
+	if (!p->current() || p->endpoints.changing())
+		return false;
+	const auto endpoint = p->endpoints.endpoint(index);
+	return !endpoint.isEmpty() && endpoint.value(QStringLiteral("category")).toInt() == 1 &&
+	       endpoint.value(QStringLiteral("readable")).toBool();
+}
+
+QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexes)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
+	                   {QStringLiteral("unsupported"), 0}, {QStringLiteral("capacity"), 0}};
+	if (!p->idle())
+		return result;
+	QVector<QPair<quint32, QString>> fields;
+	int unsupported = 0;
+	for (const auto& value : indexes) {
+		if (!value.canConvert<QModelIndex>()) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		const auto endpoint = p->endpoints.endpoint(value.value<QModelIndex>());
+		if (endpoint.isEmpty()) {
+			result[QStringLiteral("status")] = p->current() ? QStringLiteral("invalid")
+			                                             : QStringLiteral("stale");
+			return result;
+		}
+		if (endpoint.value(QStringLiteral("category")).toInt() != 1 ||
+		    !endpoint.value(QStringLiteral("readable")).toBool()) {
+			++unsupported;
+			continue;
+		}
+		fields.push_back({endpoint.value(QStringLiteral("id")).toUInt(),
+		                  endpoint.value(QStringLiteral("path")).toString()});
+	}
+	if (!p->idle()) {
+		result[QStringLiteral("status")] = QStringLiteral("stale");
+		return result;
+	}
+	result = p->watch.addMany(fields);
+	if (result.value(QStringLiteral("status")) == QStringLiteral("ok"))
+		result[QStringLiteral("unsupported")] =
+		    result.value(QStringLiteral("unsupported")).toInt() + unsupported;
+	return result;
+}
+
 void DynamicConfiguratorProvider::removeWatch(int row)
 {
 	auto p = d;

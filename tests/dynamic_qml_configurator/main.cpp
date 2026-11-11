@@ -57,6 +57,19 @@ static void independentFieldsAndRefusal()
 	      QStringLiteral("77"));
 	CHECK(b.values()->data(member(b.values(), "limit"), ValueModel::EditorTextRole).toString() ==
 	      QStringLiteral("22"));
+	const auto selected = a.selectedEndpointIndex();
+	const auto serial = endpoint(a, "Serial");
+	CHECK(a.watchCandidate(serial) && a.watchCandidate(fieldIndex) && !a.watchCandidate(commandIndex));
+	const auto beforeBulk = h.storage->packets;
+	const auto rejected = a.addWatchMany({QVariant::fromValue(serial),
+	                                      QVariant::fromValue(endpoint(b, "Serial"))});
+	CHECK(rejected.value("status") == "invalid" && a.watchCount() == 0);
+	CHECK(a.addWatchMany({QVariant::fromValue(serial)}).value("status") == "refused");
+	CHECK(a.selectedEndpointIndex() == selected && a.editing());
+	CHECK(a.values()->data(member(a.values(), "limit"), ValueModel::EditorTextRole).toString() ==
+	      QStringLiteral("77"));
+	a.refreshWatch();
+	CHECK(h.storage->packets == beforeBulk && h.storage->owner.pending() == 0);
 	const auto field = h.storage->owner.bindField(0);
 	CHECK(field);
 	for (int i = 0; i < 8; ++i)

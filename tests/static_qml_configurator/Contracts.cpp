@@ -931,6 +931,92 @@ static void watchBoundsAndReentrancy()
 	other.changed();
 }
 
+static void bulkWatch()
+{
+	Api api, other;
+	StaticConfiguratorProvider p(watchBinding(api, 65)), foreign(watchBinding(other));
+	p.setAllowMutations(true);
+	p.selectEndpoint(endpoint(p, 3));
+	p.beginEdit();
+	const auto oldSelection = p.selectedEndpointIndex();
+	const auto value = p.values()->index(0, 0);
+	CHECK(p.editing() && p.setScalarText(value, "42"));
+	QVariantList indices;
+	for (int i = 0; i < 65; ++i) {
+		CHECK(p.watchCandidate(endpoint(p, i)));
+		indices.push_back(QVariant::fromValue(endpoint(p, i)));
+	}
+	indices.push_back(QVariant::fromValue(endpoint(p, 0)));
+	int resets = 0;
+	QObject::connect(p.watchlist(), &QAbstractItemModel::modelReset, &p, [&] { ++resets; });
+	const auto bad = p.addWatchMany({indices[0], QVariant::fromValue(endpoint(foreign))});
+	CHECK(bad.value("status") == "invalid" && p.watchCount() == 0 && resets == 0);
+	const auto result = p.addWatchMany(indices);
+	CHECK(result.value("status") == "ok" && result.value("added").toInt() == 65);
+	CHECK(result.value("duplicate").toInt() == 1 && resets == 1 && api.calls.isEmpty());
+	CHECK(p.selectedEndpointIndex() == oldSelection && p.editing());
+	CHECK(p.values()->data(value, role(p.values(), "editorText")).toString() == "42");
+	p.refreshWatch();
+	CHECK(api.calls.isEmpty()); // A draft prevents a polling cycle on this provider.
+	p.cancelEdit();
+	api.invalidate();
+	CHECK(p.watchCandidate(endpoint(p, 0)));
+	CHECK(p.addWatchMany(indices).value("status") == "refused");
+	CHECK(p.watchCount() == 65);
+
+	Api changing;
+	StaticConfiguratorProvider live(watchBinding(changing));
+	QObject::connect(live.watchlist(), &QAbstractItemModel::modelAboutToBeReset, &live,
+	                 [&] { changing.invalidate(); });
+	const auto committed = live.addWatchMany({QVariant::fromValue(endpoint(live))});
+	CHECK(committed.value("added").toInt() == 1);
+	watchEvents();
+	CHECK(!live.connected() && live.watchCount() == 1 && changing.calls.isEmpty());
+	CHECK(live.watchlist()->data(live.watchlist()->index(0, 0),
+	                             role(live.watchlist(), "status")).toString() == "Stale");
+	Api sessionChange;
+	auto mixed = watchBinding(sessionChange);
+	auto service = binding(sessionChange, 3, true).endpoints.first();
+	service.name = "Service";
+	mixed.endpoints.push_back(service);
+	StaticConfiguratorProvider sessionProvider(std::move(mixed));
+	sessionProvider.setAllowMutations(true);
+	auto* tree = sessionProvider.endpoints();
+	sessionProvider.selectEndpoint(tree->index(0, 0, tree->index(1, 0)));
+	sessionProvider.callService();
+	sessionChange.finish(true, {}, false, quint32{42});
+	auto* response = sessionProvider.responses();
+	const auto responseIndex = response->index(0, 0);
+	CHECK(response->data(responseIndex, role(response, "value")).toString() == "42");
+	sessionProvider.selectEndpoint(endpoint(sessionProvider));
+	sessionProvider.beginEdit();
+	auto* values = sessionProvider.values();
+	const auto draftIndex = values->index(0, 0);
+	CHECK(sessionProvider.editing());
+	CHECK(!values->data(draftIndex, role(values, "editorText")).toString().isEmpty());
+	bool hiddenSynchronously = false;
+	QObject::connect(sessionProvider.watchlist(), &QAbstractItemModel::modelAboutToBeReset,
+	                 &sessionProvider, [&] {
+		                 ++sessionChange.epoch; // The transport remains ready.
+		                 sessionChange.changed();
+		                 hiddenSynchronously =
+		                     values->data(draftIndex, role(values, "editorText")).toString().isEmpty() &&
+		                     response->data(responseIndex, role(response, "value")).toString().isEmpty();
+	                 });
+	const auto sessionResult = sessionProvider.addWatchMany(
+	    {QVariant::fromValue(endpoint(sessionProvider))});
+	CHECK(sessionResult.value("added").toInt() == 1 && hiddenSynchronously);
+	watchEvents();
+	Api destroyed;
+	QObject observer;
+	QPointer<StaticConfiguratorProvider> doomed = new StaticConfiguratorProvider(watchBinding(destroyed));
+	QObject::connect(doomed->watchlist(), &QAbstractItemModel::modelAboutToBeReset, &observer,
+	                 [&] { delete doomed.data(); });
+	const auto sourceIndex = endpoint(*doomed);
+	const auto destruction = doomed->addWatchMany({QVariant::fromValue(sourceIndex)});
+	CHECK(!doomed && destruction.value("added").toInt() == 1 && destroyed.calls.isEmpty());
+}
+
 static void largeWatchCycle()
 {
 	Api api;
@@ -990,6 +1076,7 @@ int main(int argc, char** argv)
 	staleCacheAfterWriteRefusal();
 	watchLifecycle();
 	watchBoundsAndReentrancy();
+	bulkWatch();
 	largeWatchCycle();
 	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
 	return failures ? 1 : 0;

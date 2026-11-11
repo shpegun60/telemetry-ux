@@ -1,6 +1,7 @@
 // One pending read, bounded wire chunks, Qt-owned scalar rows. MIT.
 #include "DynamicWatchlist.hpp"
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <algorithm>
@@ -406,6 +407,78 @@ bool DynamicWatchlist::add(quint32 id, QString name)
 		p->changed();
 	}
 	return added;
+}
+
+QVariantMap DynamicWatchlist::addMany(const QVector<QPair<quint32, QString>>& entries)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
+	                   {QStringLiteral("unsupported"), 0}, {QStringLiteral("capacity"), 0}};
+	if (p->guarded() || !p->current() || p->active() || !p->source.fieldBytes)
+		return result;
+	// Block changes and defer source replacement throughout preparation and
+	// publication. Once insert signals start, accepted rows are committed as a
+	// single range; a reentrant retirement is handled by the existing drain.
+	p->publishing = true;
+	struct Publication {
+		Impl& state;
+		~Publication() { state.publishing = false; }
+	} publication{*p};
+	const auto revision = p->revision;
+	QSet<quint32> seen;
+	for (int i = 0; i < p->model.count(); ++i)
+		seen.insert(p->model.id(i));
+	QVector<QPair<quint32, QString>> accepted;
+	int duplicates = 0, unsupported = 0, capacity = 0;
+	for (const auto& entry : entries) {
+		if (!p->current() || p->revision != revision || p->active()) {
+			result[QStringLiteral("status")] = QStringLiteral("stale");
+			return result;
+		}
+		if (seen.contains(entry.first)) {
+			++duplicates;
+			continue;
+		}
+		seen.insert(entry.first);
+		const auto bytes = p->source.fieldBytes(entry.first);
+		if (!p->current() || p->revision != revision || p->active()) {
+			result[QStringLiteral("status")] = QStringLiteral("stale");
+			return result;
+		}
+		if (!bytes || !*bytes || *bytes > 8 || entry.second.isEmpty()) {
+			++unsupported;
+			continue;
+		}
+		if (accepted.size() >= WatchlistModel::maxRows - p->model.count()) {
+			++capacity;
+			continue;
+		}
+		accepted.push_back(entry);
+	}
+	if (!p->current() || p->revision != revision || p->active()) {
+		result[QStringLiteral("status")] = QStringLiteral("stale");
+		return result;
+	}
+	if (!accepted.isEmpty() && !p->model.addMany(accepted))
+		return result;
+	if (!accepted.isEmpty())
+		++p->revision;
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	result[QStringLiteral("added")] = accepted.size();
+	result[QStringLiteral("duplicate")] = duplicates;
+	result[QStringLiteral("unsupported")] = unsupported;
+	result[QStringLiteral("capacity")] = capacity;
+	// Scheduling progress and notifying observers occur after this method's
+	// publication guard is released; no request is sent here.
+	if (!accepted.isEmpty() && p->context) {
+		const std::weak_ptr<Impl> weak = p;
+		QMetaObject::invokeMethod(p->context, [weak] {
+			if (const auto state = weak.lock())
+				state->changed();
+		}, Qt::QueuedConnection);
+	}
+	return result;
 }
 
 void DynamicWatchlist::remove(int row)

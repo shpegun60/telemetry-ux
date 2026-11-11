@@ -109,6 +109,8 @@ public:
 	void setWatchIndividual(bool individual);
 	void setWatchIntervalMs(int interval);
 	Q_INVOKABLE bool addWatch();
+	Q_INVOKABLE bool watchCandidate(const QModelIndex& index) const;
+	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
 	Q_INVOKABLE void clearWatch();
 	Q_INVOKABLE void refreshWatch();

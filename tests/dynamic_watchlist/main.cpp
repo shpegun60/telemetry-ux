@@ -107,6 +107,62 @@ void fill(ux::DynamicWatchlist& watch, int count)
 		CHECK(watch.add(quint32(id), QStringLiteral("catalog.Field%1").arg(id)));
 }
 
+void bulkPublication()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	QSignalSpy inserted(watch.model(), &QAbstractItemModel::rowsInserted);
+	QVector<QPair<quint32, QString>> fields;
+	for (quint32 i = 1; i <= 65; ++i)
+		fields.push_back({i, QStringLiteral("field%1").arg(i)});
+	fields.push_back({1, QStringLiteral("duplicate")});
+	fields.push_back({100, QStringLiteral("unsupported")});
+	const auto result = watch.addMany(fields);
+	CHECK(result.value("status") == "ok" && result.value("added").toInt() == 65);
+	CHECK(result.value("duplicate").toInt() == 1 && result.value("unsupported").toInt() == 1);
+	CHECK(watch.count() == 65 && inserted.count() == 1 && peer.calls.empty());
+	CHECK(watch.begin(false));
+	for (int size : {32, 32, 1}) {
+		CHECK(peer.pending.size() == size_t(size));
+		peer.finish(); watch.poll(); events();
+	}
+	CHECK(!watch.active());
+
+	QObject otherOwner;
+	Peer other;
+	ux::DynamicWatchlist stale(&otherOwner);
+	auto source = other.source();
+	source.fieldBytes = [&other](quint32) -> std::optional<unsigned> {
+		other.current = false;
+		return 4;
+	};
+	stale.setSource(std::move(source));
+	CHECK(stale.addMany({{1, "one"}}).value("status") == "stale");
+	CHECK(stale.count() == 0 && other.calls.empty());
+
+	QObject retireOwner;
+	Peer retirePeer;
+	ux::DynamicWatchlist retiring(&retireOwner);
+	retiring.setSource(retirePeer.source());
+	QObject::connect(retiring.model(), &QAbstractItemModel::rowsAboutToBeInserted, &retireOwner,
+	                 [&] { retiring.retire(); });
+	CHECK(retiring.addMany({{1, "one"}, {2, "two"}}).value("added").toInt() == 2);
+	events();
+	CHECK(retiring.count() == 0 && retirePeer.calls.empty());
+
+	QPointer<QObject> doomed = new QObject;
+	QObject observer;
+	Peer deathPeer;
+	ux::DynamicWatchlist orphaned(doomed);
+	orphaned.setSource(deathPeer.source());
+	QObject::connect(orphaned.model(), &QAbstractItemModel::rowsAboutToBeInserted, &observer,
+	                 [&] { delete doomed.data(); });
+	const auto destruction = orphaned.addMany({{1, "one"}});
+	CHECK(!doomed && destruction.value("added").toInt() == 1 && deathPeer.calls.empty());
+}
+
 void chunks()
 {
 	QObject owner;
@@ -332,6 +388,7 @@ void replaceSourceDuringPublication()
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	bulkPublication();
 	chunks();
 	budgetsAndFallback();
 	drainAndStale();

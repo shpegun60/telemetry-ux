@@ -44,6 +44,9 @@ public:
 	void setDescriptorChunkBytes(qsizetype bytes);
 	void setNextReplyOverride(QByteArray bytes);
 	void setWritableDemo(bool writable);
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+	QByteArray lastWritePayload() const;
+#endif
 	void setRejectWrites(bool reject);
 
 	quint64 requests() const noexcept;
