@@ -7,9 +7,12 @@
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <wire/IdentityWire.hpp>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QLocale>
 #include <QPointer>
 #include <QTcpServer>
@@ -18,6 +21,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QEventLoop>
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -579,6 +583,111 @@ void filesOnly(const QString& folder)
 		return !files.available() && files.fileCount() == 0;
 	}));
 }
+
+// The device's folder from its identity file - a files-only device has one
+// too: "<name> [<id>]" with the name made a plain local name; the same folder
+// renamed when the device is, unless a file in it is open; the id alone for a
+// device without a name; the connection's label without an identity.
+void identityFolders(const QString& folder)
+{
+	namespace id = telemetry::protocol::identity;
+	std::array<std::byte, id::writtenBytes> bytes{};
+	std::size_t size = 0;
+	const auto serve = [&](std::string_view name) {
+		size = id::write(id::Identity{"UNIT-7", name, "Bench", "2.0"}, bytes);
+		CHECK(size > 0);
+	};
+	serve("Stand: A/B");
+	const resource::BytesFile events{eventsBytes};
+	// The device's side, written with the wire's own encoder: it borrows the
+	// array and its size, and each serve() rewrites them in place.
+	class IdentityProvider {
+	public:
+		IdentityProvider(const std::array<std::byte, id::writtenBytes>& bytes, const std::size_t& size) noexcept
+		    : bytes_(bytes), size_(size)
+		{}
+		[[nodiscard]] resource::FileSize size() const noexcept { return static_cast<resource::FileSize>(size_); }
+		[[nodiscard]] resource::ReadResult read(resource::Cursor cursor, resource::Output output) const noexcept
+		{
+			if (cursor > size_)
+				return {resource::Status::InvalidCursor, cursor};
+			const auto count = std::min<std::size_t>(output.size(), size_ - static_cast<std::size_t>(cursor));
+			std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(cursor), count, output.begin());
+			return {resource::Status::Ok, cursor + count, static_cast<std::uint32_t>(count), cursor + count == size_};
+		}
+
+	private:
+		const std::array<std::byte, id::writtenBytes>& bytes_;
+		const std::size_t& size_;
+	};
+	const IdentityProvider provider(bytes, size);
+	const auto table = resource::filesystem(resource::file(id::path, provider), resource::file("/logs/events.csv", events));
+	Peer peer{table.view()};
+	qt::ConnectionSession session;
+	DeviceFileTransfers transfers(&session);
+	const auto root = folder + QStringLiteral("/identity");
+	const auto connect = [&] {
+		CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+		CHECK(await([&] {
+			return session.identityState() == qt::ConnectionSession::IdentityState::Known;
+		}));
+		CHECK(session.filesOnly() && session.deviceId() == QStringLiteral("UNIT-7"));
+	};
+	const auto exists = [&](const char* name) {
+		return QFileInfo(root + QLatin1Char('/') + QString::fromUtf8(name)).isDir();
+	};
+
+	connect();
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/Fallback")) == root + QStringLiteral("/Stand_ A_B [UNIT-7]"));
+	CHECK(exists("Stand_ A_B [UNIT-7]"));
+	session.disconnect();
+
+	// Renamed on the device: the same folder under the new name.
+	serve("Bench");
+	connect();
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/Fallback")) == root + QStringLiteral("/Bench [UNIT-7]"));
+	CHECK(exists("Bench [UNIT-7]") && !exists("Stand_ A_B [UNIT-7]"));
+	session.disconnect();
+
+	// A file of it open in a viewer keeps the folder where it is.
+	const auto copy = root + QStringLiteral("/Bench [UNIT-7]/logs/events.csv");
+	QDir().mkpath(QFileInfo(copy).path());
+	{
+		QFile file(copy);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write("a,b\n1,2\n") > 0);
+	}
+	telemetry::ux::OpenFiles viewer;
+	viewer.open(copy, QStringLiteral("/logs/events.csv"));
+	serve("Third");
+	connect();
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/Fallback"), &viewer) == root + QStringLiteral("/Bench [UNIT-7]"));
+	CHECK(!exists("Third [UNIT-7]"));
+	viewer.close(0);
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/Fallback"), &viewer) == root + QStringLiteral("/Third [UNIT-7]"));
+	CHECK(QFileInfo::exists(root + QStringLiteral("/Third [UNIT-7]/logs/events.csv")));
+	session.disconnect();
+
+	// No name: the id alone, still the same folder.
+	serve("");
+	connect();
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/Fallback")) == root + QStringLiteral("/UNIT-7"));
+	CHECK(exists("UNIT-7") && !exists("Third [UNIT-7]"));
+	session.disconnect();
+	CHECK(await([&] {
+		return session.identityState() == qt::ConnectionSession::IdentityState::Absent;
+	}));
+
+	// No identity: the connection's label.
+	Peer plain{withoutDescriptor.view()};
+	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), plain.listener.serverPort()));
+	CHECK(await([&] {
+		return session.filesOnly();
+	}));
+	CHECK(session.identityState() == qt::ConnectionSession::IdentityState::Absent);
+	CHECK(transfers.deviceFolder(root, QStringLiteral("/TCP · 10.0.0.5:5577")) ==
+	      root + QStringLiteral("/TCP · 10.0.0.5_5577"));
+	session.disconnect();
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -615,6 +724,7 @@ int main(int argc, char** argv)
 		return !files.available();
 	}));
 	filesOnly(folder.path());
+	identityFolders(folder.path());
 	localPaths(folder.path());
 	fileContent(folder.path());
 	codecs(folder.path());

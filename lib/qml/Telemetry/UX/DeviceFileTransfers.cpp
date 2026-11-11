@@ -253,6 +253,56 @@ bool DeviceFileTransfers::makeFolder(const QString& path)
 	return !path.isEmpty() && QDir().mkpath(path);
 }
 
+QString DeviceFileTransfers::deviceFolder(const QString& root, const QString& fallbackLabel, QObject* viewer) const
+{
+	const auto made = [](const QString& path) {
+		return makeFolder(path) ? path : QString{};
+	};
+	if (!session_ || session_->identityState() != integration::qt::ConnectionSession::IdentityState::Known)
+		return made(localPathFor(root, fallbackLabel));
+	// The id is already a plain name (the wire allows nothing else); the name
+	// is the device's text: one segment, cut short for the path limit.
+	const auto id = session_->deviceId();
+	auto name = session_->deviceName().simplified();
+	name.replace(QLatin1Char('/'), QLatin1Char('_')).replace(QLatin1Char('\\'), QLatin1Char('_'));
+	if (name.size() > 32)
+		name = name.left(32).trimmed();
+	const auto suffix = QStringLiteral(" [%1]").arg(id);
+	const auto target = localPathFor(root, name.isEmpty() ? id : name + suffix);
+	if (target.isEmpty())
+		return {};
+	// The same device under an earlier name keeps its folder, renamed when
+	// nothing in it is in use; otherwise it is used as it is.
+	const QDir folder(root);
+	const auto wanted = QFileInfo(target).fileName();
+	for (const auto& entry : folder.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+		if (entry == wanted)
+			break;
+		if (entry.compare(id, Qt::CaseInsensitive) != 0 && !entry.endsWith(suffix, Qt::CaseInsensitive))
+			continue;
+		const auto earlier = folder.filePath(entry);
+		if (inUse(earlier, viewer) || !QDir(root).rename(entry, wanted))
+			return earlier;
+		break;
+	}
+	return made(target);
+}
+
+bool DeviceFileTransfers::inUse(const QString& folder, QObject* viewer) const
+{
+	const auto inside = [prefix = QDir::cleanPath(folder) + QLatin1Char('/')](const QString& path) {
+		return QDir::cleanPath(path).startsWith(prefix, Qt::CaseInsensitive);
+	};
+	for (const auto& job : jobs_)
+		if (job->active() && inside(job->localFile))
+			return true;
+	if (const auto* open = qobject_cast<const OpenFiles*>(viewer))
+		for (int row = 0; row < open->rowCount(); ++row)
+			if (inside(open->data(open->index(row), OpenFiles::LocalFileRole).toString()))
+				return true;
+	return false;
+}
+
 QString DeviceFileTransfers::localFileAt(int row) const
 {
 	if (row < 0 || row >= static_cast<int>(jobs_.size()))

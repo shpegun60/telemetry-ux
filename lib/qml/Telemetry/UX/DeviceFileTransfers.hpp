@@ -90,6 +90,14 @@ public:
 	// Makes a local folder and its parents, for a host that offers or shows a
 	// place before anything is written there; true when it exists.
 	Q_INVOKABLE static bool makeFolder(const QString& path);
+	// The connected device's folder under root, made when missing; empty when
+	// it cannot be. "<name> [<id>]" from the device's identity file, or the id
+	// alone for a device without a name; a folder of the same id under an
+	// earlier name is renamed to it, unless a transfer or a file open in viewer
+	// (an OpenFiles) is inside it - then that folder is used as it is. Without
+	// an identity, fallbackLabel names it, as a device path would.
+	Q_INVOKABLE QString deviceFolder(const QString& root, const QString& fallbackLabel,
+	                                 QObject* viewer = nullptr) const;
 	// The local file a row writes, as download() was given it; rows move when
 	// finished ones are cleared, so a host keys its own records by this.
 	Q_INVOKABLE QString localFileAt(int row) const;
@@ -116,6 +124,7 @@ Q_SIGNALS:
 
 private:
 	struct Job;
+	bool inUse(const QString& folder, QObject* viewer) const;
 	int queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
 	          OpenFiles* viewer);
 	void schedulePoll();
