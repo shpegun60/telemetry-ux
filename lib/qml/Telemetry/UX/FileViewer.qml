@@ -52,7 +52,7 @@ Pane {
         else if (shownMode === "table")
             table.forceActiveFocus()
         else if (shownMode === "hex")
-            hexView.forceActiveFocus()
+            hexPane.focusContent()
         else if (shownMode === "text")
             textArea.forceActiveFocus()
         else if (shownMode === "decoded" && decodedView.item)
@@ -285,35 +285,10 @@ Pane {
                 }
             }
 
-            // Hex: offset, 16 bytes, their ASCII; the current row framed.
-            ListView {
-                id: hexView
-                objectName: "fileViewerHex"
-                clip: true
-                activeFocusOnTab: true
-                keyNavigationEnabled: true
-                highlightMoveDuration: 0
-                model: viewer.shownMode === "hex" ? viewer.content.hex : null
-                highlight: Rectangle {
-                    color: "transparent"
-                    radius: 3
-                    border.width: hexView.activeFocus ? 2 : 0
-                    border.color: Theme.focusRing
-                }
-                delegate: Row {
-                    id: hexRow
-                    required property string offset
-                    required property string bytes
-                    required property string ascii
-                    leftPadding: 8
-                    spacing: 16
-                    Accessible.role: Accessible.ListItem
-                    Accessible.name: qsTr("%1: %2").arg(hexRow.offset).arg(hexRow.bytes)
-                    Label { font.family: Type.fixedFamily; color: Theme.textSecondary; text: hexRow.offset }
-                    Label { font.family: Type.fixedFamily; color: Theme.textPrimary; text: hexRow.bytes }
-                    Label { font.family: Type.fixedFamily; color: Theme.textSecondary; text: hexRow.ascii }
-                }
-                ScrollBar.vertical: ScrollBar {}
+            // Hex: the painted grid, its bars, the status line and the inspector.
+            HexPane {
+                id: hexPane
+                content: viewer.content
             }
 
             // The codec's own view of its model, given as "decoded".

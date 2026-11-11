@@ -30,7 +30,26 @@ over localhost TCP to the SDK's native server. No board.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
-- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 47 checks):
+- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 127 checks). It calls
+  `telemetry::ux::registerQmlTypes()` first, as a host does. It checks the hex grid
+  (`HexView`) on its own:
+  - **Layout:** 32, 16 or 8 bytes a row by width, the text column dropped first.
+  - **Keys:** arrows, Shift to extend, Home, Ctrl+End, Ctrl+A, Esc; Tab from hex to
+    text and then out.
+  - **Status and copy:** the status and accessible text; Copy as in every form, with
+    the 1 MiB limit and its notice; the clipboard.
+  - **Go to** in every form (`0x20`, `40h`, `100`, `+0x10`, `-16`, `end-16`,
+    `end`) and its refusals; **Select block** by length and by end.
+  - **Find** as hex, text, integer and float, in both byte orders: the match
+    selected, next and previous going round once and saying so, the count and the
+    match's place, the refusals.
+  - **The inspector** at `E8 03`: little-endian and big-endian, signed and
+    unsigned, bits, `time_t`, `—` past the end.
+  - **Regions:** a codec's region named in the status.
+  - **The context menu** requested by the Menu key and Shift+F10.
+  - **An empty file.**
+
+  The panel itself:
   - the not-connected words, the tree once connected, the column headings;
   - the Download button and the marked line following the marks;
   - `downloadRequested` carrying the selection;

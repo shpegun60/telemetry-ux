@@ -153,6 +153,8 @@ public:
 	QString text() const { return text_; }
 	QAbstractItemModel* table() { return &table_; }
 	QAbstractItemModel* hex() { return &hex_; }
+	// The bytes as read: shared, so a viewer's copy costs nothing.
+	const QByteArray& bytes() const noexcept { return bytes_; }
 	QString codecName() const { return codecName_; }
 	QObject* decoded() const noexcept { return decoded_; }
 	QUrl codecView() const { return codecView_; }
