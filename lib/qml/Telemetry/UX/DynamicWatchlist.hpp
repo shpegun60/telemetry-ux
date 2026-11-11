@@ -43,6 +43,7 @@ public:
 	~DynamicWatchlist();
 	void setNotify(std::function<void()> notify, std::function<bool()> blocked);
 	void setSource(WatchlistSource source);
+	void setWritable(std::function<bool(quint32)> writable);
 	void retire(bool clearRows = true);
 	void poll(); // Only after native callback/progress has returned.
 	void tick(); // Local scheduler tick, also usable with a controlled test clock.
@@ -63,6 +64,15 @@ public:
 	void setInterval(int milliseconds);
 	bool begin(bool polling);
 	void stop();
+	// After a write, Command, Service or Batch while polling. With the Field
+	// written, it is read again before the cycle goes on when this cycle has
+	// already read it (or its read was in flight); without one, the next cycle
+	// starts as soon as this one ends. Between cycles the next starts now.
+	void wake(std::optional<quint32> written = std::nullopt);
+	// Another panel changed data on the device. A polling Watchlist keeps
+	// polling and reads everything again right after this cycle; otherwise its
+	// values are marked stale.
+	void dataChanged();
 
 private:
 	struct Impl;

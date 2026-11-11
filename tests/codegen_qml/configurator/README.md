@@ -8,7 +8,7 @@ The host's top-level CMake also finds that component before adding the generated
 QML directory, so Qt's parent-level executable finalizer sees its imported targets:
 
 ```cmake
-find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS static_configurator)
+find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS static_configurator)
 add_subdirectory("${GENERATED_SDK}/qml" generated)
 ```
 

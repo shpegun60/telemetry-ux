@@ -168,9 +168,10 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 
 	bool editable() const
 	{
+		// A busy session (another panel's request, a polling Watchlist) is no
+		// reason to refuse: the FIFO orders requests and reports QueueFull.
 		return current() && !request && !publishing && !invalidationPending && !model.changing() &&
-		       !responses.changing() && (!blocked || !blocked()) &&
-		       (!source.busy || !source.busy());
+		       !responses.changing() && (!blocked || !blocked());
 	}
 
 	bool permitted() const

@@ -58,7 +58,8 @@ The provider exposes notifying properties:
 | `commandSelected`, `canExecute`, `serviceSelected`, `canCallService` | Operation selection and action gates |
 | `watchActive`, `watchPending`, `canAddWatch`, `watchCount` | Watchlist state and gates |
 | `watchStatus`, `writeOutcome`, `commandOutcome`, `serviceOutcome`, `statusText` | Already-classified display text; the view does not infer execution certainty |
-| `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval; the provider validates changes |
+| `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval (0 to 60000 ms; 0 reads continuously at low priority); the provider validates changes |
+| `watchIntervalMinimumMs` | The smallest interval the provider accepts (0 here); the interval box starts there, at 1 for a provider that does not say |
 
 Actions retain the existing provider signatures:
 
@@ -74,6 +75,26 @@ Actions retain the existing provider signatures:
   endpoint and any open draft untouched and sending no request. The map holds
   `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
   `duplicate`, `unsupported` and `capacity`.
+
+The Watchlist and the rest of the panel work together. While it polls, selecting
+an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all
+work; only adding or removing rows waits for polling to stop. An open draft
+(a Field edit, or the request editor a selected Command or Service opens) does not
+hold the Watchlist: a watch read never touches it. Requests interleave in the
+session's one ordered FIFO: the Watchlist keeps at most one portion (up to 32
+Fields) in it, so a write waits behind one exchange at most, and while the write
+is in flight the Watchlist sends nothing. Afterwards the written Field is read
+again at once if this cycle had already read it (or had it in flight); after a
+Command, Service or Batch the next cycle follows immediately instead of waiting
+for the timer. A write from another panel on the same session does not stop
+it either: a polling Watchlist reads its list again right after the current
+cycle, a stopped one marks its values stale. A start refused because an
+operation is in flight leaves `watchStatus` saying so. `busy` is this view's own work (an operation, a Batch)
+and leaves the Watchlist's reads out, so Cancel and Batch editing stay available
+while it polls. Several Watchlists on one session take turns: each session
+progress starts with the next panel, and a Batch is never refused because the
+session is busy. One Watchlist holds at most 1024 Fields
+(`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
 
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt
@@ -94,6 +115,19 @@ never has to parse display text:
 | `sampleValue` | That reading as a `double` when it is exact; no value otherwise |
 | `sampleExact` | `true` only for a finite number a double holds exactly: an integer beyond 2^53 − 1, NaN or infinity is `false` and is not plotted. Enums give their code |
 | `sampleRevision`, `sampleEpoch` | Change counters: a new reading increments the revision; a new session or admission changes the epoch |
+| `writable` | The Field accepts writes, taken from the device's endpoint table when the row is added |
+
+`writeWatch(row, text)` writes a watched Field from its row, as Details would: its
+own read, an exact draft of `text`, the write and a confirming read. It runs on a
+second view of the provider, so it never moves the Details selection or touches
+its draft (the Details snapshot is marked stale, as after any write). It is
+refused without permission (`canWriteWatch` false), for a read-only Field, or
+while another row write is in flight (`watchWriting`). `watchWriteOutcome` says
+what happened in words (confirmed, written but unconfirmed, an invalid text, the
+device's refusal), `watchWriteFinished(confirmed)` signals the end, and the
+Watchlist reads the row again at once: within the running cycle, or as a Read
+once when it is not polling. Start during a Read once turns that cycle into the
+first one of polling.
 
 Adding, group-adding and removing Fields inserts or removes rows (only Clear
 resets the model), so a persistent index — a view's current row, a Trend's

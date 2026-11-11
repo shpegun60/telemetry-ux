@@ -4,7 +4,7 @@ project(telemetry_codegen_qml_example LANGUAGES CXX)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 qt_standard_project_setup(REQUIRES 6.4)
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml")
-find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS
     core encoded_server encoded_backend rpc_backend rpc_sessions)
 if(NOT GENERATED_SDK)
     message(FATAL_ERROR "Set GENERATED_SDK to the external SDK generated from fixture/native/descriptor.bin")

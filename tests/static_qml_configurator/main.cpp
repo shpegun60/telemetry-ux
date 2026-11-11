@@ -496,11 +496,13 @@ static void qmlInput(const QString& image, bool standalone = false)
 		          watchMode->property("currentIndex").toInt() == 0,
 		      "Static QML never advertises unsupported ReadMany mode");
 		auto* frequency = root->findChild<QQuickItem*>(QStringLiteral("watchFrequency"));
-		check(frequency && frequency->property("from").toInt() == 1 &&
+		// The interval box starts at the provider's watchIntervalMinimumMs: 0 for
+		// this one, which reads continuously at low priority there (#55).
+		check(frequency && frequency->property("from").toInt() == 0 &&
 		          frequency->property("to").toInt() == 60000 &&
 		          frequency->property("stepSize").toInt() == 1 &&
 		          frequency->property("editable").toBool(),
-		      "Watch interval uses editable integer milliseconds rather than a fixed Hz range");
+		      "Watch interval uses editable integer milliseconds from the provider's minimum");
 		auto* view = root->findChild<QObject*>(QStringLiteral("staticTestView"));
 		auto* expanded = root->findChild<QObject*>(QStringLiteral("watchlistExpanded"));
 		check(view && expanded, "watch controls retain stable object identities");

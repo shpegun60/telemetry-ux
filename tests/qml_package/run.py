@@ -239,7 +239,7 @@ def main():
         report['compile_commands_sha256'] = digest(consumer_build / 'compile_commands.json')
         controls = []
         for case, success in [('optional', True), ('optional-unknown', True), ('required', False),
-                              ('unknown', False), ('default', False)]:
+                              ('unknown', False), ('default', False), ('next-minor', False)]:
             run('config-' + case, [tools['cmake'], '-S', consumer / 'controls', '-B', output / ('control-' + case),
                 *common, '-DTelemetryUX_DIR=' + str(configs[0].parent),
                 '-DCMAKE_DISABLE_FIND_PACKAGE_Qt6=TRUE', '-DCASE=' + case], success)

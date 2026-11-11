@@ -26,11 +26,20 @@ Window {
         property int starts: 0
         property int stops: 0
         property int reads: 0
-        function addWatch() { values.append({name: "measure.Voltage", text: "18446744073709551615", status: "SubmissionRefused"}); return true }
+        // Row writes: offered for rows whose `writable` role is true.
+        property bool canWriteWatch: true
+        property string watchWriteOutcome: ""
+        property var writes: []
+        function writeWatch(row, text) {
+            writes = writes.concat([row + ":" + text])
+            watchWriteOutcome = "Writing " + values.get(row).name
+            return true
+        }
+        function addWatch() { values.append({name: "measure.Voltage", text: "18446744073709551615", status: "SubmissionRefused", writable: false}); return true }
         function populate(count) {
             values.clear()
             for (let i = 0; i < count; ++i)
-                values.append({name: "measure.Field" + i, text: "18446744073709551615", status: i === count - 1 ? "SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable" : "SubmissionRefused"})
+                values.append({name: "measure.Field" + i, text: "18446744073709551615", status: i === count - 1 ? "SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable" : "SubmissionRefused", writable: i === 0})
         }
         function startWatch() { ++starts; watchActive = true }
         function stopWatch() { ++stops; watchActive = false }
