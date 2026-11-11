@@ -42,7 +42,9 @@ public:
 	bool remove(int row);
 	void clear();
 	void invalidateValues();
-	bool setResult(int row, QString status, QString text, WatchSample sample = {});
+	// The sample is required: a reading published without its typed number would
+	// be shown but never plotted. Pass sampleOf() of the value formatted as text.
+	bool setResult(int row, QString status, QString text, WatchSample sample);
 	[[nodiscard]] quint32 id(int row) const noexcept;
 	[[nodiscard]] int count() const noexcept;
 	[[nodiscard]] bool changing() const noexcept;

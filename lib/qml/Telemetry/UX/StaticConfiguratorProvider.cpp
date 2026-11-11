@@ -572,6 +572,11 @@ public:
 
 	// Membership edits insert or remove rows, so persistent indexes (a Trend's
 	// selection, a view's current row) follow their Field instead of resetting.
+	// Qt itself still uses the model after it emits rowsAboutToBeInserted or
+	// rowsAboutToBeRemoved, so a host may destroy the provider only from the
+	// post-change signals (rowsInserted, rowsRemoved, modelReset) or deferred
+	// (deleteLater); nothing here can make deletion inside the "about to"
+	// signals safe, and no guard pretends to.
 	void append(QVector<Row> added)
 	{
 		if (added.isEmpty())
@@ -580,11 +585,8 @@ public:
 			qFatal("Static Watchlist index space exhausted");
 		for (auto& row : added)
 			row.token = next_++;
-		QPointer<WatchList> alive(this);
 		const int first = static_cast<int>(rows.size());
 		beginInsertRows({}, first, first + static_cast<int>(added.size()) - 1);
-		if (!alive)
-			return;
 		rows += added;
 		endInsertRows();
 	}
@@ -593,10 +595,7 @@ public:
 	{
 		if (row < 0 || row >= rows.size())
 			return;
-		QPointer<WatchList> alive(this);
 		beginRemoveRows({}, row, row);
-		if (!alive)
-			return;
 		rows.removeAt(row);
 		endRemoveRows();
 	}

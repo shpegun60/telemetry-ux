@@ -123,7 +123,12 @@ void TrendHistory::inspect()
         if (setState(QStringLiteral("This provider has no sample history support"))) publish(StateChanged);
         return;
     }
-    const auto code = static_cast<WatchStatus>(source_->data(selected_, codeRole).toInt());
+    // A missing or unknown code counts as a failure, so it breaks the line.
+    const QVariant codeValue = source_->data(selected_, codeRole);
+    bool codeOk = false;
+    const int codeNumber = codeValue.toInt(&codeOk);
+    const auto code = codeOk && codeNumber >= int(WatchStatus::NotRead) && codeNumber <= int(WatchStatus::Failed)
+                          ? static_cast<WatchStatus>(codeNumber) : WatchStatus::Failed;
     if (code != WatchStatus::Ok) {
         if (code != WatchStatus::Pending && code != WatchStatus::NotRead) gap_ = true;
         const QString status = source_->data(selected_, statusRole).toString();
@@ -139,7 +144,7 @@ void TrendHistory::inspect()
     const QVariant sample = source_->data(selected_, valueRole);
     if (!source_->data(selected_, exactRole).toBool() || !sample.isValid()) {
         gap_ = true;
-        if (setState(QStringLiteral("Value cannot be plotted without losing information: ") + raw)) publish(StateChanged);
+        if (setState(QStringLiteral("Not plotted: not a finite number a chart can show exactly: ") + raw)) publish(StateChanged);
         return;
     }
     const double value = sample.toDouble();

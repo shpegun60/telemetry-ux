@@ -29,10 +29,10 @@ telemetry::ux::WatchSample sampleFrom(const QString& text) {
 }
 class Source : public QAbstractListModel {
 public:
-    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); telemetry::ux::WatchSample sample; };
+    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); telemetry::ux::WatchSample sample; QVariant code; };
     enum { Name = Qt::UserRole + 1, Status, Text, Revision, Epoch, Value, Exact, Code };
-    QList<Row> rows{{QStringLiteral("First"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}},
-                    {QStringLiteral("Second"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}}};
+    QList<Row> rows{{QStringLiteral("First"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}, {}},
+                    {QStringLiteral("Second"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}, {}}};
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : int(rows.size()); }
     QVariant data(const QModelIndex& index, int role) const override {
         if (!index.isValid() || index.row() < 0 || index.row() >= rows.size()) return {};
@@ -40,7 +40,8 @@ public:
         switch (role) { case Name: return r.name; case Status: return r.status; case Text: return r.text;
                         case Revision: return r.rev; case Epoch: return r.epoch;
                         case Value: return r.sample.role(); case Exact: return r.sample.exact;
-                        case Code: return int(telemetry::ux::watchStatusCode(r.status)); default: return {}; }
+                        case Code: return r.code.isValid() ? r.code : QVariant(int(telemetry::ux::watchStatusCode(r.status)));
+                        default: return {}; }
     }
     QHash<int,QByteArray> roleNames() const override {
         return {{Name,"name"},{Status,"status"},{Text,"sampleText"},{Revision,"sampleRevision"},{Epoch,"sampleEpoch"},
@@ -51,8 +52,13 @@ public:
     }
     void publishSample(int i, QString status, QString value, telemetry::ux::WatchSample sample, QString revision,
                        QString epoch = QStringLiteral("1")) {
-        auto& r = rows[i]; r.status = status; r.text = value; r.rev = revision; r.epoch = epoch; r.sample = sample;
+        auto& r = rows[i]; r.status = status; r.text = value; r.rev = revision; r.epoch = epoch; r.sample = sample; r.code = {};
         Q_EMIT dataChanged(index(0, 0), index(int(rows.size())-1, 0), {Status, Text, Revision, Epoch, Value, Exact, Code});
+    }
+    // A third-party model's own code, valid or not.
+    void publishCode(int i, QString status, QVariant code, QString revision, QString epoch = QStringLiteral("1")) {
+        auto& r = rows[i]; r.status = status; r.code = code; r.rev = revision; r.epoch = epoch;
+        Q_EMIT dataChanged(index(i, 0), index(i, 0), {Status, Code, Revision, Epoch});
     }
     void remove(int i) { beginRemoveRows({}, i, i); rows.removeAt(i); endRemoveRows(); }
     void move(int from, int to) {
@@ -89,7 +95,7 @@ int main(int argc, char** argv) {
     source.publish(1, "Ok", "5", "3");
     CHECK(h.points().size() == 3 && h.points().last().toMap().value("breakBefore").toBool());
     source.publish(1, "Ok", "9007199254740993", "4");
-    CHECK(h.points().size() == 3 && h.state().contains("losing"));
+    CHECK(h.points().size() == 3 && h.state().contains("Not plotted"));
     source.publish(1, "Ok", "6", "5");
     CHECK(h.points().size() == 4 && h.points().last().toMap().value("breakBefore").toBool());
     source.publish(1, "Ok", "7", "5", "2");
@@ -98,7 +104,7 @@ int main(int argc, char** argv) {
     // plain-looking text without an exact sample is not plotted, and an enum's
     // display text ("Known (1)") with an exact sample is plotted as its code.
     source.publishSample(1, "Ok", "8.5", {}, "6", "2");
-    CHECK(h.points().size() == 5 && h.state().contains("losing"));
+    CHECK(h.points().size() == 5 && h.state().contains("Not plotted"));
     source.publishSample(1, "Ok", "Known (1)", telemetry::ux::WatchSample::ofSigned(1), "7", "2");
     CHECK(h.points().size() == 6 && h.points().last().toMap().value("value").toDouble() == 1.0);
     CHECK(h.points().last().toMap().value("text") == "Known (1)");
@@ -106,6 +112,13 @@ int main(int argc, char** argv) {
     source.publish(1, "Not read", {}, "7", "2");
     source.publish(1, "Ok", "9", "8", "2");
     CHECK(h.points().size() == 7 && !h.points().last().toMap().value("breakBefore").toBool());
+    // An unknown or missing status code counts as a failure and breaks the line.
+    source.publishCode(1, "ReadError", 77, "8", "2");
+    source.publish(1, "Ok", "10", "9", "2");
+    CHECK(h.points().size() == 8 && h.points().last().toMap().value("breakBefore").toBool());
+    source.publishCode(1, "ReadError", QVariant(), "9", "2");
+    source.publish(1, "Ok", "11", "10", "2");
+    CHECK(h.points().size() == 9 && h.points().last().toMap().value("breakBefore").toBool());
     source.remove(0);
     CHECK(h.row() == 0);
     for (int i=6; i<540; ++i) source.publish(0, "Ok", QString::number(i), QString::number(i), "2");
