@@ -2,7 +2,10 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include <QGuiApplication>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QItemSelectionModel>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QtTest/qtestspontaneevent.h>
 #include <QQmlApplicationEngine>
@@ -12,8 +15,10 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QQuickStyle>
+#include <QStandardItemModel>
 #include <QTest>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
@@ -21,6 +26,23 @@
 namespace {
 unsigned checks = 0;
 unsigned warnings = 0;
+
+// Deliberately use non-Telemetry numeric role IDs: named QML roles, not a
+// provider-specific layout, are the contract for reusable endpoint panels.
+class SearchFixtureModel final : public QStandardItemModel {
+public:
+    QHash<int, QByteArray> roleNames() const override {
+        return {{333, "name"}, {444, "detail"}, {487, "isEndpoint"}};
+    }
+    QStandardItem* append(QStandardItem* parent, const QString& name, bool endpoint) {
+        auto* node = new QStandardItem;
+        node->setData(name, 333);
+        node->setData(QString(), 444);
+        node->setData(endpoint, 487);
+        if (parent) parent->appendRow(node); else appendRow(node);
+        return node;
+    }
+};
 
 void check(bool condition, const char* expression)
 {
@@ -30,6 +52,18 @@ void check(bool condition, const char* expression)
 }
 
 #define CHECK(expression) check(bool(expression), #expression)
+
+double contrastRatio(const QColor& foreground, const QColor& background)
+{
+    const auto luminance = [](const QColor& c) {
+        const auto linear = [](double v) {
+            return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * linear(c.redF()) + 0.7152 * linear(c.greenF()) + 0.0722 * linear(c.blueF());
+    };
+    const auto a = luminance(foreground), b = luminance(background);
+    return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
+}
 
 QQuickItem* item(QQuickItem* root, const QString& name)
 {
@@ -279,6 +313,31 @@ int main(int argc, char** argv)
         QTest::keyClick(separateWindow, Qt::Key_Return);
         settle();
         CHECK(row->property("highlighted").toBool() && !secondRow->property("highlighted").toBool());
+        // Searching only inspects endpoint metadata; it must never select or
+        // send a request until the user explicitly activates a source index.
+        auto* searchInput = item(separateTreePanel, QStringLiteral("endpointSearch"));
+        auto* searchStatus = item(separateTreePanel, QStringLiteral("endpointSearchStatus"));
+        CHECK(searchInput && searchStatus);
+        const auto beforeSearch = shared->property("selections").toInt();
+        CHECK(searchInput->setProperty("text", QStringLiteral("voltage")));
+        QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("2 matching endpoints"));
+        CHECK(shared->property("selections").toInt() == beforeSearch);
+        auto* searchRow = item(separateTreePanel, QStringLiteral("endpointSearchResult"));
+        CHECK(searchRow != nullptr);
+        CHECK(shared->setProperty("refuseSelection", true));
+        click(separateWindow, searchRow);
+        CHECK(shared->property("selections").toInt() == beforeSearch);
+        CHECK(shared->setProperty("refuseSelection", false));
+        click(separateWindow, searchRow);
+        CHECK(shared->property("selections").toInt() == beforeSearch + 1);
+        CHECK(searchInput->setProperty("text", QStringLiteral("not-present")));
+        QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("No matching endpoints"));
+        CHECK(searchInput->setProperty("text", QString()));
+        settle();
+        CHECK(!searchStatus->isVisible());
+        CHECK(warnings == 0);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("addWatchButton")));
         CHECK(shared->property("watchCount").toInt() == 1);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
@@ -564,6 +623,195 @@ int main(int argc, char** argv)
                           rectangle(destroyAdd).center().toPoint());
         delete destroyWindow;
         QTest::qWait(300);
+        CHECK(warnings == 0);
+        SearchFixtureModel searchFixture;
+        auto* alpha = searchFixture.append(nullptr, QStringLiteral("Alpha"), false);
+        auto* alphaVoltage = searchFixture.append(alpha, QStringLiteral("Voltage"), true);
+        // QML's required bool role accepts integer 0/1 from third-party models.
+        alpha->setData(0, 487);
+        alphaVoltage->setData(1, 487);
+        auto* beta = searchFixture.append(nullptr, QStringLiteral("Beta"), false);
+        searchFixture.append(beta, QStringLiteral("Voltage"), true);
+        engine.rootContext()->setContextProperty(QStringLiteral("searchFixtureModel"), &searchFixture);
+        engine.load(QUrl(QStringLiteral("qrc:/Search.qml")));
+        auto* searchWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+        CHECK(searchWindow && searchWindow != lifecycleWindow);
+        settle();
+        auto* searchPanel = item(searchWindow->contentItem(), QStringLiteral("searchTree"));
+        auto* query = item(searchPanel, QStringLiteral("endpointSearch"));
+        auto* status = item(searchPanel, QStringLiteral("endpointSearchStatus"));
+        auto* results = item(searchPanel, QStringLiteral("endpointSearchResults"));
+        auto* fake = searchPanel->property("provider").value<QObject*>();
+        CHECK(searchPanel && query && status && results && fake);
+        CHECK(query->setProperty("text", QStringLiteral("ALPHA / voltage")));
+        QTest::qWait(250);
+        CHECK(status->property("text").toString() == QStringLiteral("1 matching endpoints"));
+        CHECK(results->property("count").toInt() == 1 && fake->property("calls").toInt() == 0);
+        auto* resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow && resultRow->property("text").toString() == QStringLiteral("Alpha / Voltage"));
+        auto* resultBackground = resultRow->property("background").value<QObject*>();
+        auto* resultLabel = resultRow->property("contentItem").value<QObject*>();
+        auto* treeBackground = item(searchPanel, QStringLiteral("endpointTreePanelBackground"));
+        auto* treeTitle = item(searchPanel, QStringLiteral("endpointTreeTitle"));
+        auto* treeHelp = item(searchPanel, QStringLiteral("endpointTreeHelp"));
+        CHECK(resultBackground && resultLabel && treeBackground && treeTitle && treeHelp);
+        const auto treeColor = [&] { return treeBackground->property("color").value<QColor>(); };
+        const auto textColor = [&] { return resultLabel->property("color").value<QColor>(); };
+        CHECK(!resultRow->property("highlighted").toBool());
+        CHECK(resultBackground->property("color").value<QColor>().alpha() == 0);
+        CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
+        CHECK(contrastRatio(textColor(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
+        resultRow->forceActiveFocus(Qt::TabFocusReason);
+        settle();
+        QQmlExpression focusWidth(qmlContext(resultRow), resultRow, QStringLiteral("background.border.width"));
+        QQmlExpression focusColor(qmlContext(resultRow), resultRow, QStringLiteral("background.border.color"));
+        CHECK(focusWidth.evaluate().toInt() == 2 && !focusWidth.hasError());
+        CHECK(contrastRatio(focusColor.evaluate().value<QColor>(), treeColor()) >= 3.0 && !focusColor.hasError());
+        click(searchWindow, resultRow);
+        CHECK(fake->property("calls").toInt() == 1);
+        CHECK(fake->property("selectedEndpointIndex").value<QModelIndex>() == alphaVoltage->index());
+        CHECK(resultRow->property("highlighted").toBool());
+        CHECK(resultBackground->property("color").value<QColor>() == QColor(QStringLiteral("#215a68")));
+        CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#ffffff")));
+        CHECK(contrastRatio(textColor(), resultBackground->property("color").value<QColor>()) >= 4.5);
+        // A host-supplied light palette must replace every selected/unselected
+        // foreground and background, not inherit hard-coded dark colors.
+        CHECK(searchWindow->setProperty("testHighlight", QColor(QStringLiteral("#c3e0ff"))));
+        CHECK(searchWindow->setProperty("testHighlightedText", QColor(QStringLiteral("#121212"))));
+        CHECK(searchWindow->setProperty("testButtonText", QColor(QStringLiteral("#242424"))));
+        CHECK(searchWindow->setProperty("testBase", QColor(QStringLiteral("#ffffff"))));
+        CHECK(searchWindow->setProperty("testText", QColor(QStringLiteral("#121212"))));
+        settle();
+        CHECK(treeColor() == QColor(QStringLiteral("#ffffff")));
+        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(resultBackground->property("color").value<QColor>() == QColor(QStringLiteral("#c3e0ff")));
+        CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#121212")));
+        CHECK(contrastRatio(textColor(), resultBackground->property("color").value<QColor>()) >= 4.5);
+        resultRow->forceActiveFocus(Qt::TabFocusReason);
+        settle();
+        CHECK(focusWidth.evaluate().toInt() == 2 && !focusWidth.hasError());
+        CHECK(focusColor.evaluate().value<QColor>() == QColor(QStringLiteral("#121212")) && !focusColor.hasError());
+        CHECK(contrastRatio(focusColor.evaluate().value<QColor>(), resultBackground->property("color").value<QColor>()) >= 3.0);
+        // A light canvas can still use a dark selected-row highlight. The
+        // keyboard cursor must use highlightedText on the selected tree row.
+        CHECK(query->setProperty("text", QString()));
+        CHECK(searchWindow->setProperty("testHighlight", QColor(QStringLiteral("#163860"))));
+        CHECK(searchWindow->setProperty("testHighlightedText", QColor(QStringLiteral("#ffffff"))));
+        settle();
+        auto* sourceTree = item(searchPanel, QStringLiteral("endpointTree"));
+        auto* selectedTreeRow = rowItem(searchPanel, 1);
+        CHECK(sourceTree && selectedTreeRow && selectedTreeRow->property("highlighted").toBool());
+        auto* selectedFocus = item(selectedTreeRow, QStringLiteral("endpointFocusIndicator"));
+        auto* selectionModel = qobject_cast<QItemSelectionModel*>(sourceTree->property("selectionModel").value<QObject*>());
+        CHECK(selectedFocus && selectionModel);
+        selectionModel->setCurrentIndex(alphaVoltage->index(), QItemSelectionModel::NoUpdate);
+        sourceTree->forceActiveFocus(Qt::TabFocusReason);
+        settle();
+        CHECK(selectedFocus->isVisible());
+        QQmlExpression selectedTreeFocus(qmlContext(selectedFocus), selectedFocus, QStringLiteral("border.color"));
+        CHECK(contrastRatio(selectedTreeFocus.evaluate().value<QColor>(), QColor(QStringLiteral("#163860"))) >= 3.0 && !selectedTreeFocus.hasError());
+        // Repeat the selected focus contrast with the default dark canvas.
+        CHECK(searchWindow->setProperty("testBase", QColor(QStringLiteral("#17202b"))));
+        CHECK(searchWindow->setProperty("testText", QColor(QStringLiteral("#e8edf5"))));
+        CHECK(searchWindow->setProperty("testHighlight", QColor(QStringLiteral("#215a68"))));
+        settle();
+        CHECK(selectedFocus->isVisible());
+        CHECK(contrastRatio(selectedTreeFocus.evaluate().value<QColor>(), QColor(QStringLiteral("#215a68"))) >= 3.0 && !selectedTreeFocus.hasError());
+        CHECK(searchWindow->setProperty("testBase", QColor(QStringLiteral("#ffffff"))));
+        CHECK(searchWindow->setProperty("testText", QColor(QStringLiteral("#121212"))));
+        CHECK(searchWindow->setProperty("testHighlight", QColor(QStringLiteral("#c3e0ff"))));
+        CHECK(searchWindow->setProperty("testHighlightedText", QColor(QStringLiteral("#121212"))));
+        CHECK(query->setProperty("text", QStringLiteral("alpha.voltage")));
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1);
+        searchFixture.append(alpha, QStringLiteral("<b>Current</b>"), true);
+        CHECK(query->setProperty("text", QStringLiteral("<b>current")));
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow && resultRow->property("text").toString() == QStringLiteral("Alpha / <b>Current</b>"));
+        CHECK(resultRow->property("contentItem").value<QObject*>()->property("textFormat").toInt() == int(Qt::PlainText));
+        CHECK(!resultRow->property("highlighted").toBool());
+        CHECK(resultRow->property("background").value<QObject*>()->property("color").value<QColor>().alpha() == 0);
+        CHECK(resultRow->property("contentItem").value<QObject*>()->property("color").value<QColor>() == QColor(QStringLiteral("#242424")));
+        CHECK(contrastRatio(resultRow->property("contentItem").value<QObject*>()->property("color").value<QColor>(), treeColor()) >= 4.5);
+        resultRow->forceActiveFocus(Qt::TabFocusReason);
+        settle();
+        QQmlExpression lightFocusColor(qmlContext(resultRow), resultRow, QStringLiteral("background.border.color"));
+        CHECK(contrastRatio(lightFocusColor.evaluate().value<QColor>(), treeColor()) >= 3.0 && !lightFocusColor.hasError());
+        CHECK(query->setProperty("text", QStringLiteral("alpha.voltage")));
+        QTest::qWait(250);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow);
+        resultRow->forceActiveFocus();
+        QTest::keyClick(searchWindow, Qt::Key_Return);
+        settle();
+        CHECK(fake->property("calls").toInt() == 2);
+        // Reset invalidates indexes synchronously, before any deferred scan.
+        searchFixture.clear();
+        CHECK(results->property("count").toInt() == 0);
+        alpha = searchFixture.append(nullptr, QStringLiteral("Alpha"), false);
+        alphaVoltage = searchFixture.append(alpha, QStringLiteral("Voltage"), true);
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1 && fake->property("calls").toInt() == 2);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow);
+        click(searchWindow, resultRow);
+        CHECK(fake->property("calls").toInt() == 3);
+        CHECK(fake->property("selectedEndpointIndex").value<QModelIndex>() == alphaVoltage->index());
+        CHECK(query->setProperty("text", QStringLiteral("item")));
+        auto* large = searchFixture.append(nullptr, QStringLiteral("Large"), false);
+        for (int i = 0; i < 499; ++i)
+            searchFixture.append(large, QStringLiteral("item %1").arg(i), true);
+        QTest::qWait(1000);
+        CHECK(!searchPanel->property("searchRunning").toBool());
+        CHECK(results->property("count").toInt() == 499);
+        CHECK(status->property("text").toString() == QStringLiteral("499 matching endpoints"));
+        searchFixture.append(large, QStringLiteral("item 499"), true);
+        QTest::qWait(500);
+        CHECK(results->property("count").toInt() == 500);
+        CHECK(status->property("text").toString() == QStringLiteral("Search limited; refine search"));
+        searchFixture.append(large, QStringLiteral("item 500"), true);
+        QTest::qWait(500);
+        CHECK(results->property("count").toInt() == 500);
+        CHECK(status->property("text").toString() == QStringLiteral("Search limited; refine search"));
+        CHECK(fake->property("calls").toInt() == 3);
+        delete searchWindow;
+        QCoreApplication::processEvents();
+        searchFixture.clear();
+        large = searchFixture.append(nullptr, QStringLiteral("Large"), false);
+        for (int i = 0; i < 10000; ++i)
+            searchFixture.append(large, QStringLiteral("item %1").arg(i), true);
+        engine.load(QUrl(QStringLiteral("qrc:/Search.qml")));
+        searchWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+        CHECK(searchWindow);
+        settle();
+        searchPanel = item(searchWindow->contentItem(), QStringLiteral("searchTree"));
+        query = item(searchPanel, QStringLiteral("endpointSearch"));
+        status = item(searchPanel, QStringLiteral("endpointSearchStatus"));
+        CHECK(searchPanel && query && status);
+        int timerTicks = 0;
+        QTimer heartbeat;
+        heartbeat.setInterval(1);
+        QObject::connect(&heartbeat, &QTimer::timeout, [&] { ++timerTicks; });
+        heartbeat.start();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        CHECK(query->setProperty("text", QStringLiteral("never-match")));
+        while (searchPanel->property("searchRunning").toBool() && elapsed.elapsed() < 15000)
+            QTest::qWait(10);
+        heartbeat.stop();
+        std::printf("Search 10000 nodes elapsed=%lldms heartbeat=%d\n", elapsed.elapsed(), timerTicks);
+        CHECK(!searchPanel->property("searchRunning").toBool());
+        CHECK(timerTicks > 0);
+        CHECK(status->property("text").toString() == QStringLiteral("No matching endpoints"));
+        delete searchWindow;
+        QCoreApplication::processEvents();
         CHECK(warnings == 0);
 		std::printf("QML layout checks=%u warnings=%u\n", checks, warnings);
 		return 0;
