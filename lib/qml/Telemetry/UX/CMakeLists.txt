@@ -7,10 +7,11 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
               EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
-              Theme.qml Type.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
+              Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
-target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp)
+target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp
+    FileContent.cpp FileContent.hpp)
 target_compile_features(telemetry_ux_configurator PUBLIC cxx_std_17)
 target_include_directories(telemetry_ux_configurator PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
@@ -42,11 +43,11 @@ install(TARGETS telemetry_ux_configurator telemetry_ux_static_configurator ${_te
     OBJECTS DESTINATION "${CMAKE_INSTALL_LIBDIR}/telemetry-ux/objects")
 install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
-    Theme.qml Type.qml
+    Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
-install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp
+install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp FileContent.hpp
     WatchSample.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 
@@ -85,7 +86,8 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     if(NOT TARGET Telemetry::qt_connection)
         find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
     endif()
-    add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp)
+    add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp
+        DeviceFilesModel.cpp DeviceFilesModel.hpp DeviceFileTransfers.cpp DeviceFileTransfers.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
     set_target_properties(telemetry_ux_qt_connection PROPERTIES EXPORT_NAME qt_connection AUTOMOC ON)
     target_compile_features(telemetry_ux_qt_connection PUBLIC cxx_std_20)
@@ -98,5 +100,6 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
     install(EXPORT TelemetryUXConnectionTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
-    install(FILES QtConnectionBinding.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
+    install(FILES QtConnectionBinding.hpp DeviceFilesModel.hpp DeviceFileTransfers.hpp
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()

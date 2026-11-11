@@ -592,6 +592,10 @@ jobs:
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+            python -B tests/device_files/run.py --build-dir "$RUNNER_TEMP/ux-device-files-$profile" \
+              --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
+              --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
+              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja
             python -B tests/presentation_metadata/run.py --build-dir "$RUNNER_TEMP/ux-presentation-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"

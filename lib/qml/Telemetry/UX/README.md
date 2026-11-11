@@ -220,3 +220,43 @@ controls take their font from `qtquickcontrols2.conf`, rather than from
 
 **Status:** the panels in this module adopt the singletons in a following change; until
 then they keep their own colours.
+
+## Device files
+
+`DeviceFilesPanel` shows the device's files as a tree of their own paths - the
+device's names, never renamed - with marks, Open, Download and the running
+transfers, each with a `ProgressLine`. The host owns the models, the dialogs and
+every write to disk:
+
+- `DeviceFilesModel` (C++, the `qt_connection` component) lists and states the
+  files of a `ConnectionSession` on its own queue, with or without telemetry
+  (a files-only connection lists them too), and refreshes on every new
+  connection.
+- `DeviceFileTransfers` (C++, the same component) downloads one file at a time
+  with the SDK's `FileReader`, writes it through `QSaveFile` so a cancelled or
+  failed download never leaves a truncated file under the real name, and reports
+  progress, rate and time left in the designer's words. It owns its readers: one
+  whose request is still in flight is handed to the session when the model goes.
+- The panel asks for a destination with `downloadRequested(selection)` - a save
+  dialog for one file, a folder for several, kept below by the device's folders
+  (`DeviceFileTransfers.localPathFor`) - for a viewer with `openRequested(file)`,
+  and for the folder of a saved file with `showInFolderRequested(localPath)`.
+  `localFileOf` and `urlOfLocalFile` turn a QML dialog's URL into the local path
+  `download()` takes and back.
+- Both C++ models need a build with the `qt_connection` component
+  (`TELEMETRY_UX_BUILD_QT_CONNECTION`), which links the SDK's session; the panel
+  itself is in the configurator module.
+
+The tree's rows are `DeviceFileRow` (the Basic style is imported there only):
+a mark that never stops halfway and is off for a file the device cannot read,
+the device's name, then size and access in columns shared with the headings.
+The current row is highlighted and framed while the tree has the keyboard;
+Space marks, Enter opens a file or folds a folder, Left and Right fold and
+unfold. A failed transfer is drawn in the error colour with Retry; a saved one
+offers Show in folder; Cancel all and Clear finished sit by the Transfers
+heading. `LinkButton` is the link-styled action they use.
+
+`ProgressLine` is the one progress pattern: determinate for 0..1, indeterminate
+for a negative value, shown only after 400 ms and kept at least 500 ms, in the
+info colours, never the accent. It keeps its place in a layout while hidden and
+fades in and out. See telemetry-qt-client `doc/DEVICE_FILES.md`.
