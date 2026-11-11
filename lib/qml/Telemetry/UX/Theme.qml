@@ -15,6 +15,7 @@ QtObject {
     property color surfaceBar: "#1a2533"      // header and status bar
     property color surfaceDisabled: "#1b2533" // disabled controls
     property color surfaceAlternate: "#151d27" // every other row of a long list
+    property color shadow: "#0b0f14"           // shadows and the deepest edge of controls
 
     // Interaction states laid over a surface.
     property color stateHover: "#1f2b3a"

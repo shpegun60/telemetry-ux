@@ -46,6 +46,7 @@ EXEMPT = {
     'textDisabled': 'text of inactive controls; WCAG 1.4.3 exempts inactive components',
     'surfaceDisabled': 'fill of inactive controls; exempt likewise',
     'outlineVariant': 'separators and disabled borders carry no information (1.4.11)',
+    'shadow': 'a shadow is decoration; no text or state is drawn on it',
 }
 
 
