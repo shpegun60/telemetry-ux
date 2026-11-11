@@ -2,7 +2,9 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include <QGuiApplication>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QtTest/qtestspontaneevent.h>
 #include <QQmlApplicationEngine>
@@ -12,6 +14,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QQuickStyle>
+#include <QStandardItemModel>
 #include <QTest>
 #include <algorithm>
 #include <cstdio>
@@ -21,6 +24,23 @@
 namespace {
 unsigned checks = 0;
 unsigned warnings = 0;
+
+// Deliberately use non-Telemetry numeric role IDs: named QML roles, not a
+// provider-specific layout, are the contract for reusable endpoint panels.
+class SearchFixtureModel final : public QStandardItemModel {
+public:
+    QHash<int, QByteArray> roleNames() const override {
+        return {{333, "name"}, {444, "detail"}, {487, "isEndpoint"}};
+    }
+    QStandardItem* append(QStandardItem* parent, const QString& name, bool endpoint) {
+        auto* node = new QStandardItem;
+        node->setData(name, 333);
+        node->setData(QString(), 444);
+        node->setData(endpoint, 487);
+        if (parent) parent->appendRow(node); else appendRow(node);
+        return node;
+    }
+};
 
 void check(bool condition, const char* expression)
 {
@@ -279,6 +299,31 @@ int main(int argc, char** argv)
         QTest::keyClick(separateWindow, Qt::Key_Return);
         settle();
         CHECK(row->property("highlighted").toBool() && !secondRow->property("highlighted").toBool());
+        // Searching only inspects endpoint metadata; it must never select or
+        // send a request until the user explicitly activates a source index.
+        auto* searchInput = item(separateTreePanel, QStringLiteral("endpointSearch"));
+        auto* searchStatus = item(separateTreePanel, QStringLiteral("endpointSearchStatus"));
+        CHECK(searchInput && searchStatus);
+        const auto beforeSearch = shared->property("selections").toInt();
+        CHECK(searchInput->setProperty("text", QStringLiteral("voltage")));
+        QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("2 matching endpoints"));
+        CHECK(shared->property("selections").toInt() == beforeSearch);
+        auto* searchRow = item(separateTreePanel, QStringLiteral("endpointSearchResult"));
+        CHECK(searchRow != nullptr);
+        CHECK(shared->setProperty("refuseSelection", true));
+        click(separateWindow, searchRow);
+        CHECK(shared->property("selections").toInt() == beforeSearch);
+        CHECK(shared->setProperty("refuseSelection", false));
+        click(separateWindow, searchRow);
+        CHECK(shared->property("selections").toInt() == beforeSearch + 1);
+        CHECK(searchInput->setProperty("text", QStringLiteral("not-present")));
+        QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("No matching endpoints"));
+        CHECK(searchInput->setProperty("text", QString()));
+        settle();
+        CHECK(!searchStatus->isVisible());
+        CHECK(warnings == 0);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("addWatchButton")));
         CHECK(shared->property("watchCount").toInt() == 1);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
@@ -564,6 +609,113 @@ int main(int argc, char** argv)
                           rectangle(destroyAdd).center().toPoint());
         delete destroyWindow;
         QTest::qWait(300);
+        CHECK(warnings == 0);
+        SearchFixtureModel searchFixture;
+        auto* alpha = searchFixture.append(nullptr, QStringLiteral("Alpha"), false);
+        auto* alphaVoltage = searchFixture.append(alpha, QStringLiteral("Voltage"), true);
+        // QML's required bool role accepts integer 0/1 from third-party models.
+        alpha->setData(0, 487);
+        alphaVoltage->setData(1, 487);
+        auto* beta = searchFixture.append(nullptr, QStringLiteral("Beta"), false);
+        searchFixture.append(beta, QStringLiteral("Voltage"), true);
+        engine.rootContext()->setContextProperty(QStringLiteral("searchFixtureModel"), &searchFixture);
+        engine.load(QUrl(QStringLiteral("qrc:/Search.qml")));
+        auto* searchWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+        CHECK(searchWindow && searchWindow != lifecycleWindow);
+        settle();
+        auto* searchPanel = item(searchWindow->contentItem(), QStringLiteral("searchTree"));
+        auto* query = item(searchPanel, QStringLiteral("endpointSearch"));
+        auto* status = item(searchPanel, QStringLiteral("endpointSearchStatus"));
+        auto* results = item(searchPanel, QStringLiteral("endpointSearchResults"));
+        auto* fake = searchPanel->property("provider").value<QObject*>();
+        CHECK(searchPanel && query && status && results && fake);
+        CHECK(query->setProperty("text", QStringLiteral("ALPHA / voltage")));
+        QTest::qWait(250);
+        CHECK(status->property("text").toString() == QStringLiteral("1 matching endpoints"));
+        CHECK(results->property("count").toInt() == 1 && fake->property("calls").toInt() == 0);
+        auto* resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow && resultRow->property("text").toString() == QStringLiteral("Alpha / Voltage"));
+        click(searchWindow, resultRow);
+        CHECK(fake->property("calls").toInt() == 1);
+        CHECK(fake->property("selectedEndpointIndex").value<QModelIndex>() == alphaVoltage->index());
+        CHECK(query->setProperty("text", QStringLiteral("alpha.voltage")));
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1);
+        searchFixture.append(alpha, QStringLiteral("<b>Current</b>"), true);
+        CHECK(query->setProperty("text", QStringLiteral("<b>current")));
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow && resultRow->property("text").toString() == QStringLiteral("Alpha / <b>Current</b>"));
+        CHECK(resultRow->property("contentItem").value<QObject*>()->property("textFormat").toInt() == int(Qt::PlainText));
+        CHECK(query->setProperty("text", QStringLiteral("alpha.voltage")));
+        QTest::qWait(250);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow);
+        resultRow->forceActiveFocus();
+        QTest::keyClick(searchWindow, Qt::Key_Return);
+        settle();
+        CHECK(fake->property("calls").toInt() == 2);
+        // Reset invalidates indexes synchronously, before any deferred scan.
+        searchFixture.clear();
+        CHECK(results->property("count").toInt() == 0);
+        alpha = searchFixture.append(nullptr, QStringLiteral("Alpha"), false);
+        alphaVoltage = searchFixture.append(alpha, QStringLiteral("Voltage"), true);
+        QTest::qWait(250);
+        CHECK(results->property("count").toInt() == 1 && fake->property("calls").toInt() == 2);
+        resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
+        CHECK(resultRow);
+        click(searchWindow, resultRow);
+        CHECK(fake->property("calls").toInt() == 3);
+        CHECK(fake->property("selectedEndpointIndex").value<QModelIndex>() == alphaVoltage->index());
+        CHECK(query->setProperty("text", QStringLiteral("item")));
+        auto* large = searchFixture.append(nullptr, QStringLiteral("Large"), false);
+        for (int i = 0; i < 499; ++i)
+            searchFixture.append(large, QStringLiteral("item %1").arg(i), true);
+        QTest::qWait(1000);
+        CHECK(!searchPanel->property("searchRunning").toBool());
+        CHECK(results->property("count").toInt() == 499);
+        CHECK(status->property("text").toString() == QStringLiteral("499 matching endpoints"));
+        searchFixture.append(large, QStringLiteral("item 499"), true);
+        QTest::qWait(500);
+        CHECK(results->property("count").toInt() == 500);
+        CHECK(status->property("text").toString() == QStringLiteral("Search limited; refine search"));
+        searchFixture.append(large, QStringLiteral("item 500"), true);
+        QTest::qWait(500);
+        CHECK(results->property("count").toInt() == 500);
+        CHECK(status->property("text").toString() == QStringLiteral("Search limited; refine search"));
+        CHECK(fake->property("calls").toInt() == 3);
+        delete searchWindow;
+        QCoreApplication::processEvents();
+        searchFixture.clear();
+        large = searchFixture.append(nullptr, QStringLiteral("Large"), false);
+        for (int i = 0; i < 10000; ++i)
+            searchFixture.append(large, QStringLiteral("item %1").arg(i), true);
+        engine.load(QUrl(QStringLiteral("qrc:/Search.qml")));
+        searchWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+        CHECK(searchWindow);
+        settle();
+        searchPanel = item(searchWindow->contentItem(), QStringLiteral("searchTree"));
+        query = item(searchPanel, QStringLiteral("endpointSearch"));
+        status = item(searchPanel, QStringLiteral("endpointSearchStatus"));
+        CHECK(searchPanel && query && status);
+        int timerTicks = 0;
+        QTimer heartbeat;
+        heartbeat.setInterval(1);
+        QObject::connect(&heartbeat, &QTimer::timeout, [&] { ++timerTicks; });
+        heartbeat.start();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        CHECK(query->setProperty("text", QStringLiteral("never-match")));
+        while (searchPanel->property("searchRunning").toBool() && elapsed.elapsed() < 15000)
+            QTest::qWait(10);
+        heartbeat.stop();
+        std::printf("Search 10000 nodes elapsed=%lldms heartbeat=%d\n", elapsed.elapsed(), timerTicks);
+        CHECK(!searchPanel->property("searchRunning").toBool());
+        CHECK(timerTicks > 0);
+        CHECK(status->property("text").toString() == QStringLiteral("No matching endpoints"));
+        delete searchWindow;
+        QCoreApplication::processEvents();
         CHECK(warnings == 0);
 		std::printf("QML layout checks=%u warnings=%u\n", checks, warnings);
 		return 0;

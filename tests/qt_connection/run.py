@@ -172,6 +172,13 @@ def main():
         layout_checks = re.search(r'QML layout checks=(\d+) warnings=0', layout_log)
         if not layout_checks or int(layout_checks[1]) < 65:
             raise RuntimeError('Real disconnected window layout did not reach its warning-free assertion floor')
+        search_executable = build / ('telemetry_qml_search_providers.exe' if os.name == 'nt' else 'telemetry_qml_search_providers')
+        search_log = run('search-providers-runtime', [search_executable])
+        search_checks = re.search(r'QML search native-provider checks=(\d+) warnings=0', search_log)
+        if not search_checks or int(search_checks[1]) < 29:
+            raise RuntimeError('Native provider search did not reach its warning-free assertion floor')
+        report['search_providers'] = dict(checks=int(search_checks[1]),
+            executable_sha256=digest(search_executable))
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]

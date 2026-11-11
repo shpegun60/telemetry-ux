@@ -24,7 +24,7 @@ def inventory(root):
 
 
 def sources():
-    paths = [ROOT / 'VERSION', ROOT / 'lib/qml/CMakeLists.txt',
+    paths = [ROOT / 'VERSION', ROOT / 'tests/dynamic_qml_configurator/Fixture.hpp', ROOT / 'lib/qml/CMakeLists.txt',
              ROOT / 'lib/qml/TelemetryUXConfig.cmake.in']
     for directory in (HERE, ROOT / 'lib/qml/Telemetry/UX'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
@@ -91,6 +91,12 @@ def main():
         if not match or int(match[1]) < 65:
             raise RuntimeError('missing successful geometry/warning contract')
         report['checks'] = int(match[1])
+        search_binary = output / 'build' / ('telemetry_qml_search_providers.exe' if os.name == 'nt' else 'telemetry_qml_search_providers')
+        search_text = run('search-providers', [search_binary])
+        search_match = re.search(r'QML search native-provider checks=(\d+) warnings=0', search_text)
+        if not search_match or int(search_match[1]) < 29:
+            raise RuntimeError('missing native-provider search contract')
+        report['search_providers'] = dict(checks=int(search_match[1]), executable_sha256=digest(search_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:

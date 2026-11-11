@@ -80,3 +80,18 @@ does not create a client, a second FIFO, or a polling timer in the view. Hiding
 or showing a Watchlist panel does not stop or restart polling. If the application
 wants to stop polling, it must request that explicitly via the provider. A new
 provider has its own presentation and polling state and must be chosen deliberately.
+
+`EndpointTreePanel` includes case-insensitive search by endpoint name or path
+(for example, `measure.Voltage`). Results display their full path; choosing one
+passes its original model index to the provider. Searching only examines the
+existing model and never requests a value or changes the selected endpoint.
+Clear the search to return to the tree. Search scans incrementally and displays
+at most the first 500 matches, with a depth limit of 64 levels; the status says
+when traversal is limited, even if there are no additional matches. Refine the
+query to narrow the results.
+
+Results contain copied display names. If an external session invalidation does
+not immediately notify the view, already displayed names may remain until the
+provider resets or updates its model; selection still goes through the provider's
+normal validation. Hosts should notify/reset their models when their schema or
+session changes.
