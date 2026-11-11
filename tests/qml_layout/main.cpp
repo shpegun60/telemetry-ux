@@ -659,6 +659,52 @@ int main(int argc, char** argv)
             auto* failedStatus = item(failedRow, QStringLiteral("watchRowStatus"));
             CHECK(okStatus && !okStatus->isVisible());
             CHECK(failedStatus && failedStatus->isVisible());
+            // A writable row is written in place: double-click the value, type,
+            // Enter writes; Esc or clicking elsewhere cancels; a read-only row
+            // offers nothing, and neither does a provider without permission.
+            {
+                auto* okValue = item(okRow, QStringLiteral("watchValueText"));
+                auto* editor = item(okRow, QStringLiteral("watchValueEditor"));
+                CHECK(okValue && editor && !editor->isVisible());
+                const auto doubleClick = [&](QQuickItem* target) {
+                    QTest::mouseDClick(narrowWindow, Qt::LeftButton, Qt::NoModifier,
+                                       rectangle(target).center().toPoint());
+                    settle();
+                };
+                doubleClick(okValue);
+                CHECK(editor->isVisible() && editor->hasActiveFocus() && !okValue->isVisible());
+                CHECK(editor->property("text").toString() == QStringLiteral("18446744073709551615"));
+                QTest::keyClick(narrowWindow, Qt::Key_A, Qt::ControlModifier);
+                QTest::keyClick(narrowWindow, '4');
+                QTest::keyClick(narrowWindow, '2');
+                QTest::keyClick(narrowWindow, Qt::Key_Return);
+                settle();
+                CHECK(!editor->isVisible() && okValue->isVisible());
+                CHECK(narrowProvider->property("writes").toStringList() == QStringList{QStringLiteral("0:42")});
+                auto* outcome = item(narrowPanel, QStringLiteral("watchWriteOutcome"));
+                CHECK(outcome && outcome->property("text").toString() == QStringLiteral("Writing measure.Field0"));
+                doubleClick(okValue);
+                CHECK(editor->isVisible());
+                QTest::keyClick(narrowWindow, Qt::Key_Escape);
+                settle();
+                CHECK(!editor->isVisible());
+                doubleClick(okValue);
+                CHECK(editor->isVisible());
+                item(narrowPanel, QStringLiteral("watchFrequency"))->forceActiveFocus();
+                settle();
+                CHECK(!editor->isVisible());
+                CHECK(narrowProvider->property("writes").toStringList().size() == 1);
+                auto* readOnlyValue = item(failedRow, QStringLiteral("watchValueText"));
+                doubleClick(readOnlyValue);
+                CHECK(!item(failedRow, QStringLiteral("watchValueEditor"))->isVisible());
+                CHECK(narrowProvider->setProperty("canWriteWatch", false));
+                settle();
+                doubleClick(okValue);
+                CHECK(!editor->isVisible());
+                CHECK(narrowProvider->setProperty("canWriteWatch", true));
+                CHECK(narrowProvider->setProperty("watchWriteOutcome", QString()));
+                settle();
+            }
             auto* okDot = item(okRow, QStringLiteral("watchOkDot"));
             auto* failedDot = item(failedRow, QStringLiteral("watchOkDot"));
             CHECK(okDot && okDot->isVisible() && failedDot && !failedDot->isVisible());

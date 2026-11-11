@@ -86,6 +86,23 @@ struct WritableDevice {
 		return config;
 	}
 
+	// A writable scalar for Watchlist row writes; above 100000 is refused.
+	std::uint32_t setpoint = 0;
+
+	std::uint32_t readSetpoint() const noexcept
+	{
+		return setpoint;
+	}
+
+	telemetry::WriteResult writeSetpoint(const std::uint32_t& requested) noexcept
+	{
+		++writes;
+		if (rejectWrites || requested > 100000)
+			return telemetry::WriteResult::InvalidValue;
+		setpoint = requested;
+		return telemetry::WriteResult::Applied;
+	}
+
 	telemetry::WriteResult write(const Config& requested) noexcept
 	{
 		++writes;
@@ -414,9 +431,17 @@ constexpr auto extendedDescriptorBytes =
     telemetry::descriptor::packDescriptor<extendedDescriptor>();
 
 demo::WritableDevice writablePrototype;
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+constexpr telemetry::FieldTable writableFields{
+    telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
+                                                                                writablePrototype),
+    telemetry::field<&demo::WritableDevice::readSetpoint, &demo::WritableDevice::writeSetpoint>(
+        "Setpoint", writablePrototype)};
+#else
 constexpr telemetry::FieldTable writableFields{
     telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
                                                                                 writablePrototype)};
+#endif
 #ifdef TELEMETRY_TEST_BULK_WRITABLE
 // Test-only peer: one writable configuration and 65 independent scalar Fields.
 constexpr telemetry::FieldCatalogTable writableCatalogs{telemetry::group("device", writableFields),
@@ -453,7 +478,13 @@ struct DemoPeer::Impl {
 	demo::WritableDevice device;
 	decltype(writableFields) fields{
 	    telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
-	                                                                                device)};
+	                                                                                device)
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+	    ,
+	    telemetry::field<&demo::WritableDevice::readSetpoint, &demo::WritableDevice::writeSetpoint>(
+	        "Setpoint", device)
+#endif
+	};
 	decltype(writableCatalogs) catalogs{telemetry::group("device", fields)
 #ifdef TELEMETRY_TEST_BULK_WRITABLE
 	                                    , telemetry::group("scaling", extendedFields)

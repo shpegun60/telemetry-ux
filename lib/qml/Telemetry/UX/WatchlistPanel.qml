@@ -204,6 +204,16 @@ Pane {
                         onClicked: panel.provider.clearWatch()
                     }
                 }
+                // The outcome of the last write from a row, in words.
+                Label {
+                    objectName: "watchWriteOutcome"
+                    visible: panel.open && text.length > 0
+                    textFormat: Text.PlainText
+                    text: panel.provider.watchWriteOutcome === undefined ? "" : panel.provider.watchWriteOutcome
+                    color: "#f2d28a"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                }
                 Label {
                     objectName: "watchIntervalHint"
                     visible: panel.open
@@ -235,7 +245,31 @@ Pane {
                 required property string name
                 required property string status
                 required property string text
+                // Optional roles (writable, sampleValue, sampleExact) are read
+                // through the model object, so other providers need not have them.
+                required property var model
                 width: watchList.width
+                // A writable Field is changed in its own row, as in Live
+                // Expressions: double-click the value (or the pencil), Enter
+                // writes, Esc or clicking elsewhere cancels.
+                readonly property bool writable: model.writable === true &&
+                                                 panel.provider.canWriteWatch === true
+                property bool editing: false
+                function startEdit() {
+                    if (!writable || editing)
+                        return
+                    editing = true
+                    valueEditor.text = model.sampleExact === true ? String(model.sampleValue) : watchRow.text
+                    valueEditor.forceActiveFocus()
+                    valueEditor.selectAll()
+                }
+                function commitEdit() {
+                    if (!editing)
+                        return
+                    const value = valueEditor.text
+                    editing = false
+                    panel.provider.writeWatch(watchRow.index, value)
+                }
                 // Narrow panels wrap name, value and status over two lines; wide
                 // ones show one 28 px table row per Field.
                 readonly property bool compact: !panel.tableRows
@@ -281,6 +315,7 @@ Pane {
                         }
                         Label {
                             objectName: "watchValueText"
+                            visible: !watchRow.editing
                             textFormat: Text.PlainText
                             text: watchRow.text
                             font.family: "monospace"
@@ -295,6 +330,41 @@ Pane {
                             ToolTip.visible: valueHover.hovered && truncated
                             ToolTip.text: watchRow.text
                             HoverHandler { id: valueHover }
+                            TapHandler {
+                                enabled: watchRow.writable
+                                onDoubleTapped: watchRow.startEdit()
+                            }
+                            ToolButton {
+                                objectName: "watchEditButton"
+                                text: "\u270E"
+                                visible: watchRow.writable && (rowHover.hovered || visualFocus)
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 24
+                                height: 24
+                                padding: 0
+                                onClicked: watchRow.startEdit()
+                                Accessible.name: "Write " + watchRow.name
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Write a new value (or double-click the value)"
+                            }
+                        }
+                        TextField {
+                            id: valueEditor
+                            objectName: "watchValueEditor"
+                            visible: watchRow.editing
+                            font.family: "monospace"
+                            horizontalAlignment: watchRow.compact ? TextInput.AlignLeft : TextInput.AlignRight
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 60
+                            Layout.preferredHeight: watchRow.compact ? implicitHeight : 24
+                            topPadding: 2
+                            bottomPadding: 2
+                            onAccepted: watchRow.commitEdit()
+                            Keys.onEscapePressed: watchRow.editing = false
+                            // Clicking elsewhere cancels: nothing is written by accident.
+                            onActiveFocusChanged: if (!activeFocus && watchRow.editing) watchRow.editing = false
+                            Accessible.name: "New value for " + watchRow.name
                         }
                         // In a table row a good reading is a quiet dot; only a
                         // problem is spelled out (the full text is its tooltip).

@@ -347,6 +347,27 @@ void busySessionTicks()
 	watch.stop();
 }
 
+// Start while a Read once runs turns that cycle into the first one of polling
+// rather than being refused; the timer then repeats it.
+void startDuringReadOnce()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	CHECK(watch.begin(false) && peer.calls.size() == 1);
+	CHECK(watch.begin(true) && watch.active());
+	peer.finish();
+	watch.poll();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(watch.active() && !watch.pending()); // polling, between cycles
+	watch.tick();
+	CHECK(peer.calls.size() == 2 && watch.pending());
+	watch.stop();
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -619,6 +640,7 @@ int main(int argc, char** argv)
 	wakeAfterWrites();
 	continuousLowPriority();
 	busySessionTicks();
+	startDuringReadOnce();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();

@@ -90,6 +90,13 @@ small remove button clear of the scrollbar, framed when it has keyboard focus;
 cut text shows in full as a tooltip. Narrower panels wrap
 name, value and status over two lines instead.
 
+A writable Field is changed in its own row, as in Live Expressions: double-click
+the value (or press the pencil that appears on hover), type, and Enter writes; Esc
+or clicking elsewhere cancels, so nothing is written by accident. The editor opens
+with the exact number of the last reading. The outcome of the write shows under
+the toolbar in words. Rows are writable when the provider gives them a `writable`
+role and `canWriteWatch` is true; a provider without them shows no editor.
+
 `EndpointTreePanel` includes case-insensitive search by endpoint name or path
 (for example, `measure.Voltage`). Results display their full path; choosing one
 passes its original model index to the provider. Searching only examines the
