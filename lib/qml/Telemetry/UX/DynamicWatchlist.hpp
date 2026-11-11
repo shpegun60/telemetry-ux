@@ -63,6 +63,11 @@ public:
 	void setInterval(int milliseconds);
 	bool begin(bool polling);
 	void stop();
+	// After a write, Command, Service or Batch while polling. With the Field
+	// written, it is read again before the cycle goes on when this cycle has
+	// already read it (or its read was in flight); without one, the next cycle
+	// starts as soon as this one ends. Between cycles the next starts now.
+	void wake(std::optional<quint32> written = std::nullopt);
 
 private:
 	struct Impl;

@@ -196,6 +196,67 @@ void rowLimit()
 	CHECK(watch.count() == ux::watchlistRowLimit && peer.calls.empty());
 }
 
+// After a write while polling, the Watchlist reads again without waiting for
+// its timer. A Field this cycle already read, or had in flight while the write
+// waited, is read first; one not read yet waits for its turn. With no Field
+// named (a Command, Service or Batch) the next cycle follows this one at once,
+// and between cycles a wake starts the next one now.
+void wakeAfterWrites()
+{
+	const auto step = [](ux::DynamicWatchlist& watch, Peer& peer) {
+		peer.finish();
+		watch.poll();
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 65);
+	watch.setInterval(60000); // the timer never fires during this test
+	CHECK(watch.begin(true));
+	CHECK(peer.pending.size() == 32 && peer.pending.front() == 1);
+	step(watch, peer);
+	CHECK(peer.pending.size() == 32 && peer.pending.front() == 33); // in flight
+	watch.wake(5u);  // read earlier in this cycle
+	watch.wake(40u); // in flight: read before the write
+	watch.wake(65u); // not read yet: its turn comes after the write
+	watch.wake(5u);  // named twice, read once
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{5});
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{40});
+	CHECK(text(watch, 4) == QStringLiteral("5"));
+	step(watch, peer);
+	CHECK(peer.pending == std::vector<std::uint32_t>{65});
+	step(watch, peer);
+	CHECK(!peer.busy && !watch.pending()); // complete; the 60 s timer has not fired
+	const auto calls = peer.calls.size();
+	watch.wake();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(peer.calls.size() == calls + 1 && peer.pending.front() == 1);
+	step(watch, peer); // 33..64 in flight
+	watch.wake();      // a Command: whatever it changed is read in the next cycle
+	step(watch, peer); // 65
+	CHECK(peer.pending == std::vector<std::uint32_t>{65});
+	step(watch, peer); // complete, and the next cycle follows at once
+	CHECK(peer.busy && peer.pending.size() == 32 && peer.pending.front() == 1);
+	step(watch, peer);
+	step(watch, peer);
+	step(watch, peer);
+	CHECK(!peer.busy); // no further cycle without a new wake or tick
+	watch.stop();
+	// Not polling: a wake reads nothing.
+	const auto stopped = peer.calls.size();
+	watch.wake(5u);
+	watch.wake();
+	for (int i = 0; i < 4; ++i)
+		events();
+	CHECK(peer.calls.size() == stopped);
+}
+
 void trendCompletions()
 {
 	QObject owner;
@@ -458,6 +519,7 @@ int main(int argc, char** argv)
 	QCoreApplication app(argc, argv);
 	bulkPublication();
 	rowLimit();
+	wakeAfterWrites();
 	trendCompletions();
 	chunks();
 	budgetsAndFallback();

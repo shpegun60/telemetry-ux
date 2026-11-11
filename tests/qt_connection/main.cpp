@@ -239,10 +239,15 @@ void twoPanels()
 	CHECK(peer.requests() == requestsBeforeBulk && connection.workbench()->pending() == 0);
 	CHECK(first->editing() && first->selectedEndpointIndex() == oldSelection);
 	CHECK(first->values()->data(gain, ux::ValueModel::EditorTextRole) == draftText);
+	// The open draft does not hold the Watchlist. This peer serves no
+	// ReadMany, so the refusal is the capability's, said in the status, and
+	// the draft stays as it was.
 	first->refreshWatch();
 	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 	QCoreApplication::processEvents();
 	CHECK(peer.requests() == requestsBeforeBulk && !first->watchPending());
+	CHECK(first->watchStatus().startsWith(QStringLiteral("ReadMany unavailable")));
+	CHECK(first->editing() && first->values()->data(gain, ux::ValueModel::EditorTextRole) == draftText);
 	QSignalSpy applied(first, &ux::DynamicConfiguratorProvider::applyFinished);
 	CHECK(first->apply());
 	CHECK(await([&] {
@@ -296,10 +301,12 @@ void bulkSessionWatch()
 	connection.disconnect();
 }
 
-// Selecting a Command or Service opens its request editor, and the provider
-// then reports editing. That draft never touches a watched value: Read once and
-// polling go on. A Field edit still holds the Watchlist, and a refused start
-// says why instead of leaving the last status in place.
+// The Watchlist and the rest of the panel work together. Selecting a Command or
+// Service (its request editor is open, so the provider reports editing) leaves
+// Read once and polling going. While it polls, the tree selects, Details
+// refreshes, a Field draft stays open with polling going on, Apply writes and a
+// Command executes, all through the one ordered FIFO. A start refused because an
+// operation is in flight says so instead of leaving the last status in place.
 void requestSelectionKeepsWatchlist()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -357,21 +364,100 @@ void requestSelectionKeepsWatchlist()
 	CHECK(await([&] {
 		return peer.requests() >= polling + 3;
 	}));
+	// Writing while it polls: the draft leaves polling going and keeps its text,
+	// Apply writes and reads back, then a Command executes.
+	const auto config = endpoint(provider->endpoints(), QStringLiteral("Config"));
+	CHECK(await([&] {
+		return provider->selectEndpoint(config);
+	}));
+	CHECK(await([&] {
+		return provider->refresh();
+	}));
+	CHECK(await([&] {
+		return !provider->busy() && provider->values()->rowCount() == 1;
+	}));
+	provider->setAllowMutations(true);
+	CHECK(await([&] {
+		return provider->beginEdit();
+	}));
+	CHECK(provider->editing() && provider->watchActive());
+	const auto gain = member(provider->values(), QStringLiteral("Gain"));
+	CHECK(provider->setScalarText(gain, QStringLiteral("4.25")));
+	const auto draft = provider->values()->data(gain, ux::ValueModel::EditorTextRole);
+	polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
+	CHECK(provider->editing() && provider->values()->data(gain, ux::ValueModel::EditorTextRole) == draft);
+	QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+	const auto writes = peer.nativeWrites();
+	CHECK(await([&] {
+		return provider->apply();
+	}));
+	CHECK(await([&] {
+		return applied.count() == 1;
+	}));
+	CHECK(applied.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
+	CHECK(provider->values()->data(member(provider->values(), QStringLiteral("Gain")),
+	                               ux::ValueModel::ValueRole).toString() == QStringLiteral("4.25"));
+	CHECK(provider->watchActive());
+	const auto commands = peer.nativeCommands();
+	const auto execute = endpoint(provider->endpoints(), QStringLiteral("Execute"));
+	CHECK(await([&] {
+		return provider->selectEndpoint(execute);
+	}));
+	CHECK(await([&] {
+		return provider->executeCommand();
+	}));
+	CHECK(await([&] {
+		return !provider->busy() && peer.nativeCommands() == commands + 1;
+	}));
+	polling = peer.requests();
+	CHECK(await([&] {
+		return peer.requests() >= polling + 3;
+	}));
 	provider->stopWatch();
 	CHECK(await([&] {
 		return !provider->watchPending() && !provider->watchActive();
 	}));
-	// A Field edit holds the Watchlist, and the status names the reason.
-	readConfig(*provider);
-	provider->setAllowMutations(true);
-	CHECK(provider->beginEdit() && provider->editing());
-	const auto held = peer.requests();
+	// An operation in flight holds a new start, and the status says so.
+	const auto value1 = endpoint(provider->endpoints(), QStringLiteral("Value_1"));
+	CHECK(await([&] {
+		return provider->selectEndpoint(value1);
+	}));
+	CHECK(provider->refresh() && provider->busy());
 	provider->refreshWatch();
-	CHECK(!provider->watchPending() && peer.requests() == held);
-	CHECK(provider->watchStatus() ==
-	      QStringLiteral("Not started: a Field edit or an operation is in progress"));
-	provider->cancelEdit();
+	CHECK(!provider->watchPending());
+	CHECK(provider->watchStatus() == QStringLiteral("Not started: another operation is in progress"));
+	CHECK(await([&] {
+		return !provider->busy();
+	}));
 	CHECK(readOnce());
+	// Polling once a minute: a Command makes the Watchlist read again as soon
+	// as it completes, not when the minute is up.
+	provider->setWatchIntervalMs(60000);
+	provider->startWatch();
+	CHECK(await([&] {
+		return provider->watchActive() && !provider->watchPending() &&
+		       provider->watchStatus().contains(QStringLiteral("complete"));
+	}));
+	const auto quiet = peer.requests();
+	QTest::qWait(200);
+	CHECK(peer.requests() == quiet); // nothing until the timer
+	const auto executed = peer.nativeCommands();
+	CHECK(await([&] {
+		return provider->selectEndpoint(execute);
+	}));
+	CHECK(await([&] {
+		return provider->executeCommand();
+	}));
+	CHECK(await([&] {
+		return peer.nativeCommands() == executed + 1 && peer.requests() >= quiet + 2;
+	}));
+	provider->stopWatch();
+	CHECK(await([&] {
+		return !provider->watchPending() && !provider->watchActive();
+	}));
 	connection.disconnect();
 }
 

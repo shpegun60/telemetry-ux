@@ -75,13 +75,19 @@ Actions retain the existing provider signatures:
   `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
   `duplicate`, `unsupported` and `capacity`.
 
-While the Watchlist polls, selecting an endpoint, refreshing a Field into its
-Details and `cancelEdit()` still work: the Watchlist reads through the session
-and skips its tick while a foreground read is pending. Writes, Commands, Services,
-Batch and adding to the Watchlist wait until polling stops. Selecting a Command
-or Service opens its request editor (`editing` is true), which does not hold the
-Watchlist; only a Field edit or an operation in progress does, and then
-`refreshWatch()` / `startWatch()` leave `watchStatus` saying so.
+The Watchlist and the rest of the panel work together. While it polls, selecting
+an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all
+work; only adding or removing rows waits for polling to stop. An open draft
+(a Field edit, or the request editor a selected Command or Service opens) does not
+hold the Watchlist: a watch read never touches it. Requests interleave in the
+session's one ordered FIFO: the Watchlist keeps at most one portion (up to 32
+Fields) in it, so a write waits behind one exchange at most, and while the write
+is in flight the Watchlist sends nothing. Afterwards the written Field is read
+again at once if this cycle had already read it (or had it in flight); after a
+Command, Service or Batch the next cycle follows immediately instead of waiting
+for the timer. A start refused because an operation is in flight leaves
+`watchStatus` saying so. One Watchlist holds at most 1024 Fields
+(`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
 
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt

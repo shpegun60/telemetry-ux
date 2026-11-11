@@ -297,10 +297,12 @@ struct DynamicConfiguratorProvider::Impl {
 		return state && state->action != DynamicViewState::Action::None;
 	}
 
-	// Selecting an endpoint, reading it into Details and dropping a draft stay
-	// available while the Watchlist polls: the Watchlist reads through the
-	// session, skips its tick while a foreground read is pending, and holds
-	// no part of this view.
+	// Everything the panel does stays available while its Watchlist polls:
+	// selecting, reading into Details, editing, writing, Commands, Services
+	// and Batch. The Watchlist reads through the session's one ordered FIFO,
+	// skips its tick while any of these is pending, and holds no part of this
+	// view (a read never replaces the snapshot, a draft or a response). Other
+	// panels on the same session could always do this; now this one can too.
 	bool selectable() const
 	{
 		return current() && !busy() && !batch.active() && !updating && !endpoints.changing() &&
@@ -314,12 +316,12 @@ struct DynamicConfiguratorProvider::Impl {
 
 	bool mutate() const
 	{
-		return idle() && allowed && binding->mutationsAllowed() && !state->staleData;
+		return selectable() && allowed && binding->mutationsAllowed() && !state->staleData;
 	}
 
 	std::optional<BatchRow> batchRow(const QString& operation) const
 	{
-		if (!idle() || !invalid.isEmpty() || !state || state->staleData)
+		if (!selectable() || !invalid.isEmpty() || !state || state->staleData)
 			return {};
 		BatchRow row;
 		row.id = state->endpointId;
@@ -459,6 +461,12 @@ struct DynamicConfiguratorProvider::Impl {
 			state->dirty = false;
 		}
 		updating = false;
+		// A write, Command or Service may have changed watched values: the
+		// Watchlist reads them again now rather than on its next tick.
+		if (applyDone && state)
+			watch.wake(state->endpointId);
+		else if (commandDone || serviceDone)
+			watch.wake();
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive && readDone)
@@ -484,11 +492,10 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	    },
 	    [weak] {
 		    const auto p = weak.lock();
-		    // A selected Command or Service opens its request editor, which the
-		    // view also reports as editing; that draft never touches a watched
-		    // value, so only a Field edit holds the Watchlist.
-		    return !p || p->busy() || p->updating ||
-		           (p->state && p->state->view.editing() && p->category != 2 && p->category != 3);
+		    // Only an operation in flight (or a model update) holds the
+		    // Watchlist; an open draft, Field or request, does not: a watch
+		    // read never touches it.
+		    return !p || p->busy() || p->updating;
 	    });
 	d->batch.setNotify(
 	    [weak] {
@@ -497,7 +504,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	    },
 	    [weak] {
 		    const auto p = weak.lock();
-		    return !p || p->busy() || p->watch.active() || p->updating;
+		    return !p || p->busy() || p->updating;
 	    },
 	    [weak] {
 		    const auto p = weak.lock();
@@ -505,7 +512,10 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	    },
 	    [weak] {
 		    if (auto p = weak.lock(); p && p->q)
+		    {
+			    p->watch.wake();
 			    Q_EMIT p->q->batchFinished();
+		    }
 	    });
 	setBinding(binding);
 }

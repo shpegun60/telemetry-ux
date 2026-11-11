@@ -6,6 +6,7 @@
 #include <QtCore/QThread>
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace telemetry::ux {
 struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
@@ -13,6 +14,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		std::shared_ptr<void> storage;
 		std::uint64_t revision = 0;
 		int cursor = 0, count = 0;
+		bool urgent = false; // a written Field read again, outside the cycle's order
 		std::array<std::uint32_t, 32> ids{};
 		std::optional<WatchlistCompletion> completion;
 	};
@@ -31,6 +33,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	bool enabled = false, attached = false, running = false, cycle = false, individual = false;
 	bool publishing = false, queued = false, retiring = false, clearRetiredRows = false;
 	bool deferredQueued = false;
+	// Written Fields to read again before the cycle goes on, and whether the
+	// next cycle follows this one at once.
+	std::vector<quint32> urgent;
+	bool rerun = false;
 
 	explicit Impl(QObject* owner) : context(owner)
 	{
@@ -145,6 +151,56 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		    Qt::QueuedConnection);
 	}
 
+	int rowOf(quint32 id) const
+	{
+		for (int row = 0; row < model.count(); ++row)
+			if (model.id(row) == id)
+				return row;
+		return -1;
+	}
+
+	// One written Field per request, in the cycle's own mode. True when a read
+	// went out or the session asked to wait; the cycle then waits for it.
+	bool submitUrgent()
+	{
+		while (!urgent.empty()) {
+			const auto id = urgent.front();
+			if (rowOf(id) < 0) {
+				urgent.erase(urgent.begin());
+				continue;
+			}
+			if (individual ? !source.readField : (!source.readMany || !source.capability || !source.capability())) {
+				urgent.clear(); // the cycle's own read reports the missing capability
+				return false;
+			}
+			auto pending = std::make_shared<Request>();
+			pending->storage = source.storage;
+			pending->revision = revision;
+			pending->cursor = cursor;
+			pending->urgent = true;
+			pending->ids[0] = id;
+			pending->count = 1;
+			auto complete = WatchlistSource::Completion{pending, &pending->completion};
+			const auto submitted =
+			    individual ? source.readField(id, std::move(complete))
+			               : source.readMany(std::span<const std::uint32_t>{pending->ids}.first(1),
+			                                 std::move(complete));
+			if (!submitted) {
+				if (submitted.status == client::Status::Busy ||
+				    submitted.status == client::Status::QueueFull)
+					return true; // tried again on the next progress
+				urgent.erase(urgent.begin());
+				continue;
+			}
+			urgent.erase(urgent.begin());
+			request = std::move(pending);
+			status = QStringLiteral("Reading a written Field again");
+			changed();
+			return true;
+		}
+		return false;
+	}
+
 	void fail(QString message)
 	{
 		running = cycle = false;
@@ -164,6 +220,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		}
 		if (source.busy && source.busy())
 			return; // No accumulation behind foreground/other panels.
+		if (submitUrgent())
+			return;
 		if (cursor >= model.count()) {
 			cycle = false;
 			status = QStringLiteral("%1 complete - %2 Fields")
@@ -171,6 +229,12 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			                             : QStringLiteral("ReadMany"))
 			             .arg(model.count());
 			changed();
+			if (rerun && running && !guarded()) {
+				rerun = false;
+				cycle = true;
+				cursor = 0;
+				continueCycle();
+			}
 			return;
 		}
 		auto pending = std::make_shared<Request>();
@@ -249,6 +313,17 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			auto result = std::move(*completed->completion);
 			if (completed->revision != revision || !current()) {
 				status = QStringLiteral("Stopped - accepted read drained");
+			} else if (completed->urgent) {
+				// Matched by id: rows may have moved since it was sent. A failed
+				// read leaves the row to the next cycle.
+				const auto row = rowOf(completed->ids[0]);
+				if (result.status == client::Status::Ok && result.count == 1 && row >= 0 &&
+				    result.rows[0].id == completed->ids[0]) {
+					publishing = true;
+					model.setResult(row, std::move(result.rows[0].status),
+					                std::move(result.rows[0].text), result.rows[0].sample);
+					publishing = false;
+				}
 			} else {
 				bool valid = result.status == client::Status::Ok &&
 				             result.count == completed->count && result.count > 0 &&
@@ -551,7 +626,7 @@ bool DynamicWatchlist::begin(bool polling)
 		return false;
 	if (p->unavailable()) {
 		// Refused for a reason the operator can act on: say it.
-		p->status = QStringLiteral("Not started: a Field edit or an operation is in progress");
+		p->status = QStringLiteral("Not started: another operation is in progress");
 		p->changed();
 		return false;
 	}
@@ -562,6 +637,38 @@ bool DynamicWatchlist::begin(bool polling)
 		p->timer.start();
 	p->next();
 	return p->cycle || bool(p->request);
+}
+
+void DynamicWatchlist::wake(std::optional<quint32> written)
+{
+	auto p = d;
+	if (p->guarded() || !p->running || !p->current())
+		return;
+	if (!p->cycle) {
+		// Between cycles: the next one starts now, not on the timer.
+		const std::weak_ptr<Impl> weak = p;
+		QMetaObject::invokeMethod(
+		    p->context,
+		    [weak] {
+			    if (auto self = weak.lock())
+				    self->tick();
+		    },
+		    Qt::QueuedConnection);
+		return;
+	}
+	if (written) {
+		// Rows before the cursor were read before the write; so was a portion in
+		// flight, sent while the write waited. Later rows are read after it.
+		const auto row = p->rowOf(*written);
+		const int reached =
+		    p->cursor + (p->request && !p->request->urgent ? p->request->count : 0);
+		if (row >= 0 && row < reached &&
+		    std::find(p->urgent.begin(), p->urgent.end(), *written) == p->urgent.end())
+			p->urgent.push_back(*written);
+	} else {
+		p->rerun = true;
+	}
+	p->continueCycle();
 }
 
 void DynamicWatchlist::stop()

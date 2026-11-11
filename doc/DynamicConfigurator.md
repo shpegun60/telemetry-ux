@@ -148,9 +148,10 @@ The endpoint tree also supports marking several readable Fields independently
 of the Field open in the editor, then adding them together. Adding does not
 start a read or change the selected Field or its draft. Scalar Fields and
 enums can be watched; duplicate and unsupported choices are reported and
-skipped. An active draft on the same provider prevents a watch read or poll
-from starting until the draft is finished or cancelled. An independent panel
-may use the same Session and FIFO.
+skipped. An open draft on the same provider (a Field edit or a Command or
+Service request) does not hold the Watchlist: reads never touch it. Writes,
+Commands, Services and Batch run while it polls, from this panel as from an
+independent one on the same Session and FIFO.
 
 The optional Qt provider API `addWatchMany(QVariantList sourceIndexes)` accepts
 indexes from that provider's `endpoints` model. Its result map has `status`
@@ -164,13 +165,18 @@ The 32-Field bound applies to a ReadMany request, not the watch list.
 
 **Read once** reads the selected list sequentially. ReadMany uses at most 32
 Fields in one exchange and obeys both advertised request and response byte
-limits; a list of 65 U64 Fields normally needs 32 + 32 + 1. The UI list has no
-32-item limit and grows with available host memory, up to Qt's row-index limit.
+limits; a list of 65 U64 Fields normally needs 32 + 32 + 1. The UI list holds at
+most 1024 Fields (32 ReadMany portions per cycle); adding past it reports
+`capacity`.
 The list is not an atomic measurement snapshot.
 
 **Start polling** accepts intervals from 1 to 60000 milliseconds. This is a
 nominal scheduling interval, not a promised device update rate. A slow exchange
 or busy shared Session skips ticks instead of appending queued poll requests.
+While another request of this panel is in flight the Watchlist sends nothing.
+After a write the written Field is read again at once when this cycle already
+read it (or had it in flight); after a Command, Service or Batch the next cycle
+follows this one immediately rather than on the timer.
 Each panel retains at most one accepted watch request. Stop disables future
 submissions immediately and drains accepted work; membership, mode and timing
 remain locked until that completion. A read does not replace the panel's
