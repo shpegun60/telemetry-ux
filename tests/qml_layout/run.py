@@ -109,6 +109,12 @@ def main():
         if not trend_match or int(trend_match[1]) < 20:
             raise RuntimeError('missing trend UI contract')
         report['trend'] = dict(checks=int(trend_match[1]), executable_sha256=digest(trend_binary))
+        actions_binary = output / 'build' / ('telemetry_qml_tree_actions.exe' if os.name == 'nt' else 'telemetry_qml_tree_actions')
+        actions_text = run('tree-actions', [actions_binary])
+        actions_match = re.search(r'QML tree-actions checks=(\d+) warnings=0', actions_text)
+        if not actions_match or int(actions_match[1]) < 60:
+            raise RuntimeError('missing tree-actions UI contract')
+        report['tree_actions'] = dict(checks=int(actions_match[1]), executable_sha256=digest(actions_binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:
