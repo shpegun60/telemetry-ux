@@ -7,6 +7,7 @@
 #include <QtTest/QSignalSpy>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 #include <utility>
 
@@ -93,6 +94,12 @@ struct Peer {
 			                        : pending[row] == 2 ? QStringLiteral("-9223372036854775808")
 			                        : pending[row] == 3 ? QStringLiteral("-123 (unknown)")
 			                                            : QString::number(pending[row]);
+			// The typed facts a real binding takes from the same value (sampleOf).
+			result.rows[row].sample =
+			    pending[row] == 1   ? ux::WatchSample::ofUnsigned(18446744073709551615ULL)
+			    : pending[row] == 2 ? ux::WatchSample::ofSigned(std::numeric_limits<long long>::min())
+			    : pending[row] == 3 ? ux::WatchSample::ofSigned(-123)
+			                        : ux::WatchSample::ofUnsigned(pending[row]);
 		}
 		if (malformed)
 			result.rows[0].id = 999;
@@ -181,6 +188,13 @@ void trendCompletions()
 	}
 	CHECK(trend.points().size() == 2);
 	CHECK(!trend.points().last().toMap().value("breakBefore").toBool());
+	CHECK(trend.points().last().toMap().value("value").toDouble() == 4.0);
+	const auto* model = watch.model();
+	const auto first = model->index(0, 0);
+	CHECK(model->data(first, ux::WatchlistModel::SampleValueRole).toDouble() == 4.0);
+	CHECK(model->data(first, ux::WatchlistModel::SampleExactRole).toBool());
+	CHECK(model->data(first, ux::WatchlistModel::StatusCodeRole).toInt() ==
+	      int(ux::WatchStatus::Ok));
 	watch.setIndividual(true);
 	CHECK(watch.begin(false));
 	peer.finish(); watch.poll(); events();

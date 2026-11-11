@@ -17,25 +17,42 @@ void messages(QtMsgType type, const QMessageLogContext&, const QString& message)
     std::fprintf(stderr, "%s\n", qPrintable(message));
 }
 #define CHECK(x) do { ++checks; if (!(x)) { qCritical() << "Trend failure" << __LINE__ << #x; return 1; } } while (false)
+// A provider model supplies typed sample facts beside its display text; the fake
+// derives them from the test's literal the way a provider derives them from a value.
+telemetry::ux::WatchSample sampleFrom(const QString& text) {
+    using telemetry::ux::WatchSample;
+    bool ok = false;
+    if (const auto s = text.toLongLong(&ok); ok) return WatchSample::ofSigned(s);
+    if (const auto u = text.toULongLong(&ok); ok) return WatchSample::ofUnsigned(u);
+    const double d = text.toDouble(&ok);
+    return ok ? WatchSample::ofFloating(d) : WatchSample{};
+}
 class Source : public QAbstractListModel {
 public:
-    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); };
-    enum { Name = Qt::UserRole + 1, Status, Text, Revision, Epoch };
-    QList<Row> rows{{QStringLiteral("First"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1")},
-                    {QStringLiteral("Second"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1")}};
+    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); telemetry::ux::WatchSample sample; };
+    enum { Name = Qt::UserRole + 1, Status, Text, Revision, Epoch, Value, Exact, Code };
+    QList<Row> rows{{QStringLiteral("First"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}},
+                    {QStringLiteral("Second"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}}};
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : int(rows.size()); }
     QVariant data(const QModelIndex& index, int role) const override {
         if (!index.isValid() || index.row() < 0 || index.row() >= rows.size()) return {};
         const auto& r = rows[index.row()];
         switch (role) { case Name: return r.name; case Status: return r.status; case Text: return r.text;
-                        case Revision: return r.rev; case Epoch: return r.epoch; default: return {}; }
+                        case Revision: return r.rev; case Epoch: return r.epoch;
+                        case Value: return r.sample.role(); case Exact: return r.sample.exact;
+                        case Code: return int(telemetry::ux::watchStatusCode(r.status)); default: return {}; }
     }
     QHash<int,QByteArray> roleNames() const override {
-        return {{Name,"name"},{Status,"status"},{Text,"sampleText"},{Revision,"sampleRevision"},{Epoch,"sampleEpoch"}};
+        return {{Name,"name"},{Status,"status"},{Text,"sampleText"},{Revision,"sampleRevision"},{Epoch,"sampleEpoch"},
+                {Value,"sampleValue"},{Exact,"sampleExact"},{Code,"statusCode"}};
     }
     void publish(int i, QString status, QString value, QString revision, QString epoch = QStringLiteral("1")) {
-        auto& r = rows[i]; r.status = status; r.text = value; r.rev = revision; r.epoch = epoch;
-        Q_EMIT dataChanged(index(0, 0), index(int(rows.size())-1, 0), {Status, Text, Revision, Epoch});
+        publishSample(i, status, value, sampleFrom(value), revision, epoch);
+    }
+    void publishSample(int i, QString status, QString value, telemetry::ux::WatchSample sample, QString revision,
+                       QString epoch = QStringLiteral("1")) {
+        auto& r = rows[i]; r.status = status; r.text = value; r.rev = revision; r.epoch = epoch; r.sample = sample;
+        Q_EMIT dataChanged(index(0, 0), index(int(rows.size())-1, 0), {Status, Text, Revision, Epoch, Value, Exact, Code});
     }
     void remove(int i) { beginRemoveRows({}, i, i); rows.removeAt(i); endRemoveRows(); }
     void move(int from, int to) {
@@ -77,6 +94,18 @@ int main(int argc, char** argv) {
     CHECK(h.points().size() == 4 && h.points().last().toMap().value("breakBefore").toBool());
     source.publish(1, "Ok", "7", "5", "2");
     CHECK(h.points().size() == 5 && h.points().last().toMap().value("breakBefore").toBool());
+    // The number comes from the typed sample, never from the display text: a
+    // plain-looking text without an exact sample is not plotted, and an enum's
+    // display text ("Known (1)") with an exact sample is plotted as its code.
+    source.publishSample(1, "Ok", "8.5", {}, "6", "2");
+    CHECK(h.points().size() == 5 && h.state().contains("losing"));
+    source.publishSample(1, "Ok", "Known (1)", telemetry::ux::WatchSample::ofSigned(1), "7", "2");
+    CHECK(h.points().size() == 6 && h.points().last().toMap().value("value").toDouble() == 1.0);
+    CHECK(h.points().last().toMap().value("text") == "Known (1)");
+    // Both providers' wordings of "not read" leave the line unbroken.
+    source.publish(1, "Not read", {}, "7", "2");
+    source.publish(1, "Ok", "9", "8", "2");
+    CHECK(h.points().size() == 7 && !h.points().last().toMap().value("breakBefore").toBool());
     source.remove(0);
     CHECK(h.row() == 0);
     for (int i=6; i<540; ++i) source.publish(0, "Ok", QString::number(i), QString::number(i), "2");
@@ -87,14 +116,27 @@ int main(int argc, char** argv) {
     CHECK(real.add(42, QStringLiteral("Real")));
     TrendHistory native;
     native.setSource(&real); native.setRow(0);
-    CHECK(real.setResult(0, "Ok", "3.25"));
-    CHECK(real.setResult(0, "Ok", "3.25"));
+    using telemetry::ux::WatchSample;
+    CHECK(real.setResult(0, "Ok", "3.25", WatchSample::ofFloating(3.25)));
+    CHECK(real.setResult(0, "Ok", "3.25", WatchSample::ofFloating(3.25)));
     CHECK(native.points().size() == 2 && !native.points().last().toMap().value("breakBefore").toBool());
+    const int valueRole = real.roleNames().key("sampleValue");
+    const int exactRole = real.roleNames().key("sampleExact");
+    const int codeRole = real.roleNames().key("statusCode");
+    CHECK(real.data(real.index(0, 0), valueRole).toDouble() == 3.25);
+    CHECK(real.data(real.index(0, 0), exactRole).toBool());
+    CHECK(real.data(real.index(0, 0), codeRole).toInt() == int(telemetry::ux::WatchStatus::Ok));
     real.invalidateValues();
     const int sampleRole = real.roleNames().key("sampleText");
     CHECK(real.data(real.index(0, 0), sampleRole).toString().isEmpty());
-    CHECK(real.setResult(0, "Ok", "3.5"));
+    CHECK(!real.data(real.index(0, 0), valueRole).isValid() && !real.data(real.index(0, 0), exactRole).toBool());
+    CHECK(real.data(real.index(0, 0), codeRole).toInt() == int(telemetry::ux::WatchStatus::Stale));
+    CHECK(real.setResult(0, "Ok", "3.5", WatchSample::ofFloating(3.5)));
     CHECK(native.points().size() == 3 && native.points().last().toMap().value("breakBefore").toBool());
+    // U64 beyond 2^53 - 1 keeps its exact text and is not plotted.
+    CHECK(real.setResult(0, "Ok", "18446744073709551615", WatchSample::ofUnsigned(18446744073709551615ULL)));
+    CHECK(native.points().size() == 3 && !real.data(real.index(0, 0), exactRole).toBool());
+    CHECK(!real.data(real.index(0, 0), valueRole).isValid());
     // Slots may destroy or replace a history synchronously during publication.
     {
         auto* doomed = new TrendHistory;
@@ -140,7 +182,7 @@ int main(int argc, char** argv) {
         auto* doomed = new TrendHistory;
         doomed->setSource(&real); doomed->setRow(0);
         QObject::connect(doomed, &TrendHistory::stateChanged, [&] { delete doomed; doomed = nullptr; });
-        CHECK(real.setResult(0, "Ok", "7"));
+        CHECK(real.setResult(0, "Ok", "7", WatchSample::ofSigned(7)));
         CHECK(doomed == nullptr);
     }
     {

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "DynamicModels.hpp"
+#include "WatchSample.hpp"
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QVector>
@@ -26,7 +27,10 @@ public:
 		TextRole,
 		SampleRevisionRole,
 		SampleTextRole,
-		SampleEpochRole
+		SampleEpochRole,
+		SampleValueRole, // double of the last Ok reading when exact, else no value
+		SampleExactRole, // whether that reading is a finite number a double holds exactly
+		StatusCodeRole   // int(WatchStatus), stable across providers
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = std::numeric_limits<int>::max();
@@ -38,7 +42,7 @@ public:
 	bool remove(int row);
 	void clear();
 	void invalidateValues();
-	bool setResult(int row, QString status, QString text);
+	bool setResult(int row, QString status, QString text, WatchSample sample = {});
 	[[nodiscard]] quint32 id(int row) const noexcept;
 	[[nodiscard]] int count() const noexcept;
 	[[nodiscard]] bool changing() const noexcept;
@@ -49,6 +53,8 @@ public:
 	// Convert while the borrowed view is current; the returned text owns all
 	// digits. NaN payloads and signed zero retain their exact hexadecimal bits.
 	[[nodiscard]] static QString formatValue(const telemetry::runtime::DynamicValueView& value);
+	// The same value as a number for plotting, from the typed view, never from text.
+	[[nodiscard]] static WatchSample sampleOf(const telemetry::runtime::DynamicValueView& value);
 
 private:
 	struct Row {
@@ -56,6 +62,7 @@ private:
 		quintptr token = 0;
 		QString name, status, text, sampleText;
 		quint64 sampleRevision = 0;
+		WatchSample sample;
 	};
 
 	QVector<Row> rows_;
