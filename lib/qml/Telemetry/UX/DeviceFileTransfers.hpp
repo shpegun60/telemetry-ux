@@ -77,6 +77,9 @@ public:
 	// local path download() takes, and a local path as a URL to open.
 	Q_INVOKABLE static QString localFileOf(const QUrl& url);
 	Q_INVOKABLE static QUrl urlOfLocalFile(const QString& path);
+	// The local file a row writes, as download() was given it; rows move when
+	// finished ones are cleared, so a host keys its own records by this.
+	Q_INVOKABLE QString localFileAt(int row) const;
 	Q_INVOKABLE void cancel(int row);
 	// Starts a failed or cancelled download again, in its own row, from the
 	// first byte. False when the row is still running, saved, or not connected.

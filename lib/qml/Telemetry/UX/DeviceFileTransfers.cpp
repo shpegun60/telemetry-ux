@@ -244,6 +244,13 @@ QUrl DeviceFileTransfers::urlOfLocalFile(const QString& path)
 	return QUrl::fromLocalFile(path);
 }
 
+QString DeviceFileTransfers::localFileAt(int row) const
+{
+	if (row < 0 || row >= static_cast<int>(jobs_.size()))
+		return {};
+	return jobs_[static_cast<std::size_t>(row)]->localFile;
+}
+
 int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong size,
                                   const QString& localFile)
 {
