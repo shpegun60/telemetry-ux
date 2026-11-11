@@ -29,6 +29,7 @@ Pane {
         spacing: 16
         Loader { Layout.fillWidth: true; active: panel.headerComponent !== null; sourceComponent: panel.headerComponent }
         GridLayout {
+            id: selectionHeader
             Layout.fillWidth: true
             columns: width < 560 ? 1 : 2
             Label {
@@ -40,8 +41,24 @@ Pane {
                 Layout.fillWidth: true
                 elide: Text.ElideMiddle
             }
-            RowLayout {
+            // One row beside the title when the panel is wide; in a narrow dock
+            // the actions wrap under the title so every button stays inside it.
+            Flow {
+                id: selectionActions
                 objectName: "endpointSelectionActions"
+                spacing: 6
+                readonly property real rowWidth: {
+                    let total = 0, shown = 0
+                    for (let i = 0; i < children.length; ++i) {
+                        if (children[i].visible) {
+                            total += children[i].implicitWidth
+                            ++shown
+                        }
+                    }
+                    return total + Math.max(0, shown - 1) * spacing
+                }
+                Layout.fillWidth: selectionHeader.columns === 1
+                Layout.preferredWidth: selectionHeader.columns === 1 ? -1 : rowWidth
                 BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: 30; implicitHeight: 30 }
                 Button {
                     objectName: "editButton"
@@ -97,7 +114,9 @@ Pane {
                 objectName: "valueTree"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 280
+                // Fits a 280 px dock (256 px of content); two columns appear only
+                // from 650 px, where each is wider than this anyway.
+                Layout.minimumWidth: 160
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
                 clip: true
                 model: panel.provider.values
@@ -181,7 +200,9 @@ Pane {
                 visible: panel.showResponse
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 280
+                // Fits a 280 px dock (256 px of content); two columns appear only
+                // from 650 px, where each is wider than this anyway.
+                Layout.minimumWidth: 160
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
                 Label {
                     textFormat: Text.PlainText
