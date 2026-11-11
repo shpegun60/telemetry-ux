@@ -19,6 +19,14 @@ Pane {
     palette.placeholderText: "#718297"
     objectName: "watchlistPane"
     property bool expanded: false
+    // A host that gives the Watchlist its own dock sets this false: the list is
+    // then always open and the fold box is not shown.
+    property bool collapsible: true
+    // Wide panels show one line per Field as a table; narrow ones wrap.
+    readonly property bool tableRows: watchList.width >= 500
+    readonly property real nameColumnWidth: Math.min(280, Math.max(140, watchList.width * 0.38))
+    readonly property real statusColumnWidth: 130
+    readonly property real removeColumnWidth: 30
     property real headerImplicitHeight: 0
     // Preserve either the top, a keyboard-focused control, or the user's
     // chosen relative scroll offset as the header resizes.
@@ -100,6 +108,7 @@ Pane {
                     CheckBox {
                         id: watchPanelExpanded
                         objectName: "watchlistExpanded"
+                        visible: panel.collapsible
                         text: "Watchlist " + panel.provider.watchCount
                         // One state, two ways in: a host may set `expanded`
                         // (e.g. a program that opens the list by default) and
@@ -194,6 +203,18 @@ Pane {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                 }
+                // Column titles over the one-line table rows.
+                RowLayout {
+                    objectName: "watchColumns"
+                    visible: panel.expanded && panel.tableRows && panel.provider.watchCount > 0
+                    Layout.fillWidth: true
+                    Layout.topMargin: 4
+                    spacing: 8
+                    Label { objectName: "watchColumnName"; text: "Name"; color: "#8597ab"; font.pixelSize: 12; Layout.leftMargin: 8; Layout.preferredWidth: panel.nameColumnWidth - 8 }
+                    Label { objectName: "watchColumnValue"; text: "Value"; color: "#8597ab"; font.pixelSize: 12; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
+                    Label { objectName: "watchColumnStatus"; text: "Status"; color: "#8597ab"; font.pixelSize: 12; Layout.preferredWidth: panel.statusColumnWidth }
+                    Item { Layout.preferredWidth: panel.removeColumnWidth }
+                }
             }
             delegate: Item {
                 id: watchRow
@@ -203,8 +224,20 @@ Pane {
                 required property string status
                 required property string text
                 width: watchList.width
-                height: rowLayout.implicitHeight + 8
-                readonly property bool compact: width < 500
+                // Narrow panels wrap name, value and status over two lines; wide
+                // ones show one 28 px table row per Field.
+                readonly property bool compact: !panel.tableRows
+                readonly property bool ok: status === "Ok"
+                // Waiting is not a problem; Stale and failures are.
+                readonly property bool problem: !ok && status !== "" && status !== "Pending" && status !== "Not read" && status !== "NotRead"
+                height: compact ? rowLayout.implicitHeight + 8 : 28
+                Rectangle {
+                    anchors.fill: parent
+                    visible: !watchRow.compact
+                    radius: 3
+                    color: rowHover.hovered ? "#22303f" : (watchRow.index % 2 ? "#151d27" : "transparent")
+                }
+                HoverHandler { id: rowHover }
                 ColumnLayout {
                     id: rowLayout
                     anchors.left: parent.left
@@ -220,42 +253,77 @@ Pane {
                     }
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: watchRow.compact ? 5 : 8
                         Label {
                             visible: !watchRow.compact
                             textFormat: Text.PlainText
                             text: watchRow.name
-                            Layout.preferredWidth: Math.min(260, watchList.width / 3)
+                            Layout.leftMargin: 8
+                            Layout.preferredWidth: panel.nameColumnWidth - 8
                             elide: Text.ElideMiddle
+                            ToolTip.visible: nameHover.hovered && truncated
+                            ToolTip.text: watchRow.name
+                            HoverHandler { id: nameHover }
                         }
                         Label {
                             objectName: "watchValueText"
                             textFormat: Text.PlainText
                             text: watchRow.text
                             font.family: "monospace"
-                            color: "#83e1ce"
+                            color: watchRow.ok ? "#83e1ce" : "#8597ab"
+                            horizontalAlignment: watchRow.compact ? Text.AlignLeft : Text.AlignRight
                             Layout.fillWidth: true
                             Layout.minimumWidth: 1
-                            wrapMode: Text.WrapAnywhere
-                            Layout.fillHeight: true
-                            Layout.minimumHeight: paintedHeight
+                            wrapMode: watchRow.compact ? Text.WrapAnywhere : Text.NoWrap
+                            elide: watchRow.compact ? Text.ElideNone : Text.ElideRight
+                            Layout.fillHeight: watchRow.compact
+                            Layout.minimumHeight: watchRow.compact ? paintedHeight : 0
+                            ToolTip.visible: valueHover.hovered && truncated
+                            ToolTip.text: watchRow.text
+                            HoverHandler { id: valueHover }
+                        }
+                        // In a table row a good reading is a quiet dot; only a
+                        // problem is spelled out (the full text is its tooltip).
+                        Item {
+                            visible: !watchRow.compact && watchRow.ok
+                            Layout.preferredWidth: panel.statusColumnWidth
+                            implicitHeight: 16
+                            Rectangle {
+                                width: 8
+                                height: 8
+                                radius: 4
+                                color: "#5fd0a0"
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
                         }
                         Label {
                             objectName: "watchRowStatus"
+                            visible: watchRow.compact || !watchRow.ok
                             textFormat: Text.PlainText
                             text: watchRow.status
-                            color: "#99abbf"
+                            color: watchRow.problem && !watchRow.compact ? "#f2b96a" : "#99abbf"
                             Layout.minimumWidth: 1
-                            Layout.preferredWidth: watchRow.compact ? Math.min(100, watchList.width / 4) : implicitWidth
-                            wrapMode: Text.WrapAnywhere
-                            Layout.fillHeight: true
-                            Layout.minimumHeight: paintedHeight
+                            Layout.preferredWidth: watchRow.compact ? Math.min(100, watchList.width / 4) : panel.statusColumnWidth
+                            wrapMode: watchRow.compact ? Text.WrapAnywhere : Text.NoWrap
+                            elide: watchRow.compact ? Text.ElideNone : Text.ElideRight
+                            Layout.fillHeight: watchRow.compact
+                            Layout.minimumHeight: watchRow.compact ? paintedHeight : 0
+                            ToolTip.visible: statusHover.hovered && truncated
+                            ToolTip.text: watchRow.status
+                            HoverHandler { id: statusHover }
                         }
                         Button {
                             objectName: "removeWatchButton"
                             property int watchRowIndex: watchRow.index
-                            text: "Remove"
+                            text: watchRow.compact ? "Remove" : "×"
+                            flat: !watchRow.compact
+                            Layout.preferredWidth: watchRow.compact ? implicitWidth : panel.removeColumnWidth
+                            Layout.preferredHeight: watchRow.compact ? implicitHeight : 24
                             enabled: !panel.provider.watchActive
                             onClicked: panel.provider.removeWatch(watchRow.index)
+                            Accessible.name: "Remove " + watchRow.name
+                            ToolTip.visible: hovered && !watchRow.compact
+                            ToolTip.text: "Remove from the Watchlist"
                         }
                     }
                 }
