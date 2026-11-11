@@ -4,6 +4,7 @@
  * @author Ruslan Kovtun (shpegun60), codexAi
  * SPDX-License-Identifier: MIT
  */
+#include <cmath>
 #include "InspectorController.hpp"
 #include "DemoPeer.hpp"
 #include <wire/EncodedWire.hpp>
@@ -79,15 +80,15 @@ void modelChecks()
 	CHECK(!model.add(0, "duplicate") && !model.add(2, {}));
 	QSignalSpy changed{&model, &QAbstractItemModel::dataChanged};
 	QString value = QStringLiteral("18446744073709551615");
-	CHECK(model.setResult(0, "Ok", value));
+	CHECK(model.setResult(0, "Ok", value, telemetry::ux::WatchSample::ofUnsigned(18446744073709551615ULL)));
 	value.fill(QLatin1Char('0'));
 	CHECK(model.data(model.index(0, 0), ui::WatchlistModel::TextRole).toString() ==
 	      "18446744073709551615");
-	CHECK(changed.count() == 1 && !model.setResult(-1, {}, {}));
+	CHECK(changed.count() == 1 && !model.setResult(-1, {}, {}, {}));
 	bool resultGuard = false;
 	const auto notification =
 	    QObject::connect(&model, &QAbstractItemModel::dataChanged, &model, [&] {
-		    resultGuard = model.changing() && !model.remove(0) && !model.setResult(0, {}, {});
+		    resultGuard = model.changing() && !model.remove(0) && !model.setResult(0, {}, {}, {});
 	    });
 	model.invalidateValues();
 	CHECK(resultGuard && model.data(model.index(0, 0), ui::WatchlistModel::StatusRole) == "Stale");
@@ -120,7 +121,8 @@ void formattingChecks()
 	rt::RuntimeSchemaWorkspace metadata{types, members, enums, catalogs, endpoints};
 	const auto parsed = rt::RuntimeSchema::parse(peer.descriptor(), metadata);
 	CHECK(parsed);
-	const auto text = [&](std::string_view group, std::string_view name) {
+	// Reads one Field from the demo peer and hands its borrowed view to `use`.
+	const auto withValue = [&](std::string_view group, std::string_view name, auto&& use) {
 		const auto* field = parsed.schema.findField(group, name);
 		CHECK(field);
 		const auto* type = parsed.schema.type(field->typeId);
@@ -140,7 +142,13 @@ void formattingChecks()
 		CHECK(response);
 		const auto value = parsed.schema.view(field->typeId, response.payload);
 		CHECK(value);
-		return ui::WatchlistModel::formatValue(value.value);
+		return use(value.value);
+	};
+	const auto text = [&](std::string_view group, std::string_view name) {
+		return withValue(group, name, [](const auto& v) { return ui::WatchlistModel::formatValue(v); });
+	};
+	const auto sample = [&](std::string_view group, std::string_view name) {
+		return withValue(group, name, [](const auto& v) { return ui::WatchlistModel::sampleOf(v); });
 	};
 	CHECK(text("wide", "U64_0") == "18446744073709551615");
 	CHECK(text("signed", "S64_0") == "-9223372036854775808");
@@ -152,6 +160,17 @@ void formattingChecks()
 	CHECK(text("precise", "F64_0") == "NaN (0x7ff8123456789abc)");
 	CHECK(text("precise", "F64_1") == "-0 (0x8000000000000000)");
 	CHECK(text("precise", "F64_2") == "2.5" && text("precise", "F64_3") == "inf");
+	// The Trend's number comes from the same typed view: exact only for finite
+	// numbers a double carries without loss; enums give their code.
+	CHECK(!sample("wide", "U64_0").exact && !sample("signed", "S64_0").exact);
+	CHECK(sample("flags", "Bool_0").exact && sample("flags", "Bool_0").value == 1.0);
+	CHECK(sample("flags", "Bool_1").exact && sample("flags", "Bool_1").value == 0.0);
+	CHECK(sample("modes", "Enum_0").exact && sample("modes", "Enum_0").value == -2.0);
+	CHECK(!sample("real", "F32_0").exact && !sample("real", "F32_3").exact);
+	CHECK(sample("real", "F32_1").exact && std::signbit(sample("real", "F32_1").value));
+	CHECK(sample("real", "F32_2").exact && sample("real", "F32_2").value == 1.25);
+	CHECK(!sample("precise", "F64_0").exact && !sample("precise", "F64_3").exact);
+	CHECK(sample("precise", "F64_2").exact && sample("precise", "F64_2").value == 2.5);
 	ui::DemoPeer legacy;
 	CHECK(!legacy.readManyEnabled() && legacy.descriptor().size() < peer.descriptor().size());
 }
