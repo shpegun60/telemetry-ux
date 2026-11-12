@@ -16,6 +16,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QPointer>
+#include <memory>
 
 namespace telemetry::ux {
 namespace {
@@ -140,8 +141,16 @@ void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession
 	// A file that waits for its descriptor gets another try whenever the
 	// connection changes: a device admitted may have it, and what the view
 	// says about the connected device stays true.
-	if (session)
+	if (session) {
+		auto connectedBefore = std::make_shared<bool>(session->ready());
 		QObject::connect(session, &integration::qt::ConnectionSession::stateChanged, &files,
-		                 [&files] { files.contextChanged(); });
+		                 [&files, connected, connectedBefore] {
+			                 const bool now = connected && connected->ready();
+			                 if (now == *connectedBefore)
+				                 return;
+			                 *connectedBefore = now;
+			                 files.contextChanged();
+		                 });
+	}
 }
 } // namespace telemetry::ux

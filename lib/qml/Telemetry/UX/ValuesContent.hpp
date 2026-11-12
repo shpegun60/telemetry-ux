@@ -97,7 +97,7 @@ class ValuesContent final : public QObject {
 	// "4 Fields in 2 groups · 1 unavailable"
 	Q_PROPERTY(QString summary READ summary NOTIFY shownChanged)
 	// The header's fields and every Field's status and value bytes, for the hex view.
-	Q_PROPERTY(QVariantList regions READ regions NOTIFY shownChanged)
+	Q_PROPERTY(QVariantList regions READ regions NOTIFY regionsChanged)
 	// The tree as shown: everything, or what Find keeps. Its indexes are the
 	// ones the methods below take.
 	Q_PROPERTY(QAbstractItemModel* fields READ fields CONSTANT)
@@ -172,6 +172,8 @@ Q_SIGNALS:
 	void shownChanged();
 	void heldChanged();
 	void snapshotsChanged();
+	// Only when the layout is known (a descriptor adopted): not per snapshot.
+	void regionsChanged();
 
 private:
 	struct Schema;

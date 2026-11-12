@@ -9,6 +9,7 @@
 #include <Telemetry/UX/FileContent.hpp>
 #include <Telemetry/UX/TelemetryCodecs.hpp>
 #include <integration/tcp/Server.hpp>
+#include <integration/telemetry/v3/IdentityFile.hpp>
 #include <integration/telemetry/v3/ValuesFile.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
@@ -146,8 +147,16 @@ const resource::telemetry::v3::ValuesFile richValues{richDescriptor, richWorkspa
 alignas(32) std::array<std::byte, model.maxScratch() + 1> valuesScratch{};
 telemetry::Workspace valuesWorkspace{valuesScratch};
 const resource::telemetry::v3::ValuesFile valuesFile{descriptor, valuesWorkspace};
+// Two units of the same firmware, told apart by their identities, and one with none.
+resource::telemetry::v3::IdentityFile unitA, unitB;
 const auto withValues = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                             resource::file(telemetry::protocol::identity::path, unitA),
                                              resource::file("/telemetry/values.bin", valuesFile));
+const auto otherUnit = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                            resource::file(telemetry::protocol::identity::path, unitB),
+                                            resource::file("/telemetry/values.bin", valuesFile));
+const auto anonymousUnit = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                                resource::file("/telemetry/values.bin", valuesFile));
 
 class Peer {
 public:
@@ -1090,8 +1099,16 @@ void liveValues(const QString& folder)
 	Peer peer{withValues.view()};
 	qt::ConnectionSession session;
 	DeviceFilesModel files(&session);
-	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
-	CHECK(await([&] { return session.ready() && files.available() && !files.loading() && files.fileCount() == 2; }));
+	CHECK(unitA.set("UNIT-A", "Bench A") && unitB.set("UNIT-B", "Bench B"));
+	const auto connectTo = [&](Peer& to) {
+		CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), to.listener.serverPort()));
+		CHECK(await([&] {
+			return session.ready() && files.available() && !files.loading() &&
+			       session.identityState() != qt::ConnectionSession::IdentityState::Reading;
+		}));
+	};
+	connectTo(peer);
+	CHECK(files.fileCount() == 3 && session.deviceId() == QStringLiteral("UNIT-A"));
 
 	DeviceFileLive live(&session, &files, QStringLiteral("/telemetry/values.bin"));
 	live.setPeriodMs(50);
@@ -1135,15 +1152,68 @@ void liveValues(const QString& folder)
 	await([&] { return quiet.elapsed() > 600; }, 700);
 	CHECK(snapshots.size() == count);
 
-	// The connection drops while running: it waits and says so; back, it reads again.
+	// Off and on again at once, right after a read: the next read still starts
+	// the period after the last one did.
 	live.setRunning(true);
 	CHECK(await([&] { return snapshots.size() > count; }));
+	const auto restartFrom = snapshots.size();
+	live.setRunning(false);
+	live.setRunning(true);
+	CHECK(await([&] { return snapshots.size() > restartFrom; }));
+	CHECK(arrived[restartFrom] - arrived[restartFrom - 1] >= DeviceFileLive::minimumPeriodMs - 5);
+
+	// The connection drops while running: it waits and says so; the same unit
+	// back, it reads again.
 	session.disconnect();
 	CHECK(await([&] { return !live.reading() && live.waitingForDevice() && live.problem() == QStringLiteral("not connected"); }));
 	const auto beforeReconnect = snapshots.size();
-	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+	connectTo(peer);
 	CHECK(await([&] { return snapshots.size() > beforeReconnect + 1; }, 10000) && live.problem().isEmpty() &&
-	      !live.waitingForDevice());
+	      !live.waitingForDevice() && live.running());
+
+	// Another unit of the same firmware connected in its place: Live stops and
+	// names it, rather than show its values as this file's.
+	Peer other{otherUnit.view()};
+	session.disconnect();
+	CHECK(await([&] { return !live.reading() && live.waitingForDevice(); }));
+	const auto beforeOther = snapshots.size();
+	connectTo(other);
+	CHECK(await([&] { return !live.running(); }) && live.problem().contains(QStringLiteral("UNIT-B")) &&
+	      live.problem().contains(QStringLiteral("UNIT-A")) && snapshots.size() == beforeOther);
+	session.disconnect();
+	CHECK(await([&] { return !live.reading(); }));
+
+	// A unit without an identity cannot be told apart after the connection was
+	// lost: Live stops instead of resuming.
+	{
+		Peer anonymous{anonymousUnit.view()};
+		connectTo(anonymous);
+		DeviceFileLive unnamed(&session, &files, QStringLiteral("/telemetry/values.bin"));
+		int unnamedReads = 0;
+		QObject::connect(&unnamed, &DeviceFileLive::snapshot, &unnamed, [&](const QByteArray&) { ++unnamedReads; });
+		unnamed.setRunning(true);
+		CHECK(await([&] { return unnamedReads >= 1; }));
+		session.disconnect();
+		CHECK(await([&] { return !unnamed.reading() && unnamed.waitingForDevice(); }));
+		connectTo(anonymous);
+		CHECK(await([&] { return !unnamed.running(); }) && unnamed.problem().contains(QStringLiteral("no identity")));
+		session.disconnect();
+		CHECK(await([&] { return !files.available(); }));
+	}
+
+	// A reader that goes while its read is on the way: the session finishes the
+	// read, and the connection goes on working.
+	connectTo(peer);
+	{
+		auto doomed = std::make_unique<DeviceFileLive>(&session, &files, QStringLiteral("/telemetry/values.bin"));
+		doomed->setRunning(true);
+		CHECK(doomed->reading());
+		doomed.reset();
+	}
+	CHECK(snapshots.size() >= beforeOther);
+	live.setRunning(true);
+	const auto beforeAfterOrphan = snapshots.size();
+	CHECK(await([&] { return snapshots.size() > beforeAfterOrphan; }) && live.problem().isEmpty());
 	live.setRunning(false);
 	CHECK(await([&] { return !live.reading(); }));
 

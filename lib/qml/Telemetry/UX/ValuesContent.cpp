@@ -15,6 +15,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QStringList>
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <utility>
@@ -49,12 +50,26 @@ const Node* ValuesTreeModel::nodeAt(const QModelIndex& index) const noexcept
 
 void ValuesTreeModel::touched(const std::vector<const Node*>& nodes)
 {
-	static const QList<int> roles{ValueRole, ChangedRole, UnavailableRole};
-	for (const auto* at : nodes) {
-		if (!at || at == root_.get())
-			continue;
-		const auto index = createIndex(at->row, 0, const_cast<Node*>(at));
-		Q_EMIT dataChanged(index, index, roles);
+	static const QList<int> roles{ValueRole, ChangedRole, UnavailableRole, NumericRole};
+	// One signal per run of neighbouring rows under one parent: an array
+	// whose every element changed is one signal, not thousands.
+	std::vector<const Node*> sorted;
+	sorted.reserve(nodes.size());
+	for (const auto* at : nodes)
+		if (at && at != root_.get())
+			sorted.push_back(at);
+	std::sort(sorted.begin(), sorted.end(), [](const Node* a, const Node* b) {
+		return a->parent != b->parent ? std::less<const Node*>{}(a->parent, b->parent) : a->row < b->row;
+	});
+	sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+	for (std::size_t first = 0; first < sorted.size();) {
+		auto last = first;
+		while (last + 1 < sorted.size() && sorted[last + 1]->parent == sorted[first]->parent &&
+		       sorted[last + 1]->row == sorted[last]->row + 1)
+			++last;
+		Q_EMIT dataChanged(createIndex(sorted[first]->row, 0, const_cast<Node*>(sorted[first])),
+		                   createIndex(sorted[last]->row, 0, const_cast<Node*>(sorted[last])), roles);
+		first = last + 1;
 	}
 }
 
@@ -406,6 +421,7 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 	snapshots_ = 1;
 	Q_EMIT shownChanged();
 	Q_EMIT snapshotsChanged();
+	Q_EMIT regionsChanged();
 	return {};
 }
 

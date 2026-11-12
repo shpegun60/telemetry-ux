@@ -303,8 +303,23 @@ void FileContent::forgetDecoded()
 
 void FileContent::decode()
 {
+	auto decoded = decodeBytes();
+	if (decoded.model) {
+		decoded_ = decoded.model.release();
+		decoded_->setParent(this);
+		codecName_ = decoded.name;
+		codecView_ = decoded.view;
+		codecError_.clear();
+	} else {
+		codecError_ = decoded.error;
+	}
+}
+
+FileContent::Decoded FileContent::decodeBytes() const
+{
+	Decoded result;
 	if (!codecs_ || !loaded_)
-		return;
+		return result;
 	// Enough for any signature; the codec's parse decides.
 	constexpr qsizetype headBytes = 64;
 	const FileIdentity identity{devicePath_, localFile_, bytes_.left(headBytes)};
@@ -325,17 +340,17 @@ void FileContent::decode()
 		const auto& codec = *candidate;
 		QString reason;
 		if (auto model = codec.decode(bytes_, context, reason)) {
-			decoded_ = model.release();
-			decoded_->setParent(this);
-			codecName_ = codec.name;
-			codecView_ = codec.view;
-			codecError_.clear();
-			return;
+			result.model = std::move(model);
+			result.name = codec.name;
+			result.view = codec.view;
+			result.error.clear();
+			return result;
 		}
 		// The first codec that took the file for its own says why it could not.
-		if (codecError_.isEmpty())
-			codecError_ = tr("Not a valid %1 file: %2").arg(codec.name, reason);
+		if (result.error.isEmpty())
+			result.error = tr("Not a valid %1 file: %2").arg(codec.name, reason);
 	}
+	return result;
 }
 
 bool FileContent::looksLikeText(const QByteArray& bytes)
@@ -358,8 +373,19 @@ bool FileContent::decodeAgainIfWaiting()
 {
 	if (!decoded_ || !decoded_->property("needsDescriptor").toBool())
 		return false;
+	auto again = decodeBytes();
+	if (again.model && again.model->property("needsDescriptor").toBool() &&
+	    again.model->property("connectedFingerprintGroups") == decoded_->property("connectedFingerprintGroups"))
+		return false;
 	forgetDecoded();
-	decode();
+	if (again.model) {
+		decoded_ = again.model.release();
+		decoded_->setParent(this);
+		codecName_ = again.name;
+		codecView_ = again.view;
+	} else {
+		codecError_ = again.error;
+	}
 	Q_EMIT changed();
 	return true;
 }

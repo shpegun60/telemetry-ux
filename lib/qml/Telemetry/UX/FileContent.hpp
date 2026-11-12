@@ -208,7 +208,9 @@ public:
 	// Reads localFile again: after a new download, or Reload.
 	Q_INVOKABLE bool reload();
 	// Offers the bytes to the codecs again when the model waits for the
-	// context (`needsDescriptor`); true when it did.
+	// context (`needsDescriptor`), and takes the new model only when it no
+	// longer waits or says something else (`connectedFingerprintGroups`) -
+	// an open dialog in the view stays open otherwise. True when it took it.
 	bool decodeAgainIfWaiting();
 	// Valid UTF-8 with few control characters (tab, CR and LF excepted).
 	static bool looksLikeText(const QByteArray& bytes);
@@ -219,6 +221,13 @@ Q_SIGNALS:
 private:
 	// Offers the bytes to the codecs; the first that reads them wins.
 	void decode();
+	// The same, made and returned, nothing of this content changed.
+	struct Decoded {
+		std::unique_ptr<QObject> model;
+		QString name, error;
+		QUrl view;
+	};
+	Decoded decodeBytes() const;
 	// Drops the decoded model later than the views that still show it.
 	void forgetDecoded();
 

@@ -11,8 +11,12 @@
  * the file reads, never faster; a longer period counts from the end of the
  * last read. Nothing is written to disk; the downloaded copy stays as it was.
  *
- * Without a connection it waits and says so, and resumes when the device is
- * back. A read in flight when this goes away is finished by the session.
+ * It reads from the device the file came from, and only from it: the one
+ * connected when it was made, told by its identity. Without a connection it
+ * waits and says so, and resumes when that device is back; another device, or
+ * one without an identity to compare after the connection was lost, stops
+ * it. So do a refusal and a file past the viewer's limit. A read in flight
+ * when this goes away is finished by the session.
  */
 #ifndef TELEMETRY_UX_DEVICE_FILE_LIVE_HPP
 #define TELEMETRY_UX_DEVICE_FILE_LIVE_HPP
@@ -74,8 +78,14 @@ Q_SIGNALS:
 private:
 	struct Job;
 	class Orphan;
-	// Starts a read when running, connected and none is on its way.
+	// Records the connected device as the one this file came from.
+	void owner();
+	// Starts a read when running, connected to that device, and none is on its way.
 	void begin();
+	// begin(), unless a read is on its way or planned.
+	void resume();
+	// Turns Live off by itself, saying why.
+	void stopBecause(const QString& problem);
 	// Moves the read on; at its end hands out the bytes and plans the next.
 	void poll();
 	// poll() on the next turn of the loop: the session tells of progress from
@@ -93,6 +103,9 @@ private:
 	qint64 startedMs_ = -1, endedMs_ = -1;
 	int periodMs_ = 1000, reads_ = 0, lastReadMs_ = 0;
 	bool running_ = false, pollQueued_ = false, waiting_ = false;
+	// The device the file came from: its id, empty when it has none.
+	QString ownerId_;
+	bool ownerKnown_ = false, lostConnection_ = false;
 };
 } // namespace telemetry::ux
 #endif

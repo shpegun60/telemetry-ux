@@ -33,7 +33,20 @@ FocusScope {
     readonly property bool hasCurrent: tree.currentRow >= 0
     property alias findText: findField.text
 
-    // Read again and again only while shown: a hidden view reads nothing.
+    // Read again and again only while shown: a tab behind another, or a
+    // closed Viewer, reads nothing, and Live comes back with it.
+    property bool pausedWhileHidden: false
+    onVisibleChanged: {
+        if (!live)
+            return
+        if (!visible && live.running) {
+            pausedWhileHidden = true
+            live.running = false
+        } else if (visible && pausedWhileHidden) {
+            pausedWhileHidden = false
+            live.running = true
+        }
+    }
     Component.onDestruction: if (live) live.running = false
 
     function focusContent() { tree.forceActiveFocus() }
@@ -348,6 +361,9 @@ FocusScope {
                         return ""
                     if (view.stoppedBecause.length > 0)
                         return view.stoppedBecause
+                    // Stopped by itself: a refusal, another device.
+                    if (view.live.problem.length > 0 && !view.live.running)
+                        return qsTr("Live stopped: %1 · showing values read at %2").arg(view.live.problem).arg(shown)
                     // The values shown stay; say how old they are, and what happens next.
                     if (view.live.problem.length > 0 && view.live.running)
                         return view.live.waitingForDevice
