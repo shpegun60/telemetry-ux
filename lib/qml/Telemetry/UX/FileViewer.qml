@@ -57,11 +57,11 @@ Pane {
         if (reading)
             cancelLink.forceActiveFocus()
         else if (shownMode === "table")
-            table.forceActiveFocus()
+            tablePane.focusContent()
         else if (shownMode === "hex")
             hexPane.focusContent()
         else if (shownMode === "text")
-            textArea.forceActiveFocus()
+            textPane.focusContent()
         else if (shownMode === "decoded" && decodedView.item)
             decodedView.item.forceActiveFocus()
     }
@@ -249,76 +249,16 @@ Pane {
             currentIndex: viewer.shownMode === "table" ? 0 : viewer.shownMode === "text" ? 1
                         : viewer.shownMode === "decoded" ? 3 : 2
 
-            // Table: the CSV's first row names the columns; numbers are right-aligned.
-            ColumnLayout {
-                spacing: 0
-                HorizontalHeaderView {
-                    objectName: "fileViewerTableHeader"
-                    Layout.fillWidth: true
-                    syncView: table
-                    clip: true
-                }
-                TableView {
-                    id: table
-                    objectName: "fileViewerTable"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    columnSpacing: 1
-                    rowSpacing: 1
-                    activeFocusOnTab: true
-                    keyNavigationEnabled: true
-                    selectionModel: ItemSelectionModel { model: table.model }
-                    model: viewer.shownMode === "table" ? viewer.content.table : null
-                    delegate: Rectangle {
-                        id: tableCell
-                        required property string display
-                        required property int row
-                        required property int column
-                        required property bool current
-                        implicitWidth: Math.min(360, Math.max(72, cell.implicitWidth + 16))
-                        implicitHeight: Type.rowHeight
-                        color: row % 2 ? Theme.surfaceAlternate : Theme.surface
-                        border.width: current && table.activeFocus ? 2 : 0
-                        border.color: Theme.focusRing
-                        Accessible.role: Accessible.Cell
-                        Accessible.name: qsTr("%1: %2")
-                            .arg(viewer.content.table.headerData(tableCell.column, Qt.Horizontal))
-                            .arg(tableCell.display)
-                        Label {
-                            id: cell
-                            anchors.fill: parent
-                            anchors.leftMargin: 8
-                            anchors.rightMargin: 8
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: viewer.content.table.numeric(tableCell.column) ? Text.AlignRight
-                                                                                                : Text.AlignLeft
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            color: Theme.textPrimary
-                            text: tableCell.display
-                        }
-                    }
-                    ScrollBar.vertical: ScrollBar {}
-                    ScrollBar.horizontal: ScrollBar {}
-                }
+            // Table: the CSV's rows under its headings - sorted, filtered, searched.
+            TablePane {
+                id: tablePane
+                content: viewer.content
             }
 
-            // Text, read-only, in the fixed font.
-            ScrollView {
-                objectName: "fileViewerTextScroll"
-                clip: true
-                TextArea {
-                    id: textArea
-                    objectName: "fileViewerText"
-                    readOnly: true
-                    selectByMouse: true
-                    wrapMode: TextEdit.NoWrap
-                    textFormat: TextEdit.PlainText
-                    font.family: Type.fixedFamily
-                    color: Theme.textPrimary
-                    text: viewer.shownMode === "text" ? viewer.content.text : ""
-                }
+            // Text: numbered lines, Find, Go to line, wrap.
+            TextPane {
+                id: textPane
+                content: viewer.content
             }
 
             // Hex: the painted grid, its bars, the status line and the inspector.

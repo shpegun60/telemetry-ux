@@ -7,6 +7,7 @@
 #include <Telemetry/UX/DeviceFileLive.hpp>
 #include <Telemetry/UX/ValuesContent.hpp>
 #include <Telemetry/UX/FileContent.hpp>
+#include <Telemetry/UX/FileTextModels.hpp>
 #include <Telemetry/UX/TelemetryCodecs.hpp>
 #include <integration/tcp/Server.hpp>
 #include <integration/telemetry/v3/IdentityFile.hpp>
@@ -758,6 +759,106 @@ void identityFolders(const QString& folder)
 }
 } // namespace
 
+// The Text and Table views' models: lines at every kind of line break, Find
+// from the reader's line with its wrap words, Go to line; a table sorted by
+// heading - words in natural order, numbers as numbers, empty cells last -
+// filtered, searched and copied; and a text of 10 MB, timed.
+void textAndTable()
+{
+	using telemetry::ux::FileTableModel;
+	using telemetry::ux::TableRowsModel;
+	using telemetry::ux::TextLinesModel;
+	TextLinesModel lines;
+	lines.setText(QStringLiteral("alpha\r\nbeta\rgamma\n"));
+	CHECK(lines.lineCount() == 3 && lines.lineText(0) == QStringLiteral("alpha") &&
+	      lines.lineText(1) == QStringLiteral("beta") && lines.lineText(2) == QStringLiteral("gamma") &&
+	      lines.longestLine() == 5);
+	CHECK(lines.data(lines.index(1), TextLinesModel::NumberRole).toInt() == 2);
+	CHECK(lines.linesText(0, 1) == QStringLiteral("alpha\nbeta") && lines.linesText(-5, 99).count(QLatin1Char('\n')) == 2);
+	CHECK(lines.lineFor(QStringLiteral("2")) == 1 && lines.lineFor(QStringLiteral(" end ")) == 2 &&
+	      lines.lineFor(QStringLiteral("0")) == -1 && lines.lineFor(QStringLiteral("4")) == -1 &&
+	      lines.lineFor(QStringLiteral("two")) == -1);
+	// "a" ignoring case: alpha 2, beta 1, gamma 2.
+	CHECK(lines.find(QStringLiteral("A"), false, true, 0).isEmpty() && lines.matchCount() == 5 &&
+	      lines.matchIndex() == 1 && lines.matchLine() == 0);
+	CHECK(lines.data(lines.index(2), TextLinesModel::MatchesRole).toList().size() == 2 &&
+	      lines.data(lines.index(0), TextLinesModel::CurrentRole).toInt() == 0);
+	for (int i = 0; i < 4; ++i)
+		CHECK(lines.find(QStringLiteral("A"), false, true, 0).isEmpty());
+	CHECK(lines.matchIndex() == 5 && lines.matchLine() == 2);
+	CHECK(lines.find(QStringLiteral("A"), false, true, 0) == QStringLiteral("Wrapped to the start") && lines.matchIndex() == 1);
+	CHECK(lines.find(QStringLiteral("A"), false, false, 0) == QStringLiteral("Wrapped to the end") && lines.matchIndex() == 5);
+	// A new text starts from the reader's line: beta, from line 3, wraps.
+	CHECK(lines.find(QStringLiteral("beta"), false, true, 2) == QStringLiteral("Wrapped to the start") &&
+	      lines.matchLine() == 1);
+	CHECK(lines.find(QStringLiteral("A"), true, true, 0) == QStringLiteral("Not found") && lines.matchCount() == 0);
+	lines.clearFind();
+	CHECK(lines.matchCount() == 0 && lines.data(lines.index(0), TextLinesModel::MatchesRole).toList().isEmpty());
+	lines.setText(QString());
+	CHECK(lines.lineCount() == 1 && lines.lineText(0).isEmpty());
+	lines.setText(QStringLiteral("one\n"));
+	CHECK(lines.lineCount() == 1);
+
+	// A log of about 10 MB: split and searched at once.
+	QString big;
+	big.reserve(10 * 1024 * 1024);
+	for (int i = 0; big.size() < 10 * 1024 * 1024; ++i)
+		big += QStringLiteral("2026-11-12 12:00:%1 INFO sample %2 value=%3\n").arg(i % 60, 2, 10, QLatin1Char('0')).arg(i).arg(i * 7);
+	QElapsedTimer timer;
+	timer.start();
+	lines.setText(big);
+	const auto splitMs = timer.restart();
+	CHECK(lines.find(QStringLiteral("sample 123456 "), false, true, 0).isEmpty() && lines.matchCount() == 1);
+	const auto findMs = timer.elapsed();
+	std::printf("A text of %lld bytes, %d lines: split in %lld ms, searched in %lld ms\n",
+	            static_cast<long long>(big.size()), lines.lineCount(), static_cast<long long>(splitMs),
+	            static_cast<long long>(findMs));
+	CHECK(lines.lineCount() > 200000 && lines.matchLine() == 123456);
+
+	FileTableModel table;
+	CHECK(table.setText(QStringLiteral("name,value\nitem 10,5\nitem 2,10\nitem 1,\n\"a, b\",7\n")));
+	TableRowsModel rows(&table);
+	const auto column = [&](int c) {
+		QStringList cells;
+		for (int r = 0; r < rows.rowCount(); ++r)
+			cells << rows.cellText(r, c);
+		return cells.join(QLatin1Char('|'));
+	};
+	CHECK(rows.totalRows() == 4 && rows.shownRows() == 4 && rows.numeric(1) && !rows.numeric(0) &&
+	      rows.heading(1) == QStringLiteral("value"));
+	rows.sortBy(0);
+	CHECK(rows.sortedColumn() == 0 && !rows.descending() && column(0) == QStringLiteral("a, b|item 1|item 2|item 10"));
+	rows.sortBy(0);
+	CHECK(rows.descending() && column(0) == QStringLiteral("item 10|item 2|item 1|a, b"));
+	rows.sortBy(0);
+	CHECK(rows.sortedColumn() == -1 && column(0) == QStringLiteral("item 10|item 2|item 1|a, b"));
+	rows.sortBy(1);
+	CHECK(column(1) == QStringLiteral("5|7|10|"));
+	rows.sortBy(1);
+	CHECK(column(1) == QStringLiteral("10|7|5|"));
+	rows.sortBy(1);
+	CHECK(rows.setFilter(QStringLiteral("ITEM 1")) == 2 && rows.shownRows() == 2 && rows.totalRows() == 4);
+	CHECK(rows.setFilter(QString()) == 4);
+	// Find: cells containing "1" - item 10, 10, item 1 - in shown order, wrapping.
+	auto found = rows.find(QStringLiteral("1"), true, 0, 0);
+	CHECK(found.value(QStringLiteral("row")).toInt() == 0 && found.value(QStringLiteral("column")).toInt() == 0 &&
+	      rows.matchCount() == 3 && rows.matchIndex() == 1);
+	found = rows.find(QStringLiteral("1"), true, 0, 0);
+	CHECK(found.value(QStringLiteral("row")).toInt() == 1 && found.value(QStringLiteral("column")).toInt() == 1);
+	found = rows.find(QStringLiteral("1"), true, 0, 0);
+	CHECK(found.value(QStringLiteral("row")).toInt() == 2 && rows.matchIndex() == 3);
+	CHECK(rows.find(QStringLiteral("1"), true, 0, 0).value(QStringLiteral("message")).toString() ==
+	      QStringLiteral("Wrapped to the start"));
+	CHECK(rows.find(QStringLiteral("zzz"), true, 0, 0).value(QStringLiteral("row")).toInt() == -1);
+	// Copy: a row as TSV, everything shown as CSV with its quoting.
+	CHECK(rows.rowText(0, QStringLiteral("tsv")) == QStringLiteral("item 10\t5"));
+	CHECK(rows.shownText(QStringLiteral("csv")) == QStringLiteral("name,value\nitem 10,5\nitem 2,10\nitem 1,\n\"a, b\",7\n"));
+	// A new file resets the order and the filter.
+	rows.sortBy(0);
+	rows.setFilter(QStringLiteral("item"));
+	CHECK(table.setText(QStringLiteral("x\n1\n")) && rows.sortedColumn() == -1 && rows.shownRows() == 1);
+}
+
 // The descriptor codec, on the bytes of this test's own model: offered first
 // for /telemetry/descriptor.bin and for a renamed copy (by its "TDS3"), its
 // fingerprint, the header's fields and sections as regions, the endpoint tree,
@@ -1287,6 +1388,7 @@ int main(int argc, char** argv)
 	localPaths(folder.path());
 	fileContent(folder.path());
 	codecs(folder.path());
+	textAndTable();
 	descriptorCodec(folder.path());
 	valuesCodec(folder.path());
 	valuesFormatting();

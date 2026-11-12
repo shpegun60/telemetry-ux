@@ -640,10 +640,42 @@ int main(int argc, char** argv)
 		auto* table = child(root, "fileViewerTable");
 		return table && table->property("rows").toInt() == 2 && table->property("columns").toInt() == 2;
 	}));
+	// Sorted by a heading, filtered, the count of rows shown.
+	auto* rows = qobject_cast<telemetry::ux::TableRowsModel*>(viewerContent.rows());
+	CHECK(rows);
+	rows->sortBy(1);
+	CHECK(rows->cellText(0, 1) == QStringLiteral("2.5"));
+	rows->sortBy(1);
+	CHECK(rows->cellText(0, 1) == QStringLiteral("5") && rows->descending());
+	rows->sortBy(1);
+	child(root, "tableFilter")->setProperty("text", QStringLiteral("period"));
+	CHECK(await([&] { return child(root, "tableShown")->property("text").toString() == QStringLiteral("1 of 2 rows"); }));
+	child(root, "tableFilter")->setProperty("text", QString());
+	CHECK(await([&] { return child(root, "tableShown")->property("text").toString() == QStringLiteral("2 rows"); }));
 	CHECK(child(root, "fileViewerFooter")->property("text").toString().endsWith(QStringLiteral("/config/viewer.csv")));
 	CHECK(QMetaObject::invokeMethod(delegate(root, "fileViewerMode_text"), "clicked"));
 	CHECK(viewer->property("shownMode").toString() == QStringLiteral("text"));
-	CHECK(child(root, "fileViewerText")->property("text").toString().startsWith(QStringLiteral("name,value")));
+	// The text: numbered lines, Find with its count, Go to line.
+	CHECK(await([&] {
+		auto* list = child(root, "textLines");
+		return list && list->property("count").toInt() == 3;
+	}));
+	auto* textPane = child(root, "textPane");
+	CHECK(QMetaObject::invokeMethod(child(root, "textFind"), "open"));
+	child(root, "textFindField")->setProperty("text", QStringLiteral("gain"));
+	CHECK(await([&] { return child(root, "textFindCount")->property("text").toString() == QStringLiteral("1 of 1"); }));
+	CHECK(child(root, "textLines")->property("currentIndex").toInt() == 1);
+	CHECK(QMetaObject::invokeMethod(child(root, "textFind"), "close"));
+	CHECK(QMetaObject::invokeMethod(textPane, "openGoto"));
+	child(root, "textGotoField")->setProperty("text", QStringLiteral("3"));
+	CHECK(QMetaObject::invokeMethod(child(root, "textGotoField"), "accepted"));
+	CHECK(child(root, "textLines")->property("currentIndex").toInt() == 2);
+	child(root, "textGotoField")->setProperty("text", QStringLiteral("9"));
+	CHECK(QMetaObject::invokeMethod(textPane, "openGoto"));
+	child(root, "textGotoField")->setProperty("text", QStringLiteral("9"));
+	CHECK(QMetaObject::invokeMethod(child(root, "textGotoField"), "accepted"));
+	CHECK(child(root, "textGotoProblem")->property("text").toString() == QStringLiteral("No line 9: the text has 3 lines"));
+	CHECK(QMetaObject::invokeMethod(textPane, "closeGoto"));
 	// The file's actions are in its ⋯ menu: Save as hands the host the local
 	// copy, Copy path the device's path.
 	CHECK(child(root, "fileViewerMore") && !child(root, "fileViewerMore")->property("text").toString().isEmpty());

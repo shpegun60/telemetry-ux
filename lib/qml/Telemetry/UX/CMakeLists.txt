@@ -10,12 +10,13 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
               EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
               Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
               HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
-              ValuesView.qml ValuesRow.qml
+              ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
 target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp
-    FileContent.cpp FileContent.hpp HexView.cpp HexView.hpp QmlTypes.cpp QmlTypes.hpp Clipboard.cpp Clipboard.hpp)
+    FileContent.cpp FileContent.hpp FileTextModels.cpp FileTextModels.hpp HexView.cpp HexView.hpp QmlTypes.cpp QmlTypes.hpp
+    Clipboard.cpp Clipboard.hpp)
 target_compile_features(telemetry_ux_configurator PUBLIC cxx_std_17)
 target_include_directories(telemetry_ux_configurator PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
@@ -49,11 +50,11 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
     Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
     HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
-    ValuesView.qml ValuesRow.qml
+    ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
-install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp FileContent.hpp HexView.hpp QmlTypes.hpp Clipboard.hpp
+install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp FileContent.hpp FileTextModels.hpp HexView.hpp QmlTypes.hpp Clipboard.hpp
     WatchSample.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 
