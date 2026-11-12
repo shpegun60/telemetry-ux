@@ -59,16 +59,6 @@ void JsonTreeModel::append(Node& under, std::vector<std::unique_ptr<Node>> rows)
 	endInsertRows();
 }
 
-void JsonTreeModel::removeLast(Node& under)
-{
-	if (under.children.empty())
-		return;
-	const auto last = static_cast<int>(under.children.size()) - 1;
-	beginRemoveRows(indexOf(under), last, last);
-	under.children.pop_back();
-	endRemoveRows();
-}
-
 bool JsonTreeModel::hasChildren(const QModelIndex& parentIndex) const
 {
 	const auto* owner = node(parentIndex);
@@ -136,13 +126,14 @@ QVariant JsonTreeModel::data(const QModelIndex& index, int role) const
 		case ChangedFieldsRole:
 			return 0;
 		case PathRole:
-			return at->path;
+			// A range's rows are its container's: it has no path of its own.
+			return at->kind == QStringLiteral("range") ? QString{} : at->path;
 		case NumericRole:
 			// Right-aligned like numbers, so a column that mixes them does not zigzag.
 			return at->kind == QStringLiteral("number") || at->kind == QStringLiteral("bool") ||
 			       at->kind == QStringLiteral("null");
 		case FindRole:
-			return at->kind == QStringLiteral("more") ? QString{} : at->find;
+			return at->kind == QStringLiteral("range") ? QString{} : at->find;
 		default:
 			return {};
 	}
@@ -436,7 +427,6 @@ std::unique_ptr<Node> JsonContent::make(const QString& name, const QString& path
 	if (node->kind == QStringLiteral("object") || node->kind == QStringLiteral("array")) {
 		const bool object = node->kind == QStringLiteral("object");
 		node->total = memberCount(text_, start, object);
-		node->next = start + 1;
 		node->value = preview(text_, start, object);
 		node->type = object ? (node->total == 1 ? tr("object, 1 key") : tr("object, %L1 keys").arg(node->total))
 		                    : (node->total == 1 ? tr("array, 1 item") : tr("array, %L1 items").arg(node->total));
@@ -455,37 +445,107 @@ void JsonContent::populate(Node& node)
 {
 	if (node.total == 0 || !node.children.empty())
 		return;
-	loadStep(node);
+	// A range: the members it spans, of the object or array it belongs to.
+	Node* container = &node;
+	while (container->kind == QStringLiteral("range") && container->parent)
+		container = container->parent;
+	makeMembers(node, *container, node.kind == QStringLiteral("range") ? node.first : 0u, node.total);
 }
 
-void JsonContent::loadStep(Node& container)
+void JsonContent::markBlocks(Node& container) const
 {
-	if (container.loaded >= container.total)
+	if (!container.marks.empty())
 		return;
-	if (!container.children.empty() && container.children.back()->kind == QStringLiteral("more"))
-		tree_.removeLast(container);
+	// One pass: where every 256th member begins, and for an object the first
+	// and last key of each block - a range's name.
 	const bool object = container.kind == QStringLiteral("object");
-	const auto from = container.loaded;
-	const auto to = std::min(container.total, from + elementsPerStep);
-	std::vector<std::unique_ptr<Node>> rows;
-	qsizetype p = container.next;
+	qsizetype p = container.start + 1;
 	Member member;
-	for (auto i = from; i < to && nextMember(text_, object, p, member); ++i) {
+	for (std::uint32_t i = 0; i < container.total; ++i) {
+		const auto inBlock = i % rangeSize;
+		if (inBlock == 0)
+			container.marks.push_back(p);
+		const bool boundary = object && (inBlock == 0 || inBlock == rangeSize - 1 || i + 1 == container.total);
+		if (!nextMember(text_, object, p, member, boundary))
+			break;
+		if (boundary && inBlock == 0)
+			container.blockKeys << member.name << member.name;
+		else if (boundary)
+			container.blockKeys.last() = member.name;
+	}
+}
+
+void JsonContent::makeMembers(Node& under, Node& container, std::uint32_t first, std::uint32_t count)
+{
+	const bool object = container.kind == QStringLiteral("object");
+	std::vector<std::unique_ptr<Node>> rows;
+	// More than one range's worth: ranges, as Eclipse shows a long array.
+	if (count > rangeSize) {
+		markBlocks(container);
+		std::uint64_t span = rangeSize;
+		while ((count + span - 1) / span > rangeSize)
+			span *= rangeSize;
+		for (std::uint64_t start = first; start < std::uint64_t{first} + count; start += span) {
+			const auto size = static_cast<std::uint32_t>(std::min<std::uint64_t>(span, std::uint64_t{first} + count - start));
+			auto range = std::make_unique<Node>();
+			// Indexes, written as the elements' own names are: no grouping.
+			range->name = tr("[%1 … %2]").arg(start).arg(start + size - 1);
+			range->kind = QStringLiteral("range");
+			range->type = object ? (size == 1 ? tr("1 key") : tr("%L1 keys").arg(size))
+			                     : (size == 1 ? tr("1 item") : tr("%L1 items").arg(size));
+			range->path = container.path;
+			range->first = static_cast<std::uint32_t>(start);
+			range->total = size;
+			// An object's range says which keys it holds.
+			const auto firstBlock = static_cast<qsizetype>(start / rangeSize);
+			const auto lastBlock = static_cast<qsizetype>((start + size - 1) / rangeSize);
+			if (object && 2 * lastBlock + 1 < container.blockKeys.size())
+				range->value = container.blockKeys.at(2 * firstBlock) + QStringLiteral(" … ") +
+				               container.blockKeys.at(2 * lastBlock + 1);
+			rows.push_back(std::move(range));
+		}
+		tree_.append(under, std::move(rows));
+		return;
+	}
+	// The members themselves, read from where their block begins.
+	if (first > 0)
+		markBlocks(container);
+	const auto block = static_cast<std::size_t>(first / rangeSize);
+	qsizetype p = first == 0 ? container.start + 1 : container.marks.at(block);
+	Member member;
+	for (std::uint32_t skipped = static_cast<std::uint32_t>(block) * rangeSize; skipped < first; ++skipped)
+		nextMember(text_, object, p, member, false);
+	for (auto i = first; i < first + count && nextMember(text_, object, p, member); ++i) {
 		const auto name = object ? member.name : QStringLiteral("[%1]").arg(i);
-		rows.push_back(make(name, childPath(container.path, object, name), member.start, member.end));
+		auto row = make(name, childPath(container.path, object, name), member.start, member.end);
+		rows.push_back(std::move(row));
 	}
-	container.next = p;
-	container.loaded = from + static_cast<std::uint32_t>(rows.size());
-	if (container.loaded < container.total) {
-		auto more = std::make_unique<Node>();
-		more->name = tr("Show %L1 more · %L2 of %L3 shown")
-		                 .arg(std::min(elementsPerStep, container.total - container.loaded))
-		                 .arg(container.loaded)
-		                 .arg(container.total);
-		more->kind = QStringLiteral("more");
-		rows.push_back(std::move(more));
+	tree_.append(under, std::move(rows));
+}
+
+Node* JsonContent::childAt(Node& parent, std::uint32_t slot, std::size_t& made)
+{
+	Node* at = &parent;
+	for (;;) {
+		const auto before = at->children.size();
+		populate(*at);
+		made += at->children.size() - before;
+		if (at->children.empty())
+			return nullptr;
+		const auto base = at->kind == QStringLiteral("range") ? at->first : 0u;
+		if (slot < base)
+			return nullptr;
+		const auto offset = slot - base;
+		// Ranges first: every one but the last holds the same number of members.
+		if (at->children.front()->kind == QStringLiteral("range")) {
+			const auto index = offset / at->children.front()->total;
+			if (index >= at->children.size())
+				return nullptr;
+			at = at->children[index].get();
+			continue;
+		}
+		return offset < at->children.size() ? at->children[offset].get() : nullptr;
 	}
-	tree_.append(container, std::move(rows));
 }
 
 void JsonContent::openMatches(const QString& filter)
@@ -523,33 +583,18 @@ void JsonContent::openMatches(const QString& filter)
 		}
 	};
 	walk(root->start, root->kind == QStringLiteral("object"), QString{});
-	// Each route made, row by row; the rows made stay, so they are bounded too.
+	// Each route made, row by row - through the ranges, which make only the
+	// rows on the way. The rows made stay, so they are bounded too.
 	std::size_t made = 0;
-	const auto room = [&] {
-		if (made < maxFindRows)
-			return true;
-		findLimited_ = true;
-		return false;
-	};
 	for (const auto& route : routes) {
-		if (!room())
+		if (made >= maxFindRows) {
+			findLimited_ = true;
 			break;
-		Node* at = root;
-		for (const auto slot : route) {
-			const auto before = at->children.size();
-			populate(*at);
-			made += at->children.size() - before;
-			// Counted step by step: one match far down a long array would
-			// otherwise make every element before it.
-			while (at->loaded <= slot && at->loaded < at->total && room()) {
-				const auto loaded = at->loaded;
-				loadStep(*at);
-				made += at->loaded - loaded;
-			}
-			if (slot >= at->loaded)
-				break;
-			at = at->children[slot].get();
 		}
+		Node* at = root;
+		for (const auto slot : route)
+			if (!(at = childAt(*at, slot, made)))
+				break;
 	}
 }
 
@@ -595,14 +640,14 @@ const Node* JsonContent::nodeOf(const QModelIndex& index) const
 QString JsonContent::pathOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	return at && at->kind != QStringLiteral("more") ? at->path : QString{};
+	return at && at->kind != QStringLiteral("range") ? at->path : QString{};
 }
 
 QString JsonContent::valueOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("more") || at->total > 0 || at->kind == QStringLiteral("object") ||
-	    at->kind == QStringLiteral("array"))
+	if (!at || at->total > 0 || at->kind == QStringLiteral("object") || at->kind == QStringLiteral("array") ||
+	    at->kind == QStringLiteral("range"))
 		return {};
 	return scalarText(text_, at->start, at->end);
 }
@@ -610,7 +655,7 @@ QString JsonContent::valueOf(const QModelIndex& index) const
 QString JsonContent::rowOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("more"))
+	if (!at)
 		return {};
 	return at->name + QLatin1Char('\t') + at->value + QLatin1Char('\t') + at->type;
 }
@@ -618,9 +663,33 @@ QString JsonContent::rowOf(const QModelIndex& index) const
 QString JsonContent::jsonOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("more"))
+	if (!at)
 		return {};
-	return QString::fromUtf8(text_.constData() + at->start, at->end - at->start);
+	if (at->kind != QStringLiteral("range"))
+		return QString::fromUtf8(text_.constData() + at->start, at->end - at->start);
+	// A range: its members as the file writes them, in the brackets of its
+	// object or array, so the copy is JSON too.
+	const Node* container = at;
+	while (container->kind == QStringLiteral("range") && container->parent)
+		container = container->parent;
+	const bool object = container->kind == QStringLiteral("object");
+	if (container->marks.empty())
+		return {};
+	const auto block = static_cast<std::size_t>(at->first / rangeSize);
+	qsizetype p = container->marks.at(block);
+	Member member;
+	for (std::uint32_t skipped = static_cast<std::uint32_t>(block) * rangeSize; skipped < at->first; ++skipped)
+		nextMember(text_, object, p, member, false);
+	qsizetype from = -1, end = -1;
+	for (std::uint32_t i = 0; i < at->total && nextMember(text_, object, p, member, false); ++i) {
+		if (from < 0)
+			from = member.from;
+		end = member.end;
+	}
+	if (from < 0)
+		return {};
+	return QString(object ? QLatin1Char('{') : QLatin1Char('[')) + QString::fromUtf8(text_.constData() + from, end - from) +
+	       (object ? QLatin1Char('}') : QLatin1Char(']'));
 }
 
 QString JsonContent::jsonOfAll() const
@@ -628,21 +697,6 @@ QString JsonContent::jsonOfAll() const
 	// Without a byte order mark: it is no part of the JSON.
 	const qsizetype begin = text_.startsWith("\xEF\xBB\xBF") ? 3 : 0;
 	return valid_ ? QString::fromUtf8(text_.constData() + begin, text_.size() - begin) : QString{};
-}
-
-bool JsonContent::isMore(const QModelIndex& index) const
-{
-	const auto* at = nodeOf(index);
-	return at && at->kind == QStringLiteral("more");
-}
-
-bool JsonContent::showMore(const QModelIndex& index)
-{
-	const auto* at = nodeOf(index);
-	if (!at || at->kind != QStringLiteral("more") || !at->parent)
-		return false;
-	loadStep(*at->parent);
-	return true;
 }
 
 bool JsonContent::names(const QString& path)

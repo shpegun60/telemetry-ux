@@ -66,16 +66,6 @@ void ValuesTreeModel::append(Node& under, std::vector<std::unique_ptr<Node>> row
 	endInsertRows();
 }
 
-void ValuesTreeModel::removeLast(Node& under)
-{
-	if (under.children.empty())
-		return;
-	const auto last = static_cast<int>(under.children.size()) - 1;
-	beginRemoveRows(indexOf(under), last, last);
-	under.children.pop_back();
-	endRemoveRows();
-}
-
 bool ValuesTreeModel::hasChildren(const QModelIndex& parentIndex) const
 {
 	const auto* owner = node(parentIndex);
@@ -170,12 +160,13 @@ QVariant ValuesTreeModel::data(const QModelIndex& index, int role) const
 		case ChangedFieldsRole:
 			return at->changedFields;
 		case PathRole:
-			return at->path;
+			// A range's rows are its array's: it has no path of its own.
+			return at->kind == QStringLiteral("range") ? QString{} : at->path;
 		case NumericRole:
 			// Numbers and true/false: right-aligned, so a struct's members line up.
 			return (at->json == 1 && at->jsonText.isEmpty()) || at->json == 2;
 		case FindRole:
-			return at->kind == QStringLiteral("more") ? QString{} : at->name;
+			return at->kind == QStringLiteral("range") ? QString{} : at->name;
 		default:
 			return {};
 	}
@@ -239,6 +230,17 @@ std::uint32_t childCount(const rt::RuntimeSchema& schema, std::uint32_t typeId)
 	return type->kind == TypeKind::Struct  ? type->memberCount
 	     : type->kind == TypeKind::Array ? type->elementCount
 	                                     : 0;
+}
+
+// Eclipse's way with a long array: ranges of 256, and ranges of those past
+// 65 536, so any element is a few levels down. The span of one range below
+// count elements.
+std::uint64_t rangeSpan(std::uint32_t count)
+{
+	std::uint64_t span = ValuesContent::rangeSize;
+	while ((count + span - 1) / span > ValuesContent::rangeSize)
+		span *= ValuesContent::rangeSize;
+	return span;
 }
 
 bool leafType(const rt::RuntimeSchema& schema, std::uint32_t typeId)
@@ -324,6 +326,19 @@ struct Writer {
 			clear(*child);
 	}
 
+	// An array's elements made so far, through its ranges.
+	void fillElements(Node& under, const rt::DynamicValueView& array)
+	{
+		for (auto& child : under.children) {
+			if (child->kind == QStringLiteral("range"))
+				fillElements(*child, array);
+			else if (const auto element = array.index(child->slot))
+				fill(*child, element.value);
+			else
+				set(*child, QStringLiteral("?"), 0);
+		}
+	}
+
 	void fill(Node& node, const rt::DynamicValueView& view)
 	{
 		const auto* type = schema.type(view.typeId());
@@ -343,14 +358,7 @@ struct Writer {
 				return;
 			case TypeKind::Array:
 				set(node, arrayPreview(schema, view), 0);
-				for (auto& child : node.children) {
-					if (child->kind != QStringLiteral("element"))
-						continue;
-					if (const auto element = view.index(child->slot))
-						fill(*child, element.value);
-					else
-						set(*child, QStringLiteral("?"), 0);
-				}
+				fillElements(node, view);
 				return;
 			default: {
 				const auto value = schema_text::valueText(schema, view);
@@ -407,11 +415,38 @@ QJsonValue jsonValue(const Node& node)
 	                  node.type);
 }
 
-// A value straight from the data - for a row whose children are not all made.
+// A value straight from the data - for a row shown whole, opened or not.
 // Every value written takes one row of the budget.
 struct Data {
 	const rt::RuntimeSchema& schema;
 	schema_text::RowBudget& budget;
+
+	// A range of an array's elements, each as its own row would write it.
+	QString linesRange(const rt::DynamicValueView& array, std::uint32_t first, std::uint32_t count, int depth) const
+	{
+		QString out;
+		for (auto i = first; i < first + count && !budget.cut; ++i)
+			if (const auto element = array.index(i))
+				out += lines(element.value, QStringLiteral("[%1]").arg(i), depth);
+		return out;
+	}
+
+	void jsonRange(QJsonArray& out, const rt::DynamicValueView& array, std::uint32_t first, std::uint32_t count) const
+	{
+		for (auto i = first; i < first + count && !budget.cut; ++i)
+			if (const auto element = array.index(i))
+				if (const auto value = json(element.value); !budget.cut)
+					out.push_back(value);
+	}
+
+	QString tsvRange(const rt::DynamicValueView& array, const QString& path, std::uint32_t first, std::uint32_t count) const
+	{
+		QString out;
+		for (auto i = first; i < first + count && !budget.cut; ++i)
+			if (const auto element = array.index(i))
+				out += tsv(element.value, path + QStringLiteral("[%1]").arg(i));
+		return out;
+	}
 
 	schema_text::Value leaf(const rt::DynamicValueView& view) const
 	{
@@ -742,7 +777,8 @@ bool ValuesContent::viewOf(const Node& node, rt::DynamicValueView& out) const
 	// The way down from the Field: member or element indexes.
 	std::vector<std::uint32_t> steps;
 	for (const auto* at = &node; at && at->kind != QStringLiteral("field"); at = at->parent)
-		steps.push_back(at->slot);
+		if (at->kind != QStringLiteral("range"))
+			steps.push_back(at->slot);
 	auto view = rt::DynamicValueView::create(schema_->schema, entry.endpoint->typeId, entry.payload);
 	if (!view)
 		return false;
@@ -765,11 +801,16 @@ void ValuesContent::populate(Node& node)
 	if (!schema_ || node.total == 0 || !node.children.empty())
 		return;
 	const auto& schema = schema_->schema;
+	// A range of an array: its elements, or the ranges below it.
+	if (node.kind == QStringLiteral("range")) {
+		makeElements(node, node.first, node.total);
+		return;
+	}
 	const auto* type = schema.type(node.typeId);
 	if (!type)
 		return;
 	if (type->kind == TypeKind::Array) {
-		loadStep(node);
+		makeElements(node, 0, node.total);
 		return;
 	}
 	std::vector<std::unique_ptr<Node>> rows;
@@ -799,63 +840,84 @@ void ValuesContent::populate(Node& node)
 	tree_.append(node, std::move(rows));
 }
 
-void ValuesContent::loadStep(Node& array)
+void ValuesContent::makeElements(Node& under, std::uint32_t first, std::uint32_t count)
 {
 	const auto& schema = schema_->schema;
-	const auto* type = schema.type(array.typeId);
-	if (!type || array.loaded >= array.total)
+	// An array's node or one of its ranges: both name the array's type.
+	const auto* type = schema.type(under.typeId);
+	if (!type || type->kind != TypeKind::Array)
 		return;
-	// The "more" row goes; the next elements come, and a new one if any remain.
-	if (!array.children.empty() && array.children.back()->kind == QStringLiteral("more"))
-		tree_.removeLast(array);
-	const auto from = array.loaded;
-	const auto to = std::min(array.total, from + elementsPerStep);
+	std::vector<std::unique_ptr<Node>> rows;
+	// More than one range's worth: ranges, as Eclipse shows a long array.
+	if (count > rangeSize) {
+		const auto span = rangeSpan(count);
+		for (std::uint64_t start = first; start < std::uint64_t{first} + count; start += span) {
+			const auto size = static_cast<std::uint32_t>(std::min<std::uint64_t>(span, std::uint64_t{first} + count - start));
+			auto range = std::make_unique<Node>();
+			// Indexes, written as the elements' own names are: no grouping.
+			range->name = tr("[%1 … %2]").arg(start).arg(start + size - 1);
+			range->kind = QStringLiteral("range");
+			range->type = size == 1 ? tr("1 item") : tr("%L1 items").arg(size);
+			range->path = under.path;
+			range->typeId = under.typeId;
+			range->first = static_cast<std::uint32_t>(start);
+			range->slot = range->first;
+			range->total = size;
+			range->field = under.field;
+			rows.push_back(std::move(range));
+		}
+		tree_.append(under, std::move(rows));
+		return;
+	}
+	// The array's view: a range is no step in the data.
 	rt::DynamicValueView view;
-	const bool filled = viewOf(array, view);
+	const bool filled = viewOf(under, view);
 	std::vector<const Node*> ignored;
 	std::vector<Node*> noMarks;
 	Writer writer{schema, true, ignored, noMarks};
-	std::vector<std::unique_ptr<Node>> rows;
-	for (auto i = from; i < to; ++i) {
+	const auto elementType = schema_text::typeText(schema, type->relatedTypeId);
+	const auto elementCount = childCount(schema, type->relatedTypeId);
+	for (auto i = first; i < first + count; ++i) {
 		auto child = std::make_unique<Node>();
 		child->name = QStringLiteral("[%1]").arg(i);
 		child->kind = QStringLiteral("element");
-		child->path = array.path + child->name;
-		child->type = schema_text::typeText(schema, type->relatedTypeId);
+		child->path = under.path + child->name;
+		child->type = elementType;
 		child->typeId = type->relatedTypeId;
-		child->total = childCount(schema, type->relatedTypeId);
+		child->total = elementCount;
 		child->slot = i;
-		child->field = array.field;
+		child->field = under.field;
 		if (filled)
 			if (const auto element = view.index(i))
 				writer.fill(*child, element.value);
 		rows.push_back(std::move(child));
 	}
-	array.loaded = to;
-	if (to < array.total) {
-		auto more = std::make_unique<Node>();
-		const auto next = std::min(elementsPerStep, array.total - to);
-		more->name = tr("Show %L1 more · %L2 of %L3 shown").arg(next).arg(to).arg(array.total);
-		more->kind = QStringLiteral("more");
-		more->field = array.field;
-		rows.push_back(std::move(more));
+	tree_.append(under, std::move(rows));
+}
+
+Node* ValuesContent::childAt(Node& parent, std::uint32_t slot, std::size_t& made)
+{
+	Node* at = &parent;
+	for (;;) {
+		const auto before = at->children.size();
+		populate(*at);
+		made += at->children.size() - before;
+		if (at->children.empty())
+			return nullptr;
+		const auto base = at->kind == QStringLiteral("range") ? at->first : 0u;
+		if (slot < base)
+			return nullptr;
+		const auto offset = slot - base;
+		// Ranges first: every one but the last holds the same number of elements.
+		if (at->children.front()->kind == QStringLiteral("range")) {
+			const auto index = offset / at->children.front()->total;
+			if (index >= at->children.size())
+				return nullptr;
+			at = at->children[index].get();
+			continue;
+		}
+		return offset < at->children.size() ? at->children[offset].get() : nullptr;
 	}
-	tree_.append(array, std::move(rows));
-}
-
-bool ValuesContent::isMore(const QModelIndex& index) const
-{
-	const auto* at = nodeOf(index);
-	return at && at->kind == QStringLiteral("more");
-}
-
-bool ValuesContent::showMore(const QModelIndex& index)
-{
-	const auto* at = nodeOf(index);
-	if (!at || at->kind != QStringLiteral("more") || !at->parent)
-		return false;
-	loadStep(*at->parent);
-	return true;
 }
 
 QString ValuesContent::update(const QByteArray& bytes)
@@ -946,39 +1008,18 @@ void ValuesContent::openMatches(const QString& text)
 		walk(field, field->typeId, field->path);
 	}
 	findLimited_ = budget.cut;
-	// Each route made, row by row; an element past the made ones brings its
-	// steps. Rows made stay, so their number is bounded too: a match deep in
-	// a long array costs every element before it.
-	// The bound holds inside a route too: one match far down a long array
-	// would otherwise make every element before it.
+	// Each route made, row by row - through an array's ranges, which make
+	// only the rows on the way. Rows made stay, so their number is bounded too.
 	std::size_t made = 0;
-	const auto room = [&] {
-		if (made < maxFindRows)
-			return true;
-		findLimited_ = true;
-		return false;
-	};
 	for (const auto& route : routes) {
-		if (!room())
+		if (made >= maxFindRows) {
+			findLimited_ = true;
 			break;
-		Node* at = route.field;
-		for (const auto slot : route.steps) {
-			const auto before = at->children.size();
-			if (at->children.empty())
-				populate(*at);
-			made += at->children.size() - before;
-			const auto* type = schema.type(at->typeId);
-			const bool array = at->kind != QStringLiteral("group") && type && type->kind == TypeKind::Array;
-			while (array && at->loaded <= slot && at->loaded < at->total && room()) {
-				const auto loaded = at->loaded;
-				loadStep(*at);
-				made += at->loaded - loaded;
-			}
-			// An element past those made (the bound reached): the route ends here.
-			if (slot >= at->children.size() || (array && slot >= at->loaded))
-				break;
-			at = at->children[slot].get();
 		}
+		Node* at = route.field;
+		for (const auto slot : route.steps)
+			if (!(at = childAt(*at, slot, made)))
+				break;
 	}
 }
 
@@ -1058,17 +1099,7 @@ QVariantList ValuesContent::headerRegions(std::span<const std::byte> bytes)
 	return regions;
 }
 
-// ---- Copy: the shown rows, and the data where rows are not all made ---------
-
-bool ValuesContent::partial(const Node& node) const
-{
-	if (node.total == 0 || node.unavailable)
-		return false;
-	if (node.children.empty())
-		return true;
-	const auto* type = schema_->schema.type(node.typeId);
-	return type && type->kind == TypeKind::Array && node.loaded < node.total;
-}
+// ---- Copy: the data where a row is shown whole, the shown rows under Find ---
 
 bool ValuesContent::wholeShown(const QModelIndex& index) const
 {
@@ -1081,22 +1112,25 @@ bool ValuesContent::wholeShown(const QModelIndex& index) const
 	return false;
 }
 
+// A row shown whole is copied from the data, so what is not opened is not
+// lost. A range is no value of its own: it gives its elements, at its
+// array's depth.
 QString ValuesContent::linesOf(const QModelIndex& index, int depth, bool withSelf, schema_text::RowBudget& budget) const
 {
 	QString out;
 	const auto* at = index.isValid() ? nodeOf(index) : nullptr;
 	if (withSelf && at) {
-		if (at->kind == QStringLiteral("more"))
-			return {};
 		rt::DynamicValueView view;
 		const Data data{schema_->schema, budget};
-		const bool whole = wholeShown(index);
-		if (whole && partial(*at) && viewOf(*at, view))
-			return data.lines(view, at->name, depth);
-		// An array of plain values on one line, as the data has it.
-		const auto* type = schema_->schema.type(at->typeId);
-		if (whole && type && type->kind == TypeKind::Array && !at->unavailable &&
-		    leafType(schema_->schema, type->relatedTypeId) && viewOf(*at, view))
+		const bool whole = wholeShown(index) && viewOf(*at, view);
+		if (at->kind == QStringLiteral("range")) {
+			if (whole)
+				return data.linesRange(view, at->first, at->total, depth);
+			for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row)
+				out += linesOf(shown_.index(row, 0, index), depth, true, budget);
+			return out;
+		}
+		if (whole && !at->unavailable && at->kind != QStringLiteral("group"))
 			return data.lines(view, at->name, depth);
 		if (!budget.take())
 			return {};
@@ -1110,6 +1144,17 @@ QString ValuesContent::linesOf(const QModelIndex& index, int depth, bool withSel
 	return out;
 }
 
+void ValuesContent::appendShown(QJsonArray& array, const QModelIndex& index, schema_text::RowBudget& budget) const
+{
+	for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row) {
+		const auto child = shown_.index(row, 0, index);
+		if (nodeOf(child)->kind == QStringLiteral("range"))
+			appendShown(array, child, budget);
+		else if (const auto value = jsonOf(child, budget); !budget.cut)
+			array.push_back(value);
+	}
+}
+
 QJsonValue ValuesContent::jsonOf(const QModelIndex& index, schema_text::RowBudget& budget) const
 {
 	const auto* at = nodeOf(index);
@@ -1119,20 +1164,24 @@ QJsonValue ValuesContent::jsonOf(const QModelIndex& index, schema_text::RowBudge
 	if (at->unavailable)
 		return budget.take() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonValue::Undefined);
 	rt::DynamicValueView view;
-	if (partial(*at) && wholeShown(index) && viewOf(*at, view))
-		return Data{schema_->schema, budget}.json(view);
+	const Data data{schema_->schema, budget};
+	const bool whole = wholeShown(index) && viewOf(*at, view);
+	if (at->kind == QStringLiteral("range")) {
+		QJsonArray array;
+		if (whole)
+			data.jsonRange(array, view, at->first, at->total);
+		else
+			appendShown(array, index, budget);
+		return array;
+	}
+	if (whole && at->kind != QStringLiteral("group"))
+		return data.json(view);
 	if (at->total == 0 && at->kind != QStringLiteral("group"))
 		return budget.take() ? jsonValue(*at) : QJsonValue(QJsonValue::Undefined);
 	const auto* type = schema_->schema.type(at->typeId);
 	if (at->kind != QStringLiteral("group") && type && type->kind == TypeKind::Array) {
 		QJsonArray array;
-		for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row) {
-			const auto child = shown_.index(row, 0, index);
-			if (nodeOf(child)->kind == QStringLiteral("more"))
-				continue;
-			if (const auto value = jsonOf(child, budget); !budget.cut)
-				array.push_back(value);
-		}
+		appendShown(array, index, budget);
 		return array;
 	}
 	// A group's Fields, or a struct's members, by name.
@@ -1148,15 +1197,19 @@ QString ValuesContent::tsvOf(const QModelIndex& index, bool withSelf, schema_tex
 {
 	const auto* at = index.isValid() ? nodeOf(index) : nullptr;
 	if (withSelf && at) {
-		if (at->kind == QStringLiteral("more"))
-			return {};
 		rt::DynamicValueView view;
-		if (partial(*at) && wholeShown(index) && viewOf(*at, view))
-			return Data{schema_->schema, budget}.tsv(view, at->path);
-		if (at->unavailable || (at->total == 0 && at->kind != QStringLiteral("group")))
+		const Data data{schema_->schema, budget};
+		const bool whole = wholeShown(index) && viewOf(*at, view);
+		if (at->kind == QStringLiteral("range")) {
+			if (whole)
+				return data.tsvRange(view, at->path, at->first, at->total);
+		} else if (whole && !at->unavailable && at->kind != QStringLiteral("group")) {
+			return data.tsv(view, at->path);
+		} else if (at->unavailable || (at->total == 0 && at->kind != QStringLiteral("group"))) {
 			return budget.take() ? cell(at->path) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') +
 			                           cell(at->type) + QLatin1Char('\n')
 			                     : QString{};
+		}
 	}
 	QString out;
 	for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row)
@@ -1167,13 +1220,13 @@ QString ValuesContent::tsvOf(const QModelIndex& index, bool withSelf, schema_tex
 QString ValuesContent::pathOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	return at && at->kind != QStringLiteral("more") ? at->path : QString{};
+	return at && at->kind != QStringLiteral("range") ? at->path : QString{};
 }
 
 QString ValuesContent::valueOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("group") || at->kind == QStringLiteral("more") ||
+	if (!at || at->kind == QStringLiteral("group") || at->kind == QStringLiteral("range") ||
 	    (at->total > 0 && !at->unavailable))
 		return {};
 	return at->value;
@@ -1182,7 +1235,7 @@ QString ValuesContent::valueOf(const QModelIndex& index) const
 QString ValuesContent::rowOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("more"))
+	if (!at)
 		return {};
 	return cell(at->name) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') + cell(at->type);
 }
@@ -1190,7 +1243,7 @@ QString ValuesContent::rowOf(const QModelIndex& index) const
 QString ValuesContent::textOf(const QModelIndex& index, const QString& format) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("more"))
+	if (!at)
 		return {};
 	schema_text::RowBudget budget{maxCopiedRows};
 	if (format == QStringLiteral("json")) {

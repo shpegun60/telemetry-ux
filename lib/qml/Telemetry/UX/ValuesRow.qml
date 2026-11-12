@@ -1,9 +1,9 @@
-// One row of the Values tree: the name, the value and the type in fixed
-// columns; a group carries its Field count where a value would be. A value
-// that changed in the latest snapshot is marked with a dot and the accent
-// colour; a Field the device could not give says so. A large array shows
-// its elements 256 at a time, and a "Show 256 more · 256 of 600 shown" row -
-// a link - brings the next ones (click, Enter, Space or a screen reader's press). The current row is
+// One row of the Values tree, and of the JSON tree: the name, the value and
+// the type in fixed columns; a group carries its Field count where a value
+// would be. A value that changed in the latest snapshot is marked with a dot
+// and the accent colour; a Field the device could not give says so. A long
+// array opens as ranges of 256, "[0 … 255]", "[256 … 511]", … - as Eclipse
+// shows one - and a range opens like any row. The current row is
 // highlighted, and framed while the tree has the keyboard. MIT.
 //
 // The Basic style is imported here only, where the row customises its look.
@@ -30,7 +30,6 @@ TreeViewDelegate {
     property bool typeShown: true
 
     readonly property bool group: kind === "group"
-    readonly property bool more: kind === "more"
     // A struct's or array's one-line summary while folded; open, its members say it.
     readonly property string fieldsText: count === 1 ? qsTr("1 Field") : qsTr("%L1 Fields").arg(count)
     // A folded group still says how many of its Fields the latest snapshot changed.
@@ -44,7 +43,6 @@ TreeViewDelegate {
                                       : changed ? Theme.accent : Theme.textPrimary
 
     signal contextMenuRequested(var index, real x, real y)
-    signal moreRequested(var index)
 
     implicitWidth: treeView.width
     implicitHeight: Type.rowHeight
@@ -52,10 +50,8 @@ TreeViewDelegate {
     text: name
     highlighted: current
 
-    Accessible.role: more ? Accessible.Button : Accessible.TreeItem
-    // A screen reader's or voice control's press brings the next elements as a click does.
-    Accessible.onPressAction: if (row.more) row.moreRequested(row.treeView.index(row.row, 0))
-    Accessible.name: more ? name
+    Accessible.role: Accessible.TreeItem
+    Accessible.name: kind === "range" ? qsTr("%1, %2").arg(name.replace("…", qsTr("to"))).arg(typeText)
                    : group ? qsTr("%1, %2").arg(name).arg(valueText)
                    : unavailable ? qsTr("%1, unavailable, %2").arg(name).arg(typeText)
                    : value.length === 0 ? qsTr("%1, %2").arg(name).arg(typeText)
@@ -69,21 +65,11 @@ TreeViewDelegate {
             textFormat: Text.PlainText
             elide: Text.ElideRight
             text: row.name
-            // A "more" row is a link as LinkButton draws one: secondary text,
-            // always underlined; the accent stays the changed values' mark.
-            color: row.more ? row.detailColor : row.textColor
+            color: row.textColor
             font.weight: row.group ? Type.headingWeight : Font.Normal
-            font.underline: row.more
-            HoverHandler {
-                id: moreHover
-                enabled: row.more
-                cursorShape: Qt.PointingHandCursor
-            }
         }
         // The value, with the changed mark 4 px before its first character.
-        // A "more" row has no value or type: its words take the whole row.
         Item {
-            visible: !row.more
             Layout.preferredWidth: 10 + row.valueWidth
             Layout.fillHeight: true
             Rectangle {
@@ -117,10 +103,10 @@ TreeViewDelegate {
             }
         }
         // A wider gap: "230 f32" must not read as one word.
-        Item { visible: !row.more; Layout.preferredWidth: 8 }
+        Item { Layout.preferredWidth: 8 }
         Label {
             objectName: "valuesRowType"
-            visible: row.typeShown && !row.more
+            visible: row.typeShown
             Layout.preferredWidth: row.typeWidth
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -144,11 +130,6 @@ TreeViewDelegate {
     }
 
     TapHandler {
-        enabled: row.more
-        onTapped: row.moreRequested(row.treeView.index(row.row, 0))
-    }
-    TapHandler {
-        enabled: !row.more
         acceptedButtons: Qt.RightButton
         // The index of this row now: a delegate is reused for other rows.
         onTapped: function(point) { row.contextMenuRequested(row.treeView.index(row.row, 0), point.position.x, point.position.y) }

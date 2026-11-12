@@ -23,6 +23,9 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDir>
 #include <QLocale>
 #include <QPointer>
@@ -191,6 +194,25 @@ alignas(32) std::array<std::byte, wideModel.maxScratch() + 1> wideScratch{};
 telemetry::Workspace wideWorkspace{wideScratch};
 const resource::telemetry::v3::ValuesFile wideValues{wideDescriptor, wideWorkspace};
 
+// The most elements an array may have (Limits::maxArrayElements): 256 ranges.
+struct Long {
+	std::array<std::uint8_t, 65536> bytes{};
+
+	std::array<std::uint8_t, 65536> readBytes() noexcept
+	{
+		return bytes;
+	}
+} longest;
+
+constexpr telemetry::FieldTable longTable{telemetry::field<&Long::readBytes>("Bytes", longest)};
+constexpr telemetry::FieldCatalogTable longFields{telemetry::group("long", longTable)};
+constexpr telemetry::Model longModel{longFields, commands, services};
+constexpr telemetry::descriptor::Descriptor longDescriptor{longModel};
+constexpr auto longPacked = telemetry::descriptor::packDescriptor<longDescriptor>();
+alignas(32) std::array<std::byte, longModel.maxScratch() + 1> longScratch{};
+telemetry::Workspace longWorkspace{longScratch};
+const resource::telemetry::v3::ValuesFile longValues{longDescriptor, longWorkspace};
+
 // Types that nest seven deep, four members at each level: 54 612 rows below
 // each of twenty endpoints, had the tree made them all at once.
 struct DeepLeaf {
@@ -263,12 +285,13 @@ alignas(32) std::array<std::byte, waveModel.maxScratch() + 1> waveScratch{};
 telemetry::Workspace waveWorkspace{waveScratch};
 const resource::telemetry::v3::ValuesFile waveValues{waveDescriptor, waveWorkspace};
 
-// A whole values file, as a host reads it in pieces of a READ's size.
+// A whole values file, as a host reads it in pieces of a READ's size (or
+// larger, for a token no READ could carry).
 template<class File>
-QByteArray readWhole(const File& file)
+QByteArray readWhole(const File& file, std::size_t pieceBytes = 65535)
 {
 	QByteArray bytes;
-	std::vector<std::byte> piece(65535);
+	std::vector<std::byte> piece(pieceBytes);
 	resource::Cursor cursor = 0;
 	for (int guard = 0; guard < 100000; ++guard) {
 		const auto result = file.read(cursor, piece);
@@ -1454,8 +1477,8 @@ void valuesFormatting()
 	rich.pair.voltage = 230.5f;
 }
 
-// A large array opens 256 elements at a time behind a "Show 256 more"
-// row; Find makes the rows that lead to a match, wherever it is; Copy writes
+// A large array opens as ranges of 256, as Eclipse shows one; Find makes
+// only the rows that lead to a match, wherever it is; Copy writes
 // the elements not made yet from the data, and under Find only what is shown.
 void lazyValues()
 {
@@ -1477,28 +1500,31 @@ void lazyValues()
 		auto* fields = values.fields();
 		// Indexes of the shown model are taken again after anything that changes its rows.
 		const auto field = [&](int row) { return fields->index(row, 0, fields->index(0, 0)); };
-		const auto element = [&](int row) { return fields->index(row, 0, field(0)); };
+		const auto range = [&](int row) { return fields->index(row, 0, field(0)); };
+		const auto element = [&](int inRange, int row) { return fields->index(row, 0, range(inRange)); };
+		const auto type = [&](const QModelIndex& index) { return fields->data(index, ValuesTreeModel::TypeRole).toString(); };
 		CHECK(value(fields, field(0)) == QStringLiteral("[0, 1, 2, 3, 4, 5, 6, 7, …]") && fields->rowCount(field(0)) == 0);
 		fields->fetchMore(field(0));
-		CHECK(fields->rowCount(field(0)) == 257);
-		CHECK(name(fields, element(256)) == QStringLiteral("Show 256 more · 256 of 600 shown") && values.isMore(element(256)) &&
-		      !values.isMore(element(255)) && values.pathOf(element(256)).isEmpty() &&
-		      values.valueOf(element(256)).isEmpty() && values.textOf(element(256), QStringLiteral("text")).isEmpty());
-		CHECK(name(fields, element(255)) == QStringLiteral("[255]") && value(fields, element(255)) == QStringLiteral("255"));
-		// A "more" row is never a match: Find looks at names and paths, not at it.
-		CHECK(values.setFilter(QStringLiteral("more")) == 0 && values.setFilter(QString()) == 0);
-		// Copy of the array while only part is made: every element, from the data.
+		// As Eclipse shows a long array: ranges of 256, each opening like any row.
+		CHECK(fields->rowCount(field(0)) == 3 && name(fields, range(0)) == QStringLiteral("[0 … 255]") &&
+		      name(fields, range(2)) == QStringLiteral("[512 … 599]") && type(range(2)) == QStringLiteral("88 items") &&
+		      fields->rowCount(range(1)) == 0 && fields->hasChildren(range(1)) && fields->canFetchMore(range(1)));
+		// A range has no path or value of its own, and Find never takes it for a match.
+		CHECK(values.pathOf(range(1)).isEmpty() && values.valueOf(range(1)).isEmpty());
+		CHECK(values.setFilter(QStringLiteral("256 …")) == 0 && values.setFilter(QString()) == 0);
+		// Copy of a range: its elements, from the data, opened or not.
+		const auto rangeTsv = values.textOf(range(1), QStringLiteral("tsv"));
+		CHECK(rangeTsv.contains(QStringLiteral("wide.Counts[300]\t300\tu16")) &&
+		      !rangeTsv.contains(QStringLiteral("wide.Counts[255]")) && !rangeTsv.contains(QStringLiteral("wide.Counts[512]")));
 		CHECK(values.textOf(field(0), QStringLiteral("tsv")).contains(QStringLiteral("wide.Counts[599]\t599\tu16")));
-		CHECK(!values.showMore(element(0)) && values.showMore(element(256)));
-		CHECK(fields->rowCount(field(0)) == 513 && name(fields, element(512)) == QStringLiteral("Show 88 more · 512 of 600 shown"));
-		CHECK(values.showMore(element(512)));
-		CHECK(fields->rowCount(field(0)) == 600 && name(fields, element(599)) == QStringLiteral("[599]") &&
-		      !values.isMore(element(599)));
-		// A newer snapshot reaches every made element.
+		fields->fetchMore(range(2));
+		CHECK(fields->rowCount(range(2)) == 88 && name(fields, element(2, 87)) == QStringLiteral("[599]") &&
+		      value(fields, element(2, 87)) == QStringLiteral("599") && values.pathOf(element(2, 87)) == QStringLiteral("wide.Counts[599]"));
+		// A newer snapshot reaches every made element, through the ranges.
 		wide.counts[599] = 9999;
 		CHECK(values.update(readWhole(wideValues)).isEmpty());
-		CHECK(value(fields, element(599)) == QStringLiteral("9999") &&
-		      fields->data(element(599), ValuesTreeModel::ChangedRole).toBool() && values.changedCount() == 1);
+		CHECK(value(fields, element(2, 87)) == QStringLiteral("9999") &&
+		      fields->data(element(2, 87), ValuesTreeModel::ChangedRole).toBool() && values.changedCount() == 1);
 		// The Field is marked by its bytes, and its group counts it.
 		CHECK(fields->data(field(0), ValuesTreeModel::ChangedRole).toBool() &&
 		      fields->data(fields->index(0, 0), ValuesTreeModel::ChangedFieldsRole).toInt() == 1);
@@ -1524,7 +1550,8 @@ void lazyValues()
 		// Find into it: every element's mode, the rows that lead there made.
 		CHECK(values.setFilter(QStringLiteral("mode")) == 300 && !values.findLimited());
 		const auto shownPairs = fields->index(0, 0, fields->index(0, 0));
-		CHECK(name(fields, shownPairs) == QStringLiteral("Pairs") && fields->rowCount(shownPairs) == 300);
+		CHECK(name(fields, shownPairs) == QStringLiteral("Pairs") && fields->rowCount(shownPairs) == 2 &&
+		      fields->rowCount(fields->index(1, 0, shownPairs)) == 44);
 		const auto modeTsv = values.textOf(shownPairs, QStringLiteral("tsv"));
 		CHECK(modeTsv.contains(QStringLiteral("wide.Pairs[299].mode\tRun (1)\t")) &&
 		      !modeTsv.contains(QStringLiteral("voltage")) && !modeTsv.contains(QStringLiteral("Counts")));
@@ -1546,16 +1573,47 @@ void lazyValues()
 		fields->fetchMore(fields->index(0, 0, fields->index(0, 0)));
 		wide.counts[400] = 7777;
 		CHECK(values.update(readWhole(wideValues)).isEmpty());
-		CHECK(fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 257 &&
+		CHECK(fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 3 &&
 		      fields->data(fields->index(0, 0, fields->index(0, 0)), ValuesTreeModel::ChangedRole).toBool() &&
 		      values.changedCount() == 1);
 		wide.counts[400] = 400;
 		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		// Find for the last element: only its range is made on the way.
 		CHECK(values.setFilter(QStringLiteral("Counts[599]")) == 1 && !values.findLimited());
 		const auto counts = fields->index(0, 0, fields->index(0, 0));
-		CHECK(fields->rowCount(counts) == 1 && name(fields, fields->index(0, 0, counts)) == QStringLiteral("[599]") &&
-		      value(fields, fields->index(0, 0, counts)) == QStringLiteral("599"));
-		CHECK(values.setFilter(QString()) == 0 && fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 600);
+		const auto last = fields->index(0, 0, counts);
+		CHECK(fields->rowCount(counts) == 1 && name(fields, last) == QStringLiteral("[512 … 599]") &&
+		      fields->rowCount(last) == 1 && value(fields, fields->index(0, 0, last)) == QStringLiteral("599"));
+		// Copied as JSON under Find: through the range, only what is shown.
+		const auto shownJson = values.textOf(counts, QStringLiteral("json"));
+		CHECK(shownJson.contains(QStringLiteral("599")) && !shownJson.contains(QStringLiteral("598")));
+		CHECK(values.setFilter(QString()) == 0 && fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 3 &&
+		      fields->rowCount(fields->index(0, 0, fields->index(0, 0, fields->index(0, 0)))) == 0);
+	}
+	{
+		// The most elements an array may have: 256 ranges, and Live through them.
+		// One token is larger than a READ here, so it is read whole.
+		for (std::size_t i = 0; i < longest.bytes.size(); ++i)
+			longest.bytes[i] = static_cast<std::uint8_t>(i % 251);
+		ValuesContent values(readWhole(longValues, 70000), bytesOf(longPacked));
+		CHECK(values.valid());
+		auto* fields = values.fields();
+		const auto array = [&] { return fields->index(0, 0, fields->index(0, 0)); };
+		fields->fetchMore(array());
+		CHECK(fields->rowCount(array()) == 256 &&
+		      name(fields, fields->index(255, 0, array())) == QStringLiteral("[65280 … 65535]"));
+		// Find the very last element: one range of 256 made on the way.
+		CHECK(values.setFilter(QStringLiteral("Bytes[65535]")) == 1 && !values.findLimited());
+		CHECK(values.setFilter(QString()) == 0);
+		const auto lastRange = fields->index(255, 0, array());
+		CHECK(fields->rowCount(lastRange) == 256 && fields->rowCount(fields->index(254, 0, array())) == 0 &&
+		      name(fields, fields->index(255, 0, lastRange)) == QStringLiteral("[65535]") &&
+		      value(fields, fields->index(255, 0, lastRange)) == QString::number(65535 % 251));
+		// Live reaches it through the range.
+		longest.bytes[65535] = 250;
+		CHECK(values.update(readWhole(longValues, 70000)).isEmpty());
+		CHECK(value(fields, fields->index(255, 0, lastRange)) == QStringLiteral("250") &&
+		      fields->data(fields->index(255, 0, lastRange), ValuesTreeModel::ChangedRole).toBool());
 	}
 }
 
@@ -1638,9 +1696,12 @@ void bigValues()
 	CHECK(fields->data(wave).toString() == QStringLiteral("w003") && fields->rowCount(wave) == 0);
 	clock.restart();
 	fields->fetchMore(wave);
+	fields->fetchMore(fields->index(0, 0, wave));
 	const auto openFieldMs = clock.elapsed();
-	CHECK(fields->rowCount(wave) == 257 && fields->data(fields->index(1, 0, wave), telemetry::ux::ValuesTreeModel::ValueRole)
-	                                               .toString() == QStringLiteral("3.015625"));
+	// 16 000 elements: 63 ranges, the first opened.
+	CHECK(fields->rowCount(wave) == 63 && fields->rowCount(fields->index(0, 0, wave)) == 256 &&
+	      fields->data(fields->index(1, 0, fields->index(0, 0, wave)), telemetry::ux::ValuesTreeModel::ValueRole).toString() ==
+	          QStringLiteral("3.015625"));
 	clock.restart();
 	CHECK(values.update(bytes).isEmpty() && values.changedCount() == 0);
 	const auto snapshotMs = clock.elapsed();
@@ -1653,7 +1714,7 @@ void bigValues()
 	int made = 0;
 	for (int row = 0; row < fields->rowCount(group); ++row)
 		made += fields->rowCount(fields->index(row, 0, group));
-	CHECK(made > 0 && made <= static_cast<int>(ValuesContent::maxFindRows + ValuesContent::elementsPerStep + waveCount));
+	CHECK(made > 0 && made <= static_cast<int>(ValuesContent::maxFindRows + ValuesContent::rangeSize + waveCount));
 	// A snapshot fills every row made so far.
 	clock.restart();
 	CHECK(values.update(bytes).isEmpty());
@@ -1889,20 +1950,61 @@ void jsonCodec(const QString& folder)
 	nodes->fetchMore(b);
 	CHECK(value(nodes->index(1, 0, b)) == QStringLiteral("2.50") && json->valueOf(nodes->index(2, 0, b)) == QStringLiteral("x\ny") &&
 	      json->pathOf(nodes->index(2, 0, b)) == QStringLiteral("alpha.b[2]"));
-	// A long array: 256 at a time behind a "more" row.
+	// A long array: ranges of 256, as Eclipse shows one.
 	const auto listIndex = [&] { return nodes->index(2, 0); };
+	const auto listRange = [&](int row) { return nodes->index(row, 0, listIndex()); };
 	CHECK(type(listIndex()) == QStringLiteral("array, 600 items"));
 	nodes->fetchMore(listIndex());
-	CHECK(nodes->rowCount(listIndex()) == 257 && json->isMore(nodes->index(256, 0, listIndex())) &&
-	      name(nodes->index(256, 0, listIndex())) == QStringLiteral("Show 256 more · 256 of 600 shown"));
-	CHECK(json->showMore(nodes->index(256, 0, listIndex())) && nodes->rowCount(listIndex()) == 513);
-	CHECK(json->rowOf(nodes->index(300, 0, listIndex())) == QStringLiteral("[300]\t300\tnumber"));
-	// Find by value, into rows not made: the steps on the way are made.
+	CHECK(nodes->rowCount(listIndex()) == 3 && name(listRange(1)) == QStringLiteral("[256 … 511]") &&
+	      type(listRange(2)) == QStringLiteral("88 items") && json->pathOf(listRange(1)).isEmpty() &&
+	      json->valueOf(listRange(1)).isEmpty());
+	// A range copied as JSON: its elements as the file writes them, in brackets.
+	CHECK(QJsonDocument::fromJson(json->jsonOf(listRange(1)).toUtf8()).array().size() == 256 &&
+	      json->jsonOf(listRange(1)).startsWith(QStringLiteral("[256, 257")));
+	nodes->fetchMore(listRange(1));
+	CHECK(nodes->rowCount(listRange(1)) == 256 &&
+	      json->rowOf(nodes->index(44, 0, listRange(1))) == QStringLiteral("[300]\t300\tnumber"));
+	// Find by value, into rows not made: only the range on the way is made.
 	CHECK(json->setFilter(QStringLiteral("599")) == 1 && !json->findLimited());
 	CHECK(json->setFilter(QStringLiteral("café")) == 1);
 	CHECK(json->setFilter(QStringLiteral("nothing here")) == 0 && json->setFilter(QString()) == 0);
-	CHECK(nodes->rowCount(listIndex()) == 600);
-	CHECK(json->jsonOfAll() == QString::fromUtf8(text));
+	CHECK(nodes->rowCount(listIndex()) == 3 && nodes->rowCount(listRange(0)) == 0 && nodes->rowCount(listRange(2)) == 88);
+	CHECK(json->jsonOfAll() == QString::fromUtf8(text.mid(3)));
+
+	// An object of many keys: ranges named by their first and last key.
+	QByteArray keys = "{";
+	for (int i = 0; i < 300; ++i)
+		keys += (i ? ", " : "") + QByteArrayLiteral("\"k") + QByteArray::number(1000 + i) + "\": " + QByteArray::number(i);
+	keys += "}";
+	JsonContent keyed(keys);
+	CHECK(keyed.valid() && keyed.nodes()->rowCount() == 2);
+	const auto keysRange = keyed.nodes()->index(1, 0);
+	CHECK(keyed.nodes()->data(keysRange).toString() == QStringLiteral("[256 … 299]") &&
+	      keyed.nodes()->data(keysRange, JsonTreeModel::ValueRole).toString() == QStringLiteral("k1256 … k1299") &&
+	      keyed.nodes()->data(keysRange, JsonTreeModel::TypeRole).toString() == QStringLiteral("44 keys"));
+	CHECK(QJsonDocument::fromJson(keyed.jsonOf(keysRange).toUtf8()).object().size() == 44);
+	// More than 65 536 keys: ranges of ranges, each named by its own first and last key.
+	{
+		QByteArray huge = "{";
+		for (int i = 0; i < 66000; ++i)
+			huge += (i ? "," : "") + QByteArrayLiteral("\"k") + QByteArray::number(100000 + i) + "\":" + QByteArray::number(i);
+		huge += "}";
+		JsonContent hugeObject(huge);
+		CHECK(hugeObject.valid() && hugeObject.nodes()->rowCount() == 2);
+		const auto top = hugeObject.nodes()->index(0, 0);
+		CHECK(hugeObject.nodes()->data(top, JsonTreeModel::ValueRole).toString() == QStringLiteral("k100000 … k165535"));
+		hugeObject.nodes()->fetchMore(top);
+		const auto second = hugeObject.nodes()->index(1, 0, top);
+		CHECK(hugeObject.nodes()->rowCount(top) == 256 &&
+		      hugeObject.nodes()->data(second).toString() == QStringLiteral("[256 … 511]") &&
+		      hugeObject.nodes()->data(second, JsonTreeModel::ValueRole).toString() == QStringLiteral("k100256 … k100511"));
+		hugeObject.nodes()->fetchMore(second);
+		CHECK(hugeObject.nodes()->data(hugeObject.nodes()->index(0, 0, second)).toString() == QStringLiteral("k100256"));
+	}
+	keyed.nodes()->fetchMore(keysRange);
+	CHECK(keyed.nodes()->rowCount(keysRange) == 44 &&
+	      keyed.nodes()->data(keyed.nodes()->index(0, 0, keysRange)).toString() == QStringLiteral("k1256") &&
+	      keyed.pathOf(keyed.nodes()->index(43, 0, keysRange)) == QStringLiteral("k1299"));
 
 	// Broken: where, as a person counts; the file stays text.
 	const auto broken = write(QStringLiteral("broken.json"), "{\n  \"a\": ,\n}");
@@ -1943,30 +2045,20 @@ void jsonCodec(const QString& folder)
 	clock.start();
 	JsonContent large(big);
 	const auto openMs = clock.elapsed();
-	if (!large.valid() || large.nodes()->rowCount() != 257)
-		std::fprintf(stderr, "json large: valid %d error '%s' summary '%s' rows %d\n", int(large.valid()),
-		             qPrintable(large.error()), qPrintable(large.summary()), large.nodes()->rowCount());
-	CHECK(large.valid() && large.summary() == QStringLiteral("array, 160000 items") && large.nodes()->rowCount() == 257);
+	// 160 000 items: three ranges of 65 536, each of ranges of 256.
+	CHECK(large.valid() && large.summary() == QStringLiteral("array, 160000 items") && large.nodes()->rowCount() == 3 &&
+	      large.nodes()->data(large.nodes()->index(2, 0)).toString() == QStringLiteral("[131072 … 159999]"));
+	// At the very end: only the ranges on the way are made, so it is reached.
 	clock.restart();
-	const auto found = large.setFilter(QStringLiteral("item 90000"));
+	const auto found = large.setFilter(QStringLiteral("item 159999"));
 	const auto findMs = clock.elapsed();
 	CHECK(found == 1 && !large.findLimited());
-	// At the very end of a file just opened: found, but the way there would
-	// make more rows than one find may - it stops short and says so.
-	{
-		JsonContent fresh(big);
-		CHECK(fresh.setFilter(QStringLiteral("item 159999")) == 0 && fresh.findLimited());
-		CHECK(fresh.setFilter(QString()) == 0);
-		int made = 0;
-		for (int row = 0; row < fresh.nodes()->rowCount(); ++row)
-			made += 1 + fresh.nodes()->rowCount(fresh.nodes()->index(row, 0));
-		CHECK(made <= static_cast<int>(JsonContent::maxFindRows + 2 * JsonContent::elementsPerStep));
-	}
+	CHECK(large.setFilter(QString()) == 0);
 	clock.restart();
 	const auto many = large.setFilter(QStringLiteral("samples"));
 	const auto manyMs = clock.elapsed();
 	CHECK(many > 0 && large.findLimited());
-	std::printf("json %lld bytes: open %lld ms, find one at nine tenths %lld ms, find many %lld ms\n",
+	std::printf("json %lld bytes: open %lld ms, find one at the very end %lld ms, find many %lld ms\n",
 	            static_cast<long long>(big.size()), static_cast<long long>(openMs), static_cast<long long>(findMs),
 	            static_cast<long long>(manyMs));
 	CHECK(openMs < 2000 && findMs < 5000 && manyMs < 5000);
