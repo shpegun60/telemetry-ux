@@ -19,13 +19,16 @@
 #include <QtCore/QVariantList>
 #include "TreeFilter.hpp"
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
 
 namespace telemetry::ux {
 // Fields, Commands and Services, their groups, their endpoints, and the members
-// of a struct type below its endpoint.
+// of a struct type below its endpoint. Members are made when their row is first
+// opened: a descriptor of any size opens at once.
 class DescriptorTreeModel final : public QAbstractItemModel {
 	Q_OBJECT
 public:
@@ -48,15 +51,25 @@ public:
 		int category = 0;
 		// Its place among its parent's children.
 		int row = 0;
+		// The type whose members go below it, and whether they are still to be made.
+		std::uint32_t typeId = 0;
+		bool expandable = false;
 		Node* parent = nullptr;
 		std::vector<std::unique_ptr<Node>> children;
 	};
 
 	explicit DescriptorTreeModel(QObject* parent = nullptr);
 	~DescriptorTreeModel() override;
-	// Once: the tree never changes after, so no index into it goes stale.
+	// Once: rows are only ever added after, so no index into it goes stale.
 	void setRoot(std::unique_ptr<Node> root);
 	const Node* nodeAt(const QModelIndex& index) const noexcept { return node(index); }
+	// Makes a row's members the first time it is opened.
+	std::function<void(Node&)> populate;
+	void append(Node& under, std::vector<std::unique_ptr<Node>> rows);
+
+	bool hasChildren(const QModelIndex& parent = {}) const override;
+	bool canFetchMore(const QModelIndex& parent) const override;
+	void fetchMore(const QModelIndex& parent) override;
 
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& child) const override;
@@ -94,6 +107,7 @@ public:
 	// Parses bytes with the SDK's RuntimeSchema; invalid() with error() when
 	// they are not a descriptor this SDK reads.
 	explicit DescriptorContent(const QByteArray& bytes, QObject* parent = nullptr);
+	~DescriptorContent() override;
 
 	bool valid() const noexcept { return valid_; }
 	QString error() const { return error_; }
@@ -106,6 +120,14 @@ public:
 	Q_INVOKABLE int setFilter(const QString& text);
 	// Whether the shown row matches Find itself, not only through a child.
 	Q_INVOKABLE bool matches(const QModelIndex& index) const;
+	// Whether the last Find stopped at a bound: there may be more matches
+	// than it showed.
+	Q_INVOKABLE bool findLimited() const noexcept { return findLimited_; }
+	// The bounds Find stops at, in words, for the view to say why.
+	Q_INVOKABLE QString findLimitText() const;
+	// After a copy that stopped at maxCopiedRows, what the view says about it
+	// (the copied text ends saying so too); empty after a whole copy.
+	Q_INVOKABLE QString copyNote() const;
 	// A shown node's path, its row (name, type, access with tabs), or the node
 	// with everything below it as "text" (indented), "json" (nested by name)
 	// or "tsv" (path, kind, type, access). Empty for an index that is not one
@@ -123,21 +145,39 @@ public:
 	QString summary() const;
 	QAbstractItemModel* endpoints() { return &shown_; }
 
+	// Bounds that keep a large descriptor quick: the members Find looks at,
+	// and the rows a copy writes (the copy then says it was cut short).
+	static constexpr std::size_t maxFindVisits = 500000;
+	static constexpr std::size_t maxFindMatches = 10000;
+	static constexpr std::size_t maxFindRows = 100000;
+	static constexpr std::size_t maxCopiedRows = 500000;
+
 	// Whether a device path names the descriptor: the protocol's own file.
 	static bool names(const QString& devicePath);
 	// The header's fields and the sections after it, from the bytes alone.
 	static QVariantList headerRegions(std::span<const std::byte> bytes);
 
 private:
+	struct Schema;
+	using Node = DescriptorTreeModel::Node;
 	// The node a shown index stands for, or null for any other index.
-	const DescriptorTreeModel::Node* nodeOf(const QModelIndex& index) const;
+	const Node* nodeOf(const QModelIndex& index) const;
+	// A row's members, made when it is first opened.
+	void populate(Node& node);
+	// Makes the rows Find matches, and the way to them.
+	void openMatches(const QString& text);
+	// The last line of a copy that reached maxCopiedRows.
+	static QString cutShort();
 
-	bool valid_ = false;
+	bool valid_ = false, findLimited_ = false;
+	mutable bool copyCut_ = false;
 	QString error_, fingerprint_;
 	QVariantList regions_;
 	int counts_[3] = {0, 0, 0};
 	int groups_ = 0, types_ = 0;
-	// Everything parsed, built once; Find shows it through shown_.
+	// The parsed descriptor, kept: members are made from it as rows open.
+	std::unique_ptr<Schema> schema_;
+	// Categories, groups and endpoints, made once; members as they are opened.
 	DescriptorTreeModel tree_;
 	TreeFilter shown_;
 };

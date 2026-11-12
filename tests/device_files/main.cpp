@@ -37,6 +37,7 @@
 #include <memory>
 #include <string_view>
 #include <utility>
+#include <vector>
 namespace qt = telemetry::integration::qt;
 namespace tcp = telemetry::integration::tcp;
 using telemetry::ux::DeviceFilesModel;
@@ -143,6 +144,145 @@ constexpr auto richPacked = telemetry::descriptor::packDescriptor<richDescriptor
 alignas(32) std::array<std::byte, richModel.maxScratch() + 1> richScratch{};
 telemetry::Workspace richWorkspace{richScratch};
 const resource::telemetry::v3::ValuesFile richValues{richDescriptor, richWorkspace};
+
+// Names "w000", "w001", ... for a table made from a pack: each one a whole array.
+template<std::size_t Count>
+struct Names {
+	char text[Count][5]{};
+
+	constexpr explicit Names(char prefix)
+	{
+		for (std::size_t i = 0; i < Count; ++i) {
+			text[i][0] = prefix;
+			text[i][1] = static_cast<char>('0' + i / 100 % 10);
+			text[i][2] = static_cast<char>('0' + i / 10 % 10);
+			text[i][3] = static_cast<char>('0' + i % 10);
+		}
+	}
+};
+
+// Arrays longer than a step of the tree, of numbers and of structs.
+struct Wide {
+	std::array<std::uint16_t, 600> counts{};
+	std::array<Pair, 300> pairs{};
+
+	std::array<std::uint16_t, 600> readCounts() noexcept
+	{
+		return counts;
+	}
+
+	std::array<Pair, 300> readPairs() noexcept
+	{
+		return pairs;
+	}
+} wide;
+
+constexpr telemetry::FieldTable wideTable{telemetry::field<&Wide::readCounts>("Counts", wide),
+                                          telemetry::field<&Wide::readPairs>("Pairs", wide)};
+constexpr telemetry::FieldCatalogTable wideFields{telemetry::group("wide", wideTable)};
+constexpr telemetry::Model wideModel{wideFields, commands, services};
+constexpr telemetry::descriptor::Descriptor wideDescriptor{wideModel};
+constexpr auto widePacked = telemetry::descriptor::packDescriptor<wideDescriptor>();
+alignas(32) std::array<std::byte, wideModel.maxScratch() + 1> wideScratch{};
+telemetry::Workspace wideWorkspace{wideScratch};
+const resource::telemetry::v3::ValuesFile wideValues{wideDescriptor, wideWorkspace};
+
+// Types that nest seven deep, four members at each level: 54 612 rows below
+// each of twenty endpoints, had the tree made them all at once.
+struct DeepLeaf {
+	float x, y;
+};
+struct Deep6 {
+	DeepLeaf a, b, c, d;
+};
+struct Deep5 {
+	Deep6 a, b, c, d;
+};
+struct Deep4 {
+	Deep5 a, b, c, d;
+};
+struct Deep3 {
+	Deep4 a, b, c, d;
+};
+struct Deep2 {
+	Deep3 a, b, c, d;
+};
+struct Deep1 {
+	Deep2 a, b, c, d;
+};
+struct Deep0 {
+	Deep1 a, b, c, d;
+};
+
+// Never read: only its type goes into the descriptor.
+Deep0 readDeep() noexcept
+{
+	return {};
+}
+
+constexpr Names<20> deepNames{'d'};
+template<std::size_t... I>
+constexpr auto deepTable(std::index_sequence<I...>)
+{
+	return telemetry::FieldTable{telemetry::field<&readDeep>(deepNames.text[I])...};
+}
+constexpr auto deepFields = deepTable(std::make_index_sequence<20>{});
+constexpr telemetry::FieldCatalogTable deepCatalogs{telemetry::group("deep", deepFields)};
+constexpr telemetry::Model deepModel{deepCatalogs, commands, services};
+constexpr telemetry::descriptor::Descriptor deepDescriptor{deepModel};
+constexpr auto deepPacked = telemetry::descriptor::packDescriptor<deepDescriptor>();
+
+// Ten megabytes of values: 160 Fields of 16 000 floats. Each token stays
+// under a READ's 65 535 bytes, as a device that serves the file must keep it.
+constexpr std::size_t waveCount = 160;
+constexpr std::size_t waveLength = 16000;
+std::array<std::array<float, waveLength>, waveCount> waves{};
+
+template<std::size_t I>
+std::array<float, waveLength> readWave() noexcept
+{
+	return waves[I];
+}
+
+constexpr Names<waveCount> waveNames{'w'};
+template<std::size_t... I>
+constexpr auto waveTable(std::index_sequence<I...>)
+{
+	return telemetry::FieldTable{telemetry::field<&readWave<I>>(waveNames.text[I])...};
+}
+constexpr auto waveFields = waveTable(std::make_index_sequence<waveCount>{});
+constexpr telemetry::FieldCatalogTable waveCatalogs{telemetry::group("waves", waveFields)};
+constexpr telemetry::Model waveModel{waveCatalogs, commands, services};
+constexpr telemetry::descriptor::Descriptor waveDescriptor{waveModel};
+constexpr auto wavePacked = telemetry::descriptor::packDescriptor<waveDescriptor>();
+alignas(32) std::array<std::byte, waveModel.maxScratch() + 1> waveScratch{};
+telemetry::Workspace waveWorkspace{waveScratch};
+const resource::telemetry::v3::ValuesFile waveValues{waveDescriptor, waveWorkspace};
+
+// A whole values file, as a host reads it in pieces of a READ's size.
+template<class File>
+QByteArray readWhole(const File& file)
+{
+	QByteArray bytes;
+	std::vector<std::byte> piece(65535);
+	resource::Cursor cursor = 0;
+	for (int guard = 0; guard < 100000; ++guard) {
+		const auto result = file.read(cursor, piece);
+		CHECK(result.status == resource::Status::Ok);
+		bytes.append(reinterpret_cast<const char*>(piece.data()), static_cast<qsizetype>(result.written));
+		cursor = result.next;
+		if (result.eof)
+			return bytes;
+	}
+	CHECK(false);
+	return bytes;
+}
+
+template<std::size_t N>
+QByteArray bytesOf(const std::array<std::byte, N>& packedDescriptor)
+{
+	return QByteArray(reinterpret_cast<const char*>(packedDescriptor.data()), static_cast<qsizetype>(N));
+}
 
 // values.bin as the device serves it: every Field's value at each read.
 alignas(32) std::array<std::byte, model.maxScratch() + 1> valuesScratch{};
@@ -1278,18 +1418,257 @@ void valuesFormatting()
 	const auto value = [&](const QModelIndex& index) { return fields->data(index, ValuesTreeModel::ValueRole).toString(); };
 	const auto numeric = [&](const QModelIndex& index) { return fields->data(index, ValuesTreeModel::NumericRole).toBool(); };
 	CHECK(value(big) == QStringLiteral("18446744073709551615") && numeric(big));
+	// A struct and an array come folded: summarised from the data, no rows yet.
+	CHECK(value(pair) == QStringLiteral("{voltage 230.5, mode Run (1)}") && !numeric(pair));
+	CHECK(value(samples) == QStringLiteral("[-1, 0, 2]"));
+	CHECK(fields->rowCount(pair) == 0 && fields->hasChildren(pair) && fields->canFetchMore(pair));
+	CHECK(fields->rowCount(samples) == 0 && fields->hasChildren(samples) && !fields->hasChildren(big));
+	// Copy reads the data, so what is not opened is not lost.
+	const auto json = values.textOfAll(QStringLiteral("json"));
+	CHECK(json.contains(QStringLiteral("\"Big\": \"18446744073709551615\"")) &&
+	      json.contains(QStringLiteral("\"mode\": 1")) && json.contains(QStringLiteral("\"voltage\": 230.5")) &&
+	      json.contains(QStringLiteral("\"Samples\": [")));
+	CHECK(values.textOfAll(QStringLiteral("tsv")).contains(QStringLiteral("rich.Pair.mode\tRun (1)\t")));
+	CHECK(values.textOf(pair, QStringLiteral("text")) == QStringLiteral("Pair\n  voltage = 230.5\n  mode = Run (1)\n"));
+	// Opened, the rows come, filled from the shown snapshot.
+	fields->fetchMore(pair);
+	fields->fetchMore(samples);
+	CHECK(fields->rowCount(pair) == 2 && !fields->canFetchMore(pair) && fields->rowCount(samples) == 3);
 	const auto voltage = fields->index(0, 0, pair);
 	const auto mode = fields->index(1, 0, pair);
 	CHECK(value(voltage) == QStringLiteral("230.5") && numeric(voltage));
 	CHECK(value(mode) == QStringLiteral("Run (1)") && !numeric(mode));
-	CHECK(value(pair) == QStringLiteral("{voltage 230.5, mode Run (1)}") && !numeric(pair));
-	CHECK(value(samples) == QStringLiteral("[-1, 0, 2]") && fields->rowCount(samples) == 3 &&
-	      value(fields->index(0, 0, samples)) == QStringLiteral("-1"));
+	CHECK(values.pathOf(mode) == QStringLiteral("rich.Pair.mode"));
+	CHECK(value(fields->index(0, 0, samples)) == QStringLiteral("-1"));
 	CHECK(values.textOf(samples, QStringLiteral("text")) == QStringLiteral("Samples = [-1, 0, 2]\n"));
+	CHECK(values.textOfAll(QStringLiteral("json")) == json);
+	// A newer snapshot reaches the rows made since.
+	rich.pair.voltage = 231.0f;
+	CHECK(values.update(readWhole(richValues)).isEmpty());
+	CHECK(value(voltage) == QStringLiteral("231") && fields->data(voltage, ValuesTreeModel::ChangedRole).toBool() &&
+	      value(pair) == QStringLiteral("{voltage 231, mode Run (1)}"));
+	rich.pair.voltage = 230.5f;
+}
+
+// A large array opens 256 elements at a time behind a "Show 256 more"
+// row; Find makes the rows that lead to a match, wherever it is; Copy writes
+// the elements not made yet from the data, and under Find only what is shown.
+void lazyValues()
+{
+	using telemetry::ux::ValuesContent;
+	using telemetry::ux::ValuesTreeModel;
+	for (std::size_t i = 0; i < wide.counts.size(); ++i)
+		wide.counts[i] = static_cast<std::uint16_t>(i);
+	for (std::size_t i = 0; i < wide.pairs.size(); ++i)
+		wide.pairs[i] = Pair{static_cast<float>(i), i % 2 ? Mode::Run : Mode::Idle};
+	const auto bytes = readWhole(wideValues);
+	const auto descriptorBytes = bytesOf(widePacked);
+	const auto name = [](QAbstractItemModel* model, const QModelIndex& index) { return model->data(index).toString(); };
+	const auto value = [](QAbstractItemModel* model, const QModelIndex& index) {
+		return model->data(index, ValuesTreeModel::ValueRole).toString();
+	};
+	{
+		ValuesContent values(bytes, descriptorBytes);
+		CHECK(values.valid());
+		auto* fields = values.fields();
+		// Indexes of the shown model are taken again after anything that changes its rows.
+		const auto field = [&](int row) { return fields->index(row, 0, fields->index(0, 0)); };
+		const auto element = [&](int row) { return fields->index(row, 0, field(0)); };
+		CHECK(value(fields, field(0)) == QStringLiteral("[0, 1, 2, 3, 4, 5, 6, 7, …]") && fields->rowCount(field(0)) == 0);
+		fields->fetchMore(field(0));
+		CHECK(fields->rowCount(field(0)) == 257);
+		CHECK(name(fields, element(256)) == QStringLiteral("Show 256 more · 256 of 600 shown") && values.isMore(element(256)) &&
+		      !values.isMore(element(255)) && values.pathOf(element(256)).isEmpty() &&
+		      values.valueOf(element(256)).isEmpty() && values.textOf(element(256), QStringLiteral("text")).isEmpty());
+		CHECK(name(fields, element(255)) == QStringLiteral("[255]") && value(fields, element(255)) == QStringLiteral("255"));
+		// A "more" row is never a match: Find looks at names and paths, not at it.
+		CHECK(values.setFilter(QStringLiteral("more")) == 0 && values.setFilter(QString()) == 0);
+		// Copy of the array while only part is made: every element, from the data.
+		CHECK(values.textOf(field(0), QStringLiteral("tsv")).contains(QStringLiteral("wide.Counts[599]\t599\tu16")));
+		CHECK(!values.showMore(element(0)) && values.showMore(element(256)));
+		CHECK(fields->rowCount(field(0)) == 513 && name(fields, element(512)) == QStringLiteral("Show 88 more · 512 of 600 shown"));
+		CHECK(values.showMore(element(512)));
+		CHECK(fields->rowCount(field(0)) == 600 && name(fields, element(599)) == QStringLiteral("[599]") &&
+		      !values.isMore(element(599)));
+		// A newer snapshot reaches every made element.
+		wide.counts[599] = 9999;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(value(fields, element(599)) == QStringLiteral("9999") &&
+		      fields->data(element(599), ValuesTreeModel::ChangedRole).toBool() && values.changedCount() == 1);
+		// The Field is marked by its bytes, and its group counts it.
+		CHECK(fields->data(field(0), ValuesTreeModel::ChangedRole).toBool() &&
+		      fields->data(fields->index(0, 0), ValuesTreeModel::ChangedFieldsRole).toInt() == 1);
+		wide.counts[599] = 599;
+		// A folded Field whose change lies past its summary: marked all the same,
+		// one change; with Counts changed back, two Fields of the group changed.
+		wide.pairs[299].voltage = 1000.0f;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(fields->rowCount(field(1)) == 0 && fields->data(field(1), ValuesTreeModel::ChangedRole).toBool() &&
+		      fields->data(fields->index(0, 0), ValuesTreeModel::ChangedFieldsRole).toInt() == 2 &&
+		      values.changedCount() == 2);
+		wide.pairs[299].voltage = 299.0f;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(!fields->data(field(0), ValuesTreeModel::ChangedRole).toBool() &&
+		      fields->data(fields->index(0, 0), ValuesTreeModel::ChangedFieldsRole).toInt() == 1);
+
+		// An array of structs, not opened: Copy has all of it.
+		const auto pairs = field(1);
+		CHECK(fields->rowCount(pairs) == 0);
+		const auto pairsText = values.textOf(pairs, QStringLiteral("text"));
+		CHECK(pairsText.contains(QStringLiteral("  [299]\n    voltage = 299\n    mode = Run (1)\n")));
+		CHECK(values.textOf(pairs, QStringLiteral("json")).contains(QStringLiteral("\"voltage\": 299")));
+		// Find into it: every element's mode, the rows that lead there made.
+		CHECK(values.setFilter(QStringLiteral("mode")) == 300 && !values.findLimited());
+		const auto shownPairs = fields->index(0, 0, fields->index(0, 0));
+		CHECK(name(fields, shownPairs) == QStringLiteral("Pairs") && fields->rowCount(shownPairs) == 300);
+		const auto modeTsv = values.textOf(shownPairs, QStringLiteral("tsv"));
+		CHECK(modeTsv.contains(QStringLiteral("wide.Pairs[299].mode\tRun (1)\t")) &&
+		      !modeTsv.contains(QStringLiteral("voltage")) && !modeTsv.contains(QStringLiteral("Counts")));
+		CHECK(values.setFilter(QString()) == 0);
+	}
+	{
+		// Find for one element far past the first step: its steps are made.
+		ValuesContent values(bytes, descriptorBytes);
+		auto* fields = values.fields();
+		// First, Live with the array folded: a change past its summary still marks it.
+		wide.counts[20] = 7777;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 0 &&
+		      fields->data(fields->index(0, 0, fields->index(0, 0)), ValuesTreeModel::ChangedRole).toBool() &&
+		      values.changedCount() == 1);
+		wide.counts[20] = 20;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		// Opened, with the change in an element not made yet: marked and counted once.
+		fields->fetchMore(fields->index(0, 0, fields->index(0, 0)));
+		wide.counts[400] = 7777;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 257 &&
+		      fields->data(fields->index(0, 0, fields->index(0, 0)), ValuesTreeModel::ChangedRole).toBool() &&
+		      values.changedCount() == 1);
+		wide.counts[400] = 400;
+		CHECK(values.update(readWhole(wideValues)).isEmpty());
+		CHECK(values.setFilter(QStringLiteral("Counts[599]")) == 1 && !values.findLimited());
+		const auto counts = fields->index(0, 0, fields->index(0, 0));
+		CHECK(fields->rowCount(counts) == 1 && name(fields, fields->index(0, 0, counts)) == QStringLiteral("[599]") &&
+		      value(fields, fields->index(0, 0, counts)) == QStringLiteral("599"));
+		CHECK(values.setFilter(QString()) == 0 && fields->rowCount(fields->index(0, 0, fields->index(0, 0))) == 600);
+	}
+}
+
+// A descriptor whose types nest and repeat opens at once: members are made
+// when a row is opened, Find makes the rows to its matches up to a bound,
+// and Copy writes members from the schema - up to a bound it then names.
+void lazyDescriptor()
+{
+	using telemetry::ux::DescriptorContent;
+	QElapsedTimer clock;
+	clock.start();
+	DescriptorContent decoded(bytesOf(deepPacked));
+	const auto openMs = clock.elapsed();
+	CHECK(decoded.valid() && decoded.fieldCount() == 20);
+	auto* model = decoded.endpoints();
+	const auto group = model->index(0, 0, model->index(0, 0));
+	CHECK(model->data(group).toString() == QStringLiteral("deep") && model->rowCount(group) == 20);
+	const auto first = model->index(0, 0, group);
+	CHECK(model->data(first).toString() == QStringLiteral("d000"));
+	CHECK(model->rowCount(first) == 0 && model->hasChildren(first) && model->canFetchMore(first));
+	model->fetchMore(first);
+	CHECK(model->rowCount(first) == 4 && !model->canFetchMore(first));
+	const auto a = model->index(0, 0, first);
+	CHECK(model->data(a).toString() == QStringLiteral("a") && decoded.pathOf(a) == QStringLiteral("deep.d000.a") &&
+	      model->rowCount(a) == 0 && model->hasChildren(a));
+
+	// Copy of an endpoint not opened: its whole member tree, and no rows made.
+	const auto second = model->index(1, 0, group);
+	clock.restart();
+	const auto lines = decoded.textOf(second, QStringLiteral("text"));
+	const auto copyOneMs = clock.elapsed();
+	CHECK(lines.count(QLatin1Char('\n')) == 1 + 54612 && model->rowCount(second) == 0 && decoded.copyNote().isEmpty());
+	CHECK(decoded.textOf(second, QStringLiteral("tsv")).contains(QStringLiteral("deep.d001.a.a.a.a.a.a.a.x\tmember\tf32\t\n")));
+	CHECK(decoded.textOf(second, QStringLiteral("json")).contains(QStringLiteral("\"members\"")));
+
+	// Find by path into members not made: the way there made, one match. The
+	// search looks at so many members, then says it may have missed some.
+	CHECK(decoded.setFilter(QStringLiteral("d002.b.c")) == 1 && decoded.findLimited());
+	// Find with more matches than it opens: it stops at the bound and says so.
+	clock.restart();
+	const auto found = decoded.setFilter(QStringLiteral("y"));
+	const auto findMs = clock.elapsed();
+	CHECK(found == static_cast<int>(DescriptorContent::maxFindMatches) && decoded.findLimited());
+	CHECK(decoded.setFilter(QString()) == 0 && !decoded.findLimited() && model->rowCount(group) == 20);
+
+	// Copy of everything: past the bound, cut short and saying so.
+	clock.restart();
+	const auto all = decoded.textOfAll(QStringLiteral("text"));
+	const auto copyAllMs = clock.elapsed();
+	CHECK(all.endsWith(QStringLiteral("rows; the rest was not copied\n")) &&
+	      all.count(QLatin1Char('\n')) == static_cast<qsizetype>(DescriptorContent::maxCopiedRows) + 1);
+	CHECK(decoded.copyNote().startsWith(QStringLiteral("Copied the first 500000 rows")) && !decoded.findLimitText().isEmpty());
+	CHECK(decoded.textOfAll(QStringLiteral("json")).contains(QStringLiteral("\"…\"")));
+	std::printf("descriptor %lld bytes, 20 x 54612 member rows: open %lld ms, copy one %lld ms, find %lld ms, "
+	            "copy all %lld ms\n",
+	            static_cast<long long>(deepPacked.size()), static_cast<long long>(openMs), static_cast<long long>(copyOneMs),
+	            static_cast<long long>(findMs), static_cast<long long>(copyAllMs));
+	CHECK(openMs < 500 && findMs < 5000 && copyAllMs < 10000);
+}
+
+// Ten megabytes of values open, take a snapshot, find and copy within bounds.
+void bigValues()
+{
+	using telemetry::ux::ValuesContent;
+	for (std::size_t field = 0; field < waveCount; ++field)
+		for (std::size_t i = 0; i < waveLength; ++i)
+			waves[field][i] = static_cast<float>(field) + static_cast<float>(i) / 64.0f;
+	QElapsedTimer clock;
+	clock.start();
+	const auto bytes = readWhole(waveValues);
+	const auto readMs = clock.elapsed();
+	CHECK(bytes.size() == 24 + static_cast<qsizetype>(waveCount * (1 + waveLength * 4)) && bytes.size() > 10000000);
+	clock.restart();
+	ValuesContent values(bytes, bytesOf(wavePacked));
+	const auto openMs = clock.elapsed();
+	CHECK(values.valid() && values.summary() == QStringLiteral("160 Fields in 1 group"));
+	auto* fields = values.fields();
+	const auto group = fields->index(0, 0);
+	const auto wave = fields->index(3, 0, group);
+	CHECK(fields->data(wave).toString() == QStringLiteral("w003") && fields->rowCount(wave) == 0);
+	clock.restart();
+	fields->fetchMore(wave);
+	const auto openFieldMs = clock.elapsed();
+	CHECK(fields->rowCount(wave) == 257 && fields->data(fields->index(1, 0, wave), telemetry::ux::ValuesTreeModel::ValueRole)
+	                                               .toString() == QStringLiteral("3.015625"));
+	clock.restart();
+	CHECK(values.update(bytes).isEmpty() && values.changedCount() == 0);
+	const auto snapshotMs = clock.elapsed();
+	clock.restart();
+	const auto found = values.setFilter(QStringLiteral("[15999]"));
+	const auto findMs = clock.elapsed();
+	CHECK(found > 0 && values.findLimited());
+	CHECK(values.setFilter(QString()) == 0);
+	// The rows Find made stay within its bound, even inside one long array.
+	int made = 0;
+	for (int row = 0; row < fields->rowCount(group); ++row)
+		made += fields->rowCount(fields->index(row, 0, group));
+	CHECK(made > 0 && made <= static_cast<int>(ValuesContent::maxFindRows + ValuesContent::elementsPerStep + waveCount));
+	// A snapshot fills every row made so far.
+	clock.restart();
+	CHECK(values.update(bytes).isEmpty());
+	const auto snapshotAfterFindMs = clock.elapsed();
+	clock.restart();
+	const auto all = values.textOfAll(QStringLiteral("tsv"));
+	const auto copyMs = clock.elapsed();
+	CHECK(all.endsWith(QStringLiteral("rows; the rest was not copied\n")) && !values.copyNote().isEmpty() &&
+	      !values.findLimitText().isEmpty());
+	// JSON cut short leaves out what it did not reach: no null, which would read as unavailable.
 	const auto json = values.textOfAll(QStringLiteral("json"));
-	CHECK(json.contains(QStringLiteral("\"Big\": \"18446744073709551615\"")) &&
-	      json.contains(QStringLiteral("\"mode\": 1")) && json.contains(QStringLiteral("\"voltage\": 230.5")));
-	CHECK(values.textOfAll(QStringLiteral("tsv")).contains(QStringLiteral("rich.Pair.mode\tRun (1)\t")));
+	CHECK(json.contains(QStringLiteral("\"…\"")) && !json.contains(QStringLiteral("null")));
+	std::printf("values %lld bytes: read %lld ms, open %lld ms, open a Field %lld ms, snapshot %lld ms, find %lld ms, "
+	            "snapshot with %d rows made %lld ms, copy %lld ms\n",
+	            static_cast<long long>(bytes.size()), static_cast<long long>(readMs), static_cast<long long>(openMs),
+	            static_cast<long long>(openFieldMs), static_cast<long long>(snapshotMs), static_cast<long long>(findMs),
+	            made, static_cast<long long>(snapshotAfterFindMs), static_cast<long long>(copyMs));
+	CHECK(openMs < 1000 && snapshotMs < 1000 && openFieldMs < 200 && findMs < 5000 && copyMs < 10000 &&
+	      snapshotAfterFindMs < 2000);
 }
 
 // Live against a real session: the device's values.bin read again and again
@@ -1498,6 +1877,9 @@ int main(int argc, char** argv)
 	descriptorCodec(folder.path());
 	valuesCodec(folder.path());
 	valuesFormatting();
+	lazyValues();
+	lazyDescriptor();
+	bigValues();
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

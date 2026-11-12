@@ -4,10 +4,13 @@
  * @author Ruslan Kovtun (shpegun60)
  * SPDX-License-Identifier: MIT
  *
- * The tree under it is built once and never changes shape, so its nodes - and
+ * The tree under it keeps its nodes: rows are only added as they are opened
+ * (a "Show more" row gives way to the rows it stood for), so its nodes - and
  * the views' current row - outlive any number of finds; only this proxy's rows
  * come and go. A match keeps everything below it, so an endpoint found by
- * name still opens to its members. Qt only.
+ * name still opens to its members. A find counts the rows made so far: the
+ * contents make the rows that lead to matches before they set the text.
+ * Qt only.
  */
 #ifndef TELEMETRY_UX_TREE_FILTER_HPP
 #define TELEMETRY_UX_TREE_FILTER_HPP
@@ -25,6 +28,8 @@ public:
 
 	// Shows what matches text (ignoring case) and its parents; empty shows
 	// everything. Returns the matches, a match below a match not counted.
+	// The same text again filters nothing anew: rows added since were
+	// filtered as they came.
 	int setText(const QString& text);
 	QString text() const { return text_; }
 	// Whether the shown row at index matches itself, not only through a child.
