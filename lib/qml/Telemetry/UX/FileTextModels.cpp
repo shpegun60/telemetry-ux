@@ -8,11 +8,13 @@
 #include "FileContent.hpp"
 #include <QtCore/QStringList>
 #include <algorithm>
+#include <cmath>
 
 namespace telemetry::ux {
 namespace {
 // Natural order, the same on every platform and locale: runs of digits
-// compare as numbers ("item 2" before "item 10"), the rest ignoring case.
+// compare as numbers by their digits' values ("item 2" before "item 10", in
+// any script's digits), the rest ignoring case.
 int naturalCompare(const QString& a, const QString& b)
 {
 	qsizetype i = 0, j = 0;
@@ -25,15 +27,18 @@ int naturalCompare(const QString& a, const QString& b)
 				++endB;
 			// Leading zeros do not make a number larger.
 			auto startA = i, startB = j;
-			while (startA + 1 < endA && a.at(startA) == QLatin1Char('0'))
+			while (startA + 1 < endA && a.at(startA).digitValue() == 0)
 				++startA;
-			while (startB + 1 < endB && b.at(startB) == QLatin1Char('0'))
+			while (startB + 1 < endB && b.at(startB).digitValue() == 0)
 				++startB;
 			const auto lengthA = endA - startA, lengthB = endB - startB;
 			if (lengthA != lengthB)
 				return lengthA < lengthB ? -1 : 1;
-			if (const int digits = QStringView(a).mid(startA, lengthA).compare(QStringView(b).mid(startB, lengthB)))
-				return digits;
+			for (qsizetype k = 0; k < lengthA; ++k) {
+				const int x = a.at(startA + k).digitValue(), y = b.at(startB + k).digitValue();
+				if (x != y)
+					return x < y ? -1 : 1;
+			}
 			i = endA;
 			j = endB;
 			continue;
@@ -57,29 +62,34 @@ void TextLinesModel::setText(const QString& text)
 	starts_.clear();
 	lengths_.clear();
 	longest_ = 0;
-	matches_.clear();
+	positions_.clear();
 	findText_.clear();
 	current_ = -1;
 	capped_ = false;
-	const auto size = static_cast<int>(text_.size());
-	int start = 0;
-	for (int i = 0; i < size; ++i) {
+	const auto size = text_.size();
+	const auto addLine = [&](qsizetype start, qsizetype end) {
+		starts_.push_back(start);
+		lengths_.push_back(static_cast<int>(end - start));
+		// Its width in columns, as far as it is shown.
+		int columns = 0;
+		const auto shownEnd = std::min(end, start + maxShownChars);
+		for (auto i = start; i < shownEnd; ++i)
+			columns = text_.at(i) == QLatin1Char('\t') ? (columns / tabColumns + 1) * tabColumns : columns + 1;
+		longest_ = std::max(longest_, columns);
+	};
+	qsizetype start = 0;
+	for (qsizetype i = 0; i < size; ++i) {
 		const auto c = text_.at(i);
 		if (c != QLatin1Char('\n') && c != QLatin1Char('\r'))
 			continue;
-		starts_.push_back(start);
-		lengths_.push_back(i - start);
-		longest_ = std::max(longest_, i - start);
+		addLine(start, i);
 		if (c == QLatin1Char('\r') && i + 1 < size && text_.at(i + 1) == QLatin1Char('\n'))
 			++i;
 		start = i + 1;
 	}
 	// The last line, unless the text ended with a line break (or is empty).
-	if (start < size || size == 0) {
-		starts_.push_back(start);
-		lengths_.push_back(size - start);
-		longest_ = std::max(longest_, size - start);
-	}
+	if (start < size || size == 0)
+		addLine(start, size);
 	endResetModel();
 	Q_EMIT textChanged();
 	Q_EMIT matchesChanged();
@@ -90,9 +100,18 @@ void TextLinesModel::clear()
 	setText({});
 }
 
-int TextLinesModel::matchLine() const noexcept
+int TextLinesModel::lineAt(qsizetype position) const noexcept
 {
-	return current_ >= 0 ? matches_[static_cast<std::size_t>(current_)].line : -1;
+	const auto after = std::upper_bound(starts_.begin(), starts_.end(), position);
+	return static_cast<int>(after - starts_.begin()) - 1;
+}
+
+int TextLinesModel::matchIndex() const noexcept
+{
+	if (current_ < 0)
+		return 0;
+	const auto at = std::lower_bound(positions_.begin(), positions_.end(), current_);
+	return at != positions_.end() && *at == current_ ? static_cast<int>(at - positions_.begin()) + 1 : 0;
 }
 
 void TextLinesModel::touchLine(int line)
@@ -103,68 +122,63 @@ void TextLinesModel::touchLine(int line)
 	Q_EMIT dataChanged(at, at, {MatchesRole, CurrentRole});
 }
 
+void TextLinesModel::touchAll()
+{
+	if (lineCount() > 0)
+		Q_EMIT dataChanged(index(0), index(lineCount() - 1), {MatchesRole, CurrentRole});
+}
+
 QString TextLinesModel::find(const QString& text, bool caseSensitive, bool forward, int fromLine)
 {
 	if (text.isEmpty()) {
 		clearFind();
 		return {};
 	}
-	const bool fresh = text != findText_ || caseSensitive != findCase_;
-	if (fresh) {
-		// Every match, line by line: a match never spans a line break.
-		matches_.clear();
+	const auto sensitivity = caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+	if (text != findText_ || caseSensitive != findCase_) {
+		// Counted once, to the cap; the matches themselves are found as they are needed.
+		positions_.clear();
 		capped_ = false;
-		const auto sensitivity = caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
-		for (int line = 0; line < lineCount() && !capped_; ++line) {
-			const QStringView view(text_.constData() + starts_[static_cast<std::size_t>(line)],
-			                       lengths_[static_cast<std::size_t>(line)]);
-			for (qsizetype at = view.indexOf(text, 0, sensitivity); at >= 0;
-			     at = view.indexOf(text, at + std::max<qsizetype>(1, text.size()), sensitivity)) {
-				if (static_cast<int>(matches_.size()) == maxMatches) {
-					capped_ = true;
-					break;
-				}
-				matches_.push_back({line, static_cast<int>(at), static_cast<int>(text.size())});
+		const auto step = std::max<qsizetype>(1, text.size());
+		for (auto at = text_.indexOf(text, 0, sensitivity); at >= 0; at = text_.indexOf(text, at + step, sensitivity)) {
+			if (static_cast<int>(positions_.size()) == maxMatches) {
+				capped_ = true;
+				break;
 			}
+			positions_.push_back(at);
 		}
 		findText_ = text;
 		findCase_ = caseSensitive;
 		current_ = -1;
-		if (lineCount() > 0)
-			Q_EMIT dataChanged(index(0), index(lineCount() - 1), {MatchesRole, CurrentRole});
+		touchAll();
 	}
-	if (matches_.empty()) {
+	if (positions_.empty()) {
 		Q_EMIT matchesChanged();
 		return tr("Not found");
 	}
 	const auto previousLine = matchLine();
+	const auto line = std::clamp(fromLine, 0, lineCount() - 1);
+	// From the current match while the reader is still on its line; else from the reader's line.
+	const bool fromCurrent = current_ >= 0 && lineAt(current_) == line;
 	QString message;
-	const auto count = static_cast<int>(matches_.size());
-	if (current_ < 0) {
-		// The first from the reader's line: at it or after it, or before it backwards.
-		const auto from = std::max(0, fromLine);
-		const auto after = std::lower_bound(matches_.begin(), matches_.end(), from,
-		                                    [](const Match& m, int line) { return m.line < line; });
-		if (forward) {
-			current_ = after == matches_.end() ? 0 : static_cast<int>(after - matches_.begin());
-			if (after == matches_.end())
-				message = tr("Wrapped to the start");
-		} else {
-			const auto before = std::upper_bound(matches_.begin(), matches_.end(), from,
-			                                     [](int line, const Match& m) { return line < m.line; });
-			current_ = before == matches_.begin() ? count - 1 : static_cast<int>(before - matches_.begin()) - 1;
-			if (before == matches_.begin())
-				message = tr("Wrapped to the end");
-		}
-	} else if (forward) {
-		if (++current_ == count) {
-			current_ = 0;
+	qsizetype found = -1;
+	if (forward) {
+		const auto from = fromCurrent ? current_ + 1 : starts_[static_cast<std::size_t>(line)];
+		found = text_.indexOf(text, from, sensitivity);
+		if (found < 0) {
+			found = text_.indexOf(text, 0, sensitivity);
 			message = tr("Wrapped to the start");
 		}
-	} else if (--current_ < 0) {
-		current_ = count - 1;
-		message = tr("Wrapped to the end");
+	} else {
+		const auto lineEnd = starts_[static_cast<std::size_t>(line)] + lengths_[static_cast<std::size_t>(line)];
+		const auto from = fromCurrent ? current_ - 1 : lineEnd - text.size();
+		found = from >= 0 ? text_.lastIndexOf(text, from, sensitivity) : -1;
+		if (found < 0) {
+			found = text_.lastIndexOf(text, -1, sensitivity);
+			message = tr("Wrapped to the end");
+		}
 	}
+	current_ = found;
 	touchLine(previousLine);
 	touchLine(matchLine());
 	Q_EMIT matchesChanged();
@@ -173,13 +187,13 @@ QString TextLinesModel::find(const QString& text, bool caseSensitive, bool forwa
 
 void TextLinesModel::clearFind()
 {
-	const bool had = !matches_.empty();
-	matches_.clear();
+	const bool had = !findText_.isEmpty();
+	positions_.clear();
 	findText_.clear();
 	current_ = -1;
 	capped_ = false;
-	if (had && lineCount() > 0)
-		Q_EMIT dataChanged(index(0), index(lineCount() - 1), {MatchesRole, CurrentRole});
+	if (had)
+		touchAll();
 	Q_EMIT matchesChanged();
 }
 
@@ -220,24 +234,32 @@ QVariant TextLinesModel::data(const QModelIndex& index, int role) const
 	const int line = index.row();
 	if (!index.isValid() || line < 0 || line >= lineCount())
 		return {};
+	const auto start = starts_[static_cast<std::size_t>(line)];
+	const auto length = lengths_[static_cast<std::size_t>(line)];
+	const auto shown = std::min(length, maxShownChars);
 	switch (role) {
 		case NumberRole:
 			return line + 1;
 		case Qt::DisplayRole:
 		case TextRole:
-			return lineText(line);
+			return text_.mid(start, shown);
+		case HiddenRole:
+			return length - shown;
 		case MatchesRole: {
+			// Only the lines asked for - the ones on screen - are searched.
 			QVariantList ranges;
-			auto at = std::lower_bound(matches_.begin(), matches_.end(), line,
-			                           [](const Match& m, int l) { return m.line < l; });
-			for (; at != matches_.end() && at->line == line; ++at)
-				ranges.push_back(QVariantList{at->column, at->length});
+			if (findText_.isEmpty())
+				return ranges;
+			const QStringView view(text_.constData() + start, shown);
+			const auto sensitivity = findCase_ ? Qt::CaseSensitive : Qt::CaseInsensitive;
+			const auto step = std::max<qsizetype>(1, findText_.size());
+			for (auto at = view.indexOf(findText_, 0, sensitivity); at >= 0 && ranges.size() < maxDrawnPerLine;
+			     at = view.indexOf(findText_, at + step, sensitivity))
+				ranges.push_back(QVariantList{static_cast<int>(at), static_cast<int>(findText_.size())});
 			return ranges;
 		}
 		case CurrentRole:
-			return current_ >= 0 && matches_[static_cast<std::size_t>(current_)].line == line
-			           ? matches_[static_cast<std::size_t>(current_)].column
-			           : -1;
+			return current_ >= start && current_ < start + shown ? static_cast<int>(current_ - start) : -1;
 		default:
 			return {};
 	}
@@ -245,7 +267,11 @@ QVariant TextLinesModel::data(const QModelIndex& index, int role) const
 
 QHash<int, QByteArray> TextLinesModel::roleNames() const
 {
-	return {{NumberRole, "number"}, {TextRole, "line"}, {MatchesRole, "matches"}, {CurrentRole, "currentMatch"}};
+	return {{NumberRole, "number"},
+	        {TextRole, "line"},
+	        {HiddenRole, "hidden"},
+	        {MatchesRole, "matches"},
+	        {CurrentRole, "currentMatch"}};
 }
 
 // ---- Table -----------------------------------------------------------------
@@ -254,16 +280,15 @@ TableRowsModel::TableRowsModel(FileTableModel* source, QObject* parent) : QSortF
 {
 	setSourceModel(source);
 	setDynamicSortFilter(false);
-	// A new file: its own order, every row. The filter goes before the rows
-	// are mapped again, so none of the new rows is judged by the old filter.
-	connect(source, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
-		filter_.clear();
-		sorted_ = -1;
-		descending_ = false;
-	});
+	// The file read again (Reload): the same filter and sort, while its column is still there.
 	connect(source, &QAbstractItemModel::modelReset, this, [this] {
 		clearFind();
-		sort(-1);
+		if (sorted_ >= table_->columnCount()) {
+			sorted_ = -1;
+			descending_ = false;
+		}
+		readKeys();
+		sort(sorted_, descending_ ? Qt::DescendingOrder : Qt::AscendingOrder);
 		Q_EMIT sortChanged();
 		Q_EMIT shownChanged();
 	});
@@ -294,11 +319,34 @@ void TableRowsModel::sortBy(int column)
 		clearSort();
 }
 
+void TableRowsModel::readKeys()
+{
+	numberKeys_.clear();
+	textKeys_.clear();
+	if (sorted_ < 0 || !table_)
+		return;
+	const auto rows = table_->rowCount();
+	textKeys_.resize(static_cast<std::size_t>(rows));
+	if (numeric(sorted_))
+		numberKeys_.resize(static_cast<std::size_t>(rows));
+	for (int row = 0; row < rows; ++row) {
+		auto text = table_->cell(row, sorted_).trimmed();
+		if (!numberKeys_.empty()) {
+			bool ok = false;
+			const double value = text.toDouble(&ok);
+			// An empty cell or NaN is no number: NaN as the key says so.
+			numberKeys_[static_cast<std::size_t>(row)] = ok ? value : std::nan("");
+		}
+		textKeys_[static_cast<std::size_t>(row)] = std::move(text);
+	}
+}
+
 void TableRowsModel::sortColumn(int column, bool descending)
 {
 	sorted_ = column;
 	descending_ = column >= 0 && descending;
 	clearFind();
+	readKeys();
 	sort(sorted_, descending_ ? Qt::DescendingOrder : Qt::AscendingOrder);
 	Q_EMIT sortChanged();
 }
@@ -310,16 +358,21 @@ void TableRowsModel::clearSort()
 
 bool TableRowsModel::lessThan(const QModelIndex& left, const QModelIndex& right) const
 {
-	const auto a = left.data().toString().trimmed();
-	const auto b = right.data().toString().trimmed();
-	// Empty cells last, whichever way.
-	if (a.isEmpty() != b.isEmpty())
-		return descending_ ? a.isEmpty() : b.isEmpty();
-	if (numeric(left.column())) {
-		bool okA = false, okB = false;
-		const double x = a.toDouble(&okA), y = b.toDouble(&okB);
-		if (okA && okB && x != y)
+	const auto l = static_cast<std::size_t>(left.row()), r = static_cast<std::size_t>(right.row());
+	if (r >= textKeys_.size() || l >= textKeys_.size())
+		return left.row() < right.row();
+	const auto& a = textKeys_[l];
+	const auto& b = textKeys_[r];
+	if (!numberKeys_.empty()) {
+		const double x = numberKeys_[l], y = numberKeys_[r];
+		// An empty cell or NaN is no number: last, whichever way.
+		const bool okA = !std::isnan(x), okB = !std::isnan(y);
+		if (okA != okB)
+			return descending_ ? !okA : okA;
+		if (okA && x != y)
 			return x < y;
+	} else if (a.isEmpty() != b.isEmpty()) {
+		return descending_ ? a.isEmpty() : b.isEmpty();
 	}
 	const int compared = naturalCompare(a, b);
 	if (compared != 0)
@@ -332,54 +385,69 @@ bool TableRowsModel::lessThan(const QModelIndex& left, const QModelIndex& right)
 int TableRowsModel::setFilter(const QString& text)
 {
 	const auto trimmed = text.trimmed();
+	if (trimmed == filter_)
+		return rowCount();
 	clearFind();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
-	beginFilterChange();
 	filter_ = trimmed;
-	endFilterChange(Direction::Rows);
-#else
-	filter_ = trimmed;
-	invalidateFilter();
-#endif
+	refilter();
 	Q_EMIT shownChanged();
 	return rowCount();
+}
+
+void TableRowsModel::refilter()
+{
+	// The shown rows made again in one pass, the sort with them - not removed
+	// and inserted interval by interval, which in a large table is slow.
+	invalidate();
 }
 
 bool TableRowsModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const
 {
 	if (filter_.isEmpty())
 		return true;
-	const auto* source = sourceModel();
-	for (int column = 0; column < source->columnCount(sourceParent); ++column)
-		if (source->index(sourceRow, column, sourceParent).data().toString().contains(filter_, Qt::CaseInsensitive))
+	if (sourceParent.isValid() || !table_)
+		return false;
+	for (int column = 0; column < table_->columnCount(); ++column)
+		if (table_->cell(sourceRow, column).contains(filter_, Qt::CaseInsensitive))
 			return true;
 	return false;
 }
 
 QVariantMap TableRowsModel::find(const QString& text, bool forward, int row, int column)
 {
+	const auto none = [](const QString& message) {
+		return QVariantMap{{QStringLiteral("row"), -1}, {QStringLiteral("column"), -1}, {QStringLiteral("message"), message}};
+	};
 	if (text.isEmpty()) {
 		clearFind();
-		return {{QStringLiteral("row"), -1}, {QStringLiteral("column"), -1}, {QStringLiteral("message"), QString{}}};
+		return none({});
 	}
 	if (text != findText_) {
 		matches_.clear();
-		for (int r = 0; r < rowCount(); ++r)
+		capped_ = false;
+		for (int r = 0; r < rowCount() && !capped_; ++r)
 			for (int c = 0; c < columnCount(); ++c)
-				if (index(r, c).data().toString().contains(text, Qt::CaseInsensitive))
+				if (index(r, c).data().toString().contains(text, Qt::CaseInsensitive)) {
+					if (static_cast<int>(matches_.size()) == maxMatches) {
+						capped_ = true;
+						break;
+					}
 					matches_.emplace_back(r, c);
+				}
 		findText_ = text;
 		current_ = -1;
 	}
-	QString message;
 	if (matches_.empty()) {
 		current_ = -1;
 		Q_EMIT matchesChanged();
-		return {{QStringLiteral("row"), -1}, {QStringLiteral("column"), -1}, {QStringLiteral("message"), tr("Not found")}};
+		return none(tr("Not found"));
 	}
+	QString message;
 	const auto count = static_cast<int>(matches_.size());
 	const std::pair<int, int> from{std::max(0, row), std::max(0, column)};
-	if (current_ < 0) {
+	// From the current match while the reader is still on it; else from the reader's cell.
+	const bool fromCurrent = current_ >= 0 && matches_[static_cast<std::size_t>(current_)] == from;
+	if (!fromCurrent) {
 		if (forward) {
 			const auto after = std::lower_bound(matches_.begin(), matches_.end(), from);
 			current_ = after == matches_.end() ? 0 : static_cast<int>(after - matches_.begin());
@@ -410,6 +478,7 @@ void TableRowsModel::clearFind()
 	matches_.clear();
 	findText_.clear();
 	current_ = -1;
+	capped_ = false;
 	Q_EMIT matchesChanged();
 }
 

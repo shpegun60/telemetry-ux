@@ -18,6 +18,8 @@ FocusScope {
     required property var content
     readonly property var rows: content ? content.rows : null
     readonly property alias view: table
+    // The text the last search was for: typing a new one waits, Enter on it does not.
+    property string lastFound: ""
 
     function focusContent() { table.forceActiveFocus() }
     // A heading is never cut: a column is as wide as its widest cell or its heading.
@@ -32,6 +34,17 @@ FocusScope {
         table.selectionModel.setCurrentIndex(rows.index(row, column), ItemSelectionModel.NoUpdate)
         table.positionViewAtCell(Qt.point(column, row), TableView.Contain)
     }
+    // A pause in typing before a large table is filtered or searched.
+    Timer {
+        id: filterLater
+        interval: 200
+        onTriggered: pane.rows.setFilter(filterField.text)
+    }
+    Timer {
+        id: findLater
+        interval: 200
+        onTriggered: pane.findNext(true)
+    }
     function findNext(forward) {
         if (findBar.text.length === 0) {
             rows.clearFind()
@@ -39,6 +52,8 @@ FocusScope {
             return
         }
         const at = current()
+        findLater.stop()
+        lastFound = findBar.text
         const found = rows.find(findBar.text, forward, at.valid ? at.row : 0, at.valid ? at.column : 0)
         findBar.message = found.message
         showCell(found.row, found.column)
@@ -159,7 +174,12 @@ FocusScope {
                 Layout.maximumWidth: 260
                 placeholderText: qsTr("Filter rows (Ctrl+L)")
                 Accessible.name: qsTr("Filter rows")
-                onTextChanged: pane.rows.setFilter(text)
+                onTextChanged: filterLater.restart()
+                // Enter filters at once.
+                onAccepted: {
+                    filterLater.stop()
+                    pane.rows.setFilter(text)
+                }
                 Keys.onEscapePressed: {
                     text = ""
                     table.forceActiveFocus()
@@ -200,8 +220,15 @@ FocusScope {
             Layout.rightMargin: 8
             Layout.bottomMargin: 4
             countText: !pane.rows || pane.rows.matchCount === 0 ? ""
+                     : pane.rows.matchesCapped ? qsTr("%1 of %2+").arg(pane.rows.matchIndex).arg(pane.rows.matchCount)
                      : qsTr("%1 of %2").arg(pane.rows.matchIndex).arg(pane.rows.matchCount)
-            onFindRequested: function(forward) { pane.findNext(forward) }
+            // Typing waits for a pause; Enter, F3, Next and Previous go at once.
+            onFindRequested: function(forward) {
+                if (forward && findBar.field.activeFocus && findBar.text !== pane.lastFound)
+                    findLater.restart()
+                else
+                    pane.findNext(forward)
+            }
             onClosed: {
                 pane.rows.clearFind()
                 table.forceActiveFocus()
@@ -272,7 +299,8 @@ FocusScope {
             focus: true
             keyNavigationEnabled: true
             selectionModel: ItemSelectionModel { model: table.model }
-            model: pane.rows
+            // Only while the table is shown: a hidden tab keeps no cells.
+            model: pane.visible ? pane.rows : null
             columnWidthProvider: function(column) {
                 const cells = table.implicitColumnWidth(column)
                 const heading = pane.rows ? headingMetrics.advanceWidth(pane.rows.heading(column)) + 40 : 0

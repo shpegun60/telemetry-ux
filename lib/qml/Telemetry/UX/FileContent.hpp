@@ -62,6 +62,9 @@ public:
 	QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 	// Every filled cell of the column reads as a number: shown right-aligned.
 	Q_INVOKABLE bool numeric(int column) const;
+	// A cell's text without a QVariant, for sorting and filtering many rows;
+	// empty outside the table.
+	const QString& cell(int row, int column) const noexcept;
 
 private:
 	QStringList header_;

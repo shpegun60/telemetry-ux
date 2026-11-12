@@ -178,6 +178,14 @@ int FileTableModel::columnCount(const QModelIndex& parent) const
 	return parent.isValid() ? 0 : static_cast<int>(header_.size());
 }
 
+const QString& FileTableModel::cell(int row, int column) const noexcept
+{
+	static const QString none;
+	if (row < 0 || row >= rowCount() || column < 0 || column >= columnCount())
+		return none;
+	return rows_[static_cast<std::size_t>(row)].at(column);
+}
+
 QVariant FileTableModel::data(const QModelIndex& index, int role) const
 {
 	if (!index.isValid() || role != Qt::DisplayRole || index.row() >= rowCount() || index.column() >= columnCount())

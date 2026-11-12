@@ -784,10 +784,14 @@ void textAndTable()
 	CHECK(lines.data(lines.index(2), TextLinesModel::MatchesRole).toList().size() == 2 &&
 	      lines.data(lines.index(0), TextLinesModel::CurrentRole).toInt() == 0);
 	for (int i = 0; i < 4; ++i)
-		CHECK(lines.find(QStringLiteral("A"), false, true, 0).isEmpty());
+		CHECK(lines.find(QStringLiteral("A"), false, true, lines.matchLine()).isEmpty());
 	CHECK(lines.matchIndex() == 5 && lines.matchLine() == 2);
-	CHECK(lines.find(QStringLiteral("A"), false, true, 0) == QStringLiteral("Wrapped to the start") && lines.matchIndex() == 1);
-	CHECK(lines.find(QStringLiteral("A"), false, false, 0) == QStringLiteral("Wrapped to the end") && lines.matchIndex() == 5);
+	CHECK(lines.find(QStringLiteral("A"), false, true, lines.matchLine()) == QStringLiteral("Wrapped to the start") &&
+	      lines.matchIndex() == 1);
+	CHECK(lines.find(QStringLiteral("A"), false, false, lines.matchLine()) == QStringLiteral("Wrapped to the end") &&
+	      lines.matchIndex() == 5);
+	// The reader moved to another line: Next goes on from there, not from the match.
+	CHECK(lines.find(QStringLiteral("A"), false, true, 1).isEmpty() && lines.matchLine() == 1);
 	// A new text starts from the reader's line: beta, from line 3, wraps.
 	CHECK(lines.find(QStringLiteral("beta"), false, true, 2) == QStringLiteral("Wrapped to the start") &&
 	      lines.matchLine() == 1);
@@ -814,6 +818,40 @@ void textAndTable()
 	            static_cast<long long>(big.size()), lines.lineCount(), static_cast<long long>(splitMs),
 	            static_cast<long long>(findMs));
 	CHECK(lines.lineCount() > 200000 && lines.matchLine() == 123456);
+
+	// Past the cap: every line holds a match, more than are counted; Next from
+	// a line far past the cap finds it there, without wrapping, and says
+	// nothing of its number among the matches.
+	{
+		QString many;
+		for (int i = 0; i < 150000; ++i)
+			many += QStringLiteral("x\n");
+		TextLinesModel crowded;
+		crowded.setText(many);
+		CHECK(crowded.find(QStringLiteral("x"), false, true, 0).isEmpty() && crowded.matchesCapped() &&
+		      crowded.matchCount() == TextLinesModel::maxMatches);
+		CHECK(crowded.find(QStringLiteral("x"), false, true, 149000).isEmpty() && crowded.matchLine() == 149000 &&
+		      crowded.matchIndex() == 0);
+		CHECK(crowded.find(QStringLiteral("x"), false, true, crowded.matchLine()).isEmpty() &&
+		      crowded.matchLine() == 149001);
+		CHECK(crowded.data(crowded.index(149500), TextLinesModel::MatchesRole).toList().size() == 1);
+	}
+	// A line of 30000 characters shows its first 10000 and says how many more;
+	// Copy takes it whole.
+	{
+		TextLinesModel wide;
+		wide.setText(QString(30000, QLatin1Char('a')) + QStringLiteral("\nshort\tline\n"));
+		CHECK(wide.data(wide.index(0), TextLinesModel::TextRole).toString().size() == TextLinesModel::maxShownChars &&
+		      wide.data(wide.index(0), TextLinesModel::HiddenRole).toInt() == 20000 &&
+		      wide.lineText(0).size() == 30000 && wide.longestLine() == TextLinesModel::maxShownChars);
+		// A tab reaches the next multiple of eight columns.
+		TextLinesModel tabbed;
+		tabbed.setText(QStringLiteral("a\tb\n"));
+		CHECK(tabbed.longestLine() == 9);
+		// No more marks drawn on a line than the cap.
+		CHECK(wide.find(QStringLiteral("a"), true, true, 0).isEmpty() &&
+		      wide.data(wide.index(0), TextLinesModel::MatchesRole).toList().size() == TextLinesModel::maxDrawnPerLine);
+	}
 
 	FileTableModel table;
 	CHECK(table.setText(QStringLiteral("name,value\nitem 10,5\nitem 2,10\nitem 1,\n\"a, b\",7\n")));
@@ -843,12 +881,15 @@ void textAndTable()
 	auto found = rows.find(QStringLiteral("1"), true, 0, 0);
 	CHECK(found.value(QStringLiteral("row")).toInt() == 0 && found.value(QStringLiteral("column")).toInt() == 0 &&
 	      rows.matchCount() == 3 && rows.matchIndex() == 1);
-	found = rows.find(QStringLiteral("1"), true, 0, 0);
+	const auto next = [&] {
+		return rows.find(QStringLiteral("1"), true, found.value(QStringLiteral("row")).toInt(),
+		                 found.value(QStringLiteral("column")).toInt());
+	};
+	found = next();
 	CHECK(found.value(QStringLiteral("row")).toInt() == 1 && found.value(QStringLiteral("column")).toInt() == 1);
-	found = rows.find(QStringLiteral("1"), true, 0, 0);
+	found = next();
 	CHECK(found.value(QStringLiteral("row")).toInt() == 2 && rows.matchIndex() == 3);
-	CHECK(rows.find(QStringLiteral("1"), true, 0, 0).value(QStringLiteral("message")).toString() ==
-	      QStringLiteral("Wrapped to the start"));
+	CHECK(next().value(QStringLiteral("message")).toString() == QStringLiteral("Wrapped to the start"));
 	CHECK(rows.find(QStringLiteral("zzz"), true, 0, 0).value(QStringLiteral("row")).toInt() == -1);
 	// Copy: a row as TSV, everything shown as CSV with its quoting.
 	CHECK(rows.rowText(0, QStringLiteral("tsv")) == QStringLiteral("item 10\t5"));
@@ -871,10 +912,57 @@ void textAndTable()
 		tied.clearSort();
 		CHECK(keys() == QStringLiteral("a|b|c") && tied.sortedColumn() == -1);
 	}
-	// A new file resets the order and the filter.
-	rows.sortBy(0);
+	// The file read again keeps its sort and its filter - the filter field
+	// shows what is applied; a sort past the new file's columns goes.
+	rows.sortBy(1);
 	rows.setFilter(QStringLiteral("item"));
-	CHECK(table.setText(QStringLiteral("x\n1\n")) && rows.sortedColumn() == -1 && rows.shownRows() == 1);
+	CHECK(table.setText(QStringLiteral("name,value\nitem 3,3\nother,9\nitem 1,1\n")) && rows.sortedColumn() == 1 &&
+	      rows.filterText() == QStringLiteral("item") && rows.shownRows() == 2 && rows.cellText(0, 1) == QStringLiteral("1"));
+	CHECK(table.setText(QStringLiteral("x\nitem\n")) && rows.sortedColumn() == -1 && rows.shownRows() == 1);
+	rows.setFilter(QString());
+	// NaN is no number: last, whichever way; digits of any script by value.
+	{
+		FileTableModel nan;
+		CHECK(nan.setText(QStringLiteral("v\n3\nnan\n1\n2\n")));
+		TableRowsModel byValue(&nan);
+		byValue.sortColumn(0, false);
+		CHECK(byValue.cellText(0, 0) == QStringLiteral("1") && byValue.cellText(2, 0) == QStringLiteral("3") &&
+		      byValue.cellText(3, 0) == QStringLiteral("nan"));
+		byValue.sortColumn(0, true);
+		CHECK(byValue.cellText(0, 0) == QStringLiteral("3") && byValue.cellText(3, 0) == QStringLiteral("nan"));
+		FileTableModel arabic;
+		CHECK(arabic.setText(QString::fromUtf8("k\nx \xD9\xA5\nx 9\nx 10\n")));
+		TableRowsModel byName(&arabic);
+		byName.sortColumn(0, false);
+		CHECK(byName.cellText(0, 0) == QString::fromUtf8("x \xD9\xA5") && byName.cellText(2, 0) == QStringLiteral("x 10"));
+	}
+	// A CSV of about 10 MB: read, sorted, filtered and searched, timed.
+	{
+		QString csv = QStringLiteral("time_ms,level,event,value\n");
+		csv.reserve(10 * 1024 * 1024);
+		int warns = 0;
+		for (int i = 0; csv.size() < 10 * 1024 * 1024; ++i, warns += i % 5 == 4 ? 1 : 0)
+			csv += QStringLiteral("%1,%2,%3,%4\n").arg(i * 250).arg(i % 5 == 3 ? QStringLiteral("WARN") : QStringLiteral("INFO"))
+			           .arg(i % 5 == 3 ? QStringLiteral("threshold") : QStringLiteral("sample")).arg(220 + (i * 37) % 23);
+		FileTableModel big;
+		TableRowsModel bigRows(&big);
+		QElapsedTimer clock;
+		clock.start();
+		CHECK(big.setText(csv));
+		const auto readMs = clock.restart();
+		bigRows.sortColumn(3, true);
+		const auto sortMs = clock.restart();
+		const auto shown = bigRows.setFilter(QStringLiteral("WARN"));
+		const auto filterMs = clock.restart();
+		const auto first = bigRows.find(QStringLiteral("threshold"), true, 0, 0);
+		const auto findMs = clock.elapsed();
+		std::printf("A CSV of %lld bytes, %d rows: read in %lld ms, sorted in %lld ms, filtered in %lld ms, "
+		            "searched in %lld ms\n",
+		            static_cast<long long>(csv.size()), big.rowCount(), static_cast<long long>(readMs),
+		            static_cast<long long>(sortMs), static_cast<long long>(filterMs), static_cast<long long>(findMs));
+		CHECK(shown == warns && first.value(QStringLiteral("row")).toInt() == 0 &&
+		      bigRows.matchCount() == shown);
+	}
 }
 
 // The descriptor codec, on the bytes of this test's own model: offered first

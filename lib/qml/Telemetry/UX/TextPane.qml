@@ -33,6 +33,10 @@ FocusScope {
     function openFind() { findBar.open() }
     function closeFind() { findBar.close() }
     function selectLines(from, to) {
+        // Lines chosen: a selection inside one line no longer counts.
+        if (editor)
+            editor.deselect()
+        editor = null
         anchorLine = from
         lastLine = to
     }
@@ -167,7 +171,9 @@ FocusScope {
             Layout.rightMargin: 8
             Layout.bottomMargin: 4
             caseOption: true
+            // Past the cap a match has no number: only how many there are at least.
             countText: !pane.lines || pane.lines.matchCount === 0 ? ""
+                     : pane.lines.matchesCapped && pane.lines.matchIndex === 0 ? qsTr("%1+ matches").arg(pane.lines.matchCount)
                      : pane.lines.matchesCapped ? qsTr("%1 of %2+").arg(pane.lines.matchIndex).arg(pane.lines.matchCount)
                      : qsTr("%1 of %2").arg(pane.lines.matchIndex).arg(pane.lines.matchCount)
             onFindRequested: function(forward) { pane.findNext(forward) }
@@ -238,7 +244,9 @@ FocusScope {
             activeFocusOnTab: true
             keyNavigationEnabled: true
             boundsBehavior: Flickable.StopAtBounds
-            model: pane.lines
+            reuseItems: true
+            // Only while the text is shown: a hidden tab keeps no rows.
+            model: pane.visible ? pane.lines : null
             // Unwrapped, as wide as the longest line; wrapped, as wide as the view.
             contentWidth: pane.wrap ? width : Math.max(width, pane.gutterWidth + pane.charWidth * (pane.lines ? pane.lines.longestLine : 0) + 24)
             flickableDirection: pane.wrap ? Flickable.VerticalFlick : Flickable.HorizontalAndVerticalFlick
@@ -275,6 +283,7 @@ FocusScope {
                 required property string line
                 required property var matches
                 required property int currentMatch
+                required property int hidden
                 readonly property bool selected: pane.anchorLine >= 0 && index >= pane.firstSelected && index <= pane.lastSelected
                 readonly property bool current: ListView.isCurrentItem
 
@@ -282,6 +291,7 @@ FocusScope {
                 height: Math.max(metrics.height + 6, lineText.contentHeight + 6)
                 Accessible.role: Accessible.ListItem
                 Accessible.name: qsTr("Line %1: %2").arg(number).arg(line)
+                ListView.onReused: if (pane.editor === lineText) pane.editor = null
 
                 Rectangle {
                     anchors.fill: parent
@@ -315,8 +325,11 @@ FocusScope {
                     model: lineItem.matches
                     delegate: Rectangle {
                         required property var modelData
-                        readonly property rect from: lineText.positionToRectangle(modelData[0])
-                        readonly property rect to: lineText.positionToRectangle(modelData[0] + modelData[1])
+                        // Read again whenever the line is laid out again (wrap, width).
+                        readonly property rect from: (lineText.width, lineText.contentHeight,
+                                                      lineText.positionToRectangle(modelData[0]))
+                        readonly property rect to: (lineText.width, lineText.contentHeight,
+                                                    lineText.positionToRectangle(modelData[0] + modelData[1]))
                         x: lineText.x + from.x
                         y: lineText.y + from.y
                         width: Math.max(2, to.y === from.y ? to.x - from.x : lineText.width - from.x)
@@ -338,18 +351,34 @@ FocusScope {
                     textFormat: TextEdit.PlainText
                     wrapMode: pane.wrap ? TextEdit.WrapAnywhere : TextEdit.NoWrap
                     font.family: Type.fixedFamily
+                    // A tab to the next multiple of eight columns, as the width is counted.
+                    tabStopDistance: pane.charWidth * 8
                     color: Theme.textPrimary
                     selectionColor: Theme.selectionFill
                     selectedTextColor: Theme.selectedForeground
                     text: lineItem.line
+                    // The selection Copy takes stays when a menu takes the keyboard;
+                    // it goes when it is emptied or another line is chosen.
                     onActiveFocusChanged: {
                         if (activeFocus) {
+                            if (pane.editor && pane.editor !== lineText)
+                                pane.editor.deselect()
                             pane.editor = lineText
+                            pane.anchorLine = -1
+                            pane.lastLine = -1
                             list.currentIndex = lineItem.index
-                        } else if (pane.editor === lineText) {
-                            pane.editor = null
                         }
                     }
+                    onSelectedTextChanged: if (selectedText.length === 0 && pane.editor === lineText && !activeFocus) pane.editor = null
+                }
+                // A line longer than is shown says how much more it has; Copy takes it whole.
+                Label {
+                    visible: lineItem.hidden > 0
+                    x: lineText.x + lineText.width + 8
+                    y: lineText.y
+                    font.pointSize: Type.caption
+                    color: Theme.textMuted
+                    text: visible ? qsTr("… %1 more characters").arg(lineItem.hidden) : ""
                 }
                 // The current match's characters over its fill, in the selected
                 // foreground: the line's own colour is too faint on the selection.
@@ -360,8 +389,9 @@ FocusScope {
                                 return lineItem.matches[i][1]
                         return 0
                     }
-                    readonly property rect at: lineItem.currentMatch >= 0 ? lineText.positionToRectangle(lineItem.currentMatch)
-                                                                         : Qt.rect(0, 0, 0, 0)
+                    readonly property rect at: (lineText.width, lineText.contentHeight,
+                                                lineItem.currentMatch >= 0 ? lineText.positionToRectangle(lineItem.currentMatch)
+                                                                           : Qt.rect(0, 0, 0, 0))
                     visible: lineItem.currentMatch >= 0 && length > 0
                     x: lineText.x + at.x
                     y: lineText.y + at.y
