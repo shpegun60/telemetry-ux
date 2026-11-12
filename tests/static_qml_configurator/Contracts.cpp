@@ -1232,6 +1232,15 @@ static void groupWatchBoxes()
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 3 && p.watchCount() == 0 &&
 	      p.watchState(group) == Qt::Unchecked);
 	CHECK(p.undoWatch().value("changed").toInt() == 3 && names() == before);
+	// Rows apart from one another: taken out run by run, put back in place,
+	// fresh and not read yet.
+	CHECK(p.setWatchMany(watched(endpoint(p, 3)), true).value("changed").toInt() == 1);
+	const auto four = names();
+	result = p.setWatchMany({QVariant::fromValue(endpoint(p, 0)), QVariant::fromValue(endpoint(p, 1))}, false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && p.watchCount() == 2);
+	CHECK(p.undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(p.watchlist()->index(0, 0).data(role(p.watchlist(), "status")).toString() == "NotRead");
+	CHECK(p.setWatchMany(watched(endpoint(p, 3)), false).value("changed").toInt() == 1);
 	// Another change of the Watchlist takes Undo away.
 	CHECK(p.setWatchMany(watched(group), true).value("status") == "ok" && p.canUndoWatch());
 	p.removeWatch(0);

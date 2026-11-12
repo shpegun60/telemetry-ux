@@ -365,6 +365,14 @@ void groupWatchBoxes()
 	      provider->watchCount() == 0 && provider->watchState(group) == Qt::Unchecked &&
 	      removed.count() == 1);
 	CHECK(provider->undoWatch().value("changed").toInt() == 3 && names() == before);
+	// Rows apart from one another: taken out run by run, put back in place.
+	const auto fourth = endpoint(model, QStringLiteral("Value_3"));
+	CHECK(provider->setWatchMany(watched(fourth), true).value("changed").toInt() == 1);
+	const auto four = names();
+	result = provider->setWatchMany({QVariant::fromValue(first), QVariant::fromValue(second)}, false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && provider->watchCount() == 2);
+	CHECK(provider->undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(provider->setWatchMany(watched(fourth), false).value("changed").toInt() == 1);
 	// Another change of the Watchlist takes Undo away.
 	CHECK(provider->setWatchMany(watched(group), true).value("status") == "ok" && provider->canUndoWatch());
 	provider->removeWatch(0);

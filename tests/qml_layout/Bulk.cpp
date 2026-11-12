@@ -82,6 +82,42 @@ int main(int argc, char** argv) {
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
         CHECK(window);
         settle();
+        // Watch boxes (T-1) on the library's floor Qt: a box is watched at
+        // once and shows what the provider says; a Command has none; while
+        // polling the boxes are off and the line says why; a refusal at
+        // capacity is said and changes nothing.
+        {
+            auto* boxesWindow = window->findChild<QQuickWindow*>(QStringLiteral("boxesWindow"));
+            CHECK(boxesWindow);
+            auto* boxTree = named(boxesWindow->contentItem(), "boxTree");
+            CHECK(boxTree);
+            auto* boxes = boxTree->property("provider").value<QObject*>();
+            auto* firstRow = named(boxTree, "endpointRow", 0);
+            auto* firstBox = firstRow ? named(firstRow, "endpointWatchCheck") : nullptr;
+            auto* status = named(boxTree, "endpointWatchSelectionStatus");
+            CHECK(boxes && firstRow && firstBox && status && evaluate(boxTree, "watchApi").toBool());
+            CHECK(!named(boxTree, "endpointAddSelectedWatches")->isVisible());
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 1 && firstRow->property("watchState").toInt() == Qt::Checked);
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 2 && firstRow->property("watchState").toInt() == Qt::Unchecked);
+            CHECK(evaluate(boxTree, "stateOf(searchSource.index(40, 0), watchRevision)").toInt() == -1);
+            CHECK(boxes->setProperty("watchActive", true));
+            settle();
+            CHECK(!firstBox->isEnabled() && status->property("text").toString() == QStringLiteral("Stop polling first"));
+            CHECK(boxes->setProperty("watchActive", false));
+            CHECK(boxes->setProperty("full", true));
+            settle();
+            click(boxesWindow, firstBox);
+            CHECK(status->property("text").toString().startsWith(QStringLiteral("No room")) &&
+                  firstRow->property("watchState").toInt() == Qt::Unchecked);
+            CHECK(boxes->setProperty("full", false));
+            // The checks below type into the main window: give it back the keyboard.
+            boxesWindow->close();
+            window->requestActivate();
+            CHECK(QTest::qWaitForWindowActive(window));
+            settle();
+        }
         auto* panel = named(window->contentItem(), "bulkTree");
         auto* tree = named(panel, "endpointTree");
         auto* first = named(panel, "endpointRow", 0);

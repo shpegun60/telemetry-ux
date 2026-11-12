@@ -285,6 +285,10 @@ struct DynamicConfiguratorProvider::Impl {
 	// membership count, and the last change setWatchMany made.
 	WatchCoverage coverage;
 	quint64 treeEpoch = 0;
+	// Moves when the boxes become answerable or stop being so (a model update,
+	// a connection, a Watchlist source), so a row that answered -1 asks again.
+	quint64 availability = 0;
+	bool available = false;
 	QSet<quint64> heldKeys;
 	quint64 heldMembership = ~quint64{0};
 	struct WatchUndo {
@@ -305,11 +309,13 @@ struct DynamicConfiguratorProvider::Impl {
 		return heldKeys;
 	}
 
-	// Built on first use after the tree changed: the Fields the Watchlist can
-	// hold are asked once for the whole tree, then the tree walked once.
+	// Built on first use after the tree changed: the Fields' ids collected in
+	// one walk, the Watchlist asked once which it can hold, then the tree
+	// walked once more into the coverage. Not built while the Watchlist cannot
+	// tell, so an empty answer is never kept.
 	void ensureCoverage()
 	{
-		if (coverage.built() || !current() || endpoints.changing())
+		if (coverage.built() || !current() || endpoints.changing() || !watch.canTellHoldable())
 			return;
 		QSet<quint32> fields;
 		QVector<QModelIndex> stack{QModelIndex{}};
@@ -326,7 +332,10 @@ struct DynamicConfiguratorProvider::Impl {
 				}
 			}
 		}
-		const auto holdable = watch.holdable(fields);
+		const auto answer = watch.holdable(fields);
+		if (!answer)
+			return;
+		const auto& holdable = *answer;
 		coverage.build(endpoints, [this, &holdable](const QModelIndex& index)
 		                              -> std::optional<WatchCoverage::Holdable> {
 			if (!endpoints.data(index, EndpointModel::IsEndpointRole).toBool() ||
@@ -446,6 +455,11 @@ struct DynamicConfiguratorProvider::Impl {
 
 	void notify()
 	{
+		const bool now = current() && !updating && !endpoints.changing() && watch.canTellHoldable();
+		if (now != available) {
+			available = now;
+			++availability;
+		}
 		if (q)
 			Q_EMIT q->stateChanged();
 	}
@@ -953,7 +967,10 @@ void DynamicConfiguratorProvider::pollBatch()
 void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 {
 	auto p = d;
+	// Which Fields can be held may differ with the new source.
+	p->treeChanged();
 	p->watch.setSource(std::move(source));
+	p->notify();
 }
 
 void DynamicConfiguratorProvider::pollWatch()
@@ -1090,7 +1107,7 @@ void DynamicConfiguratorProvider::clearWatch()
 
 int DynamicConfiguratorProvider::watchRevision() const
 {
-	return static_cast<int>((d->watch.membership() + d->treeEpoch) & 0x7fffffffU);
+	return static_cast<int>((d->watch.membership() + d->treeEpoch + d->availability) & 0x7fffffffU);
 }
 
 bool DynamicConfiguratorProvider::canUndoWatch() const
@@ -1127,6 +1144,11 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 		const auto index = value.value<QModelIndex>();
 		if (!value.canConvert<QModelIndex>() || !index.isValid() || index.model() != &p->endpoints) {
 			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		// An index of a tree since replaced, or past the walk's bounds.
+		if (!p->coverage.contains(index)) {
+			result[QStringLiteral("status")] = QStringLiteral("stale");
 			return result;
 		}
 		for (const auto& field : p->coverage.holdableUnder(index))

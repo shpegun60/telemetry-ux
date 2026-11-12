@@ -93,11 +93,21 @@ Actions retain the existing provider signatures:
     back in their places. `canUndoWatch` says whether it can: nothing else may
     have changed the Watchlist or the tree since, and the Watchlist must not be
     polling.
-  - `watchRevision` moves whenever a box may show something else; a view asks
-    `watchState` again then. `watchLimit` is 1024.
-  - The first question after the tree changes walks it once; after that each
-    question is a hash lookup, and a change of the Watchlist costs one pass over
-    the tree (`WatchCoverage`).
+  - `watchRevision` moves whenever a box may show something else: the Fields
+    held, the tree, or whether boxes can be answered at all (a model update, a
+    new connection, the Watchlist's source). A view asks `watchState` again
+    then. `watchLimit` is 1024.
+  - Nothing is answered until it can be: without a current session, or while
+    the Watchlist cannot tell which Fields it holds, `watchState` is `-1` and
+    no empty answer is kept. A read into Details does not hold the boxes.
+  - The first question after the tree changes builds `WatchCoverage`:
+    - in Dynamic, one walk collects the Field ids, the Watchlist is asked once
+      which of them it can hold, and a second walk builds the coverage;
+    - in Static, one walk builds it.
+
+    After that each question is a hash lookup, and a change of the Watchlist
+    costs one pass over the tree. An index the walk did not see (a tree since
+    replaced) is `stale`.
 
 The Watchlist and the rest of the panel work together. While it polls, selecting
 an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all

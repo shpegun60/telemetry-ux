@@ -627,8 +627,9 @@ public:
 		return removed;
 	}
 
-	// Puts rows back where removeEndpoints took them from, with new tokens.
-	void insertAt(const QVector<QPair<int, Row>>& taken)
+	// Puts rows back where removeEndpoints took them from: new tokens, and
+	// fresh rows of this session, not yet read - as an added row is.
+	void insertAt(const QVector<QPair<int, Row>>& taken, quint32 epoch)
 	{
 		if (taken.isEmpty())
 			return;
@@ -640,10 +641,10 @@ public:
 				++end;
 			beginInsertRows({}, taken[start].first, taken[end - 1].first);
 			for (auto i = start; i < end; ++i) {
-				auto row = taken[i].second;
+				Row row;
+				row.endpoint = taken[i].second.endpoint;
+				row.epoch = epoch;
 				row.token = next_++;
-				row.status = QStringLiteral("NotRead");
-				row.published = false;
 				rows.insert(taken[i].first, row);
 			}
 			endInsertRows();
@@ -862,6 +863,7 @@ struct StaticConfiguratorProvider::Impl {
 		QSet<int> addedEndpoints;
 		QVector<QPair<int, WatchList::Row>> removed;
 		quint64 membership = 0, treeEpoch = 0;
+		quint32 epoch = 0;
 	} undo;
 
 	const QSet<quint64>& held()
@@ -888,12 +890,27 @@ struct StaticConfiguratorProvider::Impl {
 		});
 	}
 
-	// Watch membership may change: the provider is idle, on its thread, with
-	// a current session.
+	// Watch membership may change: on its thread, not publishing or polling,
+	// with a current session. A read into Details does not hold it, as in the
+	// Dynamic provider and as removeWatch and clearWatch here.
 	bool watchChangeable() const
 	{
-		return owner() && !pending && !publishing && !watchActive() && !deferredChanged && ready() &&
+		return owner() && !publishing && !watchActive() && !deferredChanged && ready() &&
 		       session() == epoch;
+	}
+
+	// Remembers the change just made, before it is published, so the
+	// publication already says Undo is there.
+	void recordUndo(bool added, QSet<int> addedEndpoints, QVector<QPair<int, WatchList::Row>> removed)
+	{
+		undo = {};
+		undo.valid = added ? !addedEndpoints.isEmpty() : !removed.isEmpty();
+		undo.added = added;
+		undo.addedEndpoints = std::move(addedEndpoints);
+		undo.removed = std::move(removed);
+		undo.membership = watchModel.membership;
+		undo.treeEpoch = treeEpoch;
+		undo.epoch = epoch;
 	}
 
 	Impl(StaticConfiguratorProvider* owner, StaticConfiguratorBinding value)
@@ -1709,12 +1726,14 @@ bool StaticConfiguratorProvider::canUndoWatch() const
 {
 	const auto& undo = d->undo;
 	return undo.valid && undo.membership == d->watchModel.membership &&
-	       undo.treeEpoch == d->treeEpoch && d->watchChangeable();
+	       undo.treeEpoch == d->treeEpoch && undo.epoch == d->epoch && d->watchChangeable();
 }
 
 int StaticConfiguratorProvider::watchState(const QModelIndex& index) const
 {
-	if (!d->owner() || !index.isValid() || index.model() != &d->endpointModel)
+	// No boxes without a current session: they could not change anything.
+	if (!d->owner() || !index.isValid() || index.model() != &d->endpointModel || !d->ready() ||
+	    d->session() != d->epoch)
 		return -1;
 	d->ensureCoverage();
 	return d->coverage.state(index, d->held(), d->watchModel.membership);
@@ -1770,13 +1789,13 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 				return result;
 			}
 			result[QStringLiteral("changed")] = static_cast<int>(rows.size());
-			p->changeWatch([&] { p->watchModel.append(rows); });
-			p->undo = {};
-			p->undo.valid = true;
-			p->undo.added = true;
-			p->undo.addedEndpoints = added;
-			p->undo.membership = p->watchModel.membership;
-			p->undo.treeEpoch = p->treeEpoch;
+			QPointer<StaticConfiguratorProvider> alive(this);
+			p->changeWatch([&] {
+				p->watchModel.append(rows);
+				p->recordUndo(true, added, {});
+			});
+			if (!alive)
+				return result;
 		}
 	} else {
 		QSet<int> remove;
@@ -1785,14 +1804,16 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 				remove.insert(n);
 		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - remove.size());
 		if (!remove.isEmpty()) {
-			QVector<QPair<int, WatchList::Row>> removed;
-			p->changeWatch([&] { removed = p->watchModel.removeEndpoints(remove); });
-			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
-			p->undo = {};
-			p->undo.valid = !removed.isEmpty();
-			p->undo.removed = removed;
-			p->undo.membership = p->watchModel.membership;
-			p->undo.treeEpoch = p->treeEpoch;
+			int count = 0;
+			QPointer<StaticConfiguratorProvider> alive(this);
+			p->changeWatch([&] {
+				auto removed = p->watchModel.removeEndpoints(remove);
+				count = static_cast<int>(removed.size());
+				p->recordUndo(false, {}, std::move(removed));
+			});
+			if (!alive)
+				return result;
+			result[QStringLiteral("changed")] = count;
 		}
 	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
@@ -1808,17 +1829,20 @@ QVariantMap StaticConfiguratorProvider::undoWatch()
 	auto* p = d.get();
 	const auto undo = std::exchange(p->undo, {});
 	int changed = 0;
+	QPointer<StaticConfiguratorProvider> alive(this);
 	if (undo.added) {
-		QVector<QPair<int, WatchList::Row>> removed;
-		p->changeWatch([&] { removed = p->watchModel.removeEndpoints(undo.addedEndpoints); });
-		changed = static_cast<int>(removed.size());
+		p->changeWatch([&] {
+			changed = static_cast<int>(p->watchModel.removeEndpoints(undo.addedEndpoints).size());
+		});
 	} else {
 		if (static_cast<int>(p->watchModel.rows.size() + undo.removed.size()) > watchlistRowLimit ||
 		    !p->watchModel.canTake(undo.removed.size()))
 			return result;
-		p->changeWatch([&] { p->watchModel.insertAt(undo.removed); });
+		p->changeWatch([&] { p->watchModel.insertAt(undo.removed, p->epoch); });
 		changed = static_cast<int>(undo.removed.size());
 	}
+	if (!alive)
+		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");
 	result[QStringLiteral("changed")] = changed;
 	return result;

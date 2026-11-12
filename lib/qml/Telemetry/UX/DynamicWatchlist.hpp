@@ -59,9 +59,12 @@ public:
 	QVariantMap addMany(const QVector<QPair<quint32, QString>>& entries);
 	void remove(int row);
 	void clear();
-	// Which of ids the Watchlist can hold now: a Field of 1 to 8 bytes of the
-	// current device. Empty while it cannot change.
-	QSet<quint32> holdable(const QSet<quint32>& ids) const;
+	// Which of ids the Watchlist can hold: a Field of 1 to 8 bytes of the
+	// current device. nullopt while it cannot tell (no source, not current,
+	// or in the middle of a change), so a caller does not keep an empty answer.
+	std::optional<QSet<quint32>> holdable(const QSet<quint32>& ids) const;
+	// Whether holdable can answer now; cheap.
+	bool canTellHoldable() const;
 	// The Fields held, and a counter that moves whenever they change.
 	QSet<quint32> held() const;
 	quint64 membership() const;

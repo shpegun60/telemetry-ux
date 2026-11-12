@@ -68,11 +68,18 @@ Pane {
         const state = stateOf(index, watchRevision)
         if (state < 0)
             return false
-        const watched = state !== Qt.Checked
         const group = isGroup(index)
         // A group by its own name ("signals"), a Field by its path.
-        const label = group ? nameOf(index) : pathOf(index)
-        const result = provider.setWatchMany([index], watched)
+        return applyWatch([index], state !== Qt.Checked, group ? nameOf(index) : pathOf(index), group)
+    }
+    // Watches or stops watching the Fields under indexes, as one change, and
+    // says what it did. A single Field says nothing when it worked.
+    function applyWatch(indexes, watched, label, group) {
+        if (watchLocked) {
+            say(pollingShort, pollingFull, false)
+            return false
+        }
+        const result = provider.setWatchMany(indexes, watched)
         if (!result || result.status === "capacity") {
             const fields = result ? result.fields : 0, room = result ? result.room : 0
             say(qsTr("No room: %L1 Fields, %L2 free").arg(fields).arg(room),
@@ -254,9 +261,13 @@ Pane {
         return result.added > 0
     }
     function watchIndex(index) {
+        if (watchApi)
+            return stateOf(index, watchRevision) >= 0 ? applyWatch([index], true, pathOf(index), false) : false
         return canMarkWatch(index) ? watchIndexes([index], pathOf(index), false, false) : false
     }
     function watchGroup(index) {
+        if (watchApi)
+            return applyWatch([index], true, nameOf(index), true)
         const walk = groupCandidates(index)
         return watchIndexes(walk.indexes, pathOf(index), true, walk.limited)
     }
@@ -265,6 +276,12 @@ Pane {
     function watchAll() {
         if (!searchSource)
             return false
+        if (watchApi) {
+            const roots = []
+            for (let row = 0; row < searchSource.rowCount(); ++row)
+                roots.push(searchSource.index(row, 0))
+            return applyWatch(roots, true, qsTr("the device"), true)
+        }
         const walk = candidatesUnder(searchSource.index(-1, -1))
         return watchIndexes(walk.indexes, "the device", true, walk.limited)
     }
@@ -309,7 +326,7 @@ Pane {
         const first = searchResults[0]
         if (first.generation !== searchGeneration || !first.index.valid)
             return false
-        if (canMarkWatch(first.index))
+        if (watchApi ? stateOf(first.index, watchRevision) >= 0 : canMarkWatch(first.index))
             watchIndex(first.index)
         else
             provider.selectEndpoint(first.index)
@@ -332,7 +349,7 @@ Pane {
         const first = searchResults[0]
         if (!first.index || !first.index.valid)
             return ""
-        if (!canMarkWatch(first.index))
+        if (watchApi ? stateOf(first.index, watchRevision) < 0 : !canMarkWatch(first.index))
             return "; Enter shows the first"
         return provider.watchActive === true ? "" : "; Enter watches the first"
     }
@@ -440,11 +457,11 @@ Pane {
         }
         MenuItem {
             objectName: "endpointMenuWatch"
-            readonly property int state: panel.watchApi && endpointMenu.targetIsEndpoint
-                                         ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
-            text: state === Qt.Checked ? qsTr("Stop watching") : qsTr("Watch")
+            readonly property int boxState: panel.watchApi && endpointMenu.targetIsEndpoint
+                                            ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
+            text: boxState === Qt.Checked ? qsTr("Stop watching") : qsTr("Watch")
             enabled: panel.provider.watchActive !== true &&
-                     (panel.watchApi ? state >= 0 : panel.canMarkWatch(endpointMenu.target))
+                     (panel.watchApi ? boxState >= 0 : panel.canMarkWatch(endpointMenu.target))
             onTriggered: {
                 const target = panel.menuTarget()
                 if (target && panel.watchApi)
@@ -455,12 +472,12 @@ Pane {
         }
         MenuItem {
             objectName: "endpointMenuWatchGroup"
-            readonly property int state: panel.watchApi && endpointMenu.targetIsGroup
-                                         ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
+            readonly property int boxState: panel.watchApi && endpointMenu.targetIsGroup
+                                            ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
             text: !panel.watchApi ? qsTr("Watch this group")
-                : state === Qt.Checked ? qsTr("Stop watching group") : qsTr("Watch all in group")
+                : boxState === Qt.Checked ? qsTr("Stop watching group") : qsTr("Watch all in group")
             enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true &&
-                     (!panel.watchApi || state >= 0)
+                     (!panel.watchApi || boxState >= 0)
             onTriggered: {
                 const target = panel.menuTarget()
                 if (target && panel.watchApi)

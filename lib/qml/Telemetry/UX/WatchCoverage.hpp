@@ -51,6 +51,8 @@ public:
 	// the set of keys the Watchlist holds; membership moves whenever it changes.
 	[[nodiscard]] int state(const QModelIndex& index, const QSet<quint64>& watched,
 	                        quint64 membership);
+	// Whether index is a node of the tree as walked.
+	[[nodiscard]] bool contains(const QModelIndex& index) const;
 	// The Fields it can hold at or under index, in tree order.
 	[[nodiscard]] QVector<Holdable> holdableUnder(const QModelIndex& index) const;
 	[[nodiscard]] int size() const noexcept;

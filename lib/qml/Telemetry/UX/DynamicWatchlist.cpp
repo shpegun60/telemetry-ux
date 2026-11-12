@@ -671,11 +671,18 @@ void DynamicWatchlist::clear()
 	}
 }
 
-QSet<quint32> DynamicWatchlist::holdable(const QSet<quint32>& ids) const
+bool DynamicWatchlist::canTellHoldable() const
+{
+	return !d->guarded() && d->current() && d->source.fieldBytes;
+}
+
+std::optional<QSet<quint32>> DynamicWatchlist::holdable(const QSet<quint32>& ids) const
 {
 	auto p = d;
+	if (!canTellHoldable())
+		return std::nullopt;
 	QSet<quint32> found;
-	if (p->guarded() || !p->current() || !p->source.fieldBytes || ids.isEmpty())
+	if (ids.isEmpty())
 		return found;
 	if (p->source.holdable) {
 		const auto all = p->source.holdable();

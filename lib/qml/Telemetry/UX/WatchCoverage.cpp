@@ -99,6 +99,11 @@ int WatchCoverage::state(const QModelIndex& index, const QSet<quint64>& watched,
 	return node.watched == node.holdable ? Qt::Checked : Qt::PartiallyChecked;
 }
 
+bool WatchCoverage::contains(const QModelIndex& index) const
+{
+	return built_ && index_.contains(index);
+}
+
 QVector<WatchCoverage::Holdable> WatchCoverage::holdableUnder(const QModelIndex& index) const
 {
 	QVector<Holdable> found;
