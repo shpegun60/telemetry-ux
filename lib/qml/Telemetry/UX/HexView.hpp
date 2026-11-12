@@ -66,6 +66,10 @@ class HexView : public QQuickPaintedItem {
 	Q_PROPERTY(QString accessibleText READ accessibleText NOTIFY cursorChanged)
 	// Something the last action could not do, in words; empty otherwise.
 	Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
+	// How the last paste or replace went, for its colour - never read from
+	// its words, which a translation changes: "done", "partial" (cut short),
+	// "refused" (nothing written, or not found), or empty for a plain notice.
+	Q_PROPERTY(QString outcome READ outcome NOTIFY noticeChanged)
 	// The inspector: the bytes at the cursor read as each type.
 	Q_PROPERTY(bool bigEndian READ bigEndian WRITE setBigEndian NOTIFY cursorChanged)
 	Q_PROPERTY(QVariantList inspector READ inspector NOTIFY cursorChanged)
@@ -130,6 +134,7 @@ public:
 	QString status() const;
 	QString accessibleText() const;
 	QString notice() const { return notice_; }
+	QString outcome() const { return outcome_; }
 	bool bigEndian() const noexcept { return bigEndian_; }
 	void setBigEndian(bool big);
 	QVariantList inspector() const;
@@ -163,6 +168,23 @@ public:
 	Q_INVOKABLE QString find(const QString& query, const QString& kind, int width = 4, bool forward = true);
 	// Forgets the pattern and its highlights.
 	Q_INVOKABLE void clearFind();
+	// Paste over the bytes (Ctrl+V while editing): the clipboard's text read
+	// as hex in the hex column (as Find reads hex) or as UTF-8 in the text
+	// column, written from the selection's start or the cursor, never past a
+	// selection or the file's end; one step to undo. What happened, in words,
+	// also as the notice.
+	Q_INVOKABLE QString paste();
+	// Replace (Ctrl+H while editing): what Find finds, written over with
+	// `replacement` read the same way and the same length - a file keeps its
+	// size. One: the match selected is written over and the next selected; a
+	// selection that is not a match is found first. All: every match left to
+	// right, never overlapping and never in bytes just written, up to
+	// maxMatches, one step to undo. Empty, or what happened, or why not.
+	Q_INVOKABLE QString replace(const QString& query, const QString& kind, int width, const QString& replacement,
+	                            bool all);
+	// How many bytes a query stands for, or -1 when it does not read: shown
+	// beside Replace's field, so another length shows before pressing.
+	Q_INVOKABLE int patternBytes(const QString& query, const QString& kind, int width) const;
 	int matchCount() const noexcept { return static_cast<int>(matches_.size()); }
 	int matchIndex() const noexcept;
 	bool counting() const noexcept { return counting_; }
@@ -218,7 +240,7 @@ private:
 	// Keeps a byte in view: with centre, a row outside the middle third is
 	// brought to the middle (a jump); otherwise the least scroll (a step).
 	void ensureVisible(qint64 offset, bool centre = false);
-	void setNotice(const QString& notice);
+	void setNotice(const QString& notice, const QString& outcome = {});
 	const Region* regionAt(qint64 offset) const;
 	void changed();
 	void countMatches();
@@ -230,6 +252,9 @@ private:
 
 	QPointer<FileContent> content_;
 	QByteArray pattern_;
+	// Where Find last selected a match, so Replace knows the selection is
+	// one - a one-byte match selects no more than the cursor does.
+	qint64 lastMatch_ = -1;
 	std::vector<qint64> matches_;
 	bool counting_ = false, capped_ = false;
 	// Bumped by every new pattern or new bytes: a count from before stops at
@@ -245,6 +270,7 @@ private:
 	// Which of the cursor byte's hex digits the next one typed writes.
 	int nibble_ = 0;
 	QString notice_;
+	QString outcome_;
 	QVariantList regionList_;
 	std::vector<Region> regions_;
 	QColor textColor_{0xe8, 0xed, 0xf5}, secondaryColor_{0x9f, 0xb0, 0xc3}, mutedColor_{0x8c, 0x9f, 0xb3};

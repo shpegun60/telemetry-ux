@@ -29,6 +29,7 @@
 #include "FileTextModels.hpp"
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace telemetry::ux {
@@ -243,6 +244,12 @@ public:
 	// a byte's second digit). False when nothing was written: not editing, not
 	// loaded, or the offset outside the file.
 	Q_INVOKABLE bool overwrite(qint64 offset, const QByteArray& bytes, bool typing = false);
+	// Overwrites several places as one step to undo (Replace all), each as
+	// overwrite() does; the view hears of it once. `text` names the step.
+	// False when nothing was written: not editing, not loaded, or no place
+	// inside the file.
+	using Run = std::pair<qint64, QByteArray>;
+	bool overwriteRuns(const std::vector<Run>& runs, const QString& text);
 	// Editing on or off: they change only the bytes in memory.
 	Q_INVOKABLE void undo();
 	Q_INVOKABLE void redo();
@@ -277,8 +284,11 @@ Q_SIGNALS:
 
 private:
 	friend class OverwriteStep;
+	friend class RunsStep;
 	// Writes bytes at offset, the edited count kept: what an undo step does.
 	void put(qint64 offset, const QByteArray& bytes);
+	// The same for several places, announced once over the span they cover.
+	void putRuns(const std::vector<Run>& runs);
 	// The text, the table and the codec, from bytes_.
 	void interpret();
 	// No edits, nothing to undo: after a read.

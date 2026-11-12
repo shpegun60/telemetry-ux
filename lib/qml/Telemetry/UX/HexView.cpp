@@ -305,11 +305,12 @@ void HexView::changed()
 	update();
 }
 
-void HexView::setNotice(const QString& notice)
+void HexView::setNotice(const QString& notice, const QString& outcome)
 {
-	if (notice == notice_)
+	if (notice == notice_ && outcome == outcome_)
 		return;
 	notice_ = notice;
+	outcome_ = outcome;
 	Q_EMIT noticeChanged();
 }
 
@@ -580,6 +581,7 @@ QString HexView::find(const QString& query, const QString& kind, int width, bool
 		return tr("Not found");
 	}
 	// The match is the selection, the cursor on its first byte.
+	lastMatch_ = found;
 	anchor_ = found + pattern_.size() - 1;
 	cursor_ = found;
 	ensureVisible(found, true);
@@ -589,8 +591,128 @@ QString HexView::find(const QString& query, const QString& kind, int width, bool
 	return wrapped;
 }
 
+QString HexView::paste()
+{
+	const auto told = [this](const QString& message, const QString& outcome) {
+		setNotice(message, outcome);
+		return message;
+	};
+	const auto refused = QStringLiteral("refused");
+	if (!editing())
+		return told(tr("Turn on Edit to paste over the bytes."), refused);
+	if (bytes_.isEmpty())
+		return told(tr("This file is empty."), refused);
+	const auto text = QGuiApplication::clipboard()->text();
+	if (text.isEmpty())
+		return told(tr("The clipboard holds no text to paste."), refused);
+	QString error;
+	const auto bytes = textPane_ ? text.toUtf8() : pattern(text, QStringLiteral("hex"), 1, &error);
+	if (!error.isEmpty())
+		return told(tr("Not pasted: %1").arg(error), refused);
+	if (bytes.isEmpty())
+		return told(tr("Not pasted: the clipboard's text holds no bytes."), refused);
+	const auto selected = selectionLength();
+	const auto from = selected > 0 ? selectionStart() : cursor_;
+	// Within the selection when there is one, and always within the file.
+	const qint64 room = selected > 0 ? selected : bytes_.size() - from;
+	const auto written = bytes.left(std::min<qint64>(room, bytes_.size() - from));
+	content_->overwrite(from, written, false);
+	nibble_ = 0;
+	anchor_ = cursor_ = std::min<qint64>(from + written.size(), bytes_.size() - 1);
+	ensureVisible(cursor_, false);
+	changed();
+	const auto count = static_cast<int>(written.size());
+	const auto all = static_cast<int>(bytes.size());
+	const auto partial = QStringLiteral("partial");
+	if (selected > 0 && all < selected)
+		return told(tr("Pasted %L1 of the %L2 selected bytes").arg(count).arg(selected), partial);
+	if (written.size() < bytes.size())
+		return told(selected > 0 ? tr("Pasted %L1 of %L2 bytes: as many as are selected").arg(count).arg(all)
+		                         : tr("Pasted %L1 of %L2 bytes: the rest would pass the file's end").arg(count).arg(all),
+		            partial);
+	return told(tr("Pasted %Ln bytes", nullptr, count), QStringLiteral("done"));
+}
+
+int HexView::patternBytes(const QString& query, const QString& kind, int width) const
+{
+	QString error;
+	const auto bytes = pattern(query, kind, width, &error);
+	return error.isEmpty() ? static_cast<int>(bytes.size()) : -1;
+}
+
+QString HexView::replace(const QString& query, const QString& kind, int width, const QString& replacement, bool all)
+{
+	// The outcome is set last: Find, called on the way, clears the notice.
+	const auto ended = [this](const QString& message, const QString& outcome) {
+		setNotice(notice_, outcome);
+		return message;
+	};
+	const auto refused = QStringLiteral("refused");
+	if (!editing())
+		return ended(tr("Turn on Edit to replace."), refused);
+	QString error;
+	const auto needle = pattern(query, kind, width, &error);
+	if (!error.isEmpty())
+		return ended(error, refused);
+	if (replacement.isEmpty())
+		return ended(tr("Enter what to write instead."), refused);
+	const auto bytes = pattern(replacement, kind, width, &error);
+	if (!error.isEmpty())
+		return ended(tr("The replacement: %1").arg(error), refused);
+	if (bytes.size() != needle.size())
+		return ended(
+		    tr("The replacement is %L1 bytes and what is found %L2: a file keeps its size, so they must be the same length.")
+		        .arg(bytes.size())
+		        .arg(needle.size()),
+		    refused);
+	if (bytes == needle)
+		return ended(tr("The replacement is what is found: nothing would change."), refused);
+	if (bytes_.isEmpty())
+		return ended(tr("This file is empty."), refused);
+	if (all) {
+		std::vector<FileContent::Run> runs;
+		const QByteArrayView haystack(bytes_);
+		bool capped = false;
+		for (auto at = haystack.indexOf(needle, 0); at >= 0; at = haystack.indexOf(needle, at + needle.size())) {
+			if (runs.size() == static_cast<std::size_t>(maxMatches)) {
+				capped = true;
+				break;
+			}
+			runs.emplace_back(at, bytes);
+		}
+		if (runs.empty())
+			return ended(tr("Not found"), refused);
+		const auto count = static_cast<int>(runs.size());
+		const auto last = runs.back().first;
+		content_->overwriteRuns(runs, tr("Replace %n places", nullptr, count));
+		anchor_ = last + needle.size() - 1;
+		cursor_ = last;
+		ensureVisible(last, true);
+		changed();
+		return capped ? ended(tr("Replaced %L1, the most at once; Replace all again for the rest").arg(count),
+		                      QStringLiteral("partial"))
+		              : ended(tr("Replaced %Ln", nullptr, count), QStringLiteral("done"));
+	}
+	// The match Find selected, still selected: written over, then the next
+	// one selected. Its ends, not the selection's length, which is 0 for one byte.
+	const auto start = std::min(anchor_, cursor_);
+	const auto span = std::max(anchor_, cursor_) - start + 1;
+	if (start == lastMatch_ && span == needle.size() && std::as_const(bytes_).mid(start, needle.size()) == needle) {
+		content_->overwrite(start, bytes, false);
+		anchor_ = cursor_ = start + needle.size() - 1;
+		const auto next = find(query, kind, width, true);
+		return ended(next == tr("Not found") ? tr("Replaced; no more matches")
+		             : next.isEmpty()        ? tr("Replaced; the next one selected")
+		                                     : tr("Replaced; the next one selected, from the start"),
+		             QStringLiteral("done"));
+	}
+	const auto found = find(query, kind, width, true);
+	return ended(found, found == tr("Not found") ? refused : QStringLiteral("done"));
+}
+
 void HexView::clearFind()
 {
+	lastMatch_ = -1;
 	++*findGeneration_;
 	const bool had = !pattern_.isEmpty() || !matches_.empty() || counting_;
 	pattern_.clear();
@@ -1021,6 +1143,14 @@ void HexView::keyPressEvent(QKeyEvent* event)
 				return;
 			}
 			selectAll();
+			break;
+		case Qt::Key_V:
+			// Ctrl+V pastes over the bytes while editing; elsewhere it is others'.
+			if (!control || !editing()) {
+				QQuickPaintedItem::keyPressEvent(event);
+				return;
+			}
+			paste();
 			break;
 		case Qt::Key_C:
 			if (!control) {

@@ -2184,6 +2184,23 @@ void fileEditing(const QString& folder)
 	CHECK(content.modified() && content.isEdited(2));
 	content.discard();
 	CHECK(!content.modified() && !content.canUndo() && content.bytes() == QByteArray("XBCDEF12"));
+	// Several places as one step (Replace all): heard of once, cut at the
+	// file's end, undone at once; nothing without editing.
+	{
+		const auto runsPath = write(QStringLiteral("runs.bin"), QByteArray("ABCDEFGH"));
+		FileContent runs;
+		runs.setLocalFile(runsPath);
+		runs.setEditing(true);
+		int heard = 0;
+		QObject::connect(&runs, &FileContent::bytesEdited, &runs, [&] { ++heard; });
+		CHECK(runs.overwriteRuns({{0, QByteArray("x")}, {4, QByteArray("yz")}, {7, QByteArray("12")}, {99, QByteArray("Q")}},
+		                         QStringLiteral("Replace")));
+		CHECK(heard == 1 && runs.bytes() == QByteArray("xBCDyzG1") && runs.editedBytes() == 4);
+		runs.undo();
+		CHECK(heard == 2 && runs.bytes() == QByteArray("ABCDEFGH") && !runs.modified());
+		runs.setEditing(false);
+		CHECK(!runs.overwriteRuns({{0, QByteArray("x")}}, QString()) && runs.bytes() == QByteArray("ABCDEFGH"));
+	}
 	// A copy elsewhere: this one keeps its edits.
 	CHECK(content.overwrite(0, "Q"));
 	const auto copy = folder + QStringLiteral("/edit-copy.bin");

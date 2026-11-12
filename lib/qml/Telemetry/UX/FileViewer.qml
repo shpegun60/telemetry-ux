@@ -80,6 +80,19 @@ Pane {
         return problem
     }
     function askDiscard() { hexPane.askDiscard() }
+    // Paste over the bytes and Replace, from a menu: in Hex, while editing.
+    function paste() {
+        if (!viewer.ready || !viewer.content.editing)
+            return ""
+        viewer.mode = "hex"
+        return hexPane.paste()
+    }
+    function openReplace() {
+        if (!viewer.ready || !viewer.content.editing)
+            return
+        viewer.mode = "hex"
+        hexPane.openReplace()
+    }
     function saveEditedCopy() { hexPane.saveCopy() }
     // Reload loses edits not saved: asked first, then read again.
     function askReload() {

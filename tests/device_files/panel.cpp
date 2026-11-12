@@ -459,6 +459,101 @@ void hexEditing(const QString& folder)
 	content.setEditing(false);
 	type(&view, QStringLiteral("q"));
 	CHECK(content.bytes() == QByteArray("ZzCDEFG7"));
+
+	// Paste over the bytes: hex in the hex column, written from the cursor,
+	// never past the file's end or a selection; bad hex refused in words.
+	auto* clipboard = QGuiApplication::clipboard();
+	clipboard->setText(QStringLiteral("41 42"));
+	CHECK(view.paste() == QStringLiteral("Turn on Edit to paste over the bytes.") && content.bytes() == QByteArray("ZzCDEFG7"));
+	content.setEditing(true);
+	press(&view, Qt::Key_Backtab);
+	view.moveTo(1);
+	press(&view, Qt::Key_V, Qt::ControlModifier);
+	CHECK(content.bytes() == QByteArray("ZABDEFG7") && view.cursor() == 3 && view.notice() == QStringLiteral("Pasted 2 bytes") &&
+	      view.outcome() == QStringLiteral("done"));
+	view.moveTo(6);
+	clipboard->setText(QStringLiteral("31 32 33"));
+	CHECK(view.paste() == QStringLiteral("Pasted 2 of 3 bytes: the rest would pass the file's end") &&
+	      content.bytes() == QByteArray("ZABDEF12") && view.outcome() == QStringLiteral("partial"));
+	view.selectRange(0, 2);
+	clipboard->setText(QStringLiteral("616263"));
+	CHECK(view.paste() == QStringLiteral("Pasted 2 of 3 bytes: as many as are selected") && content.bytes().startsWith("ab"));
+	view.selectRange(2, 3);
+	clipboard->setText(QStringLiteral("2D"));
+	CHECK(view.paste() == QStringLiteral("Pasted 1 of the 3 selected bytes") && content.bytes() == QByteArray("ab-DEF12"));
+	clipboard->setText(QStringLiteral("4G"));
+	CHECK(view.paste().startsWith(QStringLiteral("Not pasted:")) && content.bytes() == QByteArray("ab-DEF12") &&
+	      view.outcome() == QStringLiteral("refused"));
+	// In the text column the text is UTF-8, as Find reads text.
+	press(&view, Qt::Key_Tab);
+	view.moveTo(3);
+	clipboard->setText(QString::fromUtf8("\xC3\xA9"));
+	CHECK(view.paste() == QStringLiteral("Pasted 2 bytes") && content.bytes() == QByteArray("ab-\xC3\xA9" "F12"));
+	// One step each: an undo takes back the last paste, the next the one before.
+	content.undo();
+	CHECK(content.bytes() == QByteArray("ab-DEF12"));
+	content.undo();
+	CHECK(content.bytes() == QByteArray("abBDEF12"));
+	content.discard();
+	content.setEditing(false);
+}
+
+// Replace: the first press finds, the next writes over and finds on; all at
+// once is one step to undo; another length, or without Edit, is refused.
+void hexReplacing(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	using telemetry::ux::HexView;
+	const auto path = folder + QStringLiteral("/replace.bin");
+	{
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write("ab-ab-ab") == 8);
+	}
+	FileContent content;
+	content.setLocalFile(path);
+	HexView view;
+	view.setSize(QSizeF(3000, 600));
+	view.setContent(&content);
+	const auto text = QStringLiteral("text");
+	const auto ab = QStringLiteral("ab");
+	const auto xy = QStringLiteral("XY");
+	CHECK(view.replace(ab, text, 4, xy, false) == QStringLiteral("Turn on Edit to replace."));
+	content.setEditing(true);
+	CHECK(view.replace(ab, text, 4, QStringLiteral("XYZ"), false).startsWith(QStringLiteral("The replacement is 3 bytes")) &&
+	      view.outcome() == QStringLiteral("refused"));
+	CHECK(view.patternBytes(QStringLiteral("XYZ"), text, 4) == 3 && view.patternBytes(QStringLiteral("4G"), QStringLiteral("hex"), 4) == -1 &&
+	      view.patternBytes(QStringLiteral("7"), QStringLiteral("integer"), 2) == 2);
+	CHECK(view.replace(ab, text, 4, QString(), false) == QStringLiteral("Enter what to write instead."));
+	CHECK(view.replace(ab, text, 4, xy, false).isEmpty() && view.selectionStart() == 0 &&
+	      content.bytes() == QByteArray("ab-ab-ab"));
+	CHECK(view.replace(ab, text, 4, xy, false) == QStringLiteral("Replaced; the next one selected") &&
+	      content.bytes() == QByteArray("XY-ab-ab") && view.selectionStart() == 3);
+	CHECK(view.replace(ab, text, 4, ab, true) == QStringLiteral("The replacement is what is found: nothing would change.") &&
+	      view.outcome() == QStringLiteral("refused"));
+	CHECK(view.replace(ab, text, 4, xy, true) == QStringLiteral("Replaced 2") && content.bytes() == QByteArray("XY-XY-XY") &&
+	      view.outcome() == QStringLiteral("done"));
+	content.undo();
+	CHECK(content.bytes() == QByteArray("XY-ab-ab"));
+	content.undo();
+	CHECK(content.bytes() == QByteArray("ab-ab-ab") && !content.modified());
+	// One byte: Replace writes a one-byte match too, in either column's kind.
+	view.clearFind();
+	view.moveTo(0);
+	const auto dash = QStringLiteral("-");
+	CHECK(view.replace(dash, text, 4, QStringLiteral("+"), false).isEmpty() && view.cursor() == 2);
+	CHECK(view.replace(dash, text, 4, QStringLiteral("+"), false) == QStringLiteral("Replaced; the next one selected") &&
+	      content.bytes() == QByteArray("ab+ab-ab") && view.cursor() == 5);
+	CHECK(view.replace(QStringLiteral("2D"), QStringLiteral("hex"), 4, QStringLiteral("2A"), false) ==
+	          QStringLiteral("Replaced; no more matches") &&
+	      content.bytes() == QByteArray("ab+ab*ab"));
+	content.undo();
+	content.undo();
+	CHECK(content.bytes() == QByteArray("ab-ab-ab") && !content.modified());
+	// Hex as Find reads it; matches never overlap.
+	CHECK(view.replace(QStringLiteral("2D"), QStringLiteral("hex"), 4, QStringLiteral("2B"), true) ==
+	          QStringLiteral("Replaced 2") &&
+	      content.bytes() == QByteArray("ab+ab+ab"));
+	CHECK(view.replace(QStringLiteral("zz"), text, 4, QStringLiteral("QQ"), true) == QStringLiteral("Not found"));
 }
 
 // The pictograms: each name draws in the colour given, undo's arrow on the
@@ -515,6 +610,7 @@ int main(int argc, char** argv)
 	telemetry::ux::registerQmlTypes();
 	hexView();
 	hexEditing(folder.path());
+	hexReplacing(folder.path());
 	toolIcons();
 
 	Peer peer;
