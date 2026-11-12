@@ -172,6 +172,11 @@ public:
 	// earlier name is renamed to it, unless a transfer or a file open in viewer
 	// (an OpenFiles) is inside it - then that folder is used as it is. Without
 	// an identity, fallbackLabel names it, as a device path would.
+	// The name the connected device's folder takes from its identity file, as
+	// deviceFolder() makes it: "<name> [<id>]", or the id alone; empty without
+	// an identity. A host compares a folder with it to say whether the folder
+	// follows a new name.
+	Q_INVOKABLE QString deviceFolderName() const;
 	Q_INVOKABLE QString deviceFolder(const QString& root, const QString& fallbackLabel,
 	                                 QObject* viewer = nullptr) const;
 	// The local file a row writes, as download() was given it; rows move when

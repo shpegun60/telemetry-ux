@@ -338,6 +338,28 @@ bool DeviceFileTransfers::folderHasFiles(const QString& path)
 	return !path.isEmpty() && QDir(path).exists() && !QDir(path).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot);
 }
 
+namespace {
+// The label a device's folder is named after: "<name> [<id>]", or the id alone.
+QString identityLabel(const integration::qt::ConnectionSession& session)
+{
+	// The id is already a plain name (the wire allows nothing else); the name
+	// is the device's text: one segment, cut short for the path limit.
+	const auto id = session.deviceId();
+	auto name = session.deviceName().simplified();
+	name.replace(QLatin1Char('/'), QLatin1Char('_')).replace(QLatin1Char('\\'), QLatin1Char('_'));
+	if (name.size() > 32)
+		name = name.left(32).trimmed();
+	return name.isEmpty() ? id : name + QStringLiteral(" [%1]").arg(id);
+}
+} // namespace
+
+QString DeviceFileTransfers::deviceFolderName() const
+{
+	if (!session_ || session_->identityState() != integration::qt::ConnectionSession::IdentityState::Known)
+		return {};
+	return QFileInfo(localPathFor(QDir::rootPath(), identityLabel(*session_))).fileName();
+}
+
 QString DeviceFileTransfers::deviceFolder(const QString& root, const QString& fallbackLabel, QObject* viewer) const
 {
 	const auto made = [](const QString& path) {
@@ -345,15 +367,9 @@ QString DeviceFileTransfers::deviceFolder(const QString& root, const QString& fa
 	};
 	if (!session_ || session_->identityState() != integration::qt::ConnectionSession::IdentityState::Known)
 		return made(localPathFor(root, fallbackLabel));
-	// The id is already a plain name (the wire allows nothing else); the name
-	// is the device's text: one segment, cut short for the path limit.
 	const auto id = session_->deviceId();
-	auto name = session_->deviceName().simplified();
-	name.replace(QLatin1Char('/'), QLatin1Char('_')).replace(QLatin1Char('\\'), QLatin1Char('_'));
-	if (name.size() > 32)
-		name = name.left(32).trimmed();
 	const auto suffix = QStringLiteral(" [%1]").arg(id);
-	const auto target = localPathFor(root, name.isEmpty() ? id : name + suffix);
+	const auto target = localPathFor(root, identityLabel(*session_));
 	if (target.isEmpty())
 		return {};
 	// The same device under an earlier name keeps its folder, renamed when
