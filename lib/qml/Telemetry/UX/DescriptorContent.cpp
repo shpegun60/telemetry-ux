@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "DescriptorContent.hpp"
+#include "SchemaText.hpp"
 #include <telemetry/descriptor/Format.hpp>
 #include <telemetry/runtime/RuntimeSchema.hpp>
 #include <QtCore/QJsonArray>
@@ -96,67 +97,8 @@ QHash<int, QByteArray> DescriptorTreeModel::roleNames() const
 namespace {
 using Node = DescriptorTreeModel::Node;
 
-QString text(std::string_view view)
-{
-	return QString::fromUtf8(view.data(), static_cast<qsizetype>(view.size()));
-}
-
-QString scalarName(ScalarCode code)
-{
-	switch (code) {
-		case ScalarCode::Bool:
-			return QStringLiteral("bool");
-		case ScalarCode::U8:
-			return QStringLiteral("u8");
-		case ScalarCode::S8:
-			return QStringLiteral("i8");
-		case ScalarCode::U16:
-			return QStringLiteral("u16");
-		case ScalarCode::S16:
-			return QStringLiteral("i16");
-		case ScalarCode::U32:
-			return QStringLiteral("u32");
-		case ScalarCode::S32:
-			return QStringLiteral("i32");
-		case ScalarCode::U64:
-			return QStringLiteral("u64");
-		case ScalarCode::S64:
-			return QStringLiteral("i64");
-		case ScalarCode::F32:
-			return QStringLiteral("f32");
-		case ScalarCode::F64:
-			return QStringLiteral("f64");
-	}
-	return QStringLiteral("?");
-}
-
-// The type in words, short enough for one column.
-QString typeText(const rt::RuntimeSchema& schema, TypeId id)
-{
-	const auto* type = schema.type(id);
-	if (!type)
-		return QStringLiteral("?");
-	switch (type->kind) {
-		case TypeKind::Void:
-			return DescriptorContent::tr("nothing");
-		case TypeKind::Scalar:
-			return scalarName(type->scalarCode);
-		case TypeKind::Enum: {
-			QStringList names;
-			for (const auto& entry : schema.enumEntries(id))
-				names << text(entry.name);
-			const auto shown = names.mid(0, 4).join(QStringLiteral(", "));
-			return names.size() > 4 ? DescriptorContent::tr("enum %1, …").arg(shown)
-			                        : DescriptorContent::tr("enum %1").arg(shown);
-		}
-		case TypeKind::Struct:
-			return type->memberCount == 1 ? DescriptorContent::tr("struct, 1 member")
-			                              : DescriptorContent::tr("struct, %1 members").arg(type->memberCount);
-		case TypeKind::Array:
-			return QStringLiteral("%1[%2]").arg(typeText(schema, type->relatedTypeId)).arg(type->elementCount);
-	}
-	return QStringLiteral("?");
-}
+using schema_text::text;
+using schema_text::typeText;
 
 // A struct's members below the node that has the type, and theirs below them.
 void addMembers(const rt::RuntimeSchema& schema, TypeId id, Node& under, int depth)

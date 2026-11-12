@@ -325,11 +325,14 @@ Pane {
             HexPane {
                 id: hexPane
                 content: viewer.content
-                // A codec's parts of the file, tinted and named in the hex view.
-                regions: viewer.content && viewer.content.decoded ? viewer.content.regions() : []
+                // A codec's parts of the file, tinted and named in the hex view;
+                // bound to the model's own property, which says when they change.
+                regions: viewer.content && viewer.content.decoded && viewer.content.decoded.regions
+                         ? viewer.content.decoded.regions : []
             }
 
-            // The codec's own view of its model, given as "decoded".
+            // The codec's own view of its model, given as "decoded", and the
+            // file as "content" (a view that reads it again uses its `live`).
             Loader {
                 id: decodedView
                 objectName: "fileViewerDecoded"
@@ -348,7 +351,7 @@ Pane {
                     }
                     if (item && item.decoded === viewer.content.decoded)
                         return
-                    setSource(viewer.content.codecView, { decoded: viewer.content.decoded })
+                    setSource(viewer.content.codecView, { decoded: viewer.content.decoded, content: viewer.content })
                 }
             }
         }

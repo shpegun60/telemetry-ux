@@ -209,11 +209,24 @@ void FileContent::setLocalFile(const QString& path)
 	reload();
 }
 
+QObject* FileContent::live()
+{
+	if (live_ || devicePath_.isEmpty() || !liveFactory_ || !*liveFactory_)
+		return live_;
+	live_ = (*liveFactory_)(devicePath_, this);
+	return live_;
+}
+
 void FileContent::setDevicePath(const QString& path)
 {
 	if (path == devicePath_)
 		return;
 	devicePath_ = path;
+	// A live reader reads the path it was made for.
+	if (live_) {
+		live_->deleteLater();
+		live_ = nullptr;
+	}
 	// The device's name may say CSV where the local copy's does not.
 	if (textual_ && !tabular_ && devicePath_.toLower().endsWith(QStringLiteral(".csv")))
 		tabular_ = table_.setText(text_);
@@ -304,11 +317,14 @@ void FileContent::decode()
 	std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
 		return static_cast<int>(a.first) > static_cast<int>(b.first);
 	});
-	static const FileCodecContext none;
+	// The host's context, and which file this is.
+	FileCodecContext context = context_ ? *context_ : FileCodecContext{};
+	context.localFile = localFile_;
+	context.devicePath = devicePath_;
 	for (const auto& [how, candidate] : candidates) {
 		const auto& codec = *candidate;
 		QString reason;
-		if (auto model = codec.decode(bytes_, context_ ? *context_ : none, reason)) {
+		if (auto model = codec.decode(bytes_, context, reason)) {
 			decoded_ = model.release();
 			decoded_->setParent(this);
 			codecName_ = codec.name;
@@ -336,6 +352,16 @@ bool FileContent::looksLikeText(const QByteArray& bytes)
 			++control;
 	// "Few": at most one in a hundred characters.
 	return control * 100 <= decoded.size();
+}
+
+bool FileContent::decodeAgainIfWaiting()
+{
+	if (!decoded_ || !decoded_->property("needsDescriptor").toBool())
+		return false;
+	forgetDecoded();
+	decode();
+	Q_EMIT changed();
+	return true;
 }
 
 bool FileContent::reload()
@@ -386,12 +412,19 @@ QVariantList FileContent::regions() const
 	return decoded_ ? decoded_->property("regions").toList() : QVariantList{};
 }
 
+void OpenFiles::contextChanged()
+{
+	for (const auto& file : files_)
+		file->decodeAgainIfWaiting();
+}
+
 int OpenFiles::append()
 {
 	// Parented, so QML never takes it over when a script reaches it through
 	// data(); files_ still decides when it goes.
 	auto file = std::make_unique<FileContent>(this);
 	file->setCodecs(&codecs_, &context_);
+	file->setLiveFactory(&liveFactory_);
 	const auto row = static_cast<int>(files_.size());
 	beginInsertRows({}, row, row);
 	files_.push_back(std::move(file));

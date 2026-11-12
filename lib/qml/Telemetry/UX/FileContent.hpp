@@ -87,15 +87,20 @@ struct FileCodecContext {
 	// The bytes of a descriptor with this fingerprint - the connected
 	// device's, or one in a device's folder - or empty: values.bin needs it.
 	std::function<QByteArray(quint64 fingerprint)> descriptor;
+	// The file being read: its local copy and the device's path (empty for a
+	// file from disk). Filled for each read; a host sets only the above.
+	QString localFile, devicePath;
 };
 
 // A format's codec: its name ("Descriptor"), how surely it takes a file, the
 // parse - the proof - that makes the view model, and the QML component that
-// shows it (given the model as its required property "decoded"). Tied to a
-// format, not to a file. The model may also offer `regions` (the parts of the
-// file, which the hex view tints and names) and `findings`. A parse that
-// fails leaves the file to Text or Hex, with the codec's reason. Qt only here;
-// the parser can be anything.
+// shows it (given the model as its required property "decoded", and the
+// FileContent as "content"). Tied to a format, not to a file. The model may
+// also offer `regions` (the parts of the file, which the hex view tints and
+// names) and `findings`, and `needsDescriptor` while it waits for something
+// the context did not have yet - OpenFiles::contextChanged() reads it again.
+// A parse that fails leaves the file to Text or Hex, with the codec's reason.
+// Qt only here; the parser can be anything.
 struct FileCodec {
 	QString name;
 	std::function<FileMatch(const FileIdentity&)> match;
@@ -137,6 +142,8 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QString text READ text NOTIFY changed)
 	Q_PROPERTY(QAbstractItemModel* table READ table CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* hex READ hex CONSTANT)
+	// Reads the device's file again and again for a live view; see live().
+	Q_PROPERTY(QObject* live READ live NOTIFY changed)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
@@ -185,9 +192,21 @@ public:
 	// A codec's parts of the file, for the hex view: the decoded model's
 	// `regions`, or empty.
 	Q_INVOKABLE QVariantList regions() const;
+	// Makes a reader that reads a device file again and again into memory
+	// (Live), parented to the content it is for; null when it cannot.
+	using LiveFactory = std::function<QObject*(const QString& devicePath, QObject* parent)>;
+	void setLiveFactory(const LiveFactory* factory) noexcept { liveFactory_ = factory; }
+	// The device file's live reader, made on first use and kept with this
+	// content: null for a file from disk, or when the host reads no device.
+	// It offers `running`, `periodMs`, `problem` and the signal
+	// `snapshot(bytes)`; a codec view shows its snapshots.
+	QObject* live();
 
 	// Reads localFile again: after a new download, or Reload.
 	Q_INVOKABLE bool reload();
+	// Offers the bytes to the codecs again when the model waits for the
+	// context (`needsDescriptor`); true when it did.
+	bool decodeAgainIfWaiting();
 	// Valid UTF-8 with few control characters (tab, CR and LF excepted).
 	static bool looksLikeText(const QByteArray& bytes);
 
@@ -203,7 +222,9 @@ private:
 	QString localFile_, devicePath_, error_, text_, figures_, codecName_, codecError_;
 	const std::vector<FileCodec>* codecs_ = nullptr;
 	const FileCodecContext* context_ = nullptr;
+	const LiveFactory* liveFactory_ = nullptr;
 	QObject* decoded_ = nullptr; // a child of this
+	QObject* live_ = nullptr;    // a child of this, for devicePath_
 	QUrl codecView_;
 	QByteArray bytes_;
 	QDateTime readAt_;
@@ -227,6 +248,8 @@ public:
 	void addCodec(FileCodec codec);
 	// What the codecs may ask for (a descriptor by fingerprint).
 	void setContext(FileCodecContext context) { context_ = std::move(context); }
+	// How a device file is read live, for the views that show it so.
+	void setLiveFactory(FileContent::LiveFactory factory) { liveFactory_ = std::move(factory); }
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
 	// it again when that copy is already open; returns its row.
 	Q_INVOKABLE int open(const QString& localFile, const QString& devicePath = {});
@@ -235,6 +258,9 @@ public:
 	Q_INVOKABLE int reading(const QString& localFile, const QString& devicePath);
 	// The content that shows localFile, or null.
 	FileContent* contentFor(const QString& localFile) const;
+	// What the context offers has changed (a device was admitted): every file
+	// whose codec waited for it is read again.
+	Q_INVOKABLE void contextChanged();
 	Q_INVOKABLE void close(int row);
 	// The row showing localFile, or -1.
 	Q_INVOKABLE int rowOf(const QString& localFile) const;
@@ -252,6 +278,7 @@ private:
 
 	std::vector<FileCodec> codecs_;
 	FileCodecContext context_;
+	FileContent::LiveFactory liveFactory_;
 	std::vector<std::unique_ptr<FileContent>> files_;
 };
 } // namespace telemetry::ux

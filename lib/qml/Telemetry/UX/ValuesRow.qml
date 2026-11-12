@@ -1,0 +1,108 @@
+// One row of the Values tree: the name, the value and the type in fixed
+// columns; a group carries its Field count where a value would be. A value
+// that changed in the latest snapshot is marked with a dot and the accent
+// colour; a Field the device could not give says so. The current row is
+// highlighted, and framed while the tree has the keyboard. MIT.
+//
+// The Basic style is imported here only, where the row customises its look.
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+
+TreeViewDelegate {
+    id: row
+    objectName: "valuesRow"
+
+    required property string name
+    required property string kind
+    required property string typeText
+    required property string value
+    required property bool unavailable
+    required property bool changed
+    required property int count
+    required property bool numeric
+
+    property real valueWidth: 200
+    property real typeWidth: 140
+    property bool typeShown: true
+
+    readonly property bool group: kind === "group"
+    readonly property string valueText: group ? (count === 1 ? qsTr("1 Field") : qsTr("%1 Fields").arg(count)) : value
+    readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
+    readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
+    readonly property color valueColor: highlighted ? Theme.selectedForeground
+                                      : group || unavailable ? Theme.textMuted
+                                      : changed ? Theme.accent : Theme.textPrimary
+
+    signal contextMenuRequested(var index, real x, real y)
+
+    implicitWidth: treeView.width
+    implicitHeight: Type.rowHeight
+    rightPadding: 8
+    text: name
+    highlighted: current
+
+    Accessible.name: group ? qsTr("%1, %2").arg(name).arg(valueText)
+                   : unavailable ? qsTr("%1, unavailable, %2").arg(name).arg(typeText)
+                   : value.length === 0 ? qsTr("%1, %2").arg(name).arg(typeText)
+                   : changed ? qsTr("%1, %2, changed, %3").arg(name).arg(value).arg(typeText)
+                   : qsTr("%1, %2, %3").arg(name).arg(value).arg(typeText)
+
+    contentItem: RowLayout {
+        spacing: 8
+        Label {
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            text: row.name
+            color: row.textColor
+            font.weight: row.group ? Type.headingWeight : Font.Normal
+        }
+        // The changed mark: always laid out, so a value never moves.
+        Rectangle {
+            Layout.preferredWidth: 6
+            Layout.preferredHeight: 6
+            radius: 3
+            color: row.changed && !row.group && !row.highlighted ? Theme.accent : "transparent"
+            Accessible.ignored: true
+        }
+        Label {
+            objectName: "valuesRowValue"
+            Layout.preferredWidth: row.valueWidth
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            font.family: row.group ? Qt.application.font.family : Type.fixedFamily
+            font.pointSize: row.group ? Type.caption : Type.body
+            font.italic: row.unavailable
+            horizontalAlignment: row.group || row.numeric ? Text.AlignRight : Text.AlignLeft
+            color: row.valueColor
+            text: row.valueText
+        }
+        Label {
+            objectName: "valuesRowType"
+            visible: row.typeShown
+            Layout.preferredWidth: row.typeWidth
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            font.family: Type.fixedFamily
+            font.pointSize: Type.caption
+            color: row.detailColor
+            text: row.typeText
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        radius: 3
+        border.width: 2
+        border.color: Theme.focusRing
+        visible: row.treeView.activeFocus && row.current
+    }
+
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        // The index of this row now: a delegate is reused for other rows.
+        onTapped: function(point) { row.contextMenuRequested(row.treeView.index(row.row, 0), point.position.x, point.position.y) }
+    }
+}

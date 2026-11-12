@@ -10,6 +10,7 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
               EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
               Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
               HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
+              ValuesView.qml ValuesRow.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
@@ -48,6 +49,7 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     EndpointPanel.qml EndpointTreePanel.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
     Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
     HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
+    ValuesView.qml ValuesRow.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
@@ -93,7 +95,8 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp
         DeviceFilesModel.cpp DeviceFilesModel.hpp DeviceFileTransfers.cpp DeviceFileTransfers.hpp
         DescriptorContent.cpp DescriptorContent.hpp TelemetryCodecs.cpp TelemetryCodecs.hpp
-        TreeFilter.cpp TreeFilter.hpp)
+        TreeFilter.cpp TreeFilter.hpp SchemaText.cpp SchemaText.hpp ValuesContent.cpp ValuesContent.hpp
+        DeviceFileLive.cpp DeviceFileLive.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)
     set_target_properties(telemetry_ux_qt_connection PROPERTIES EXPORT_NAME qt_connection AUTOMOC ON)
     target_compile_features(telemetry_ux_qt_connection PUBLIC cxx_std_20)
@@ -107,6 +110,6 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     install(EXPORT TelemetryUXConnectionTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES QtConnectionBinding.hpp DeviceFilesModel.hpp DeviceFileTransfers.hpp DescriptorContent.hpp
-        TelemetryCodecs.hpp TreeFilter.hpp
+        TelemetryCodecs.hpp TreeFilter.hpp ValuesContent.hpp DeviceFileLive.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
