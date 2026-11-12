@@ -1,8 +1,10 @@
 // The descriptor codec's view: which descriptor this is (its fingerprint, with
 // Copy), how much it describes, and every endpoint as a tree - category, group,
-// endpoint, a struct's members - with its type and access. Find narrows the
-// tree to the matches and their parents. Copy takes a node's path, its value
-// line, or its whole subtree as indented text, JSON or TSV. MIT.
+// endpoint, a struct's members - with its type and access. The tree opens
+// folded, and a struct's members are made when it is opened, so a descriptor
+// of megabytes opens at once. Find narrows the tree to the matches and their
+// parents. Copy takes a node's path, its value line, or its whole subtree as
+// indented text, JSON or TSV. MIT.
 //
 // An index is taken from the selection when it is used, never kept: Find
 // changes the shown rows under it.
@@ -34,17 +36,15 @@ FocusScope {
         const text = whole ? view.decoded.textOfAll(format) : view.decoded.textOf(view.current(), format)
         if (text.length > 0)
             Clipboard.setText(text)
+        view.copyNote = view.decoded.copyNote()
     }
-    // After Find: the matches' parents open, the matches folded. Cleared: the
-    // first look again - categories open - with the current row in view.
+    // After Find: the matches' parents open, the matches folded. Cleared:
+    // folded again, as it opened, with the current row in view.
     function showFound() {
         if (!tree)
             return
         if (view.findText.length === 0) {
             tree.collapseRecursively()
-            for (let row = tree.rows - 1; row >= 0; --row)
-                if (tree.depth(row) === 0)
-                    tree.expand(row)
             const index = view.current()
             if (index.valid) {
                 tree.expandToIndex(index)
@@ -103,6 +103,33 @@ FocusScope {
         onClosed: tree.forceActiveFocus()
     }
     property alias findText: findField.text
+    // Find what the field holds now: the matches counted, the tree shown to them.
+    function applyFind() {
+        findLater.stop()
+        const text = findField.text
+        const found = view.decoded.setFilter(text)
+        const limited = text.length > 0 && view.decoded.findLimited()
+        matches.limited = limited
+        matches.text = text.length === 0 ? ""
+                     : limited ? (found === 0 ? qsTr("No match in the part searched")
+                                              : qsTr("%L1+ matches · narrow the search").arg(found))
+                     : found === 1 ? qsTr("1 match") : qsTr("%L1 matches").arg(found)
+        showLater.restart()
+    }
+    // Said after a copy that stopped at its bound; the next copy clears it.
+    property string copyNote: ""
+    Timer {
+        id: findLater
+        interval: 200
+        onTriggered: view.applyFind()
+    }
+    // The tree shown to the matches once the rows have settled. A timer of the
+    // view's own, not Qt.callLater: closing the tab takes it along.
+    Timer {
+        id: showLater
+        interval: 0
+        onTriggered: view.showFound()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -167,20 +194,39 @@ FocusScope {
                 Layout.maximumWidth: 320
                 placeholderText: qsTr("Find by name or path (Ctrl+F)")
                 Accessible.name: qsTr("Find by name or path")
+                // Typing waits a moment before finding: in a file of megabytes
+                // one find takes a fifth of a second. Cleared or Enter: at once.
                 onTextChanged: {
-                    const found = view.decoded.setFilter(text)
-                    matches.text = text.length === 0 ? "" : found === 1 ? qsTr("1 match") : qsTr("%1 matches").arg(found)
-                    Qt.callLater(view.showFound)
+                    if (text.length === 0)
+                        view.applyFind()
+                    else
+                        findLater.restart()
                 }
+                onAccepted: view.applyFind()
                 Keys.onEscapePressed: { text = ""; tree.forceActiveFocus() }
             }
             Label {
                 id: matches
                 objectName: "descriptorMatches"
+                // Find stopped at a bound: the bound in words on hover.
+                property bool limited: false
                 color: Theme.textSecondary
                 font.pointSize: Type.caption
+                HoverHandler { id: matchesHover }
+                ToolTip.visible: matches.limited && matchesHover.hovered
+                ToolTip.text: view.decoded.findLimitText()
             }
-            Item { Layout.fillWidth: true }
+            Label {
+                objectName: "descriptorCopyNote"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideRight
+                color: Theme.warning
+                font.pointSize: Type.caption
+                text: view.copyNote
+                Accessible.role: Accessible.AlertMessage
+            }
         }
 
         // The columns' titles, at the rows' widths.
@@ -250,15 +296,6 @@ FocusScope {
                 onContextMenuRequested: function(index, x, y) { view.openMenu(index, this, x, y) }
             }
             ScrollBar.vertical: ScrollBar {}
-            // Categories and groups open, members folded: what a descriptor
-            // has, without every struct spilled out.
-            Component.onCompleted: Qt.callLater(function() {
-                if (!tree)
-                    return
-                for (let row = tree.rows - 1; row >= 0; --row)
-                    if (tree.depth(row) === 0)
-                        tree.expand(row)
-            })
         }
     }
 }

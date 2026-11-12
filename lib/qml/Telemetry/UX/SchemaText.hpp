@@ -17,6 +17,7 @@
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <telemetry/runtime/RuntimeSchema.hpp>
 #include <QtCore/QString>
+#include <cstddef>
 #include <string_view>
 
 namespace telemetry::ux::schema_text {
@@ -36,5 +37,22 @@ struct Value {
 
 // A scalar or an enum, read through the view; "?" for anything else.
 Value valueText(const runtime::RuntimeSchema& schema, const runtime::DynamicValueView& view);
+
+// A bound on the rows a copy or a find goes through: a large file stays quick.
+// cut says the bound was reached and the rest was left out.
+struct RowBudget {
+	std::size_t left;
+	bool cut = false;
+
+	bool take() noexcept
+	{
+		if (left == 0) {
+			cut = true;
+			return false;
+		}
+		--left;
+		return true;
+	}
+};
 } // namespace telemetry::ux::schema_text
 #endif

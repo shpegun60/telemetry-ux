@@ -48,6 +48,9 @@ int TreeFilter::count(const QModelIndex& parent, bool underMatch) const
 int TreeFilter::setText(const QString& text)
 {
 	const auto trimmed = text.trimmed();
+	// The same text again: the rows shown stay as they are, only counted.
+	if (trimmed == text_)
+		return text_.isEmpty() || !sourceModel() ? 0 : count({}, false);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
 	beginFilterChange();
 	text_ = trimmed;

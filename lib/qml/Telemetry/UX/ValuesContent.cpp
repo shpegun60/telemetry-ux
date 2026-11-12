@@ -16,7 +16,6 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QStringList>
 #include <algorithm>
-#include <cmath>
 #include <functional>
 #include <utility>
 
@@ -48,9 +47,56 @@ const Node* ValuesTreeModel::nodeAt(const QModelIndex& index) const noexcept
 	return index.isValid() && index.model() == this ? node(index) : nullptr;
 }
 
+QModelIndex ValuesTreeModel::indexOf(const Node& at) const
+{
+	return &at == root_.get() ? QModelIndex{} : createIndex(at.row, 0, const_cast<Node*>(&at));
+}
+
+void ValuesTreeModel::append(Node& under, std::vector<std::unique_ptr<Node>> rows)
+{
+	if (rows.empty())
+		return;
+	const auto first = static_cast<int>(under.children.size());
+	beginInsertRows(indexOf(under), first, first + static_cast<int>(rows.size()) - 1);
+	for (auto& row : rows) {
+		row->parent = &under;
+		row->row = static_cast<int>(under.children.size());
+		under.children.push_back(std::move(row));
+	}
+	endInsertRows();
+}
+
+void ValuesTreeModel::removeLast(Node& under)
+{
+	if (under.children.empty())
+		return;
+	const auto last = static_cast<int>(under.children.size()) - 1;
+	beginRemoveRows(indexOf(under), last, last);
+	under.children.pop_back();
+	endRemoveRows();
+}
+
+bool ValuesTreeModel::hasChildren(const QModelIndex& parentIndex) const
+{
+	const auto* owner = node(parentIndex);
+	return owner && (!owner->children.empty() || owner->total > 0);
+}
+
+bool ValuesTreeModel::canFetchMore(const QModelIndex& parentIndex) const
+{
+	const auto* owner = node(parentIndex);
+	return owner && owner->total > 0 && owner->children.empty();
+}
+
+void ValuesTreeModel::fetchMore(const QModelIndex& parentIndex)
+{
+	if (auto* owner = node(parentIndex); owner && canFetchMore(parentIndex) && populate)
+		populate(*owner);
+}
+
 void ValuesTreeModel::touched(const std::vector<const Node*>& nodes)
 {
-	static const QList<int> roles{ValueRole, ChangedRole, UnavailableRole, NumericRole};
+	static const QList<int> roles{ValueRole, ChangedRole, UnavailableRole, NumericRole, ChangedFieldsRole};
 	// One signal per run of neighbouring rows under one parent: an array
 	// whose every element changed is one signal, not thousands.
 	std::vector<const Node*> sorted;
@@ -121,11 +167,15 @@ QVariant ValuesTreeModel::data(const QModelIndex& index, int role) const
 			return at->changed;
 		case CountRole:
 			return at->count;
+		case ChangedFieldsRole:
+			return at->changedFields;
 		case PathRole:
 			return at->path;
 		case NumericRole:
 			// Numbers and true/false: right-aligned, so a struct's members line up.
 			return (at->json == 1 && at->jsonText.isEmpty()) || at->json == 2;
+		case FindRole:
+			return at->kind == QStringLiteral("more") ? QString{} : at->name;
 		default:
 			return {};
 	}
@@ -135,7 +185,8 @@ QHash<int, QByteArray> ValuesTreeModel::roleNames() const
 {
 	return {{NameRole, "name"},   {KindRole, "kind"},         {TypeRole, "typeText"},
 	        {ValueRole, "value"}, {UnavailableRole, "unavailable"}, {ChangedRole, "changed"},
-	        {CountRole, "count"}, {PathRole, "path"},           {NumericRole, "numeric"}};
+	        {CountRole, "count"}, {PathRole, "path"},           {NumericRole, "numeric"},
+	        {ChangedFieldsRole, "changedFields"}};
 }
 
 // ---- The content ----------------------------------------------------------
@@ -150,6 +201,10 @@ struct ValuesContent::Schema {
 	// The schema borrows these bytes: they are kept with it.
 	QByteArray bytes;
 	rt::RuntimeSchema schema;
+	// The shown snapshot and its tokens, which point into it: what rows made
+	// later are filled from.
+	QByteArray shown;
+	std::vector<v3::ValuesEntry> entries;
 };
 
 namespace {
@@ -167,7 +222,7 @@ QString groupsOf(quint64 fingerprint)
 	return groups.join(QLatin1Char(' '));
 }
 
-Node& append(Node& under, std::unique_ptr<Node> child)
+Node& attach(Node& under, std::unique_ptr<Node> child)
 {
 	child->parent = &under;
 	child->row = static_cast<int>(under.children.size());
@@ -175,64 +230,67 @@ Node& append(Node& under, std::unique_ptr<Node> child)
 	return *under.children.back();
 }
 
-// A Field's value below its node: struct members by name, array elements by index.
-void addValue(const rt::RuntimeSchema& schema, TypeId id, Node& under, int depth)
+// How many rows a value of this type has below it: members or elements.
+std::uint32_t childCount(const rt::RuntimeSchema& schema, std::uint32_t typeId)
 {
-	const auto* type = schema.type(id);
-	if (!type || depth > 32)
-		return;
-	if (type->kind == TypeKind::Struct) {
-		for (const auto& member : schema.members(id)) {
-			auto child = std::make_unique<Node>();
-			child->name = schema_text::text(member.name);
-			child->kind = QStringLiteral("member");
-			child->path = under.path + QLatin1Char('.') + child->name;
-			child->type = schema_text::typeText(schema, member.typeId);
-			addValue(schema, member.typeId, append(under, std::move(child)), depth + 1);
-		}
-	} else if (type->kind == TypeKind::Array) {
-		for (std::uint32_t i = 0; i < type->elementCount; ++i) {
-			auto child = std::make_unique<Node>();
-			child->name = QStringLiteral("[%1]").arg(i);
-			child->kind = QStringLiteral("element");
-			child->path = under.path + child->name;
-			child->type = schema_text::typeText(schema, type->relatedTypeId);
-			addValue(schema, type->relatedTypeId, append(under, std::move(child)), depth + 1);
-		}
-	}
+	const auto* type = schema.type(typeId);
+	if (!type)
+		return 0;
+	return type->kind == TypeKind::Struct  ? type->memberCount
+	     : type->kind == TypeKind::Array ? type->elementCount
+	                                     : 0;
 }
 
-// A struct on its own row: its plain members by name, the first four, then "…".
-QString summary(const Node& structure)
+bool leafType(const rt::RuntimeSchema& schema, std::uint32_t typeId)
 {
+	const auto* type = schema.type(typeId);
+	return type && (type->kind == TypeKind::Scalar || type->kind == TypeKind::Enum);
+}
+
+// A struct on its own row: its members by name, the first four, then "…".
+QString structSummary(const rt::RuntimeSchema& schema, const rt::DynamicValueView& view)
+{
+	const auto members = schema.members(view.typeId());
 	QStringList shown;
-	for (const auto& member : structure.children) {
+	for (std::uint32_t i = 0; i < members.size(); ++i) {
 		if (shown.size() == 4) {
 			shown << QStringLiteral("…");
 			break;
 		}
-		shown << member->name + QLatin1Char(' ') + (member->children.empty() ? member->value : QStringLiteral("{…}"));
+		const auto name = schema_text::text(members[i].name);
+		const auto member = view.member(i);
+		if (!member) {
+			shown << name + QStringLiteral(" ?");
+			continue;
+		}
+		const auto* type = schema.type(members[i].typeId);
+		shown << name + QLatin1Char(' ') +
+		             (leafType(schema, members[i].typeId) ? schema_text::valueText(schema, member.value).text
+		              : type && type->kind == TypeKind::Array ? QStringLiteral("[…]")
+		                                                       : QStringLiteral("{…}"));
 	}
 	return QLatin1Char('{') + shown.join(QStringLiteral(", ")) + QLatin1Char('}');
 }
 
 // An array of plain values on its own row: the first eight, then "…".
-QString preview(const Node& array)
+QString arrayPreview(const rt::RuntimeSchema& schema, const rt::DynamicValueView& view)
 {
+	const auto* type = schema.type(view.typeId());
+	if (!type || !leafType(schema, type->relatedTypeId))
+		return {};
 	QStringList shown;
-	for (const auto& element : array.children) {
-		if (!element->children.empty())
-			return {};
+	for (std::uint32_t i = 0; i < type->elementCount; ++i) {
 		if (shown.size() == 8) {
 			shown << QStringLiteral("…");
 			break;
 		}
-		shown << element->value;
+		const auto element = view.index(i);
+		shown << (element ? schema_text::valueText(schema, element.value).text : QStringLiteral("?"));
 	}
 	return QLatin1Char('[') + shown.join(QStringLiteral(", ")) + QLatin1Char(']');
 }
 
-// Writes one snapshot's values into the nodes; records what changed.
+// Writes one snapshot's values into the rows made so far; records what changed.
 struct Writer {
 	const rt::RuntimeSchema& schema;
 	bool first = false;
@@ -254,7 +312,8 @@ struct Writer {
 			node.changed = true;
 			marked.push_back(&node);
 		}
-		if (node.children.empty())
+		// A value, or a struct or array still folded: one change the user can see.
+		if (node.total == 0 || node.children.empty())
 			++changed;
 	}
 
@@ -274,22 +333,24 @@ struct Writer {
 		}
 		switch (type->kind) {
 			case TypeKind::Struct:
-				for (std::uint32_t i = 0; i < node.children.size(); ++i) {
-					if (const auto member = view.member(i))
-						fill(*node.children[i], member.value);
+				set(node, structSummary(schema, view), 0);
+				for (auto& child : node.children) {
+					if (const auto member = view.member(child->slot))
+						fill(*child, member.value);
 					else
-						set(*node.children[i], QStringLiteral("?"), 0);
+						set(*child, QStringLiteral("?"), 0);
 				}
-				set(node, summary(node), 0);
 				return;
 			case TypeKind::Array:
-				for (std::uint32_t i = 0; i < node.children.size(); ++i) {
-					if (const auto element = view.index(i))
-						fill(*node.children[i], element.value);
+				set(node, arrayPreview(schema, view), 0);
+				for (auto& child : node.children) {
+					if (child->kind != QStringLiteral("element"))
+						continue;
+					if (const auto element = view.index(child->slot))
+						fill(*child, element.value);
 					else
-						set(*node.children[i], QStringLiteral("?"), 0);
+						set(*child, QStringLiteral("?"), 0);
 				}
-				set(node, preview(node), 0);
 				return;
 			default: {
 				const auto value = schema_text::valueText(schema, view);
@@ -311,13 +372,148 @@ QString problemText(v3::ValuesProblem problem)
 {
 	return schema_text::text(v3::describe(problem));
 }
+
+// A name or value as one cell: a tab or line break in it cannot split a row.
+QString cell(QString text)
+{
+	text.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+	text.replace(QLatin1Char('\t'), QStringLiteral("\\t"));
+	text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+	text.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+	return text;
+}
+
+QJsonValue jsonOfText(const QString& text, schema_text::Json kind, const QString& typeText)
+{
+	switch (kind) {
+		case schema_text::Json::Number: {
+			// A 64-bit integer is text: a JSON number would lose its low digits.
+			if (typeText == QStringLiteral("u64") || typeText == QStringLiteral("i64"))
+				return text;
+			bool ok = false;
+			const double number = text.toDouble(&ok);
+			return ok ? QJsonValue(number) : QJsonValue(text);
+		}
+		case schema_text::Json::Boolean:
+			return text == QStringLiteral("true");
+		default:
+			return text;
+	}
+}
+
+QJsonValue jsonValue(const Node& node)
+{
+	return jsonOfText(node.jsonText.isEmpty() ? node.value : node.jsonText, static_cast<schema_text::Json>(node.json),
+	                  node.type);
+}
+
+// A value straight from the data - for a row whose children are not all made.
+// Every value written takes one row of the budget.
+struct Data {
+	const rt::RuntimeSchema& schema;
+	schema_text::RowBudget& budget;
+
+	schema_text::Value leaf(const rt::DynamicValueView& view) const
+	{
+		return schema_text::valueText(schema, view);
+	}
+
+	QString lines(const rt::DynamicValueView& view, const QString& name, int depth) const
+	{
+		const auto* type = schema.type(view.typeId());
+		const auto indent = QString(depth * 2, QLatin1Char(' '));
+		if (!budget.take())
+			return {};
+		if (!type)
+			return indent + cell(name) + QStringLiteral(" = ?\n");
+		if (type->kind == TypeKind::Array && leafType(schema, type->relatedTypeId)) {
+			QStringList values;
+			for (std::uint32_t i = 0; i < type->elementCount && budget.take(); ++i) {
+				const auto element = view.index(i);
+				values << (element ? cell(leaf(element.value).text) : QStringLiteral("?"));
+			}
+			return indent + cell(name) + QStringLiteral(" = [") + values.join(QStringLiteral(", ")) + QStringLiteral("]\n");
+		}
+		if (type->kind == TypeKind::Struct) {
+			QString out = indent + cell(name) + QLatin1Char('\n');
+			const auto members = schema.members(view.typeId());
+			for (std::uint32_t i = 0; i < members.size() && !budget.cut; ++i)
+				if (const auto member = view.member(i))
+					out += lines(member.value, schema_text::text(members[i].name), depth + 1);
+			return out;
+		}
+		if (type->kind == TypeKind::Array) {
+			QString out = indent + cell(name) + QLatin1Char('\n');
+			for (std::uint32_t i = 0; i < type->elementCount && !budget.cut; ++i)
+				if (const auto element = view.index(i))
+					out += lines(element.value, QStringLiteral("[%1]").arg(i), depth + 1);
+			return out;
+		}
+		return indent + cell(name) + QStringLiteral(" = ") + cell(leaf(view).text) + QLatin1Char('\n');
+	}
+
+	QJsonValue json(const rt::DynamicValueView& view) const
+	{
+		const auto* type = schema.type(view.typeId());
+		// Past the bound: undefined, which a JSON object leaves out (null would read as unavailable).
+		if (!budget.take())
+			return QJsonValue(QJsonValue::Undefined);
+		if (!type)
+			return QStringLiteral("?");
+		if (type->kind == TypeKind::Struct) {
+			QJsonObject object;
+			const auto members = schema.members(view.typeId());
+			for (std::uint32_t i = 0; i < members.size() && !budget.cut; ++i)
+				if (const auto member = view.member(i))
+					object.insert(schema_text::text(members[i].name), json(member.value));
+			return object;
+		}
+		if (type->kind == TypeKind::Array) {
+			QJsonArray array;
+			for (std::uint32_t i = 0; i < type->elementCount && !budget.cut; ++i)
+				if (const auto element = view.index(i))
+					if (const auto value = json(element.value); !budget.cut)
+						array.push_back(value);
+			return array;
+		}
+		const auto value = leaf(view);
+		return jsonOfText(value.jsonText.isEmpty() ? value.text : value.jsonText, value.json,
+		                  schema_text::typeText(schema, view.typeId()));
+	}
+
+	QString tsv(const rt::DynamicValueView& view, const QString& path) const
+	{
+		const auto* type = schema.type(view.typeId());
+		if (!type)
+			return budget.take() ? cell(path) + QStringLiteral("\t?\t?\n") : QString{};
+		QString out;
+		if (type->kind == TypeKind::Struct) {
+			const auto members = schema.members(view.typeId());
+			for (std::uint32_t i = 0; i < members.size() && !budget.cut; ++i)
+				if (const auto member = view.member(i))
+					out += tsv(member.value, path + QLatin1Char('.') + schema_text::text(members[i].name));
+			return out;
+		}
+		if (type->kind == TypeKind::Array) {
+			for (std::uint32_t i = 0; i < type->elementCount && !budget.cut; ++i)
+				if (const auto element = view.index(i))
+					out += tsv(element.value, path + QStringLiteral("[%1]").arg(i));
+			return out;
+		}
+		if (!budget.take())
+			return {};
+		return cell(path) + QLatin1Char('\t') + cell(leaf(view).text) + QLatin1Char('\t') +
+		       cell(schema_text::typeText(schema, view.typeId())) + QLatin1Char('\n');
+	}
+};
 } // namespace
 
 ValuesContent::ValuesContent(const QByteArray& bytes, const QByteArray& descriptor, QObject* parent)
     : QObject(parent), original_(bytes), tree_(this),
-      shown_(ValuesTreeModel::NameRole, ValuesTreeModel::PathRole, this)
+      shown_(ValuesTreeModel::FindRole, ValuesTreeModel::PathRole, this)
 {
 	shown_.setSourceModel(&tree_);
+	tree_.populate = [this](Node& node) { populate(node); };
 	const auto input = bytesOf(bytes);
 	regions_ = headerRegions(input);
 	v3::ValuesHeader header;
@@ -364,8 +560,9 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 	const auto& schema = parsed->schema;
 
 	// Groups and their Fields, as the descriptor orders them - the file's order.
+	// What is below a Field waits for its row to be opened.
 	auto root = std::make_unique<Node>();
-	std::vector<Node*> fieldNodes;
+	std::vector<Node*> fieldNodes, groupNodes;
 	int groups = 0;
 	const auto fields = schema.endpoints(descriptor::Category::Field);
 	for (const auto& catalog : schema.catalogs(descriptor::Category::Field)) {
@@ -375,16 +572,18 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 		groupNode->kind = QStringLiteral("group");
 		groupNode->path = groupNode->name;
 		groupNode->count = static_cast<int>(catalog.endpointCount);
-		auto& group = append(*root, std::move(groupNode));
+		auto& group = attach(*root, std::move(groupNode));
+		groupNodes.push_back(&group);
 		for (const auto& endpoint : fields.subspan(catalog.firstEndpoint, catalog.endpointCount)) {
 			auto fieldNode = std::make_unique<Node>();
 			fieldNode->name = schema_text::text(endpoint.name);
 			fieldNode->kind = QStringLiteral("field");
 			fieldNode->path = group.path + QLatin1Char('.') + fieldNode->name;
 			fieldNode->type = schema_text::typeText(schema, endpoint.typeId);
-			auto& field = append(group, std::move(fieldNode));
-			addValue(schema, endpoint.typeId, field, 0);
-			fieldNodes.push_back(&field);
+			fieldNode->typeId = endpoint.typeId;
+			fieldNode->total = childCount(schema, endpoint.typeId);
+			fieldNode->field = static_cast<int>(fieldNodes.size());
+			fieldNodes.push_back(&attach(group, std::move(fieldNode)));
 		}
 	}
 
@@ -407,6 +606,7 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 
 	schema_ = std::move(parsed);
 	fieldNodes_ = std::move(fieldNodes);
+	groupNodes_ = std::move(groupNodes);
 	marked_.clear();
 	fieldCount_ = static_cast<int>(fields.size());
 	groupCount_ = groups;
@@ -446,10 +646,7 @@ QString ValuesContent::useDescriptorBytes(const QByteArray& descriptor)
 {
 	if (valid_)
 		return {};
-	const auto problem = adopt(descriptor);
-	if (!problem.isEmpty())
-		return problem;
-	return {};
+	return adopt(descriptor);
 }
 
 QString ValuesContent::show(const QByteArray& bytes)
@@ -469,10 +666,24 @@ QString ValuesContent::show(const QByteArray& bytes)
 		touched.push_back(node);
 	}
 	marked_.clear();
-	Writer writer{schema, last_.isEmpty(), touched, marked_};
+	const bool first = last_.isEmpty();
+	Writer writer{schema, first, touched, marked_};
+	// A Field whose bytes differ from the snapshot shown before: marked even
+	// when its folded summary reads the same, and counted on its group's row.
+	const auto& before = schema_->entries;
+	const auto differs = [&](std::size_t i) {
+		if (first || before.size() != entries.size())
+			return false;
+		const auto& now = entries[i];
+		const auto& then = before[i];
+		return now.status != then.status || now.payload.size() != then.payload.size() ||
+		       !std::equal(now.payload.begin(), now.payload.end(), then.payload.begin());
+	};
+	std::vector<int> changedInGroup(static_cast<std::size_t>(groupCount_), 0);
 	int unavailable = 0;
 	for (std::size_t i = 0; i < entries.size(); ++i) {
 		auto& field = *fieldNodes_[i];
+		const auto counted = writer.changed;
 		const bool missing = entries[i].status == v3::ValueStatus::Unavailable;
 		if (field.unavailable != missing) {
 			field.unavailable = missing;
@@ -483,14 +694,35 @@ QString ValuesContent::show(const QByteArray& bytes)
 			for (auto& child : field.children)
 				writer.clear(*child);
 			writer.set(field, tr("unavailable"), 0);
-			continue;
-		}
-		const auto view = rt::DynamicValueView::create(schema, entries[i].endpoint->typeId, entries[i].payload);
-		if (view)
+		} else if (const auto view = rt::DynamicValueView::create(schema, entries[i].endpoint->typeId, entries[i].payload)) {
 			writer.fill(field, view.value);
-		else
+		} else {
 			writer.set(field, QStringLiteral("?"), 0);
+		}
+		if (differs(i)) {
+			if (field.parent && field.parent->row >= 0 && field.parent->row < groupCount_)
+				++changedInGroup[static_cast<std::size_t>(field.parent->row)];
+			if (!field.changed) {
+				field.changed = true;
+				marked_.push_back(&field);
+				touched.push_back(&field);
+			}
+			// Counted once when no row made below it counted the change: it
+			// lies in a row not made, or past a folded summary.
+			if (writer.changed == counted)
+				++writer.changed;
+		}
 	}
+	for (auto* group : groupNodes_) {
+		const auto count = changedInGroup[static_cast<std::size_t>(group->row)];
+		if (group->changedFields != count) {
+			group->changedFields = count;
+			touched.push_back(group);
+		}
+	}
+	// The tokens point into these bytes, which the content now keeps.
+	schema_->shown = bytes;
+	schema_->entries = std::move(entries);
 	last_ = bytes;
 	shownAt_ = QDateTime::currentDateTime();
 	changedCount_ = writer.changed;
@@ -498,6 +730,132 @@ QString ValuesContent::show(const QByteArray& bytes)
 	tree_.touched(touched);
 	Q_EMIT shownChanged();
 	return {};
+}
+
+bool ValuesContent::viewOf(const Node& node, rt::DynamicValueView& out) const
+{
+	if (!schema_ || node.field < 0 || static_cast<std::size_t>(node.field) >= schema_->entries.size())
+		return false;
+	const auto& entry = schema_->entries[static_cast<std::size_t>(node.field)];
+	if (entry.status == v3::ValueStatus::Unavailable)
+		return false;
+	// The way down from the Field: member or element indexes.
+	std::vector<std::uint32_t> steps;
+	for (const auto* at = &node; at && at->kind != QStringLiteral("field"); at = at->parent)
+		steps.push_back(at->slot);
+	auto view = rt::DynamicValueView::create(schema_->schema, entry.endpoint->typeId, entry.payload);
+	if (!view)
+		return false;
+	auto current = view.value;
+	for (auto step = steps.rbegin(); step != steps.rend(); ++step) {
+		const auto* type = schema_->schema.type(current.typeId());
+		if (!type)
+			return false;
+		const auto next = type->kind == TypeKind::Struct ? current.member(*step) : current.index(*step);
+		if (!next)
+			return false;
+		current = next.value;
+	}
+	out = current;
+	return true;
+}
+
+void ValuesContent::populate(Node& node)
+{
+	if (!schema_ || node.total == 0 || !node.children.empty())
+		return;
+	const auto& schema = schema_->schema;
+	const auto* type = schema.type(node.typeId);
+	if (!type)
+		return;
+	if (type->kind == TypeKind::Array) {
+		loadStep(node);
+		return;
+	}
+	std::vector<std::unique_ptr<Node>> rows;
+	const auto members = schema.members(node.typeId);
+	for (std::uint32_t i = 0; i < members.size(); ++i) {
+		auto child = std::make_unique<Node>();
+		child->name = schema_text::text(members[i].name);
+		child->kind = QStringLiteral("member");
+		child->path = node.path + QLatin1Char('.') + child->name;
+		child->type = schema_text::typeText(schema, members[i].typeId);
+		child->typeId = members[i].typeId;
+		child->total = childCount(schema, members[i].typeId);
+		child->slot = i;
+		child->field = node.field;
+		rows.push_back(std::move(child));
+	}
+	// Filled from the shown snapshot before they are shown: no change to mark.
+	rt::DynamicValueView view;
+	if (viewOf(node, view)) {
+		std::vector<const Node*> ignored;
+		std::vector<Node*> noMarks;
+		Writer writer{schema, true, ignored, noMarks};
+		for (auto& row : rows)
+			if (const auto member = view.member(row->slot))
+				writer.fill(*row, member.value);
+	}
+	tree_.append(node, std::move(rows));
+}
+
+void ValuesContent::loadStep(Node& array)
+{
+	const auto& schema = schema_->schema;
+	const auto* type = schema.type(array.typeId);
+	if (!type || array.loaded >= array.total)
+		return;
+	// The "more" row goes; the next elements come, and a new one if any remain.
+	if (!array.children.empty() && array.children.back()->kind == QStringLiteral("more"))
+		tree_.removeLast(array);
+	const auto from = array.loaded;
+	const auto to = std::min(array.total, from + elementsPerStep);
+	rt::DynamicValueView view;
+	const bool filled = viewOf(array, view);
+	std::vector<const Node*> ignored;
+	std::vector<Node*> noMarks;
+	Writer writer{schema, true, ignored, noMarks};
+	std::vector<std::unique_ptr<Node>> rows;
+	for (auto i = from; i < to; ++i) {
+		auto child = std::make_unique<Node>();
+		child->name = QStringLiteral("[%1]").arg(i);
+		child->kind = QStringLiteral("element");
+		child->path = array.path + child->name;
+		child->type = schema_text::typeText(schema, type->relatedTypeId);
+		child->typeId = type->relatedTypeId;
+		child->total = childCount(schema, type->relatedTypeId);
+		child->slot = i;
+		child->field = array.field;
+		if (filled)
+			if (const auto element = view.index(i))
+				writer.fill(*child, element.value);
+		rows.push_back(std::move(child));
+	}
+	array.loaded = to;
+	if (to < array.total) {
+		auto more = std::make_unique<Node>();
+		const auto next = std::min(elementsPerStep, array.total - to);
+		more->name = tr("Show %L1 more · %L2 of %L3 shown").arg(next).arg(to).arg(array.total);
+		more->kind = QStringLiteral("more");
+		more->field = array.field;
+		rows.push_back(std::move(more));
+	}
+	tree_.append(array, std::move(rows));
+}
+
+bool ValuesContent::isMore(const QModelIndex& index) const
+{
+	const auto* at = nodeOf(index);
+	return at && at->kind == QStringLiteral("more");
+}
+
+bool ValuesContent::showMore(const QModelIndex& index)
+{
+	const auto* at = nodeOf(index);
+	if (!at || at->kind != QStringLiteral("more") || !at->parent)
+		return false;
+	loadStep(*at->parent);
+	return true;
 }
 
 QString ValuesContent::update(const QByteArray& bytes)
@@ -535,9 +893,111 @@ void ValuesContent::setHeld(bool held)
 	Q_EMIT snapshotsChanged();
 }
 
+void ValuesContent::openMatches(const QString& text)
+{
+	const auto& schema = schema_->schema;
+	const auto hit = [&](const QString& name, const QString& path) {
+		return name.contains(text, Qt::CaseInsensitive) || path.contains(text, Qt::CaseInsensitive);
+	};
+	// The way to every match that is not inside another: steps from its Field.
+	struct Route {
+		Node* field;
+		std::vector<std::uint32_t> steps;
+	};
+	std::vector<Route> routes;
+	// A bound on the search, so a find in a very large file stays quick; and
+	// on the matches it opens.
+	schema_text::RowBudget budget{maxFindVisits};
+	std::vector<std::uint32_t> steps;
+	std::function<void(Node*, std::uint32_t, const QString&)> walk = [&](Node* field, std::uint32_t typeId,
+	                                                                     const QString& path) {
+		const auto* type = schema.type(typeId);
+		if (!type || budget.cut)
+			return;
+		const auto visit = [&](std::uint32_t slot, const QString& name, const QString& childPath, std::uint32_t childType) {
+			if (routes.size() >= maxFindMatches)
+				budget.cut = true;
+			if (budget.cut || !budget.take())
+				return;
+			steps.push_back(slot);
+			if (hit(name, childPath))
+				routes.push_back({field, steps});
+			else
+				walk(field, childType, childPath);
+			steps.pop_back();
+		};
+		if (type->kind == TypeKind::Struct) {
+			const auto members = schema.members(typeId);
+			for (std::uint32_t i = 0; i < members.size(); ++i) {
+				const auto name = schema_text::text(members[i].name);
+				visit(i, name, path + QLatin1Char('.') + name, members[i].typeId);
+			}
+		} else if (type->kind == TypeKind::Array) {
+			for (std::uint32_t i = 0; i < type->elementCount; ++i) {
+				const auto name = QStringLiteral("[%1]").arg(i);
+				visit(i, name, path + name, type->relatedTypeId);
+			}
+		}
+	};
+	for (auto* field : fieldNodes_) {
+		// A Field that matches is shown with everything below it; nothing to open.
+		if (hit(field->name, field->path))
+			continue;
+		walk(field, field->typeId, field->path);
+	}
+	findLimited_ = budget.cut;
+	// Each route made, row by row; an element past the made ones brings its
+	// steps. Rows made stay, so their number is bounded too: a match deep in
+	// a long array costs every element before it.
+	// The bound holds inside a route too: one match far down a long array
+	// would otherwise make every element before it.
+	std::size_t made = 0;
+	const auto room = [&] {
+		if (made < maxFindRows)
+			return true;
+		findLimited_ = true;
+		return false;
+	};
+	for (const auto& route : routes) {
+		if (!room())
+			break;
+		Node* at = route.field;
+		for (const auto slot : route.steps) {
+			const auto before = at->children.size();
+			if (at->children.empty())
+				populate(*at);
+			made += at->children.size() - before;
+			const auto* type = schema.type(at->typeId);
+			const bool array = at->kind != QStringLiteral("group") && type && type->kind == TypeKind::Array;
+			while (array && at->loaded <= slot && at->loaded < at->total && room()) {
+				const auto loaded = at->loaded;
+				loadStep(*at);
+				made += at->loaded - loaded;
+			}
+			// An element past those made (the bound reached): the route ends here.
+			if (slot >= at->children.size() || (array && slot >= at->loaded))
+				break;
+			at = at->children[slot].get();
+		}
+	}
+}
+
 int ValuesContent::setFilter(const QString& text)
 {
-	return valid_ ? shown_.setText(text) : 0;
+	if (!valid_)
+		return 0;
+	const auto trimmed = text.trimmed();
+	// The same find again (Enter after the typing paused): nothing to redo.
+	if (trimmed == shown_.text())
+		return shown_.setText(trimmed);
+	findLimited_ = false;
+	if (!trimmed.isEmpty()) {
+		// Rows are made with no find shown: a proxy that filters looks through
+		// every made row below a parent for each row added there.
+		shown_.setText({});
+		openMatches(trimmed);
+	}
+	return shown_.setText(trimmed);
 }
 
 bool ValuesContent::matches(const QModelIndex& index) const
@@ -598,137 +1058,123 @@ QVariantList ValuesContent::headerRegions(std::span<const std::byte> bytes)
 	return regions;
 }
 
-namespace {
-// A name or value as one cell: a tab or line break in it cannot split a row.
-QString cell(QString text)
+// ---- Copy: the shown rows, and the data where rows are not all made ---------
+
+bool ValuesContent::partial(const Node& node) const
 {
-	text.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
-	text.replace(QLatin1Char('\t'), QStringLiteral("\\t"));
-	text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
-	text.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-	return text;
-}
-
-QJsonValue jsonValue(const Node& node)
-{
-	const auto& text = node.jsonText.isEmpty() ? node.value : node.jsonText;
-	switch (node.json) {
-		case 1: {
-			// A 64-bit integer is text: a JSON number would lose its low digits.
-			if (node.type == QStringLiteral("u64") || node.type == QStringLiteral("i64"))
-				return text;
-			bool ok = false;
-			const double number = text.toDouble(&ok);
-			return ok ? QJsonValue(number) : QJsonValue(text);
-		}
-		case 2:
-			return text == QStringLiteral("true");
-		default:
-			return text;
-	}
-}
-
-// The shown rows below an index, with the node each stands for.
-struct Walk {
-	const QAbstractItemModel& model;
-	std::function<const Node*(const QModelIndex&)> node;
-
-	// An array whose shown elements are plain values: written whole on its line.
-	bool plainArray(const QModelIndex& index) const
-	{
-		const auto* at = node(index);
-		const int rows = model.rowCount(index);
-		if (!at || at->kind == QStringLiteral("group") || rows == 0 || at->unavailable)
-			return false;
-		for (int row = 0; row < rows; ++row) {
-			const auto* child = node(model.index(row, 0, index));
-			if (child->kind != QStringLiteral("element") || !child->children.empty())
-				return false;
-		}
+	if (node.total == 0 || node.unavailable)
+		return false;
+	if (node.children.empty())
 		return true;
-	}
+	const auto* type = schema_->schema.type(node.typeId);
+	return type && type->kind == TypeKind::Array && node.loaded < node.total;
+}
 
-	QString wholeArray(const QModelIndex& index) const
-	{
-		QStringList values;
-		for (int row = 0; row < model.rowCount(index); ++row)
-			values << cell(node(model.index(row, 0, index))->value);
-		return QLatin1Char('[') + values.join(QStringLiteral(", ")) + QLatin1Char(']');
-	}
+bool ValuesContent::wholeShown(const QModelIndex& index) const
+{
+	if (shown_.text().isEmpty())
+		return true;
+	// Find keeps everything below a match: a row at or below one is shown whole.
+	for (auto at = index; at.isValid(); at = at.parent())
+		if (shown_.matches(at))
+			return true;
+	return false;
+}
 
-	QString lines(const QModelIndex& index, int depth, bool withSelf) const
-	{
-		QString out;
-		const bool plain = withSelf && plainArray(index);
-		if (withSelf) {
-			const auto* at = node(index);
-			out += QString(depth * 2, QLatin1Char(' ')) + cell(at->name);
-			if (plain)
-				out += QStringLiteral(" = ") + wholeArray(index);
-			else if (at->unavailable || (at->children.empty() && at->kind != QStringLiteral("group")))
-				out += QStringLiteral(" = ") + cell(at->value);
-			out += QLatin1Char('\n');
-		}
-		if (plain)
-			return out;
-		for (int row = 0; row < model.rowCount(index); ++row)
-			out += lines(model.index(row, 0, index), withSelf ? depth + 1 : depth, true);
-		return out;
+QString ValuesContent::linesOf(const QModelIndex& index, int depth, bool withSelf, schema_text::RowBudget& budget) const
+{
+	QString out;
+	const auto* at = index.isValid() ? nodeOf(index) : nullptr;
+	if (withSelf && at) {
+		if (at->kind == QStringLiteral("more"))
+			return {};
+		rt::DynamicValueView view;
+		const Data data{schema_->schema, budget};
+		const bool whole = wholeShown(index);
+		if (whole && partial(*at) && viewOf(*at, view))
+			return data.lines(view, at->name, depth);
+		// An array of plain values on one line, as the data has it.
+		const auto* type = schema_->schema.type(at->typeId);
+		if (whole && type && type->kind == TypeKind::Array && !at->unavailable &&
+		    leafType(schema_->schema, type->relatedTypeId) && viewOf(*at, view))
+			return data.lines(view, at->name, depth);
+		if (!budget.take())
+			return {};
+		out += QString(depth * 2, QLatin1Char(' ')) + cell(at->name);
+		if (at->unavailable || (at->total == 0 && at->kind != QStringLiteral("group")))
+			out += QStringLiteral(" = ") + cell(at->value);
+		out += QLatin1Char('\n');
 	}
+	for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row)
+		out += linesOf(shown_.index(row, 0, index), withSelf ? depth + 1 : depth, true, budget);
+	return out;
+}
 
-	QJsonValue json(const QModelIndex& index) const
-	{
-		const auto* at = node(index);
-		if (at->unavailable)
-			return QJsonValue::Null;
-		const int rows = model.rowCount(index);
-		if (at->children.empty())
-			return at->kind == QStringLiteral("group") ? QJsonValue(QJsonObject{}) : jsonValue(*at);
-		bool elements = rows > 0;
-		for (int row = 0; row < rows; ++row)
-			elements = elements && node(model.index(row, 0, index))->kind == QStringLiteral("element");
-		if (elements) {
-			QJsonArray array;
-			for (int row = 0; row < rows; ++row)
-				array.push_back(json(model.index(row, 0, index)));
-			return array;
+QJsonValue ValuesContent::jsonOf(const QModelIndex& index, schema_text::RowBudget& budget) const
+{
+	const auto* at = nodeOf(index);
+	// Past the bound: undefined, which a JSON object leaves out (null would read as unavailable).
+	if (!at || budget.cut)
+		return QJsonValue(QJsonValue::Undefined);
+	if (at->unavailable)
+		return budget.take() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonValue::Undefined);
+	rt::DynamicValueView view;
+	if (partial(*at) && wholeShown(index) && viewOf(*at, view))
+		return Data{schema_->schema, budget}.json(view);
+	if (at->total == 0 && at->kind != QStringLiteral("group"))
+		return budget.take() ? jsonValue(*at) : QJsonValue(QJsonValue::Undefined);
+	const auto* type = schema_->schema.type(at->typeId);
+	if (at->kind != QStringLiteral("group") && type && type->kind == TypeKind::Array) {
+		QJsonArray array;
+		for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row) {
+			const auto child = shown_.index(row, 0, index);
+			if (nodeOf(child)->kind == QStringLiteral("more"))
+				continue;
+			if (const auto value = jsonOf(child, budget); !budget.cut)
+				array.push_back(value);
 		}
-		QJsonObject object;
-		for (int row = 0; row < rows; ++row) {
-			const auto child = model.index(row, 0, index);
-			object.insert(node(child)->name, json(child));
-		}
-		return object;
+		return array;
 	}
+	// A group's Fields, or a struct's members, by name.
+	QJsonObject object;
+	for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row) {
+		const auto child = shown_.index(row, 0, index);
+		object.insert(nodeOf(child)->name, jsonOf(child, budget));
+	}
+	return object;
+}
 
-	QString tsv(const QModelIndex& index, bool withSelf) const
-	{
-		QString out;
-		if (withSelf) {
-			const auto* at = node(index);
-			if (at->unavailable || (at->children.empty() && at->kind != QStringLiteral("group"))) {
-				out += cell(at->path) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') + cell(at->type) +
-				       QLatin1Char('\n');
-				return out;
-			}
-		}
-		for (int row = 0; row < model.rowCount(index); ++row)
-			out += tsv(model.index(row, 0, index), true);
-		return out;
+QString ValuesContent::tsvOf(const QModelIndex& index, bool withSelf, schema_text::RowBudget& budget) const
+{
+	const auto* at = index.isValid() ? nodeOf(index) : nullptr;
+	if (withSelf && at) {
+		if (at->kind == QStringLiteral("more"))
+			return {};
+		rt::DynamicValueView view;
+		if (partial(*at) && wholeShown(index) && viewOf(*at, view))
+			return Data{schema_->schema, budget}.tsv(view, at->path);
+		if (at->unavailable || (at->total == 0 && at->kind != QStringLiteral("group")))
+			return budget.take() ? cell(at->path) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') +
+			                           cell(at->type) + QLatin1Char('\n')
+			                     : QString{};
 	}
-};
-} // namespace
+	QString out;
+	for (int row = 0; row < shown_.rowCount(index) && !budget.cut; ++row)
+		out += tsvOf(shown_.index(row, 0, index), true, budget);
+	return out;
+}
 
 QString ValuesContent::pathOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	return at ? at->path : QString{};
+	return at && at->kind != QStringLiteral("more") ? at->path : QString{};
 }
 
 QString ValuesContent::valueOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	if (!at || at->kind == QStringLiteral("group") || (!at->children.empty() && !at->unavailable))
+	if (!at || at->kind == QStringLiteral("group") || at->kind == QStringLiteral("more") ||
+	    (at->total > 0 && !at->unavailable))
 		return {};
 	return at->value;
 }
@@ -736,39 +1182,69 @@ QString ValuesContent::valueOf(const QModelIndex& index) const
 QString ValuesContent::rowOf(const QModelIndex& index) const
 {
 	const auto* at = nodeOf(index);
-	return at ? cell(at->name) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') + cell(at->type)
-	          : QString{};
+	if (!at || at->kind == QStringLiteral("more"))
+		return {};
+	return cell(at->name) + QLatin1Char('\t') + cell(at->value) + QLatin1Char('\t') + cell(at->type);
 }
 
 QString ValuesContent::textOf(const QModelIndex& index, const QString& format) const
 {
 	const auto* at = nodeOf(index);
-	if (!at)
+	if (!at || at->kind == QStringLiteral("more"))
 		return {};
-	const Walk walk{shown_, [this](const QModelIndex& shown) { return nodeOf(shown); }};
-	if (format == QStringLiteral("json"))
-		return QString::fromUtf8(
-		    QJsonDocument(QJsonObject{{at->name, walk.json(index)}}).toJson(QJsonDocument::Indented));
-	if (format == QStringLiteral("tsv"))
-		return QStringLiteral("path\tvalue\ttype\n") + walk.tsv(index, true);
-	return walk.lines(index, 0, true);
+	schema_text::RowBudget budget{maxCopiedRows};
+	if (format == QStringLiteral("json")) {
+		QJsonObject object{{at->name, jsonOf(index, budget)}};
+		if ((copyCut_ = budget.cut))
+			object.insert(QStringLiteral("…"), cutShort());
+		return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
+	}
+	// The note is added after the walk: the walk is what tells whether the bound was reached.
+	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tvalue\ttype\n") + tsvOf(index, true, budget)
+	                                           : linesOf(index, 0, true, budget);
+	if ((copyCut_ = budget.cut))
+		out += cutShort() + QLatin1Char('\n');
+	return out;
 }
 
 QString ValuesContent::textOfAll(const QString& format) const
 {
 	if (!valid_)
 		return {};
-	const Walk walk{shown_, [this](const QModelIndex& shown) { return nodeOf(shown); }};
+	schema_text::RowBudget budget{maxCopiedRows};
 	if (format == QStringLiteral("json")) {
 		QJsonObject object;
-		for (int row = 0; row < shown_.rowCount(); ++row) {
+		for (int row = 0; row < shown_.rowCount() && !budget.cut; ++row) {
 			const auto child = shown_.index(row, 0);
-			object.insert(nodeOf(child)->name, walk.json(child));
+			object.insert(nodeOf(child)->name, jsonOf(child, budget));
 		}
+		if ((copyCut_ = budget.cut))
+			object.insert(QStringLiteral("…"), cutShort());
 		return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
 	}
-	if (format == QStringLiteral("tsv"))
-		return QStringLiteral("path\tvalue\ttype\n") + walk.tsv({}, false);
-	return walk.lines({}, 0, false);
+	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tvalue\ttype\n") + tsvOf({}, false, budget)
+	                                           : linesOf({}, 0, false, budget);
+	if ((copyCut_ = budget.cut))
+		out += cutShort() + QLatin1Char('\n');
+	return out;
+}
+
+QString ValuesContent::findLimitText() const
+{
+	return tr("Find looks through %L1 values, opens %L2 matches and makes %L3 rows at most. Narrow the search to "
+	          "find the rest.")
+	    .arg(maxFindVisits)
+	    .arg(maxFindMatches)
+	    .arg(maxFindRows);
+}
+
+QString ValuesContent::copyNote() const
+{
+	return copyCut_ ? tr("Copied the first %L1 rows; the rest was not copied.").arg(maxCopiedRows) : QString{};
+}
+
+QString ValuesContent::cutShort()
+{
+	return tr("… copied the first %L1 rows; the rest was not copied").arg(maxCopiedRows);
 }
 } // namespace telemetry::ux
