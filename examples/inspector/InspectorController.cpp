@@ -197,6 +197,19 @@ InspectorController::InspectorController(QObject* parent) : QObject(parent)
 		connecting_ = tcpSession_->connecting();
 		if (!tcpSession_->lastError().isEmpty())
 			status_ = QStringLiteral("TCP: %1").arg(tcpSession_->lastError());
+		// This Inspector shows telemetry only. A device whose files alone can be
+		// read (no descriptor, or one refused) is not one it can show: the
+		// connection ends, and says why. Ended after this signal returns.
+		if (tcpSession_->filesOnly()) {
+			status_ = QStringLiteral("TCP: %1").arg(tcpSession_->limitationText());
+			QMetaObject::invokeMethod(
+			    this,
+			    [this] {
+				    if (tcpSession_->filesOnly())
+					    tcpSession_->disconnect();
+			    },
+			    Qt::QueuedConnection);
+		}
 		Q_EMIT stateChanged();
 	});
 	timer_.setInterval(5);

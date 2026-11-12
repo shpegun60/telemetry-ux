@@ -155,7 +155,7 @@ Value valueText(const rt::RuntimeSchema& schema, const rt::DynamicValueView& vie
 			// "Run (1)": the name and the code; a code the descriptor does not
 			// name says so. JSON takes the code.
 			const auto* underlying = schema.type(type->relatedTypeId);
-			const auto code = underlying ? number(view, underlying->scalarCode, true) : Value{QStringLiteral("?")};
+			const auto code = underlying ? number(view, underlying->scalarCode, true) : Value{QStringLiteral("?"), Json::Text, {}};
 			const auto name = view.enumName();
 			const auto shown = name && name.value.known ? QStringLiteral("%1 (%2)").arg(text(name.value.name), code.text)
 			                                            : tr("%1 (no name)").arg(code.text);
