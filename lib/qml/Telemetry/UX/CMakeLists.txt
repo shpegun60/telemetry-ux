@@ -109,6 +109,13 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
     target_link_libraries(telemetry_ux_qt_connection PUBLIC
         TelemetryUX::dynamic_configurator Telemetry::qt_connection)
+    # GCC 13 at -O3 reports the shared_ptr a request's completion captures, held
+    # in a std::optional inside the SDK's DelegateSlot, as maybe uninitialized:
+    # GCC's known false positive for engaged optionals (bug 80635); Clang and
+    # the sanitizers see nothing. Only this target, only GCC.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(telemetry_ux_qt_connection PRIVATE -Wno-maybe-uninitialized)
+    endif()
     install(TARGETS telemetry_ux_qt_connection EXPORT TelemetryUXConnectionTargets
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
     install(EXPORT TelemetryUXConnectionTargets NAMESPACE TelemetryUX::
