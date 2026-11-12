@@ -397,6 +397,65 @@ QModelIndex child(const DeviceFilesModel& files, const QModelIndex& parent, cons
 	return {};
 }
 
+// A device's writable file of N bytes: pieces staged, applied at the final
+// one; saved on SAVE when Savable, at once. It may refuse content that
+// begins with 0xFF, or keep the first byte its own way.
+template<std::size_t N, bool Savable>
+struct Store {
+	std::array<std::byte, N> bytes{};
+	std::array<std::byte, N> incoming{};
+	std::size_t taken = 0;
+	unsigned applied = 0, saves = 0;
+	bool guarded = false, ownFirstByte = false;
+
+	[[nodiscard]] resource::FileSize size() const noexcept
+	{
+		return N;
+	}
+
+	[[nodiscard]] resource::ReadResult read(resource::Cursor cursor, resource::Output output) const noexcept
+	{
+		return resource::BytesFile{bytes}.read(cursor, output);
+	}
+
+	[[nodiscard]] resource::WriteResult write(resource::Cursor cursor, resource::Input in, bool final) noexcept
+	{
+		if (cursor == 0)
+			taken = 0;
+		if (cursor != taken || in.size() > N - taken)
+			return {resource::Status::InvalidCursor, cursor};
+		std::copy(in.begin(), in.end(), incoming.begin() + static_cast<std::ptrdiff_t>(taken));
+		taken += in.size();
+		if (!final)
+			return {resource::Status::Ok, taken, static_cast<std::uint32_t>(in.size())};
+		if (taken != N || (guarded && incoming[0] == std::byte{0xff}))
+			return {resource::Status::InvalidData, cursor};
+		bytes = incoming;
+		if (ownFirstByte)
+			bytes[0] = std::byte{'#'};
+		++applied;
+		taken = 0;
+		return {resource::Status::Ok, N, static_cast<std::uint32_t>(in.size()), true};
+	}
+
+	[[nodiscard]] resource::SaveResult save(resource::Cursor cursor) noexcept
+	    requires Savable
+	{
+		++saves;
+		return {resource::Status::Ok, cursor, true};
+	}
+};
+
+Store<16, true> keptStore;
+Store<16, false> unkeptStore;
+Store<65536, true> bigStore;
+std::array<std::byte, 16> fixedBytes{};
+const resource::BytesFile fixedFile{fixedBytes};
+const auto writable = resource::filesystem(
+    resource::file("/telemetry/descriptor.bin", descriptorFile), resource::file("/cfg/kept.bin", keptStore),
+    resource::file("/cfg/unkept.bin", unkeptStore), resource::file("/cfg/big.bin", bigStore),
+    resource::file("/cfg/fixed.bin", fixedFile));
+
 // Waits for the row's download to end and returns its state.
 DeviceFileTransfers::State ended(DeviceFileTransfers& transfers, int row)
 {
@@ -484,6 +543,206 @@ void downloads(qt::ConnectionSession& session, DeviceFilesModel& files, const QS
 	CHECK(!QFile::exists(cancelledLocal));
 	transfers.clearFinished();
 	CHECK(transfers.rowCount() == 0);
+}
+
+// Uploads: a saved copy written back to the device's file, checked against
+// its record first, written, saved when the device keeps files, read back;
+// the bytes read back become the record and the viewer's reference. Every
+// ending has its outcome; a row can be tried again, or written anyway.
+void uploads(const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	using State = DeviceFileTransfers::State;
+	using Outcome = DeviceFileTransfers::Outcome;
+	Peer peer{writable.view()};
+	qt::ConnectionSession session;
+	DeviceFilesModel files(&session);
+	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+	CHECK(await([&] {
+		return files.available() && !files.loading() && files.fileCount() == 5;
+	}));
+	DeviceFileTransfers transfers(&session);
+	transfers.setKeepDeviceBytes(true);
+	const auto device = folder + QStringLiteral("/uploads/Writable [9]");
+	const auto indexOf = [&](const char* path) {
+		return files.data(files.indexOfPath(QString::fromLatin1(path)), DeviceFilesModel::FileIndexRole).toInt();
+	};
+	const auto copyOf = [&](const char* path) {
+		return DeviceFileTransfers::localPathFor(device, QString::fromLatin1(path));
+	};
+	const auto put = [](const QString& path, const QByteArray& bytes) {
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		QFile file(path);
+		return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size();
+	};
+	const auto bytesOf = [](const auto& array) {
+		return QByteArray(reinterpret_cast<const char*>(array.data()), static_cast<qsizetype>(array.size()));
+	};
+	// A copy as read, with its record; then edited and saved.
+	const auto readAndEdit = [&](const char* path, const QByteArray& deviceBytes, const QByteArray& edited) {
+		const auto local = copyOf(path);
+		CHECK(put(local, deviceBytes) &&
+		      DeviceBytes::keep(device, local, QString::fromLatin1(path), QDateTime::currentDateTime()).isEmpty() &&
+		      put(local, edited));
+		return local;
+	};
+	const auto upload = [&](const char* path, const QString& local, bool overwrite = false, QObject* viewer = nullptr) {
+		const auto row = transfers.upload(QString::fromLatin1(path), indexOf(path), local, device, overwrite, viewer);
+		CHECK(row >= 0 && transfers.data(transfers.index(row), DeviceFileTransfers::UploadRole).toBool());
+		return row;
+	};
+	const auto result = [&](int row) {
+		return transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString();
+	};
+	const auto outcome = [&](int row) {
+		return static_cast<Outcome>(transfers.data(transfers.index(row), DeviceFileTransfers::OutcomeRole).toInt());
+	};
+	const auto retried = [&](int row, bool overwrite) {
+		CHECK(transfers.retry(row, overwrite));
+		return ended(transfers, row);
+	};
+	keptStore.bytes.fill(std::byte{'a'});
+	const auto edited = QByteArray(16, 'b');
+
+	// Written, saved, read back: the record is the new bytes, as written, and
+	// the viewer's copy now the same as the device's. The steps are seen.
+	auto local = readAndEdit("/cfg/kept.bin", QByteArray(16, 'a'), edited);
+	telemetry::ux::OpenFiles viewer;
+	const auto lookup = DeviceBytes::lookup();
+	viewer.setReferenceLookup(lookup);
+	viewer.open(local, QStringLiteral("/cfg/kept.bin"));
+	auto* content = viewer.contentFor(local);
+	CHECK(content && content->hasReference() && content->referenceDiffers() == 16);
+	auto row = upload("/cfg/kept.bin", local, false, &viewer);
+	bool sawWriting = false;
+	CHECK(await([&] {
+		sawWriting = sawWriting || transfers.summary().startsWith(QStringLiteral("Writing kept.bin"));
+		return !transfers.data(transfers.index(row), DeviceFileTransfers::ActiveRole).toBool();
+	}));
+	CHECK(ended(transfers, row) == State::Written && outcome(row) == Outcome::Checked &&
+	      result(row) == QStringLiteral("Written · checked") && sawWriting);
+	CHECK(bytesOf(keptStore.bytes) == edited && keptStore.applied == 1 && keptStore.saves == 1 &&
+	      DeviceBytes::matches(local, QStringLiteral("/cfg/kept.bin"), edited) && DeviceBytes::find(local)->written &&
+	      content->hasReference() && content->referenceDiffers() == 0 &&
+	      content->referenceLabel().contains(QStringLiteral("as written")));
+
+	// The device changed since it was read: nothing written; written anyway
+	// when the row is tried again with overwrite.
+	keptStore.bytes.fill(std::byte{'c'});
+	CHECK(put(local, QByteArray(16, 'd')));
+	row = upload("/cfg/kept.bin", local);
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::Changed &&
+	      result(row).contains(QStringLiteral("changed after it was read at")) &&
+	      keptStore.bytes[0] == std::byte{'c'} && keptStore.applied == 1);
+	CHECK(retried(row, true) == State::Written && outcome(row) == Outcome::Checked &&
+	      keptStore.bytes[0] == std::byte{'d'} && keptStore.saves == 2);
+	CHECK(!transfers.retry(row, true));
+
+	// No record of the device's file, or one of another path: not known here.
+	const auto stray = copyOf("/cfg/stray.bin");
+	CHECK(put(stray, QByteArray(16, 'e')));
+	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray, device);
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::NotKnown &&
+	      result(row).contains(QStringLiteral("nothing here records")) && keptStore.bytes[0] == std::byte{'d'});
+	CHECK(put(stray, QByteArray(16, 'd')) &&
+	      DeviceBytes::keep(device, stray, QStringLiteral("/cfg/unkept.bin"), QDateTime::currentDateTime()).isEmpty());
+	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray, device);
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::NotKnown);
+	// A copy outside the device's folder, or no folder: not queued.
+	CHECK(transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"),
+	                       folder + QStringLiteral("/outside.bin"), device) == -1 &&
+	      transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray) == -1);
+	// The protocol's own files, whatever their Stat says: not queued.
+	CHECK(transfers.upload(QStringLiteral("/telemetry/identity.bin"), indexOf("/cfg/kept.bin"), stray, device,
+	                       true) == -1 &&
+	      transfers.upload(QStringLiteral("/telemetry/session.bin"), indexOf("/cfg/kept.bin"), stray, device) == -1);
+	// An index that no longer names the path: refused before anything is read.
+	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/unkept.bin"), copyOf("/cfg/kept.bin"),
+	                       device, true);
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::Failed &&
+	      result(row).contains(QStringLiteral("list of files")));
+
+	// A device without save(): kept until it restarts.
+	unkeptStore.bytes.fill(std::byte{'u'});
+	local = readAndEdit("/cfg/unkept.bin", QByteArray(16, 'u'), QByteArray(16, 'v'));
+	row = upload("/cfg/unkept.bin", local);
+	CHECK(ended(transfers, row) == State::Written && outcome(row) == Outcome::Checked &&
+	      result(row) == QStringLiteral("Written · checked · kept until the device restarts") &&
+	      unkeptStore.bytes[0] == std::byte{'v'});
+
+	// The device keeps a byte its own way: written, said so, and the record
+	// is what it holds, not the copy.
+	keptStore.ownFirstByte = true;
+	CHECK(put(copyOf("/cfg/kept.bin"), QByteArray(16, 'f')));
+	row = upload("/cfg/kept.bin", copyOf("/cfg/kept.bin"));
+	CHECK(ended(transfers, row) == State::Written && outcome(row) == Outcome::ReadBackDiffers &&
+	      result(row) == QStringLiteral("Written · 1 byte reads back different"));
+	auto held = QByteArray(16, 'f');
+	held[0] = '#';
+	CHECK(DeviceBytes::matches(copyOf("/cfg/kept.bin"), QStringLiteral("/cfg/kept.bin"), held));
+	keptStore.ownFirstByte = false;
+
+	// The device refuses the content: nothing written, the record kept.
+	keptStore.guarded = true;
+	auto refused = held;
+	refused[0] = '\xff';
+	CHECK(put(copyOf("/cfg/kept.bin"), refused));
+	row = upload("/cfg/kept.bin", copyOf("/cfg/kept.bin"));
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::NotWritable &&
+	      result(row) == QStringLiteral("Not written: the device refused the content") &&
+	      DeviceBytes::matches(copyOf("/cfg/kept.bin"), QStringLiteral("/cfg/kept.bin"), held));
+	keptStore.guarded = false;
+
+	// Another size, and a file the device does not let be written.
+	CHECK(put(copyOf("/cfg/kept.bin"), QByteArray(15, 'g')));
+	row = upload("/cfg/kept.bin", copyOf("/cfg/kept.bin"));
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::SizeDiffers &&
+	      result(row).contains(QStringLiteral("cannot change a file's size")));
+	local = readAndEdit("/cfg/fixed.bin", bytesOf(fixedBytes), QByteArray(16, 'h'));
+	row = upload("/cfg/fixed.bin", local);
+	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::NotWritable &&
+	      result(row) == QStringLiteral("Not written: the device does not allow writing it"));
+
+	// Cancelled while checking a small file: nothing written, even when its
+	// one READ was already on its way.
+	CHECK(put(copyOf("/cfg/kept.bin"), QByteArray(16, 'k')) &&
+	      DeviceBytes::keep(device, copyOf("/cfg/kept.bin"), QStringLiteral("/cfg/kept.bin"),
+	                        QDateTime::currentDateTime())
+	          .isEmpty());
+	keptStore.bytes.fill(std::byte{'k'});
+	CHECK(put(copyOf("/cfg/kept.bin"), QByteArray(16, 'l')));
+	const auto appliedBefore = keptStore.applied;
+	row = upload("/cfg/kept.bin", copyOf("/cfg/kept.bin"));
+	transfers.cancel(row);
+	CHECK(ended(transfers, row) == State::Cancelled && outcome(row) == Outcome::Failed &&
+	      result(row) == QStringLiteral("Cancelled · nothing written") && keptStore.applied == appliedBefore);
+
+	// Cancelled while writing: may be part old, part new, the record gone,
+	// the step seen; written whole when tried again with overwrite.
+	bigStore.bytes.fill(std::byte{'i'});
+	local = readAndEdit("/cfg/big.bin", QByteArray(65536, 'i'), QByteArray(65536, 'j'));
+	row = upload("/cfg/big.bin", local);
+	bool sawChecking = false, sawProgress = false;
+	CHECK(await([&] {
+		const auto at = transfers.index(row);
+		const auto step = static_cast<DeviceFileTransfers::Step>(transfers.data(at, DeviceFileTransfers::StepRole).toInt());
+		sawChecking = sawChecking ||
+		              transfers.data(at, DeviceFileTransfers::FiguresRole).toString().startsWith(QStringLiteral("checking · "));
+		const auto progress = transfers.data(at, DeviceFileTransfers::ProgressRole).toDouble();
+		sawProgress = sawProgress || (progress > 0 && progress < 1);
+		return step == DeviceFileTransfers::Step::Write &&
+		       transfers.data(at, DeviceFileTransfers::ReceivedRole).toULongLong() > 4096;
+	}));
+	transfers.cancel(row);
+	CHECK(ended(transfers, row) == State::Cancelled && outcome(row) == Outcome::Partial &&
+	      result(row).startsWith(QStringLiteral("Cancelled at ")) &&
+	      result(row).contains(QStringLiteral("big.bin may now be part old, part new")) && !DeviceBytes::find(local) &&
+	      sawChecking && sawProgress);
+	CHECK(retried(row, true) == State::Written && outcome(row) == Outcome::Checked &&
+	      bigStore.bytes[65535] == std::byte{'j'} &&
+	      DeviceBytes::matches(local, QStringLiteral("/cfg/big.bin"), QByteArray(65536, 'j')));
+	CHECK(transfers.activeCount() == 0);
+	session.disconnect();
 }
 
 // The device's layer: the bytes as read, kept in the device's folder and
@@ -2409,6 +2668,7 @@ int main(int argc, char** argv)
 	capabilityCodec(folder.path());
 	fileEditing(folder.path());
 	deviceLayer(folder.path());
+	uploads(folder.path());
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

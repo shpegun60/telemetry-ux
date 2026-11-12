@@ -481,6 +481,7 @@ void DeviceFilesModel::collect(const Node* from, QVariantList& into) const
 		                           {QStringLiteral("size"), QVariant::fromValue<qulonglong>(from->size)},
 		                           {QStringLiteral("sizeKnown"), from->sizeKnown},
 		                           {QStringLiteral("readable"), from->readable},
+		                           {QStringLiteral("writable"), from->writable},
 		                           {QStringLiteral("access"), !from->sizeKnown ? QString{} : from->readable && from->writable ? tr("read, write") : from->readable ? tr("read") : from->writable ? tr("write only") : tr("no access")}});
 		return;
 	}

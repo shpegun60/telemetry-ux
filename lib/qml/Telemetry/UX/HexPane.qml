@@ -16,6 +16,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
+import Telemetry.UX
 
 FocusScope {
     id: pane
@@ -646,7 +647,11 @@ FocusScope {
                 readonly property bool deviceDiffers: !!pane.content && pane.content.hasReference
                                                       && pane.content.referenceDiffers > 0
                 readonly property bool editState: !!pane.content && (pane.content.editing || pane.content.modified)
-                visible: editState || deviceDiffers || pane.saveProblem.length > 0
+                // Just written to the device and read back the same: said once,
+                // where the difference would be.
+                readonly property bool writtenSame: !!pane.content && pane.content.hasReference
+                                                    && pane.content.referenceWritten && pane.content.referenceDiffers === 0
+                visible: editState || deviceDiffers || writtenSame || pane.saveProblem.length > 0
                 Layout.maximumWidth: pane.width / 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
@@ -656,6 +661,8 @@ FocusScope {
                         return pane.saveProblem
                     if (!pane.content)
                         return ""
+                    if (!editState && !deviceDiffers)
+                        return qsTr("Written to the device · checked")
                     if (!editState)
                         // Short, so it fits beside the cursor's place; when the
                         // device's bytes were read is in the tooltip.
@@ -669,8 +676,11 @@ FocusScope {
                          : qsTr("%1 · %L2 bytes changed").arg(state).arg(edited)
                 }
                 HoverHandler { id: editStateHover }
-                ToolTip.visible: editStateHover.hovered && !!pane.content && (pane.content.editedBytes > 0 || deviceDiffers)
-                ToolTip.text: !editState ? qsTr("This copy is saved on this computer and differs from %1; Restore the device's version puts them back")
+                ToolTip.visible: editStateHover.hovered && !!pane.content
+                                 && (pane.content.editedBytes > 0 || deviceDiffers || writtenSame)
+                ToolTip.text: !editState && !deviceDiffers
+                              ? qsTr("Same as %1").arg(pane.content ? pane.content.referenceLabel : "")
+                            : !editState ? qsTr("This copy is saved on this computer and differs from %1; Restore the device's version puts them back")
                                                 .arg(pane.content ? pane.content.referenceLabel : "")
                             : pane.onDevice ? qsTr("Changed in the copy on this computer, not saved; the device's file is unchanged")
                                             : qsTr("Changed, not saved")

@@ -407,6 +407,7 @@ void FileContent::clearReference()
 	reference_.clear();
 	referenceLabel_.clear();
 	hasReference_ = false;
+	referenceWritten_ = false;
 	referenceDiffers_ = 0;
 }
 
@@ -418,9 +419,18 @@ void FileContent::findReference()
 	if (auto found = (*referenceLookup_)(localFile_, devicePath_)) {
 		reference_ = std::move(found->bytes);
 		referenceLabel_ = found->label;
+		referenceWritten_ = found->written;
 		hasReference_ = true;
 		referenceDiffers_ = differing(bytes_, reference_);
 	}
+}
+
+void FileContent::refreshReference()
+{
+	if (!loaded_)
+		return;
+	findReference();
+	Q_EMIT editChanged();
 }
 
 void FileContent::undo()

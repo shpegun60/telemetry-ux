@@ -176,6 +176,7 @@ class FileContent final : public QObject {
 	Q_PROPERTY(bool hasReference READ hasReference NOTIFY editChanged)
 	Q_PROPERTY(QString referenceLabel READ referenceLabel NOTIFY editChanged)
 	Q_PROPERTY(qint64 referenceDiffers READ referenceDiffers NOTIFY editChanged)
+	Q_PROPERTY(bool referenceWritten READ referenceWritten NOTIFY editChanged)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
@@ -238,6 +239,8 @@ public:
 	struct Reference {
 		QByteArray bytes;
 		QString label;
+		// Read back after this copy was written to the device.
+		bool written = false;
 	};
 	using ReferenceLookup =
 	    std::function<std::optional<Reference>(const QString& localFile, const QString& devicePath)>;
@@ -283,6 +286,7 @@ public:
 	bool hasReference() const noexcept { return hasReference_; }
 	QString referenceLabel() const { return referenceLabel_; }
 	qint64 referenceDiffers() const noexcept { return referenceDiffers_; }
+	bool referenceWritten() const noexcept { return referenceWritten_; }
 	// Whether a byte of the working copy differs from the device's as read.
 	bool differsFromReference(qint64 offset) const noexcept
 	{
@@ -300,6 +304,9 @@ public:
 	// step to undo, editing on or off; saved like any edit. Empty when done;
 	// otherwise why not (not known, another size, nothing differs).
 	Q_INVOKABLE QString restoreReference();
+	// Looks for the reference again - the device's bytes kept anew after this
+	// copy was written to the device - without reading the copy again.
+	Q_INVOKABLE void refreshReference();
 	// Whether a byte differs from the copy on disk, for the hex view.
 	bool isEdited(qint64 offset) const noexcept
 	{
@@ -359,7 +366,7 @@ private:
 	const ReferenceLookup* referenceLookup_ = nullptr;
 	QByteArray reference_;
 	QString referenceLabel_;
-	bool hasReference_ = false;
+	bool hasReference_ = false, referenceWritten_ = false;
 	qint64 referenceDiffers_ = 0;
 	QObject* decoded_ = nullptr; // a child of this
 	QObject* live_ = nullptr;    // a child of this, for devicePath_

@@ -53,6 +53,20 @@ QString absolute(const QString& path)
 // Folders above a copy that are searched for its record.
 constexpr int maxLevels = 16;
 
+// Where localFile's record goes inside deviceFolder, as bytesFile; otherwise
+// why it cannot go there.
+QString placeOf(const QString& deviceFolder, const QString& localFile, QString& bytesFile)
+{
+	if (deviceFolder.isEmpty() || localFile.isEmpty())
+		return tr("No device folder to keep the device's bytes in.");
+	const QDir device(absolute(deviceFolder));
+	const auto relative = device.relativeFilePath(absolute(localFile));
+	if (relative.isEmpty() || relative.startsWith(QStringLiteral("..")) || QDir::isAbsolutePath(relative))
+		return tr("The copy is not inside the device's folder.");
+	bytesFile = device.filePath(DeviceBytes::folderName() + QLatin1Char('/') + relative);
+	return {};
+}
+
 } // namespace
 
 QString DeviceBytes::folderName()
@@ -63,20 +77,38 @@ QString DeviceBytes::folderName()
 QString DeviceBytes::keep(const QString& deviceFolder, const QString& localFile, const QString& devicePath,
                           const QDateTime& readAt)
 {
-	if (deviceFolder.isEmpty() || localFile.isEmpty())
-		return tr("No device folder to keep the device's bytes in.");
-	const QDir device(absolute(deviceFolder));
-	const auto relative = device.relativeFilePath(absolute(localFile));
-	if (relative.isEmpty() || relative.startsWith(QStringLiteral("..")) || QDir::isAbsolutePath(relative))
-		return tr("The copy is not inside the device's folder.");
-	const auto bytesFile = device.filePath(folderName() + QLatin1Char('/') + relative);
-	if (!QDir().mkpath(QFileInfo(bytesFile).absolutePath()))
-		return tr("Could not make the folder for %1.").arg(QDir::toNativeSeparators(bytesFile));
-	hide(device.filePath(folderName()));
+	// Where it would go is checked before the copy is read.
+	QString bytesFile;
+	if (const auto refused = placeOf(deviceFolder, localFile, bytesFile); !refused.isEmpty())
+		return refused;
 	QFile source(localFile);
 	if (!source.open(QIODevice::ReadOnly))
 		return source.errorString();
-	const auto bytes = source.readAll();
+	return keepBytes(deviceFolder, localFile, devicePath, source.readAll(), readAt);
+}
+
+bool DeviceBytes::matches(const QString& localFile, const QString& devicePath, const QByteArray& bytes)
+{
+	const auto record = find(localFile);
+	return record && record->devicePath == devicePath && record->size == bytes.size() &&
+	       record->sha256 == QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+}
+
+bool DeviceBytes::inside(const QString& deviceFolder, const QString& localFile)
+{
+	QString bytesFile;
+	return placeOf(deviceFolder, localFile, bytesFile).isEmpty();
+}
+
+QString DeviceBytes::keepBytes(const QString& deviceFolder, const QString& localFile, const QString& devicePath,
+                               const QByteArray& bytes, const QDateTime& readAt, bool written)
+{
+	QString bytesFile;
+	if (const auto refused = placeOf(deviceFolder, localFile, bytesFile); !refused.isEmpty())
+		return refused;
+	if (!QDir().mkpath(QFileInfo(bytesFile).absolutePath()))
+		return tr("Could not make the folder for %1.").arg(QDir::toNativeSeparators(bytesFile));
+	hide(QDir(absolute(deviceFolder)).filePath(folderName()));
 	QSaveFile data(bytesFile);
 	if (!data.open(QIODevice::WriteOnly) || data.write(bytes) != bytes.size() || !data.commit())
 		return data.errorString();
@@ -84,6 +116,7 @@ QString DeviceBytes::keep(const QString& deviceFolder, const QString& localFile,
 	    {QStringLiteral("devicePath"), devicePath},
 	    {QStringLiteral("size"), static_cast<double>(bytes.size())},
 	    {QStringLiteral("readAt"), readAt.toString(Qt::ISODateWithMs)},
+	    {QStringLiteral("written"), written},
 	    {QStringLiteral("sha256"),
 	     QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
 	};
@@ -142,6 +175,7 @@ std::optional<DeviceBytes::Record> DeviceBytes::find(const QString& localFile)
 			record.size = static_cast<qint64>(object.value(QStringLiteral("size")).toDouble(-1));
 			record.readAt = QDateTime::fromString(object.value(QStringLiteral("readAt")).toString(), Qt::ISODateWithMs);
 			record.sha256 = QByteArray::fromHex(object.value(QStringLiteral("sha256")).toString().toLatin1());
+			record.written = object.value(QStringLiteral("written")).toBool();
 			// Bytes gone or cut, or a record that does not read: none.
 			if (record.size < 0 || record.sha256.size() != 32 || QFileInfo(bytesFile).size() != record.size)
 				return std::nullopt;
@@ -164,12 +198,16 @@ std::optional<FileContent::Reference> DeviceBytes::reference(const QString& loca
 		return std::nullopt;
 	FileContent::Reference reference;
 	reference.bytes = std::move(bytes);
+	reference.written = record->written;
 	const QLocale locale;
 	const auto time = locale.toString(record->readAt.time(), QLocale::ShortFormat);
-	auto when = record->readAt.date() == QDate::currentDate()
-	                ? tr("the device's bytes as read today at %1").arg(time)
-	                : tr("the device's bytes as read on %1 at %2")
-	                      .arg(locale.toString(record->readAt.date(), QLocale::ShortFormat), time);
+	const bool today = record->readAt.date() == QDate::currentDate();
+	const auto date = locale.toString(record->readAt.date(), QLocale::ShortFormat);
+	// Whole phrases, so a translator can reorder each.
+	auto when = record->written ? (today ? tr("the device's bytes as written today at %1").arg(time)
+	                                     : tr("the device's bytes as written on %1 at %2").arg(date, time))
+	                            : (today ? tr("the device's bytes as read today at %1").arg(time)
+	                                     : tr("the device's bytes as read on %1 at %2").arg(date, time));
 	// The date and time stay on one line wherever the sentence wraps.
 	const auto from = when.indexOf(QRegularExpression(QStringLiteral("\\d")));
 	if (from >= 0) {
