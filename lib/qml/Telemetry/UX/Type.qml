@@ -17,8 +17,10 @@ QtObject {
     // screen's logical density (96 dpi on Windows, 72 on macOS). A host whose
     // controls take their font elsewhere (qtquickcontrols2.conf) assigns it, and
     // caption and heading follow.
-    property real body: Qt.application.font.pointSizeF > 0 ? Qt.application.font.pointSizeF
-                      : Qt.application.font.pixelSize > 0 ? Qt.application.font.pixelSize * 72 / logicalDpi : 12
+    // At least 10 pt (13.3 px at 96 dpi): Windows' 9 pt default would make
+    // rows of 20 px and targets under 24.
+    property real body: Math.max(10, Qt.application.font.pointSizeF > 0 ? Qt.application.font.pointSizeF
+                      : Qt.application.font.pixelSize > 0 ? Qt.application.font.pixelSize * 72 / logicalDpi : 12)
     readonly property real logicalDpi: Qt.application.screens.length > 0
                                        && Qt.application.screens[0].logicalPixelDensity > 0
                                        ? Qt.application.screens[0].logicalPixelDensity * 25.4 : 96

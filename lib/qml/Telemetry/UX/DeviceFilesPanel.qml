@@ -314,6 +314,11 @@ Pane {
 
         TreeView {
             id: fileTree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (fileTree) fileTree.forceLayout() }) }
+            }
             objectName: "deviceFilesTree"
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -424,14 +429,19 @@ Pane {
             text: qsTr("Only system files so far. Logs and settings appear here when the firmware registers them.")
         }
 
-        DeviceTransfersPanel {
+        // Made only while shown here: a host that docks Transfers apart
+        // (transfersShown: false) keeps no second list to update.
+        Loader {
             objectName: "deviceFilesTransfersPanel"
-            visible: panel.transfersShown && count > 0
+            active: panel.transfersShown
+            visible: active && !!item && item.count > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: implicitHeight
-            transfers: panel.transfers
-            reducedMotion: panel.reducedMotion
-            onShowInFolderRequested: function(localPath) { panel.showInFolderRequested(localPath) }
+            Layout.preferredHeight: item ? item.implicitHeight : 0
+            sourceComponent: DeviceTransfersPanel {
+                transfers: panel.transfers
+                reducedMotion: panel.reducedMotion
+                onShowInFolderRequested: function(localPath) { panel.showInFolderRequested(localPath) }
+            }
         }
     }
 }

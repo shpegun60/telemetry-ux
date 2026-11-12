@@ -483,6 +483,11 @@ FocusScope {
 
         TreeView {
             id: tree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (tree) tree.forceLayout() }) }
+            }
             objectName: "valuesTree"
             visible: view.decoded.valid
             Layout.fillWidth: true

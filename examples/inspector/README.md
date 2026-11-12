@@ -126,9 +126,9 @@ unknown signed enum, a 16,384-element array, an empty struct and nested arrays.
 Choose **Writable demo** for a local editable Model, expand Fields / device and
 select `Config`. Press **Refresh**, then **Edit**. Edit scalar leaves of the
 structure or its arrays as text. Valid keyboard input updates the draft while
-you type; **Apply + Refresh** includes the focused editor without requiring Enter.
+you type; **Apply** includes the focused editor without requiring Enter.
 **Cancel**
-discards the draft. **Apply + Refresh** writes once, then reads the device again;
+discards the draft. **Apply** writes once, then reads the device again;
 the displayed result comes from that readback. For example, the demo setter
 limits `Gain` to 10, so entering 12 shows 10 after a successful Apply.
 

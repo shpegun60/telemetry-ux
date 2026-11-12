@@ -640,8 +640,9 @@ int main(int argc, char** argv)
             auto* okRow = rowAt(narrowList, 0);
             auto* failedRow = rowAt(narrowList, 1);
             CHECK(columns && columns->isVisible() && valueTitle && statusTitle && okRow && failedRow);
-            // A one-line row is Type's row: the application font in pixels x 1.65.
-            const qreal bodyPixels = QGuiApplication::font().pointSizeF() *
+            // A one-line row is Type's row: the body (the application font, at
+            // least 10 pt) in pixels x 1.65.
+            const qreal bodyPixels = std::max<qreal>(10.0, QGuiApplication::font().pointSizeF()) *
                                      QGuiApplication::primaryScreen()->logicalDotsPerInch() / 72.0;
             const qreal typeRow = std::round(bodyPixels * 1.65);
             for (auto* row : {okRow, failedRow}) {

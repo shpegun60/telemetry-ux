@@ -943,9 +943,32 @@ int main(int argc, char** argv)
 		      "all scalar 64bit strings");
 		check(std::isinf(scalars.value("f64").toDouble()), "IEEE infinity lost");
 		auto before = requests.size();
-		for (const auto method :
-		     {"badWide", "throwingGetter", "typedArray", "sparseArray", "cycle"})
+		for (const auto method : {"badWide", "typedArray", "sparseArray", "cycle"})
 			refused(await(finished, qmlInvoke(root.get(), method)), "Validation");
+		// Qt 6.12 reads a getter while it converts the argument and raises its
+		// exception in the QML caller once the call returns: the generated
+		// method still ran, refused the incomplete value as Validation, and
+		// made no request.
+		{
+			const auto sent = requests.size();
+			QVariant thrown;
+			check(QMetaObject::invokeMethod(root.get(), "throwingGetter", Q_RETURN_ARG(QVariant, thrown)),
+			      "throwingGetter");
+			check(thrown.toString() == QStringLiteral("thrown") && requests.size() == sent,
+			      "a throwing getter reached the device");
+			spin([&] { return !finished.isEmpty(); });
+			qsizetype validation = -1, others = 0;
+			for (qsizetype i = 0; i < finished.size(); ++i) {
+				const auto result = finished.at(i).value(1).toMap();
+				if (!result.value("success").toBool() && result.value("errorKind") == QStringLiteral("Validation"))
+					validation = validation < 0 ? i : -2;
+				else
+					++others;
+			}
+			check(validation >= 0 && others == 0, "a throwing getter's operation ended other than in one Validation");
+			if (validation >= 0)
+				finished.removeAt(validation);
+		}
 		for (const auto& invalid : {QVariant{42.0}, QVariant{"18446744073709551616"},
 		                            QVariant{"01"}, QVariant{"+1"}, QVariant{" 1"}}) {
 			auto bad = config;
@@ -964,7 +987,10 @@ int main(int argc, char** argv)
 		success(await(finished, qmlInvoke(root.get(), "getterOnce")));
 		check(requests.last().bytes == configBytes, "QML getter read repeatedly during encoding");
 		before = requests.size();
-		refused(await(finished, qmlInvoke(root.get(), "getterReset")), "Validation");
+		// Qt 6.12 runs the getter while converting the argument, before the
+		// generated method: the session is already gone when it looks, so the
+		// refusal is Schema (nothing admitted) - and nothing is sent either way.
+		refused(await(finished, qmlInvoke(root.get(), "getterReset")), "Schema");
 		check(requests.size() == before && !api->ready(),
 		      "getter session change dispatched to another peer");
 		check(api->admitDescriptor(descriptor.left(64)), "readmission after getter session change");

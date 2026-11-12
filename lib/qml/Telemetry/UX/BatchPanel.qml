@@ -137,6 +137,11 @@ Pane {
                     Layout.fillHeight: true
                     TreeView {
                         id: responseTree
+                        // A zoom changes the row height: the rows already laid out follow it.
+                        Connections {
+                            target: Type
+                            function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) }
+                        }
                         objectName: "batchResponseTree"
                         anchors.fill: parent
                         clip: true

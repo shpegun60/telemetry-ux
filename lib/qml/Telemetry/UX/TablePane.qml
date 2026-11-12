@@ -289,6 +289,11 @@ FocusScope {
 
         TableView {
             id: table
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (table) table.forceLayout() }) }
+            }
             objectName: "fileViewerTable"
             Layout.fillWidth: true
             Layout.fillHeight: true

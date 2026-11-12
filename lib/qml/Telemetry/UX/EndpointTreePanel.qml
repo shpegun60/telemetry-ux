@@ -608,6 +608,11 @@ Pane {
         }
         TreeView {
             id: endpointTree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() }) }
+            }
             objectName: "endpointTree"
             Layout.fillWidth: true
             Layout.fillHeight: true

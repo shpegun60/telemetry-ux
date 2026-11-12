@@ -62,6 +62,11 @@ Pane {
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
             onLabelPixelsChanged: requestPaint()
+            // A host that restyles Theme at run time sees the plot follow.
+            onSurfaceChanged: requestPaint()
+            onAxisChanged: requestPaint()
+            onLabelChanged: requestPaint()
+            onLineChanged: requestPaint()
             HoverHandler { id: plotHover }
             ToolTip.visible: plotHover.hovered && !plot.empty
             ToolTip.delay: 700

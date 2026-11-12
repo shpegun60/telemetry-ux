@@ -146,6 +146,11 @@ Pane {
             columns: panel.showResponse && width >= 650 ? 2 : 1
             TreeView {
                 id: valueTree
+                // A zoom changes the row height: the rows already laid out follow it.
+                Connections {
+                    target: Type
+                    function onRowHeightChanged() { Qt.callLater(function() { if (valueTree) valueTree.forceLayout() }) }
+                }
                 objectName: "valueTree"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -252,6 +257,11 @@ Pane {
                 }
                 TreeView {
                     id: responseTree
+                    // A zoom changes the row height: the rows already laid out follow it.
+                    Connections {
+                        target: Type
+                        function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) }
+                    }
                     objectName: "responseTree"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
