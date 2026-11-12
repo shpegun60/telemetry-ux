@@ -65,12 +65,30 @@ QPainterPath hookLeft()
 	return path;
 }
 
+// Write to the device: an arrow up out of an open tray.
+QPainterPath upload()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 14);
+	path.lineTo(4.5, 19.5);
+	path.lineTo(19.5, 19.5);
+	path.lineTo(19.5, 14);
+	path.moveTo(12, 15.5);
+	path.lineTo(12, 4.5);
+	path.moveTo(7.5, 9);
+	path.lineTo(12, 4.5);
+	path.lineTo(16.5, 9);
+	return path;
+}
+
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("edit"))
 		return pencil();
 	if (name == QLatin1String("save"))
 		return disk();
+	if (name == QLatin1String("upload"))
+		return upload();
 	if (name == QLatin1String("undo"))
 		return hookLeft();
 	if (name == QLatin1String("redo"))

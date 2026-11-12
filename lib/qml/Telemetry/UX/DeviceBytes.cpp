@@ -198,6 +198,7 @@ std::optional<FileContent::Reference> DeviceBytes::reference(const QString& loca
 		return std::nullopt;
 	FileContent::Reference reference;
 	reference.bytes = std::move(bytes);
+	reference.written = record->written;
 	const QLocale locale;
 	const auto time = locale.toString(record->readAt.time(), QLocale::ShortFormat);
 	const bool today = record->readAt.date() == QDate::currentDate();

@@ -395,6 +395,13 @@ QString DeviceFileTransfers::localFileAt(int row) const
 	return jobs_[static_cast<std::size_t>(row)]->localFile;
 }
 
+int DeviceFileTransfers::outcomeAt(int row) const
+{
+	if (row < 0 || row >= static_cast<int>(jobs_.size()))
+		return static_cast<int>(Outcome::None);
+	return static_cast<int>(jobs_[static_cast<std::size_t>(row)]->outcome);
+}
+
 int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong size,
                                   const QString& localFile)
 {
@@ -425,6 +432,8 @@ int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QStrin
 	job->deviceFolder = deviceFolder;
 	job->upload = true;
 	job->overwrite = overwrite;
+	if (QFile copy(localFile); copy.open(QIODevice::ReadOnly))
+		job->local = copy.readAll();
 	job->viewer = qobject_cast<OpenFiles*>(viewer);
 	const auto row = static_cast<int>(jobs_.size());
 	beginInsertRows({}, row, row);
@@ -433,6 +442,13 @@ int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QStrin
 	startNext();
 	Q_EMIT summaryChanged();
 	return row;
+}
+
+bool DeviceFileTransfers::uploading(const QString& localFile) const
+{
+	return std::any_of(jobs_.begin(), jobs_.end(), [&](const auto& job) {
+		return job->upload && job->active() && job->localFile == localFile;
+	});
 }
 
 void DeviceFileTransfers::cancelFor(const QString& localFile)
@@ -532,13 +548,16 @@ bool DeviceFileTransfers::beginUpload(Job& job)
 		end(job, State::Failed, tr("Not written: the device's list of files is not the one this was opened from"));
 		return false;
 	}
-	QFile source(job.localFile);
-	if (!source.open(QIODevice::ReadOnly)) {
-		end(job, State::Failed,
-		    tr("Not written: could not read %1: %2").arg(QDir::toNativeSeparators(job.localFile), source.errorString()));
-		return false;
+	// Read when it was asked for (upload) or tried again (retry).
+	if (job.local.isNull()) {
+		QFile source(job.localFile);
+		if (!source.open(QIODevice::ReadOnly)) {
+			end(job, State::Failed,
+			    tr("Not written: could not read %1: %2").arg(QDir::toNativeSeparators(job.localFile), source.errorString()));
+			return false;
+		}
+		job.local = source.readAll();
 	}
-	job.local = source.readAll();
 	job.size = static_cast<quint64>(job.local.size());
 	job.device.clear();
 	job.step = Step::Check;
@@ -556,6 +575,12 @@ namespace {
 // Received and total in the total's unit: "5.0 of 64 KiB", as the bar shows them.
 QString ofInUnit(quint64 done, quint64 total)
 {
+	// A little of a large file would read "0.0 of 1.0 MiB": each in its own unit then.
+	double scale = 1;
+	for (int unit = 0; unit < 4 && static_cast<double>(total) >= scale * 1024; ++unit)
+		scale *= 1024;
+	if (done > 0 && static_cast<double>(done) < scale / 20)
+		return DeviceFileTransfers::tr("%1 of %2").arg(DeviceFilesModel::sizeText(done), DeviceFilesModel::sizeText(total));
 	return pairInUnit(done, total, DeviceFileTransfers::tr("%1 of %2 %3", "done of total, then the unit"));
 }
 
@@ -787,6 +812,14 @@ void DeviceFileTransfers::poll()
 	for (std::size_t row = 0; row < jobs_.size(); ++row) {
 		auto& job = *jobs_[row];
 		if (job.state == State::Writing) {
+			// A cancel waits for the request on its way, then stops before
+			// the next: one already sent is never cancelled in the queue,
+			// which would leave a WRITE's outcome not known and the session
+			// to recover.
+			if (job.cancelRequested && job.reader && !job.reader->inFlight())
+				job.reader->cancel();
+			if (job.cancelRequested && job.writer && !job.writer->inFlight())
+				job.writer->cancel();
 			if (job.reader)
 				(void)job.reader->poll();
 			if (job.writer)
@@ -939,10 +972,6 @@ void DeviceFileTransfers::cancel(int row)
 		poll();
 	} else if (job.state == State::Writing) {
 		job.cancelRequested = true;
-		if (job.reader)
-			job.reader->cancel();
-		if (job.writer)
-			job.writer->cancel();
 		poll();
 	}
 }
@@ -952,7 +981,8 @@ bool DeviceFileTransfers::retry(int row, bool overwrite)
 	if (row < 0 || row >= static_cast<int>(jobs_.size()))
 		return false;
 	auto& job = *jobs_[static_cast<std::size_t>(row)];
-	if (job.active() || job.state == State::Saved || job.state == State::Written || !session_ ||
+	if (job.active() || job.state == State::Saved ||
+	    (job.state == State::Written && job.outcome != Outcome::NotChecked) || !session_ ||
 	    !session_->filesSupported())
 		return false;
 	// The same row starts again from the first byte, under the same name.
@@ -965,8 +995,11 @@ bool DeviceFileTransfers::retry(int row, bool overwrite)
 	job.publishedMs = -1000;
 	job.sent = 0;
 	if (job.upload) {
-		job.overwrite = overwrite;
+		job.overwrite = job.overwrite || overwrite;
 		job.outcome = Outcome::None;
+		job.local = QByteArray();
+		if (QFile copy(job.localFile); copy.open(QIODevice::ReadOnly))
+			job.local = copy.readAll();
 	}
 	publish(row);
 	startNext();

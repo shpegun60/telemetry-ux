@@ -41,6 +41,14 @@ Pane {
     readonly property int stateSaved: 2
     readonly property int stateCancelled: 3
     readonly property int stateFailed: 4
+    readonly property int stateWriting: 5
+    readonly property int stateWritten: 6
+    // DeviceFileTransfers.Outcome, as numbers.
+    readonly property int outcomeNotChecked: 3
+    readonly property int outcomeChanged: 4
+    readonly property int outcomeNotKnown: 5
+    readonly property int outcomePartial: 8
+    readonly property int outcomeFailed: 9
 
     readonly property var currentIndex: fileTree.selectionModel.currentIndex
     readonly property bool currentIsFile: files.isFile(currentIndex)
@@ -470,9 +478,23 @@ Pane {
                 required property bool active
                 // Read to be shown in the Viewer, not saved for the user.
                 required property bool opening
+                // A copy written to the device, and how it ended.
+                required property bool upload
+                required property int outcome
 
                 readonly property bool failed: state === panel.stateFailed
                 readonly property bool saved: state === panel.stateSaved
+                // Written, but not as it was meant: read back different, or not checked.
+                readonly property bool warned: state === panel.stateWritten
+                                               && outcome !== 1 && outcome !== 0
+                // After a conflict or a part write the copy can be written anyway;
+                // after a plain failure it can be tried again.
+                readonly property bool writeAnyway: upload && !active
+                    && (outcome === panel.outcomeChanged || outcome === panel.outcomeNotKnown
+                        || outcome === panel.outcomePartial)
+                readonly property bool tryAgain: upload ? !active && (outcome === panel.outcomeFailed
+                                                                      || outcome === panel.outcomeNotChecked)
+                                                        : failed
 
                 width: transferList.width
                 spacing: 2
@@ -488,21 +510,33 @@ Pane {
                         elide: Text.ElideMiddle
                         Layout.maximumWidth: transferList.width / 3
                         color: Theme.textPrimary
-                        text: transferRow.name
+                        text: transferRow.upload ? qsTr("↑ %1").arg(transferRow.name) : transferRow.name
+                        Accessible.name: transferRow.upload ? qsTr("%1, written to the device").arg(transferRow.name)
+                                                            : transferRow.name
                     }
                     Label {
                         objectName: "deviceFileTransferFigures"
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                         font.pointSize: Type.caption
+                        // A failure, or a write stopped part way: in the error
+                        // colour and marked, however it begins.
+                        readonly property bool alarming: !transferRow.active && (transferRow.failed
+                            || (transferRow.upload && transferRow.outcome === panel.outcomePartial))
                         color: transferRow.active ? Theme.textSecondary
-                             : transferRow.failed ? Theme.error
-                             : transferRow.saved ? Theme.textSecondary : Theme.textMuted
+                             : alarming ? Theme.error
+                             : transferRow.warned ? Theme.warning
+                             : transferRow.saved || transferRow.state === panel.stateWritten ? Theme.textSecondary
+                             : Theme.textMuted
                         text: transferRow.active && transferRow.opening
                                   ? qsTr("Opening · %1").arg(transferRow.figures)
                             : transferRow.active ? transferRow.figures
-                            : transferRow.failed ? qsTr("! %1").arg(transferRow.result)
+                            : alarming ? qsTr("! %1").arg(transferRow.result)
                             : transferRow.result
+                        // Cut by a narrow panel: the whole of it on hover.
+                        HoverHandler { id: figuresHover }
+                        ToolTip.visible: figuresHover.hovered && truncated
+                        ToolTip.text: text
                     }
                     LinkButton {
                         objectName: "deviceFileTransferCancel"
@@ -513,15 +547,26 @@ Pane {
                     }
                     LinkButton {
                         objectName: "deviceFileTransferRetry"
-                        visible: transferRow.failed
-                        text: qsTr("Retry")
+                        visible: transferRow.tryAgain
+                        text: transferRow.upload ? qsTr("Try again") : qsTr("Retry")
                         Accessible.name: qsTr("Retry %1").arg(transferRow.name)
-                        onClicked: panel.transfers.retry(transferRow.index)
+                        // Written but not read back: its record is gone, so again anyway.
+                        onClicked: panel.transfers.retry(transferRow.index,
+                                                         transferRow.upload && transferRow.outcome === panel.outcomeNotChecked)
+                    }
+                    LinkButton {
+                        objectName: "deviceFileTransferWriteAnyway"
+                        visible: transferRow.writeAnyway
+                        text: transferRow.outcome === panel.outcomePartial ? qsTr("Write again") : qsTr("Write anyway")
+                        Accessible.name: transferRow.outcome === panel.outcomePartial
+                                         ? qsTr("Write %1 to the device again").arg(transferRow.name)
+                                         : qsTr("Write %1 to the device anyway").arg(transferRow.name)
+                        onClicked: panel.transfers.retry(transferRow.index, true)
                     }
                     LinkButton {
                         objectName: "deviceFileTransferShow"
                         // A copy read for the Viewer lives in the temporary folder.
-                        visible: transferRow.saved && !transferRow.opening
+                        visible: transferRow.saved && !transferRow.opening && !transferRow.upload
                         text: qsTr("Show in folder")
                         Accessible.name: qsTr("Show %1 in its folder").arg(transferRow.name)
                         onClicked: panel.showInFolderRequested(transferRow.localPath)
@@ -533,9 +578,10 @@ Pane {
                     Layout.leftMargin: 8
                     Layout.rightMargin: 8
                     progress: transferRow.progress
-                    running: transferRow.state === panel.stateReading
+                    running: transferRow.state === panel.stateReading || transferRow.state === panel.stateWriting
                     reducedMotion: panel.reducedMotion
-                    description: qsTr("Downloading %1").arg(transferRow.name)
+                    description: transferRow.upload ? qsTr("Writing %1").arg(transferRow.name)
+                                                    : qsTr("Downloading %1").arg(transferRow.name)
                     valueText: transferRow.figures
                 }
             }

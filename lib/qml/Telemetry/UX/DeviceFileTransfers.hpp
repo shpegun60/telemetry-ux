@@ -142,6 +142,9 @@ public:
 	Q_INVOKABLE int upload(const QString& path, int fileIndex, const QString& localFile,
 	                       const QString& deviceFolder = {}, bool overwrite = false,
 	                       QObject* viewer = nullptr);
+	// Whether an upload of localFile is running or waiting; summaryChanged
+	// says when it may have changed.
+	Q_INVOKABLE bool uploading(const QString& localFile) const;
 	// Cancels the read that writes localFile, if one is running or waiting;
 	// never an upload of it, which a closed tab must not cut part way.
 	Q_INVOKABLE void cancelFor(const QString& localFile);
@@ -174,10 +177,14 @@ public:
 	// The local file a row writes, as download() was given it; rows move when
 	// finished ones are cleared, so a host keys its own records by this.
 	Q_INVOKABLE QString localFileAt(int row) const;
+	// How a row's upload ended (Outcome, as a number), for a host's finished().
+	Q_INVOKABLE int outcomeAt(int row) const;
 	Q_INVOKABLE void cancel(int row);
 	// Starts a failed or cancelled download or upload again, in its own row,
-	// from the first byte; an upload with overwrite as given ("Write anyway").
-	// False when the row is still running, has ended well, or not connected.
+	// from the first byte; an upload with overwrite as given ("Write anyway") -
+	// kept when it was already - also one written but not read back, whose
+	// record is gone (pass overwrite then). The copy is read again. False when the row is still
+	// running, has ended well, or not connected.
 	Q_INVOKABLE bool retry(int row, bool overwrite = false);
 	Q_INVOKABLE void cancelAll();
 	// Forgets the rows that have ended.
