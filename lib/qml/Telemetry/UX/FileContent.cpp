@@ -354,8 +354,9 @@ FileContent::Decoded FileContent::decodeBytes() const
 			result.error.clear();
 			return result;
 		}
-		// The first codec that took the file for its own says why it could not.
-		if (result.error.isEmpty())
+		// The first codec that took the file for its own says why it could not;
+		// one that only guessed says nothing.
+		if (result.error.isEmpty() && !reason.isEmpty())
 			result.error = tr("Not a valid %1 file: %2").arg(codec.name, reason);
 	}
 	return result;

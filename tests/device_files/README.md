@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 613 checks):
+- **Models** (`main.cpp`, 661 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -44,6 +44,20 @@ over localhost TCP to the SDK's native server. No board.
     made), finds in about 200 ms and copies in about 200 ms. Find with a filter already on once took 59 s on the descriptor:
     a filtering proxy looks through every made row below a parent for each row
     added there, so the contents clear the filter before they make rows.
+  - JSON as a tree: the file's own key order (read from the text; QJsonObject
+    would sort it), members made when opened and 256 at a time, Find by name,
+    path or value into rows not made, a value copied exactly as the file
+    writes it, a broken file's line and column, a byte order mark, a name
+    without an extension guessed from its first bytes (a guess that fails, such
+    as a log starting `[INFO]`, stays text and says nothing), escapes in keys,
+    surrogate pairs and `\/`. A JSON file of 10.5 MB (160 000 small objects)
+    opens in about 135 ms and finds a value nine tenths in in about 430 ms; at
+    its very end the way there would make more than 100 000 rows, so that find
+    stops short and says so.
+  - The read-many and batch capability records (TRM1, TBM1), written by the
+    SDK's own `writeCapability`: every field in words, the descriptor they
+    bind to (the connected device's, or another in the warning colour), their
+    regions, and a version this program does not read left as hex.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.

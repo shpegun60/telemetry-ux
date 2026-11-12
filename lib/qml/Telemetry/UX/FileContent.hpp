@@ -79,12 +79,15 @@ struct FileIdentity {
 	QByteArray head;    // the first bytes, for a signature
 };
 
-// How surely a codec takes a file for its own, weakest first: by its place and
-// name ("/telemetry/descriptor.bin", "*.csv"), by a signature in its first
-// bytes ("TDS3"), by a format a device declared. The surest codec is tried
-// first, then the order of registration; a path with the wrong signature is
-// tried and its failed parse says why.
-enum class FileMatch : int { No = 0, Path = 1, Signature = 2, Format = 3 };
+// How surely a codec takes a file for its own, weakest first: a guess from
+// its first bytes when nothing else says ("{" for JSON in a file without an
+// extension), by its place and name ("/telemetry/descriptor.bin", "*.csv"),
+// by a signature in its first bytes ("TDS3"), by a format a device declared.
+// The surest codec is tried first, then the order of registration; a path
+// with the wrong signature is tried and its failed parse says why. A codec
+// that only guessed gives no reason when its parse fails: the file was never
+// said to be its own.
+enum class FileMatch : int { No = 0, Guess = 1, Path = 2, Signature = 3, Format = 4 };
 
 // What a codec may ask for beyond the file's bytes.
 struct FileCodecContext {
