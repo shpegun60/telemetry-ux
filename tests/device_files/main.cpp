@@ -4,9 +4,13 @@
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
 #include <Telemetry/UX/DescriptorContent.hpp>
+#include <Telemetry/UX/DeviceFileLive.hpp>
+#include <Telemetry/UX/ValuesContent.hpp>
 #include <Telemetry/UX/FileContent.hpp>
 #include <Telemetry/UX/TelemetryCodecs.hpp>
 #include <integration/tcp/Server.hpp>
+#include <integration/telemetry/v3/IdentityFile.hpp>
+#include <integration/telemetry/v3/ValuesFile.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
 #include <wire/IdentityWire.hpp>
@@ -22,6 +26,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 #include <QEventLoop>
 #include <algorithm>
 #include <array>
@@ -67,9 +72,11 @@ bool await(const std::function<bool()>& done, int milliseconds = 15000)
 }
 
 struct Device {
+	std::uint32_t value = 42;
+
 	std::uint32_t read() noexcept
 	{
-		return 42;
+		return value;
 	}
 } device;
 
@@ -93,6 +100,63 @@ const auto withDescriptor = resource::filesystem(
     resource::file("/logs/large.bin", largeFile), resource::file("/cfg/settings.csv", settingsFile));
 const auto withoutDescriptor =
     resource::filesystem(resource::file("/logs/events.csv", eventsFile), resource::file("/cfg/settings.csv", settingsFile));
+// A model with the shapes a value can take: 64 bits, a struct with an enum, an array.
+enum class Mode : std::uint8_t {
+	Idle,
+	Run
+};
+
+struct Pair {
+	float voltage;
+	Mode mode;
+};
+
+struct Rich {
+	std::uint64_t big = 18446744073709551615ull;
+	Pair pair{230.5f, Mode::Run};
+	std::array<std::int16_t, 3> samples{-1, 0, 2};
+
+	std::uint64_t readBig() noexcept
+	{
+		return big;
+	}
+
+	Pair readPair() noexcept
+	{
+		return pair;
+	}
+
+	std::array<std::int16_t, 3> readSamples() noexcept
+	{
+		return samples;
+	}
+} rich;
+
+constexpr telemetry::FieldTable richTable{telemetry::field<&Rich::readBig>("Big", rich),
+                                          telemetry::field<&Rich::readPair>("Pair", rich),
+                                          telemetry::field<&Rich::readSamples>("Samples", rich)};
+constexpr telemetry::FieldCatalogTable richFields{telemetry::group("rich", richTable)};
+constexpr telemetry::Model richModel{richFields, commands, services};
+constexpr telemetry::descriptor::Descriptor richDescriptor{richModel};
+constexpr auto richPacked = telemetry::descriptor::packDescriptor<richDescriptor>();
+alignas(32) std::array<std::byte, richModel.maxScratch() + 1> richScratch{};
+telemetry::Workspace richWorkspace{richScratch};
+const resource::telemetry::v3::ValuesFile richValues{richDescriptor, richWorkspace};
+
+// values.bin as the device serves it: every Field's value at each read.
+alignas(32) std::array<std::byte, model.maxScratch() + 1> valuesScratch{};
+telemetry::Workspace valuesWorkspace{valuesScratch};
+const resource::telemetry::v3::ValuesFile valuesFile{descriptor, valuesWorkspace};
+// Two units of the same firmware, told apart by their identities, and one with none.
+resource::telemetry::v3::IdentityFile unitA, unitB;
+const auto withValues = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                             resource::file(telemetry::protocol::identity::path, unitA),
+                                             resource::file("/telemetry/values.bin", valuesFile));
+const auto otherUnit = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                            resource::file(telemetry::protocol::identity::path, unitB),
+                                            resource::file("/telemetry/values.bin", valuesFile));
+const auto anonymousUnit = resource::filesystem(resource::file("/telemetry/descriptor.bin", descriptorFile),
+                                                resource::file("/telemetry/values.bin", valuesFile));
 
 class Peer {
 public:
@@ -813,6 +877,378 @@ void descriptorCodec(const QString& folder)
 	CHECK(ranked.contentFor(both)->codecName() == QStringLiteral("BySignature") && bySignature == 1 && byName == 0);
 }
 
+namespace {
+// The values file as a host reads it: whole, in pieces.
+QByteArray valuesBytes()
+{
+	QByteArray bytes;
+	std::array<std::byte, 64> piece{};
+	resource::Cursor cursor = 0;
+	for (int guard = 0; guard < 100; ++guard) {
+		const auto result = valuesFile.read(cursor, piece);
+		CHECK(result.status == resource::Status::Ok);
+		bytes.append(reinterpret_cast<const char*>(piece.data()), static_cast<qsizetype>(result.written));
+		cursor = result.next;
+		if (result.eof)
+			return bytes;
+	}
+	CHECK(false);
+	return bytes;
+}
+
+QByteArray descriptorBytes()
+{
+	return QByteArray(reinterpret_cast<const char*>(packed.data()), static_cast<qsizetype>(packed.size()));
+}
+
+// The first Field's shown row: group "test", Field "Value".
+QModelIndex valueRow(QAbstractItemModel& fields)
+{
+	return fields.index(0, 0, fields.index(0, 0));
+}
+} // namespace
+
+// The values codec: values.bin read against the descriptor it names - the one
+// beside it, the context's, or one chosen by hand, only with its fingerprint -
+// its tree with values, the regions of every token, a newer snapshot marking
+// what changed, Hold, Find and Copy; a broken file says why and stays hex.
+void valuesCodec(const QString& folder)
+{
+	using telemetry::ux::FileCodecContext;
+	using telemetry::ux::ValuesContent;
+	using telemetry::ux::ValuesTreeModel;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	device.value = 42;
+	const auto bytes = valuesBytes();
+	CHECK(bytes.startsWith("TVL3") && bytes.size() == 24 + 1 + 4);
+
+	// Beside its descriptor, as a device's folder keeps them.
+	write(QStringLiteral("device-a/telemetry/descriptor.bin"), descriptorBytes());
+	const auto local = write(QStringLiteral("device-a/telemetry/values.bin"), bytes);
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	open.open(local, QStringLiteral("/telemetry/values.bin"));
+	auto* content = open.contentFor(local);
+	CHECK(content && content->codecName() == QStringLiteral("Values") && content->format() == QStringLiteral("Values"));
+	CHECK(content->codecView().toString().endsWith(QStringLiteral("ValuesView.qml")));
+	auto* values = qobject_cast<ValuesContent*>(content->decoded());
+	CHECK(values && values->valid() && !values->needsDescriptor() && values->error().isEmpty());
+	CHECK(values->fingerprint() == descriptor.fingerprint() && values->fingerprintGroups().split(QLatin1Char(' ')).size() == 4);
+	CHECK(values->summary() == QStringLiteral("1 Field in 1 group") && values->snapshots() == 1);
+	// The header's six fields, and the Field's token with its status and value.
+	QStringList paths;
+	for (const auto& entry : values->regions())
+		paths << entry.toMap().value(QStringLiteral("path")).toString();
+	CHECK(paths.contains(QStringLiteral("header › fingerprint")) && paths.contains(QStringLiteral("test.Value")) &&
+	      paths.contains(QStringLiteral("test.Value › status")) && paths.contains(QStringLiteral("test.Value › value")));
+
+	auto* fields = values->fields();
+	CHECK(fields->rowCount() == 1 && fields->data(fields->index(0, 0)).toString() == QStringLiteral("test"));
+	const QPersistentModelIndex row(valueRow(*fields));
+	CHECK(fields->data(row, ValuesTreeModel::ValueRole).toString() == QStringLiteral("42") &&
+	      fields->data(row, ValuesTreeModel::TypeRole).toString() == QStringLiteral("u32") &&
+	      !fields->data(row, ValuesTreeModel::ChangedRole).toBool());
+	CHECK(values->pathOf(row) == QStringLiteral("test.Value") && values->valueOf(row) == QStringLiteral("42") &&
+	      values->rowOf(row) == QStringLiteral("Value\t42\tu32"));
+	CHECK(values->textOf(row, QStringLiteral("text")) == QStringLiteral("Value = 42\n"));
+	CHECK(values->textOfAll(QStringLiteral("tsv")) == QStringLiteral("path\tvalue\ttype\ntest.Value\t42\tu32\n"));
+	CHECK(values->textOfAll(QStringLiteral("json")).contains(QStringLiteral("\"Value\": 42")));
+	CHECK(values->valueOf(fields->index(0, 0)).isEmpty() && values->textOf(QModelIndex(), QStringLiteral("text")).isEmpty());
+
+	// A newer snapshot: the value in place, marked as changed; the same again unmarks it.
+	device.value = 43;
+	CHECK(values->update(valuesBytes()).isEmpty());
+	CHECK(row.isValid() && fields->data(row, ValuesTreeModel::ValueRole).toString() == QStringLiteral("43") &&
+	      fields->data(row, ValuesTreeModel::ChangedRole).toBool() && values->changedCount() == 1 &&
+	      values->snapshots() == 2);
+	CHECK(values->update(valuesBytes()).isEmpty());
+	CHECK(!fields->data(row, ValuesTreeModel::ChangedRole).toBool() && values->changedCount() == 0);
+	// Held: newer snapshots wait and the shown values stay; released, the newest shows.
+	values->setHeld(true);
+	device.value = 44;
+	CHECK(values->update(valuesBytes()).isEmpty());
+	device.value = 45;
+	CHECK(values->update(valuesBytes()).isEmpty());
+	CHECK(values->waiting() == 2 && fields->data(row, ValuesTreeModel::ValueRole).toString() == QStringLiteral("43"));
+	values->setHeld(false);
+	CHECK(values->waiting() == 0 && fields->data(row, ValuesTreeModel::ValueRole).toString() == QStringLiteral("45") &&
+	      fields->data(row, ValuesTreeModel::ChangedRole).toBool());
+	// Something that is not a snapshot of it: refused, the values stay.
+	auto broken = valuesBytes();
+	broken[24] = 7;
+	CHECK(!values->update(broken).isEmpty() && fields->data(row, ValuesTreeModel::ValueRole).toString() == QStringLiteral("45"));
+	CHECK(!values->update(descriptorBytes()).isEmpty());
+	// Find: the Field by name; nothing matching shows nothing; the row comes back.
+	CHECK(values->setFilter(QStringLiteral("val")) == 1 && fields->rowCount() == 1 && row.isValid() &&
+	      values->matches(row));
+	CHECK(values->setFilter(QStringLiteral("nothing here")) == 0 && fields->rowCount() == 0 && !row.isValid() &&
+	      values->textOfAll(QStringLiteral("text")).isEmpty());
+	CHECK(values->setFilter(QString()) == 0 && fields->rowCount() == 1);
+	CHECK(values->textOf(open.index(0, 0), QStringLiteral("text")).isEmpty());
+
+	// Alone, with no descriptor at hand: it waits for one and says which.
+	device.value = 42;
+	const auto alone = write(QStringLiteral("loose/values.bin"), bytes);
+	open.open(alone);
+	auto* waiting = qobject_cast<ValuesContent*>(open.contentFor(alone)->decoded());
+	CHECK(waiting && !waiting->valid() && waiting->needsDescriptor() && waiting->fingerprint() == descriptor.fingerprint());
+	CHECK(waiting->fields()->rowCount() == 0 && waiting->textOfAll(QStringLiteral("text")).isEmpty());
+	// Only a descriptor with its fingerprint is taken.
+	static constexpr telemetry::FieldTable otherFields{telemetry::field<&Device::read>("Other", device)};
+	static constexpr telemetry::FieldCatalogTable otherCatalogs{telemetry::group("test", otherFields)};
+	static constexpr telemetry::Model otherModel{otherCatalogs, commands, services};
+	static constexpr telemetry::descriptor::Descriptor otherDescriptor{otherModel};
+	static constexpr auto otherPacked = telemetry::descriptor::packDescriptor<otherDescriptor>();
+	const auto other = write(QStringLiteral("loose/other.bin"),
+	                         QByteArray(reinterpret_cast<const char*>(otherPacked.data()), static_cast<qsizetype>(otherPacked.size())));
+	CHECK(waiting->useDescriptor(QUrl::fromLocalFile(other)).contains(QStringLiteral("fingerprint")) &&
+	      !waiting->valid() && waiting->needsDescriptor());
+	CHECK(!waiting->useDescriptor(QUrl::fromLocalFile(folder + QStringLiteral("/loose/missing.bin"))).isEmpty());
+	const auto chosen = write(QStringLiteral("loose/descriptor-copy.bin"), descriptorBytes());
+	CHECK(waiting->useDescriptor(QUrl::fromLocalFile(chosen)).isEmpty() && waiting->valid() &&
+	      !waiting->needsDescriptor() && waiting->fields()->rowCount() == 1 &&
+	      waiting->valueOf(valueRow(*waiting->fields())) == QStringLiteral("42"));
+
+	// The context's descriptor: none at first, then a device is admitted.
+	bool known = false;
+	telemetry::ux::OpenFiles later;
+	telemetry::ux::installTelemetryCodecs(later);
+	FileCodecContext context;
+	context.descriptor = [&known](quint64 fingerprint) {
+		return known && fingerprint == descriptor.fingerprint() ? descriptorBytes() : QByteArray{};
+	};
+	later.setContext(context);
+	later.open(alone);
+	CHECK(qobject_cast<ValuesContent*>(later.contentFor(alone)->decoded())->needsDescriptor());
+	known = true;
+	later.contextChanged();
+	auto* found = qobject_cast<ValuesContent*>(later.contentFor(alone)->decoded());
+	CHECK(found && found->valid() && found->valueOf(valueRow(*found->fields())) == QStringLiteral("42"));
+
+	// Not a values file under its name: why, and the file stays hex.
+	auto wrongVersion = bytes;
+	wrongVersion[4] = 9;
+	const auto wrong = write(QStringLiteral("loose/values-wrong.bin"), wrongVersion);
+	open.open(wrong, QStringLiteral("/telemetry/values.bin"));
+	auto* refused = open.contentFor(wrong);
+	CHECK(refused && !refused->decoded() && refused->codecError().startsWith(QStringLiteral("Not a valid Values file:")) &&
+	      refused->format() == QStringLiteral("Binary"));
+}
+
+// How values read, as the designer set them: a 64-bit number whole (and as
+// text in JSON, where a number would lose digits), an enum by name with its
+// code (the code in JSON), a struct summarised on its row, an array on its
+// row and element by element, numbers marked for right alignment.
+void valuesFormatting()
+{
+	using telemetry::ux::ValuesContent;
+	using telemetry::ux::ValuesTreeModel;
+	QByteArray bytes;
+	std::array<std::byte, 64> piece{};
+	resource::Cursor cursor = 0;
+	for (int guard = 0; guard < 100; ++guard) {
+		const auto result = richValues.read(cursor, piece);
+		CHECK(result.status == resource::Status::Ok);
+		bytes.append(reinterpret_cast<const char*>(piece.data()), static_cast<qsizetype>(result.written));
+		cursor = result.next;
+		if (result.eof)
+			break;
+	}
+	ValuesContent values(bytes, QByteArray(reinterpret_cast<const char*>(richPacked.data()),
+	                                       static_cast<qsizetype>(richPacked.size())));
+	CHECK(values.valid() && values.summary() == QStringLiteral("3 Fields in 1 group"));
+	auto* fields = values.fields();
+	const auto group = fields->index(0, 0);
+	const auto big = fields->index(0, 0, group);
+	const auto pair = fields->index(1, 0, group);
+	const auto samples = fields->index(2, 0, group);
+	const auto value = [&](const QModelIndex& index) { return fields->data(index, ValuesTreeModel::ValueRole).toString(); };
+	const auto numeric = [&](const QModelIndex& index) { return fields->data(index, ValuesTreeModel::NumericRole).toBool(); };
+	CHECK(value(big) == QStringLiteral("18446744073709551615") && numeric(big));
+	const auto voltage = fields->index(0, 0, pair);
+	const auto mode = fields->index(1, 0, pair);
+	CHECK(value(voltage) == QStringLiteral("230.5") && numeric(voltage));
+	CHECK(value(mode) == QStringLiteral("Run (1)") && !numeric(mode));
+	CHECK(value(pair) == QStringLiteral("{voltage 230.5, mode Run (1)}") && !numeric(pair));
+	CHECK(value(samples) == QStringLiteral("[-1, 0, 2]") && fields->rowCount(samples) == 3 &&
+	      value(fields->index(0, 0, samples)) == QStringLiteral("-1"));
+	CHECK(values.textOf(samples, QStringLiteral("text")) == QStringLiteral("Samples = [-1, 0, 2]\n"));
+	const auto json = values.textOfAll(QStringLiteral("json"));
+	CHECK(json.contains(QStringLiteral("\"Big\": \"18446744073709551615\"")) &&
+	      json.contains(QStringLiteral("\"mode\": 1")) && json.contains(QStringLiteral("\"voltage\": 230.5")));
+	CHECK(values.textOfAll(QStringLiteral("tsv")).contains(QStringLiteral("rich.Pair.mode\tRun (1)\t")));
+}
+
+// Live against a real session: the device's values.bin read again and again
+// into memory - each read whole, never two at once, starts at least the
+// period apart and never below 200 ms - the device's changes arriving; a
+// lost connection waits and says so, and the reads go on when it is back. The
+// viewer reaches it through connectTelemetryDevice, which also reads values
+// against the connected device's descriptor.
+void liveValues(const QString& folder)
+{
+	using telemetry::ux::DeviceFileLive;
+	using telemetry::ux::ValuesContent;
+	device.value = 7;
+	Peer peer{withValues.view()};
+	qt::ConnectionSession session;
+	DeviceFilesModel files(&session);
+	CHECK(unitA.set("UNIT-A", "Bench A") && unitB.set("UNIT-B", "Bench B"));
+	const auto connectTo = [&](Peer& to) {
+		CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), to.listener.serverPort()));
+		CHECK(await([&] {
+			return session.ready() && files.available() && !files.loading() &&
+			       session.identityState() != qt::ConnectionSession::IdentityState::Reading;
+		}));
+	};
+	connectTo(peer);
+	CHECK(files.fileCount() == 3 && session.deviceId() == QStringLiteral("UNIT-A"));
+
+	DeviceFileLive live(&session, &files, QStringLiteral("/telemetry/values.bin"));
+	live.setPeriodMs(50);
+	CHECK(live.periodMs() == DeviceFileLive::minimumPeriodMs && !live.running() && live.reads() == 0);
+	std::vector<qint64> arrived;
+	std::vector<QByteArray> snapshots;
+	QElapsedTimer clock;
+	clock.start();
+	int overlapping = 0;
+	QObject::connect(&live, &DeviceFileLive::snapshot, &live, [&](const QByteArray& bytes) {
+		arrived.push_back(clock.elapsed());
+		snapshots.push_back(bytes);
+		overlapping += live.reading() ? 1 : 0;
+		++device.value;
+	});
+	live.setRunning(true);
+	const bool fiveReads = await([&] { return snapshots.size() >= 5; }, 10000);
+	if (!fiveReads)
+		std::fprintf(stderr, "live: %d reads, reading %d, problem '%s'\n", live.reads(), int(live.reading()),
+		             qPrintable(live.problem()));
+	CHECK(fiveReads);
+	live.setRunning(false);
+	CHECK(await([&] { return !live.reading(); }));
+	const auto count = snapshots.size();
+	// Every read whole, in turn, the device's newest value each time.
+	ValuesContent values(snapshots.front(), descriptorBytes());
+	CHECK(values.valid() && values.valueOf(valueRow(*values.fields())) == QStringLiteral("7"));
+	for (std::size_t i = 1; i < count; ++i) {
+		CHECK(values.update(snapshots[i]).isEmpty());
+		CHECK(values.valueOf(valueRow(*values.fields())) == QString::number(7 + i));
+	}
+	// A read ends before the next begins, and reads start the period apart; a
+	// read's own length varies by a few milliseconds, hence the allowance.
+	CHECK(overlapping == 0);
+	for (std::size_t i = 1; i < arrived.size(); ++i)
+		CHECK(arrived[i] - arrived[i - 1] >= DeviceFileLive::minimumPeriodMs - 5);
+	CHECK(live.reads() == static_cast<int>(count) && live.problem().isEmpty());
+	// Stopped: no more reads.
+	QElapsedTimer quiet;
+	quiet.start();
+	await([&] { return quiet.elapsed() > 600; }, 700);
+	CHECK(snapshots.size() == count);
+
+	// Off and on again at once, right after a read: the next read still starts
+	// the period after the last one did.
+	live.setRunning(true);
+	CHECK(await([&] { return snapshots.size() > count; }));
+	const auto restartFrom = snapshots.size();
+	live.setRunning(false);
+	live.setRunning(true);
+	CHECK(await([&] { return snapshots.size() > restartFrom; }));
+	CHECK(arrived[restartFrom] - arrived[restartFrom - 1] >= DeviceFileLive::minimumPeriodMs - 5);
+
+	// The connection drops while running: it waits and says so; the same unit
+	// back, it reads again.
+	session.disconnect();
+	CHECK(await([&] { return !live.reading() && live.waitingForDevice() && live.problem() == QStringLiteral("not connected"); }));
+	const auto beforeReconnect = snapshots.size();
+	connectTo(peer);
+	CHECK(await([&] { return snapshots.size() > beforeReconnect + 1; }, 10000) && live.problem().isEmpty() &&
+	      !live.waitingForDevice() && live.running());
+
+	// Another unit of the same firmware connected in its place: Live stops and
+	// names it, rather than show its values as this file's.
+	Peer other{otherUnit.view()};
+	session.disconnect();
+	CHECK(await([&] { return !live.reading() && live.waitingForDevice(); }));
+	const auto beforeOther = snapshots.size();
+	connectTo(other);
+	CHECK(await([&] { return !live.running(); }) && live.problem().contains(QStringLiteral("UNIT-B")) &&
+	      live.problem().contains(QStringLiteral("UNIT-A")) && snapshots.size() == beforeOther);
+	session.disconnect();
+	CHECK(await([&] { return !live.reading(); }));
+
+	// A unit without an identity cannot be told apart after the connection was
+	// lost: Live stops instead of resuming.
+	{
+		Peer anonymous{anonymousUnit.view()};
+		connectTo(anonymous);
+		DeviceFileLive unnamed(&session, &files, QStringLiteral("/telemetry/values.bin"));
+		int unnamedReads = 0;
+		QObject::connect(&unnamed, &DeviceFileLive::snapshot, &unnamed, [&](const QByteArray&) { ++unnamedReads; });
+		unnamed.setRunning(true);
+		CHECK(await([&] { return unnamedReads >= 1; }));
+		session.disconnect();
+		CHECK(await([&] { return !unnamed.reading() && unnamed.waitingForDevice(); }));
+		connectTo(anonymous);
+		CHECK(await([&] { return !unnamed.running(); }) && unnamed.problem().contains(QStringLiteral("no identity")));
+		session.disconnect();
+		CHECK(await([&] { return !files.available(); }));
+	}
+
+	// A reader that goes while its read is on the way: the session finishes the
+	// read, and the connection goes on working.
+	connectTo(peer);
+	{
+		auto doomed = std::make_unique<DeviceFileLive>(&session, &files, QStringLiteral("/telemetry/values.bin"));
+		doomed->setRunning(true);
+		CHECK(doomed->reading());
+		doomed.reset();
+	}
+	CHECK(snapshots.size() >= beforeOther);
+	live.setRunning(true);
+	const auto beforeAfterOrphan = snapshots.size();
+	CHECK(await([&] { return snapshots.size() > beforeAfterOrphan; }) && live.problem().isEmpty());
+	live.setRunning(false);
+	CHECK(await([&] { return !live.reading(); }));
+
+	// Through the viewer: the descriptor is the connected device's (none on
+	// disk beside the file), and the content's live reader reads its path.
+	const auto local = folder + QStringLiteral("/live/values.bin");
+	QDir().mkpath(QFileInfo(local).absolutePath());
+	{
+		QFile file(local);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write(snapshots.back()) == snapshots.back().size());
+	}
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	telemetry::ux::connectTelemetryDevice(open, &session, &files, [] { return QStringList{}; });
+	open.open(local, QStringLiteral("/telemetry/values.bin"));
+	auto* content = open.contentFor(local);
+	auto* shown = qobject_cast<ValuesContent*>(content->decoded());
+	CHECK(shown && shown->valid());
+	auto* reader = qobject_cast<DeviceFileLive*>(content->live());
+	CHECK(reader && reader->devicePath() == QStringLiteral("/telemetry/values.bin") && content->live() == reader);
+	int fromViewer = 0;
+	QObject::connect(reader, &DeviceFileLive::snapshot, reader, [&](const QByteArray& bytes) {
+		fromViewer += shown->update(bytes).isEmpty() ? 1 : 0;
+	});
+	reader->setRunning(true);
+	CHECK(await([&] { return fromViewer >= 2; }));
+	reader->setRunning(false);
+	CHECK(await([&] { return !reader->reading(); }));
+	// A file from disk has nothing to read again.
+	open.open(folder + QStringLiteral("/loose/values.bin"));
+	CHECK(open.contentFor(folder + QStringLiteral("/loose/values.bin"))->live() == nullptr);
+	session.disconnect();
+	device.value = 42;
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -852,6 +1288,9 @@ int main(int argc, char** argv)
 	fileContent(folder.path());
 	codecs(folder.path());
 	descriptorCodec(folder.path());
+	valuesCodec(folder.path());
+	valuesFormatting();
+	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);
 	return 0;

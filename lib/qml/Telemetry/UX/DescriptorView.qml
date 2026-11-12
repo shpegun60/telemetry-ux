@@ -18,6 +18,8 @@ FocusScope {
     objectName: "descriptorView"
 
     required property var decoded
+    // The file it shows; a descriptor does not change, so it is not read again.
+    property var content: null
 
     readonly property real typeWidth: Math.min(220, Math.max(120, width * 0.3))
     readonly property real accessWidth: 120
