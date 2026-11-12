@@ -100,7 +100,8 @@ void DeviceFileLive::setRunning(bool running)
 	if (!running_) {
 		// The read on its way finishes and is shown; none follows it.
 		next_.stop();
-		setProblem({});
+		problem_.clear();
+		waiting_ = false;
 	}
 	Q_EMIT stateChanged();
 	if (running_)
@@ -118,11 +119,12 @@ void DeviceFileLive::setPeriodMs(int periodMs)
 		schedule();
 }
 
-void DeviceFileLive::setProblem(const QString& problem)
+void DeviceFileLive::setProblem(const QString& problem, bool waiting)
 {
-	if (problem_ == problem)
+	if (problem_ == problem && waiting_ == waiting)
 		return;
 	problem_ = problem;
+	waiting_ = waiting;
 	Q_EMIT stateChanged();
 }
 
@@ -131,22 +133,22 @@ void DeviceFileLive::begin()
 	if (!running_ || job_)
 		return;
 	if (!session_ || !session_->filesSupported()) {
-		setProblem(tr("Waiting for the device: not connected"));
+		setProblem(tr("not connected"), true);
 		return;
 	}
 	if (!files_ || files_->loading()) {
-		setProblem(files_ ? QString{} : tr("The device's files are not available"));
+		setProblem(files_ ? QString{} : tr("the device's files are not available"));
 		return;
 	}
 	const auto at = files_->indexOfPath(devicePath_);
 	const auto file = files_->fileAt(at);
 	if (!at.isValid() || file.isEmpty()) {
-		setProblem(tr("The device no longer lists this file"));
+		setProblem(tr("the device no longer lists this file"));
 		return;
 	}
 	// Readable is known once the file was statted; until then it is tried.
 	if (file.value(QStringLiteral("sizeKnown")).toBool() && !file.value(QStringLiteral("readable")).toBool()) {
-		setProblem(tr("The device does not allow reading this file"));
+		setProblem(tr("the device does not allow reading this file"));
 		return;
 	}
 	auto job = std::make_unique<Job>();
@@ -183,6 +185,7 @@ void DeviceFileLive::poll()
 	job_.reset();
 	endedMs_ = clock_.elapsed();
 	lastReadMs_ = static_cast<int>(endedMs_ - startedMs_);
+	waiting_ = false;
 	switch (state) {
 		case files::ReadState::Complete:
 			++reads_;
@@ -192,20 +195,24 @@ void DeviceFileLive::poll()
 		case files::ReadState::Cancelled:
 			break;
 		case files::ReadState::Refused:
-			problem_ = tr("The device refused to read the file");
+			problem_ = tr("the device refused to read the file");
 			break;
 		case files::ReadState::NotReadable:
-			problem_ = tr("The device does not allow reading this file");
+			problem_ = tr("the device does not allow reading this file");
 			break;
 		case files::ReadState::Malformed:
-			problem_ = tr("The device's answers were not valid");
+			problem_ = tr("the device's answers were not valid");
 			break;
 		case files::ReadState::Stalled:
-			problem_ = tr("The device stopped sending the file");
+			problem_ = tr("the device stopped sending the file");
 			break;
 		default:
-			problem_ = status == client::Status::Timeout ? tr("The device did not answer in time")
-			                                             : tr("Waiting for the device: not connected");
+			if (status == client::Status::Timeout) {
+				problem_ = tr("the device did not answer in time");
+			} else {
+				problem_ = tr("not connected");
+				waiting_ = true;
+			}
 			break;
 	}
 	Q_EMIT stateChanged();

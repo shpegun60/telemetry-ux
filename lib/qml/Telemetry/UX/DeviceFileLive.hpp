@@ -42,9 +42,12 @@ class DeviceFileLive final : public QObject {
 	Q_PROPERTY(int reads READ reads NOTIFY stateChanged)
 	// How long the last whole read took.
 	Q_PROPERTY(int lastReadMs READ lastReadMs NOTIFY stateChanged)
-	// Why reading is not going on now - not connected, the device refused it -
-	// in the designer's words; empty while it is.
+	// Why the last read did not give the file, as a reason a sentence can
+	// carry ("the device refused to read the file"); empty while it did.
 	Q_PROPERTY(QString problem READ problem NOTIFY stateChanged)
+	// The reason is that no device is connected: reading resumes by itself
+	// when it is back.
+	Q_PROPERTY(bool waitingForDevice READ waitingForDevice NOTIFY stateChanged)
 public:
 	static constexpr int minimumPeriodMs = 200;
 
@@ -61,6 +64,7 @@ public:
 	int reads() const noexcept { return reads_; }
 	int lastReadMs() const noexcept { return lastReadMs_; }
 	QString problem() const { return problem_; }
+	bool waitingForDevice() const noexcept { return waiting_; }
 
 Q_SIGNALS:
 	// One whole read of the file, as the device served it.
@@ -78,7 +82,7 @@ private:
 	// inside a completion, where it takes no new request.
 	void schedulePoll();
 	void schedule();
-	void setProblem(const QString& problem);
+	void setProblem(const QString& problem, bool waiting = false);
 
 	QPointer<integration::qt::ConnectionSession> session_;
 	QPointer<DeviceFilesModel> files_;
@@ -88,7 +92,7 @@ private:
 	QTimer next_;
 	qint64 startedMs_ = -1, endedMs_ = -1;
 	int periodMs_ = 1000, reads_ = 0, lastReadMs_ = 0;
-	bool running_ = false, pollQueued_ = false;
+	bool running_ = false, pollQueued_ = false, waiting_ = false;
 };
 } // namespace telemetry::ux
 #endif

@@ -303,16 +303,26 @@ FocusScope {
                 Component.onCompleted: currentIndex = Math.max(0, indexOfValue(view.live ? view.live.periodMs : 1000))
                 onActivated: if (view.live) view.live.periodMs = currentValue
             }
-            Button {
-                objectName: "valuesHold"
-                text: qsTr("Hold")
-                checked: view.decoded.held
-                Accessible.checkable: true
-                Accessible.checked: view.decoded.held
-                enabled: view.running || view.decoded.held
-                onClicked: view.toggleHold()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Keep these values on screen while reading goes on (H)")
+            // A disabled button takes no hover: the wrapper says why it is off.
+            Item {
+                implicitWidth: holdButton.implicitWidth
+                implicitHeight: holdButton.implicitHeight
+                Button {
+                    id: holdButton
+                    objectName: "valuesHold"
+                    anchors.fill: parent
+                    text: qsTr("Hold")
+                    checked: view.decoded.held
+                    Accessible.checkable: true
+                    Accessible.checked: view.decoded.held
+                    Accessible.description: enabled ? "" : qsTr("Hold needs Live on")
+                    enabled: view.running || view.decoded.held
+                    onClicked: view.toggleHold()
+                }
+                HoverHandler { id: holdHover }
+                ToolTip.visible: holdHover.hovered
+                ToolTip.text: holdButton.enabled ? qsTr("Keep these values on screen while reading goes on (H)")
+                                                 : qsTr("Hold needs Live on")
             }
             Item { Layout.fillWidth: true }
         }
@@ -338,8 +348,11 @@ FocusScope {
                         return ""
                     if (view.stoppedBecause.length > 0)
                         return view.stoppedBecause
-                    if (view.live.problem.length > 0)
-                        return view.live.problem
+                    // The values shown stay; say how old they are, and what happens next.
+                    if (view.live.problem.length > 0 && view.live.running)
+                        return view.live.waitingForDevice
+                            ? qsTr("Not connected · showing values read at %1 · Live resumes when the device is back").arg(shown)
+                            : qsTr("Read failed: %1 · showing values read at %2").arg(view.live.problem).arg(shown)
                     if (view.decoded.held)
                         return view.decoded.waiting === 0 ? qsTr("Held at %1 · H to release").arg(shown)
                              : view.decoded.waiting === 1 ? qsTr("Held at %1 · 1 newer read · H to release").arg(shown)

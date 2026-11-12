@@ -1139,10 +1139,11 @@ void liveValues(const QString& folder)
 	live.setRunning(true);
 	CHECK(await([&] { return snapshots.size() > count; }));
 	session.disconnect();
-	CHECK(await([&] { return !live.reading() && live.problem().contains(QStringLiteral("not connected")); }));
+	CHECK(await([&] { return !live.reading() && live.waitingForDevice() && live.problem() == QStringLiteral("not connected"); }));
 	const auto beforeReconnect = snapshots.size();
 	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
-	CHECK(await([&] { return snapshots.size() > beforeReconnect + 1; }, 10000) && live.problem().isEmpty());
+	CHECK(await([&] { return snapshots.size() > beforeReconnect + 1; }, 10000) && live.problem().isEmpty() &&
+	      !live.waitingForDevice());
 	live.setRunning(false);
 	CHECK(await([&] { return !live.reading(); }));
 
