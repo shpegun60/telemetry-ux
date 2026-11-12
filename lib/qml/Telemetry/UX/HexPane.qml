@@ -16,7 +16,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
-import Telemetry.UX
 
 FocusScope {
     id: pane

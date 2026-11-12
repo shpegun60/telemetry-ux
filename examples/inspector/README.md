@@ -25,7 +25,7 @@ endpoint tree and values. Watchlist status messages wrap below its actions.
 
 ## Build and run
 
-Use a matching Qt 6.4-or-newer C++20 kit with Core, Gui, Qml, Quick,
+Use a matching Qt 6.12-or-newer C++20 kit with Core, Gui, Qml, Quick,
 Quick Controls 2 and Network, plus CMake and Ninja. The application requires an
 installed Telemetry SDK 0.1.0 prefix containing `inspector`, `workbench`,
 `read_many_workbench`, `encoded_backend`, `encoded_server`, `core`, `tcp_server`,
@@ -59,7 +59,7 @@ Open **`examples/inspector/CMakeLists.txt`** from your Telemetry UX checkout. Th
 the application's source project; the Windows ZIP is an optional distribution,
 not a prerequisite for editing or running it.
 
-1. Choose your Qt 6.4+ C++20 kit. Its compiler/ABI and Qt version must match the
+1. Choose your Qt 6.12+ C++20 kit. Its compiler/ABI and Qt version must match the
    installed SDK prefix, including any optional transport libraries.
 2. Choose a build directory outside the checkout. In **Projects → Build → CMake**,
    append the SDK installation prefix to `CMAKE_PREFIX_PATH`; keep the kit's Qt
@@ -80,7 +80,7 @@ For later shell examples set
 On Windows, use one matching kit and put its compiler before other GCC toolchains:
 
 ```powershell
-$QtPrefix = "C:\Qt\6.10.1\mingw_64"
+$QtPrefix = "C:\Qt\6.12.0\mingw_64"
 $QtTools = "C:\Qt\Tools"
 $SdkPrefix = "C:\external-sdk\telemetry-sdk"
 $InspectorBuild = "C:\external-build\telemetry-inspector"

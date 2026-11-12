@@ -1,13 +1,13 @@
 # Optional standalone consumer example; KDDockWidgets is a separate QML runtime.
 # It is not built by the default library build, CI or packaging: KDDockWidgets
 # is GPL-2.0-only/GPL-3.0-only or commercial (see README.md).
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(TelemetryQtDocking LANGUAGES CXX)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
 find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
 find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
-qt_standard_project_setup(REQUIRES 6.4)
+qt_standard_project_setup(REQUIRES 6.12)
 
 set(KDDOCKWIDGETS_QML_IMPORT_DIR "" CACHE PATH
     "Directory containing com/kdab/dockwidgets/qmldir of KDDockWidgets 2.5 (Qt Quick frontend)")

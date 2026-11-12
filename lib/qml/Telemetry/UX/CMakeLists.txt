@@ -1,9 +1,9 @@
 # One provider-neutral renderer, linked directly without a runtime plugin. MIT.
-# The older resource prefix is a default import path on Qt 6.4 as well as newer Qt.
+# Qt 6.12 places it under /qt/qml, a default import path.
 # Theme (colour roles) and Type (the type scale) are singletons a host may set.
 set_source_files_properties(Theme.qml Type.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
-    URI Telemetry.UX VERSION 1.0 RESOURCE_PREFIX /qt-project.org/imports
+    URI Telemetry.UX VERSION 1.0
     DEPENDENCIES QtQuick
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml

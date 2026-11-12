@@ -31,31 +31,12 @@ On Windows it selects the Basic controls style and the existing Windows Fonts
 directory: native theme handles are unavailable on the offscreen platform.
 The strict QML diagnostic check remains enabled; no warning is filtered.
 
-Qt 6.4.2 on Linux has a separately reproduced software scenegraph texture-cache
-leak, also present in a Qt-only Window/Controls program with no Telemetry code.
-For that exact runtime, backend and sanitized GUI profile, the runner first
-executes the full journey without suppression. A clean exit 0, completed
-assertions and no sanitizer diagnostics are accepted directly; the extracted
-panels can avoid retaining the Qt texture, so a leak is not a required result.
-Only exit 86 with the proved Qt texture allocation enables the sole
-`QSGRenderContext::textureForFactory` LSan rule for a second normal GUI run.
-Every sanitized profile also runs the same journey with an intentional 123-byte
-application leak: that named allocation must still fail with exit 86 and an
-exact 123-byte leak summary. No other exit is accepted. Ambient `LSAN_OPTIONS`
-are removed.
-The nested generated gate and `Contracts.cpp` remain unfiltered, and other Qt
-versions receive no exception. This is a bounded external Qt qualification
-exception, not an unconditional leak-free GUI claim.
-
-The [Qt 6.4.2 base context](https://raw.githubusercontent.com/qt/qtdeclarative/v6.4.2/src/quick/scenegraph/qsgcontext.cpp)
-retains texture pointers while its destructor does not delete them;
-[software invalidation](https://raw.githubusercontent.com/qt/qtdeclarative/v6.4.2/src/quick/scenegraph/adaptations/software/qsgsoftwarecontext.cpp)
-also leaves the texture collections untouched. The corresponding
-[Qt 6.8.0 implementation](https://raw.githubusercontent.com/qt/qtdeclarative/v6.8.0/src/quick/scenegraph/adaptations/software/qsgsoftwarecontext.cpp)
-explicitly destroys both collections. This comparison does not establish the
-first fixed Qt release. The receipt records the actual runtime version, rule
-hash when applied, primary sources, per-command sanitizer settings and outcomes.
-The receipt distinguishes an eligible Qt profile from an actually applied rule.
+The GUI journey runs with no leak suppression: the Qt 6.4.2 software
+texture-cache exception went with the 6.4 floor (Qt 6.8 already frees that
+cache). Every sanitized profile also runs the same journey with an
+intentional 123-byte application leak: that named allocation must still fail
+with exit 86 and an exact 123-byte leak summary. Ambient `LSAN_OPTIONS` are
+removed, and the nested generated gate and `Contracts.cpp` stay unfiltered.
 
 The native GUI executable checks confirmed Read → Edit → Apply → separate
 Readback, exact large integers/open enums, floating wire-bit preservation,

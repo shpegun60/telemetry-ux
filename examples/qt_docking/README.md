@@ -40,7 +40,7 @@ build, by CI or by packaging, and nothing downloads KDDockWidgets for you.
 
 ## Build
 
-You need a Qt 6.4+ desktop kit, the Telemetry SDK installed with the
+You need a Qt 6.12+ desktop kit, the Telemetry SDK installed with the
 `qt_connection` component, Telemetry UX installed with
 `TELEMETRY_UX_BUILD_QT_CONNECTION=ON` against that SDK, and KDDockWidgets.
 
@@ -53,7 +53,7 @@ compiler** you build this example with:
 
 ```powershell
 cmake -S <KDDockWidgets-source> -B <KDDockWidgets-build> -G Ninja `
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.10.1/mingw_64 `
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.12.0/mingw_64 `
   -DKDDockWidgets_FRONTENDS=qtquick -DKDDockWidgets_QML_MODULE=ON `
   -DKDDockWidgets_EXAMPLES=OFF -DKDDockWidgets_TESTS=OFF
 cmake --build <KDDockWidgets-build> --parallel 4
@@ -66,7 +66,7 @@ on Windows, the library in `bin/`.
 
 ```powershell
 cmake -S . -B <example-build> -G Ninja `
-  '-DCMAKE_PREFIX_PATH=C:/Qt/6.10.1/mingw_64;<sdk-prefix>;<ux-prefix>' `
+  '-DCMAKE_PREFIX_PATH=C:/Qt/6.12.0/mingw_64;<sdk-prefix>;<ux-prefix>' `
   -DKDDOCKWIDGETS_QML_IMPORT_DIR=<KDDockWidgets-build> `
   -DKDDOCKWIDGETS_BIN_DIR=<KDDockWidgets-build>/bin
 cmake --build <example-build>

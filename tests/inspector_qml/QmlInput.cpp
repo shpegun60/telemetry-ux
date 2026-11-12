@@ -143,7 +143,7 @@ void type(QQuickWindow& window, const QString& name, const QByteArray& text)
 	}));
 	QTest::keyClick(&window, Qt::Key_A, Qt::ControlModifier);
 	QTest::keyClick(&window, Qt::Key_Backspace);
-	// Qt 6.4 has keyClicks only for QWidget. Individual QWindow keyClick
+	// QTest::keyClicks takes only a QWidget. Individual QWindow keyClick
 	// events exercise the actual TextInput path without setting its text property.
 	for (const char letter : text)
 		QTest::keyClick(&window, letter);

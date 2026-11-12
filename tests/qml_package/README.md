@@ -37,7 +37,7 @@ physical device, Telemetry client or external network service is used.
 Five CMake controls check absent-Qt required/default refusal, optional component
 acceptance and required/optional unknown components. A root configure with both
 view and Inspector disabled must also work with Qt and SDK discovery disabled.
-Export checks pin the public target, module URI/version and Qt 6.4 resource path;
+Export checks pin the public target, module URI/version and the standard /qt/qml resource path;
 resource objects must be installed, while QML private-cache dependencies and
 runtime plugins must be absent. The module's license is installed as well.
 

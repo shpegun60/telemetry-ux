@@ -6,7 +6,7 @@ The [provider contract](Telemetry/UX/README.md) describes the required presentat
 properties and methods. The existing Inspector controller is one provider; a user
 can supply another QObject with that contract.
 
-Build only the view with Qt 6.4 or newer, without an SDK installation:
+Build only the view with Qt 6.12 or newer, without an SDK installation:
 
 ```sh
 cmake -S . -B /external/telemetry-ux-view -G Ninja \
@@ -18,7 +18,7 @@ cmake --build /external/telemetry-ux-view --target install --parallel 2
 In a separate Qt application, add the installed prefix to `CMAKE_PREFIX_PATH`:
 
 ```cmake
-find_package(Qt6 6.4 REQUIRED COMPONENTS Quick QuickControls2)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Quick QuickControls2)
 find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS configurator)
 target_link_libraries(my_app PRIVATE TelemetryUX::configurator Qt6::QuickControls2)
 ```

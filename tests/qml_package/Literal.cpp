@@ -2,6 +2,7 @@
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <QAbstractItemModel>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -41,11 +42,11 @@ int main(int argc, char** argv)
 		return 1;
 	unsigned checks = 0;
 	bool passed = true, warnings = false;
-	const auto check = [&](bool condition) {
+	const auto check = [&](bool condition, int line = __builtin_LINE()) {
 		++checks;
 		if (!condition) {
 			passed = false;
-			std::fprintf(stderr, "Literal view failed check=%u\n", checks);
+			std::fprintf(stderr, "Literal view failed check=%u line=%d\n", checks, line);
 		}
 		return condition;
 	};
@@ -122,9 +123,12 @@ QtObject {
 		      "writeOutcome", "commandOutcome", "serviceOutcome", "status"})
 			check(names.contains(QString::fromLatin1(tag)));
 		for (const auto* name : {"endpointToolTip", "valueToolTip", "responseToolTip"}) {
+			// A row on screen: a pooled, hidden delegate's tooltip does not open.
 			QObject* tip = nullptr;
 			for (auto* item : items) {
-				tip = item->findChild<QObject*>(QString::fromLatin1(name));
+				if (!item->isVisible())
+					continue;
+				tip = item->findChild<QObject*>(QString::fromLatin1(name), Qt::FindDirectChildrenOnly);
 				if (tip)
 					break;
 			}
@@ -133,8 +137,17 @@ QtObject {
 			check(tip->property("text").toString().contains(QStringLiteral("<img")));
 			check(QMetaObject::invokeMethod(tip, "open"));
 			drain();
+			// A tooltip opens after its delay (the tree's waits 700 ms).
+			QElapsedTimer waited;
+			waited.start();
+			while (!tip->property("visible").toBool() && waited.elapsed() < 2000) {
+				QEventLoop pause;
+				QTimer::singleShot(20, &pause, &QEventLoop::quit);
+				pause.exec();
+			}
 			auto* content = tip->property("contentItem").value<QObject*>();
-			check(tip->property("visible").toBool());
+			if (!check(tip->property("visible").toBool()))
+				std::fprintf(stderr, "Literal view: %s did not open within 2 s\n", name);
 			check(content && content->property("textFormat").toInt() == Qt::PlainText);
 			check(content &&
 			      content->property("text").toString() == tip->property("text").toString());

@@ -20,12 +20,6 @@ from support import (check_cache, check_compile_sources, codegen_identity, diges
 
 GUI_CHECK_FLOOR = 590
 CONTRACT_CHECK_FLOOR = 1339
-QT_TEXTURE_RULE = 'leak:QSGRenderContext::textureForFactory\n'
-QT_TEXTURE_SOURCES = (
-    'https://raw.githubusercontent.com/qt/qtdeclarative/v6.4.2/src/quick/scenegraph/qsgcontext.cpp',
-    'https://raw.githubusercontent.com/qt/qtdeclarative/v6.4.2/src/quick/scenegraph/adaptations/software/qsgsoftwarecontext.cpp',
-    'https://raw.githubusercontent.com/qt/qtdeclarative/v6.8.0/src/quick/scenegraph/adaptations/software/qsgsoftwarecontext.cpp',
-)
 
 
 def candidate_inputs():
@@ -222,63 +216,21 @@ def main():
         if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+].*)?', version):
             raise RuntimeError('The actual GUI executable did not report its Qt runtime version')
         report['qt_runtime_version'] = version
-        texture_exception = (args.sanitize and sys.platform.startswith('linux') and
-                             version == '6.4.2' and env['QT_QUICK_BACKEND'] == 'software')
-        report['qt_software_texture_exception'] = dict(eligible=texture_exception, applied=False)
-        gui_env = env
-        text = None
-        if texture_exception:
-            suppression = HERE / 'qt64-software-textures.lsan'
-            if suppression.read_text(encoding='utf-8') != QT_TEXTURE_RULE:
-                raise RuntimeError('The Qt 6.4.2 exception must contain only the proved texture-cache rule')
-            unfiltered = run([provider, output/'window-unsuppressed.png'],
-                             'provider-runtime-unsuppressed', timeout=120,
-                             expected_returncode=(0, 86))
-            unfiltered_counts = gui_counts(unfiltered)
-            unfiltered_exit = report['commands'][-1]['returncode']
-            if unfiltered_exit == 0:
-                if any(marker in unfiltered for marker in
-                       ('AddressSanitizer', 'LeakSanitizer', 'UndefinedBehaviorSanitizer',
-                        'runtime error:')):
-                    raise RuntimeError('The zero-exit GUI emitted a sanitizer diagnostic')
-                # The extracted standalone renderer may no longer retain a Qt
-                # texture. Prefer that fully unfiltered successful execution.
-                text = unfiltered
-                shutil.copyfile(output/'window-unsuppressed.png', image)
-                report['qt_software_texture_exception']['unsuppressed'] = dict(
-                    **unfiltered_counts, returncode=0, leaked_bytes=0, allocations=0)
-            else:
-                leak = re.search(r'SUMMARY: AddressSanitizer: (\d+) byte\(s\) leaked in (\d+) allocation\(s\)',
-                                 unfiltered)
-                if (not leak or not int(leak[1]) or not int(leak[2]) or
-                        'LeakSanitizer: detected memory leaks' not in unfiltered or
-                        'QSGRenderContext::textureForFactory' not in unfiltered):
-                    raise RuntimeError('Exit 86 did not reproduce the established Qt texture leak')
-                gui_env = dict(env, LSAN_OPTIONS=env['LSAN_OPTIONS']+':suppressions='+str(suppression))
-                report['qt_software_texture_exception'].update(
-                    applied=True,
-                    scope='Only this Qt 6.4.2 Linux/software GUI execution; all other steps unfiltered',
-                    rule=QT_TEXTURE_RULE.strip(), suppression_sha256=digest(suppression),
-                    primary_sources=QT_TEXTURE_SOURCES, executable_sha256=digest(provider),
-                    unsuppressed=dict(**unfiltered_counts, returncode=86,
-                                      leaked_bytes=int(leak[1]), allocations=int(leak[2])))
-        if text is None:
-            text = run([provider, image], 'provider-runtime', selected_env=gui_env, timeout=120)
+        # The GUI runs with no leak suppression: the Qt 6.4.2 texture-cache
+        # exception went with the 6.4 floor.
+        text = run([provider, image], 'provider-runtime', timeout=120)
         counts = gui_counts(text)
         report['provider_checks'], report['qml_warnings'] = counts['checks'], counts['warnings']
-        if report['qt_software_texture_exception']['applied']:
-            if 'QSGRenderContext::textureForFactory' not in text or 'Suppressions used:' not in text:
-                raise RuntimeError('The filtered GUI did not report the exact Qt texture exception')
         if args.sanitize:
             injected = run([provider, output/'window-injected-leak.png', '--inject-nonqt-leak'],
-                           'provider-runtime-nonqt-leak-control', selected_env=gui_env,
+                           'provider-runtime-nonqt-leak-control',
                            timeout=120, expected_returncode=86)
             injected_counts = gui_counts(injected)
             if ('injectedNonQtLeak' not in injected or
                     not re.search(r'SUMMARY: AddressSanitizer: 123 byte\(s\) leaked in 1 allocation\(s\)',
                                   injected)):
                 raise RuntimeError('The same GUI executable did not retain its fatal non-Qt leak control')
-            report['qt_software_texture_exception']['nonqt_leak_control'] = dict(
+            report['nonqt_leak_control'] = dict(
                 **injected_counts, returncode=86, leaked_bytes=123, allocations=1,
                 allocation_frame='injectedNonQtLeak', executable_sha256=digest(provider))
         report['executions'].append(dict(path=str(contracts), sha256=digest(contracts), bytes=contracts.stat().st_size))

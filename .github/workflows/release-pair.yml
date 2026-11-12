@@ -51,7 +51,11 @@ jobs:
       sdk_revision: ${{ needs.identity.outputs.sdk_revision }}
       ux_revision: ${{ needs.identity.outputs.ux_revision }}
 
+  # Off while the libraries require Qt 6.12 and aqtinstall cannot install it
+  # on Windows yet (packaging/windows/README.md); the owner chose to skip it
+  # for now. Turn it back on with the job's move to 6.12.
   windows-portable:
+    if: false
     needs: identity
     uses: ./.github/workflows/windows-portable.yml
     with:
@@ -72,4 +76,5 @@ jobs:
         run: |
           test "$IDENTITY_RESULT" = success
           test "$INTEGRATION_RESULT" = success
-          test "$WINDOWS_RESULT" = success
+          # Skipped only while the Windows job is off (see the job above).
+          test "$WINDOWS_RESULT" = success || test "$WINDOWS_RESULT" = skipped

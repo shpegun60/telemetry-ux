@@ -16,7 +16,7 @@ Prerequisites:
   wheels in the chosen Python environment. These are development packages; use
   locally built wheels as described in the SDK
   [package guide](https://github.com/shpegun60/telemetry-sdk/blob/main/doc/SDKPackages.md).
-- Qt 6.4+ Core, Gui, Qml, Quick and QuickControls2, CMake and Ninja. The Qt Quick
+- Qt 6.12+ Core, Gui, Qml, Quick and QuickControls2, CMake and Ninja. The Qt Quick
   Templates runtime module is also required. No SerialPort, COBS checkout or SDK
   source checkout is required.
 
@@ -47,7 +47,7 @@ other MinGW installations on `PATH`. For example:
 
 ```powershell
 $sdk = 'C:/packages/telemetry'
-$qt = 'C:/Qt/6.10.1/mingw_64'
+$qt = 'C:/Qt/6.12.0/mingw_64'
 $compiler = 'C:/Qt/Tools/mingw1310_64/bin/g++.exe'
 $codegen = 'C:/venvs/telemetry/Scripts/telemetry-codegen.exe'
 $out = 'C:/temp/telemetry-generated-qml'

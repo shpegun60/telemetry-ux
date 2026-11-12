@@ -11,6 +11,13 @@ selected SDK components, compiles the actual Inspector, runs `windeployqt`,
 retains notices, and creates a ZIP, source identity and SHA-256 file manifest.
 It never flashes a device or opens a serial port.
 
+The job is off for now (`if: false` in `release-pair.yml`). The libraries require
+Qt 6.12 LTS, and on 12 November 2026 aqtinstall 3.3.0, which the job uses, could
+not read Qt 6.12's Windows repository: it is split into one directory per
+toolchain (`qt6_6120/qt6_6120_mingw`). The owner chose to skip the job's move
+for now. It comes back on Qt 6.12 once aqtinstall reads that layout, or once CI
+may use Qt's own installer with an account.
+
 A second Windows runner downloads that ZIP. This consumer job installs no Qt,
 Python package or compiler. `VerifyPortable.ps1` validates the archive/payload
 hashes and exact source pair, extracts into a path containing spaces, then runs

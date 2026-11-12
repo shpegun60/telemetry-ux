@@ -1,8 +1,8 @@
 # Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(telemetry_inspector_tcp_checks LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Test)
-qt_standard_project_setup(REQUIRES 6.4)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Test)
+qt_standard_project_setup(REQUIRES 6.12)
 get_filename_component(TELEMETRY_UX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(BUILD_TESTING OFF CACHE BOOL "Build only the maintained Inspector TCP checks" FORCE)
 # Import in the test directory so Qt deferred finalization can resolve every

@@ -192,7 +192,7 @@ With supplied prefixes: `cmake --preset local` then `cmake --build --preset loca
 Run the `telemetry-qt-connection` target (add `.exe` on Windows).
 
 Install the SDK with its optional qt_connection component and UX with
-TELEMETRY_UX_BUILD_QT_CONNECTION=ON. Link TelemetryUX::qt_connection; Qt 6.4+
+TELEMETRY_UX_BUILD_QT_CONNECTION=ON. Link TelemetryUX::qt_connection; Qt 6.12+
 Core, Network, Gui, Qml, Quick and QuickControls2 are required by this application.
 Python, generated DTOs and private Inspector sources are not runtime dependencies.
 

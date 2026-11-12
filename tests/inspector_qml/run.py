@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute real Qt Inspector models, controller and offscreen QML (MIT).
 
-Requires Qt >= 6.4. All builds/logs/receipts remain in a fresh external directory.
+Requires Qt >= 6.12. All builds/logs/receipts remain in a fresh external directory.
 Source and selected tool/runtime hashes identify inputs, not a hermetic SDK.
 """
 import argparse

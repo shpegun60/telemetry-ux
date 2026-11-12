@@ -22,7 +22,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQml.Models
-import Telemetry.UX
 
 Pane {
     id: viewer

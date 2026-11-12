@@ -19,7 +19,7 @@ def names(schema):
     for endpoint in schema.endpoints:
         symbols.update((endpoint.group, endpoint.symbol, endpoint.value_alias,
                         endpoint.request_alias, endpoint.response_alias))
-    # This function-like macro is used by QStringLiteral on tested Qt 6.4/6.10.
+    # This function-like macro is used by QStringLiteral on Qt 6.12.
     # DTO identifier references never put '(' immediately after their names,
     # so keeping a function-like macro here cannot rewrite an SDK declaration.
     candidates.update(name for name in symbols if name.startswith(("Q_", "QT_", "QML_"))

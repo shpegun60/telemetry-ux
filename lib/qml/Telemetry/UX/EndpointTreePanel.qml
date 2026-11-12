@@ -648,13 +648,12 @@ Pane {
                 const row = index.valid ? endpointTree.rowAtIndex(index) : -1
                 if (row < 0)
                     return
-                // itemAtCell, not itemAtIndex: the library's floor is Qt 6.4.
                 // A row scrolled out of view has no delegate until shown.
-                let cell = endpointTree.itemAtCell(Qt.point(0, row))
+                let cell = endpointTree.itemAtIndex(index)
                 if (!cell) {
-                    endpointTree.positionViewAtRow(row, TableView.Contain)
+                    endpointTree.positionViewAtIndex(index, TableView.Contain)
                     endpointTree.forceLayout()
-                    cell = endpointTree.itemAtCell(Qt.point(0, row))
+                    cell = endpointTree.itemAtIndex(index)
                 }
                 if (cell && panel.openEndpointMenu(index, cell.isEndpoint, cell))
                     event.accepted = true

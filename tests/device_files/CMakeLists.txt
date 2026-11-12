@@ -1,10 +1,10 @@
 # Installed Session -> installed UX: the Device files models and panel over real TCP. MIT.
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(telemetry_device_files_checks LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 Test)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 Test)
 find_package(Telemetry 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection tcp_server resource_adapter)
 find_package(TelemetryUX 0.1.0 EXACT CONFIG REQUIRED COMPONENTS qt_connection)
-qt_standard_project_setup(REQUIRES 6.4)
+qt_standard_project_setup(REQUIRES 6.12)
 
 qt_add_executable(telemetry_device_files_check main.cpp)
 target_compile_features(telemetry_device_files_check PRIVATE cxx_std_20)

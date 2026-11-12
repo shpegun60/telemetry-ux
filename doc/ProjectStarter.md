@@ -14,7 +14,7 @@ cmake --preset local
 cmake --build --preset local
 ```
 
-Open `CMakeLists.txt` in Qt Creator with the matching Qt 6.4+ C++20 kit, or run
+Open `CMakeLists.txt` in Qt Creator with the matching Qt 6.12+ C++20 kit, or run
 `telemetry-qt-connection` (`.exe` on Windows) from the build directory. SDK and UX
 must include their optional `qt_connection` components; UX is configured with
 `TELEMETRY_UX_BUILD_QT_CONNECTION=ON`. Omitting the three prefix arguments creates
@@ -48,7 +48,7 @@ explicit host/panel mutation policy.
 python -B tools/create_project.py --target dynamic-qml --name MyDevice --output /projects/MyDevice
 ```
 
-Open the new `CMakeLists.txt` in Qt Creator and select your matching C++20 Qt 6.4+
+Open the new `CMakeLists.txt` in Qt Creator and select your matching C++20 Qt 6.12+
 kit. Set `CMAKE_PREFIX_PATH` to installed matching Telemetry SDK, UX and Qt
 prefixes. The SDK needs `core`, `workbench`, `encoded_backend`, `encoded_server`;
 install UX with `TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR=ON`.
