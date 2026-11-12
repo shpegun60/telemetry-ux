@@ -304,6 +304,12 @@ Pane {
                     panel.activateCurrent()
             }
             Keys.onEnterPressed: panel.activateCurrent()
+            // Ctrl+S is Download here: claimed before a window's own Ctrl+S
+            // (a host's Save) can take it.
+            Keys.onShortcutOverride: function(event) {
+                event.accepted = (event.modifiers & Qt.ControlModifier) && !(event.modifiers & Qt.ShiftModifier)
+                                 && event.key === Qt.Key_S
+            }
             Keys.onPressed: function(event) {
                 const control = event.modifiers & Qt.ControlModifier
                 const shift = event.modifiers & Qt.ShiftModifier

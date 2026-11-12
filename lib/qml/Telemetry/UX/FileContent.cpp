@@ -6,6 +6,7 @@
  */
 #include "FileContent.hpp"
 #include <QtCore/QFile>
+#include <QtCore/QSaveFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QLocale>
 #include <QtCore/QStringDecoder>
@@ -207,7 +208,153 @@ bool FileTableModel::numeric(int column) const
 	return column >= 0 && column < static_cast<int>(numeric_.size()) && numeric_[static_cast<std::size_t>(column)];
 }
 
-FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this) {}
+// One overwrite, undone and redone. Typing joins the step before it when it
+// goes on where that one stopped, or writes again a byte it wrote (a byte's
+// second hex digit): one undo takes back what was typed in one go.
+class OverwriteStep final : public QUndoCommand {
+public:
+	OverwriteStep(FileContent& content, qint64 offset, QByteArray before, QByteArray after, bool typing)
+	    : content_(content), offset_(offset), before_(std::move(before)), after_(std::move(after)), typing_(typing)
+	{
+		setText(FileContent::tr("Overwrite %n bytes", nullptr, static_cast<int>(after_.size())));
+	}
+
+	int id() const override { return typing_ ? 1 : -1; }
+
+	bool mergeWith(const QUndoCommand* other) override
+	{
+		const auto* next = static_cast<const OverwriteStep*>(other);
+		const auto end = offset_ + after_.size();
+		if (!next->typing_ || next->offset_ < offset_ || next->offset_ > end)
+			return false;
+		for (qsizetype i = 0; i < next->after_.size(); ++i) {
+			const auto at = next->offset_ - offset_ + i;
+			if (at < after_.size()) {
+				after_[at] = next->after_[i];
+			} else {
+				after_.append(next->after_[i]);
+				before_.append(next->before_[i]);
+			}
+		}
+		return true;
+	}
+
+	void redo() override { content_.put(offset_, after_); }
+	void undo() override { content_.put(offset_, before_); }
+
+private:
+	FileContent& content_;
+	qint64 offset_;
+	QByteArray before_, after_;
+	bool typing_;
+};
+
+FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this)
+{
+	connect(&undo_, &QUndoStack::canUndoChanged, this, &FileContent::editChanged);
+	connect(&undo_, &QUndoStack::canRedoChanged, this, &FileContent::editChanged);
+}
+
+void FileContent::setEditing(bool editing)
+{
+	editing = editing && loaded_ && !loading_;
+	if (editing == editing_)
+		return;
+	editing_ = editing;
+	Q_EMIT editChanged();
+}
+
+bool FileContent::overwrite(qint64 offset, const QByteArray& bytes, bool typing)
+{
+	if (!editing_ || !loaded_ || offset < 0 || offset >= bytes_.size() || bytes.isEmpty())
+		return false;
+	const auto after = bytes.left(bytes_.size() - offset);
+	const auto before = bytes_.mid(offset, after.size());
+	if (before == after)
+		return true;
+	undo_.push(new OverwriteStep(*this, offset, before, after, typing));
+	return true;
+}
+
+void FileContent::put(qint64 offset, const QByteArray& bytes)
+{
+	Q_EMIT aboutToEdit();
+	// The first edit after a read parts the working copy from the one on disk.
+	auto* data = bytes_.data();
+	const auto* disk = saved_.constData();
+	for (qsizetype i = 0; i < bytes.size(); ++i) {
+		const auto at = offset + i;
+		const bool was = at < saved_.size() && data[at] != disk[at];
+		data[at] = bytes[i];
+		const bool is = at < saved_.size() && data[at] != disk[at];
+		edited_ += static_cast<int>(is) - static_cast<int>(was);
+	}
+	Q_EMIT bytesEdited(offset, bytes.size());
+	Q_EMIT editChanged();
+}
+
+void FileContent::undo()
+{
+	undo_.undo();
+}
+
+void FileContent::redo()
+{
+	undo_.redo();
+}
+
+QString FileContent::save()
+{
+	if (!loaded_ || localFile_.isEmpty())
+		return tr("There is no copy on disk to save to.");
+	QSaveFile file(localFile_);
+	if (!file.open(QIODevice::WriteOnly) || file.write(bytes_) != bytes_.size() || !file.commit())
+		return tr("Could not save %1: %2").arg(QFileInfo(localFile_).fileName(), file.errorString());
+	saved_ = bytes_;
+	edited_ = 0;
+	readAt_ = QDateTime::currentDateTime();
+	undo_.setClean();
+	interpret();
+	Q_EMIT editChanged();
+	Q_EMIT changed();
+	return {};
+}
+
+QString FileContent::saveCopyAs(const QUrl& target)
+{
+	const auto path = target.isLocalFile() ? target.toLocalFile() : target.toString();
+	if (!loaded_ || path.isEmpty())
+		return tr("Nothing to save.");
+	if (QFileInfo(path) == QFileInfo(localFile_))
+		return save();
+	QSaveFile file(path);
+	if (!file.open(QIODevice::WriteOnly) || file.write(bytes_) != bytes_.size() || !file.commit())
+		return tr("Could not save %1: %2").arg(QFileInfo(path).fileName(), file.errorString());
+	return {};
+}
+
+void FileContent::discard()
+{
+	if (edited_ == 0 && !undo_.canUndo() && !undo_.canRedo())
+		return;
+	Q_EMIT aboutToEdit();
+	bytes_ = saved_;
+	edited_ = 0;
+	undo_.clear();
+	Q_EMIT bytesEdited(0, bytes_.size());
+	Q_EMIT editChanged();
+}
+
+void FileContent::resetEdits()
+{
+	const bool had = editing_ || edited_ > 0 || undo_.count() > 0;
+	saved_.clear();
+	edited_ = 0;
+	editing_ = false;
+	undo_.clear();
+	if (had)
+		Q_EMIT editChanged();
+}
 
 void FileContent::setLocalFile(const QString& path)
 {
@@ -253,6 +400,7 @@ void FileContent::beginReading(const QString& localFile, const QString& devicePa
 	text_.clear();
 	hex_.setBytes(nullptr);
 	bytes_.clear();
+	resetEdits();
 	table_.clear();
 	forgetDecoded();
 	Q_EMIT changed();
@@ -405,6 +553,7 @@ bool FileContent::reload()
 	error_.clear();
 	text_.clear();
 	bytes_.clear();
+	resetEdits();
 	hex_.setBytes(nullptr);
 	table_.clear();
 	lines_.clear();
@@ -422,26 +571,61 @@ bool FileContent::reload()
 		                  QLocale().formattedDataSize(maxBytes, 0, QLocale::DataSizeIecFormat));
 	else {
 		bytes_ = file.readAll();
+		saved_ = bytes_;
 		loaded_ = true;
 		readAt_ = QDateTime::currentDateTime();
 		hex_.setBytes(&bytes_);
-		if (bytes_.size() <= maxTextBytes && looksLikeText(bytes_)) {
-			textual_ = true;
-			text_ = QString::fromUtf8(bytes_);
-			lines_.setText(text_);
-			const auto name = (devicePath_.isEmpty() ? localFile_ : devicePath_).toLower();
-			if (name.endsWith(QStringLiteral(".csv")))
-				tabular_ = table_.setText(text_);
-		}
-		decode();
+		interpret();
 	}
 	Q_EMIT changed();
 	return loaded_;
 }
 
+void FileContent::interpret()
+{
+	textual_ = tabular_ = false;
+	text_.clear();
+	table_.clear();
+	lines_.clear();
+	forgetDecoded();
+	if (bytes_.size() <= maxTextBytes && looksLikeText(bytes_)) {
+		textual_ = true;
+		text_ = QString::fromUtf8(bytes_);
+		lines_.setText(text_);
+		const auto name = (devicePath_.isEmpty() ? localFile_ : devicePath_).toLower();
+		if (name.endsWith(QStringLiteral(".csv")))
+			tabular_ = table_.setText(text_);
+	}
+	decode();
+}
+
 void OpenFiles::addCodec(FileCodec codec)
 {
 	codecs_.push_back(std::move(codec));
+}
+
+QStringList OpenFiles::modifiedNames() const
+{
+	QStringList names;
+	for (const auto& file : files_)
+		if (file->modified())
+			names << QFileInfo(file->devicePath().isEmpty() ? file->localFile() : file->devicePath()).fileName();
+	return names;
+}
+
+QString OpenFiles::saveAll()
+{
+	for (const auto& file : files_)
+		if (file->modified())
+			if (const auto problem = file->save(); !problem.isEmpty())
+				return problem;
+	return {};
+}
+
+void OpenFiles::discardAll()
+{
+	for (const auto& file : files_)
+		file->discard();
 }
 
 QVariantList FileContent::regions() const
@@ -475,7 +659,9 @@ int OpenFiles::open(const QString& localFile, const QString& devicePath)
 	for (std::size_t row = 0; row < files_.size(); ++row) {
 		auto& file = *files_[row];
 		if (file.localFile() == localFile && file.devicePath() == devicePath) {
-			file.reload();
+			// Its edits are kept: a host asks before it reads the file again.
+			if (!file.modified())
+				file.reload();
 			const auto changed = index(static_cast<int>(row));
 			Q_EMIT dataChanged(changed, changed);
 			return static_cast<int>(row);
@@ -493,6 +679,9 @@ int OpenFiles::open(const QString& localFile, const QString& devicePath)
 int OpenFiles::reading(const QString& localFile, const QString& devicePath)
 {
 	auto row = rowOf(localFile);
+	// Edits not saved are never read over: the host asks first.
+	if (row >= 0 && files_[static_cast<std::size_t>(row)]->modified())
+		return row;
 	if (row < 0)
 		row = append();
 	auto& file = *files_[static_cast<std::size_t>(row)];

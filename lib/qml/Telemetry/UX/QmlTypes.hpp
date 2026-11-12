@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  *
  * The module is a static library without a plugin, so the registration Qt
- * generates for its QML_ELEMENT types (HexView) is an object nothing else
+ * generates for its QML_ELEMENT types (HexView, ToolIcon) is an object nothing else
  * refers to, and a linker drops it. Calling this keeps it, as the Qt
  * documentation prescribes; the registration then runs by itself.
  */

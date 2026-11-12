@@ -1,6 +1,16 @@
 // One file in the viewer: its format's own view when a codec read it, a table
 // when it is CSV, text when it is text, hex always, with a switch between the
-// ones it has. Read-only. MIT.
+// ones it has. Hex edits the bytes once Edit is on; Reload asks first when
+// edits are not saved. MIT.
+//
+// Editing's actions - Edit, Save, Undo, Redo, as pictograms (FileEditTools) -
+// are on the viewer's top row; a host with a toolbar of its own sets
+// editToolsShown to false and puts a FileEditTools there for the viewer in
+// front, as an editor's toolbar acts on the editor in front. Either calls
+// startEditing(), stopEditing(), save(); askDiscard() and saveEditedCopy()
+// are also in the `⋯` menu. A host that offers the file's actions elsewhere -
+// a tab's right-click menu - sets menuButtonShown to false; the top row then
+// appears only for a file with more than one view, to switch between them.
 //
 // The host gives `content`, a FileContent - usually a row of OpenFiles, whose
 // role of that name fills it in a view's delegate - and answers the requests:
@@ -23,6 +33,10 @@ Pane {
     property bool reloadable: false
     // "decoded", "table", "text" or "hex"; empty for the format's own first choice.
     property string mode: ""
+    // Editing's pictograms on the top row; false when the host has them on its toolbar.
+    property bool editToolsShown: true
+    // The `⋯` button on the top row; false when the host has one of its own.
+    property bool menuButtonShown: true
     readonly property bool ready: !!content && content.loaded
     readonly property bool reading: !!content && content.loading
     readonly property string problem: content ? content.error : ""
@@ -50,6 +64,39 @@ Pane {
     readonly property string shownPath: !content ? ""
         : content.devicePath.length > 0 ? content.devicePath : content.localFile
     function openMenu() { moreMenu.popup(moreButton, 0, moreButton.height) }
+    // Editing, from the row, a toolbar or a menu. Edit shows the bytes first.
+    function startEditing() {
+        if (!viewer.ready || viewer.content.size === 0)
+            return
+        viewer.mode = "hex"
+        hexPane.startEditing()
+    }
+    function stopEditing() { hexPane.stopEditing() }
+    // Empty when written, else why not - said on the status line, in Hex.
+    function save() {
+        const problem = hexPane.save()
+        if (problem.length > 0)
+            viewer.mode = "hex"
+        return problem
+    }
+    function askDiscard() { hexPane.askDiscard() }
+    function saveEditedCopy() { hexPane.saveCopy() }
+    // Reload loses edits not saved: asked first, then read again.
+    function askReload() {
+        if (!content || !content.modified) {
+            viewer.reloadRequested()
+            return
+        }
+        unsaved.ask([viewer.fileName], function() { return viewer.content.save() },
+                    function() { viewer.content.discard() }, function() { viewer.reloadRequested() })
+    }
+    UnsavedChangesDialog { id: unsaved }
+    // Ctrl+S while the keyboard is anywhere in this viewer - Hex, Text, Table.
+    Shortcut {
+        sequences: [StandardKey.Save]
+        enabled: viewer.visible && viewer.activeFocus && !!viewer.content && viewer.content.modified
+        onActivated: viewer.save()
+    }
 
     // The keyboard into the file: the table, the hex rows or the text, or
     // Cancel while it is being read.
@@ -80,6 +127,9 @@ Pane {
         spacing: 0
 
         RowLayout {
+            objectName: "fileViewerTopRow"
+            // Nothing to hold - one view, the actions elsewhere - takes no room.
+            visible: viewer.modeCount > 1 || viewer.editToolsShown || viewer.menuButtonShown
             Layout.fillWidth: true
             Layout.margins: 8
             spacing: 4
@@ -107,10 +157,18 @@ Pane {
                 }
             }
             Item { Layout.fillWidth: true }
+            // Editing the bytes, as pictograms, unless the host has them on
+            // its own toolbar.
+            FileEditTools {
+                objectName: "fileViewerEditTools"
+                visible: viewer.editToolsShown
+                viewer: viewer
+            }
             // The file's actions, as the tab's menu has them.
             ToolButton {
                 id: moreButton
                 objectName: "fileViewerMore"
+                visible: viewer.menuButtonShown
                 flat: true
                 implicitWidth: Math.max(32, implicitContentWidth + 16)
                 font.pointSize: Type.body * 1.25
@@ -130,7 +188,22 @@ Pane {
                 objectName: "fileViewerReload"
                 text: qsTr("&Reload%1\tCtrl+R").arg(viewer.reloadable ? "" : qsTr(" (not connected)"))
                 enabled: viewer.reloadable && !viewer.reading
-                onTriggered: viewer.reloadRequested()
+                onTriggered: viewer.askReload()
+            }
+            MenuItem {
+                objectName: "hexSaveCopy"
+                // The bytes as edited, not yet saved, written elsewhere.
+                visible: !!viewer.content && viewer.content.modified
+                height: visible ? implicitHeight : 0
+                text: qsTr("Save the &edited bytes as…")
+                onTriggered: viewer.saveEditedCopy()
+            }
+            MenuItem {
+                objectName: "hexDiscard"
+                visible: !!viewer.content && viewer.content.modified
+                height: visible ? implicitHeight : 0
+                text: qsTr("&Discard the changes…")
+                onTriggered: viewer.askDiscard()
             }
             MenuItem {
                 objectName: "fileViewerSaveAs"
@@ -238,7 +311,7 @@ Pane {
                 visible: viewer.reloadable
                 tint: Theme.errorLink
                 text: qsTr("Read again")
-                onClicked: viewer.reloadRequested()
+                onClicked: viewer.askReload()
             }
         }
 

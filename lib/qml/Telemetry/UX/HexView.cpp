@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "HexView.hpp"
+#include <utility>
 #include "FileContent.hpp"
 #include <QtCore/QDateTime>
 #include <QtCore/QPointer>
@@ -71,10 +72,60 @@ void HexView::setContent(QObject* content)
 	if (content_)
 		disconnect(content_, nullptr, this, nullptr);
 	content_ = file;
-	if (content_)
+	if (content_) {
 		connect(content_, &FileContent::changed, this, &HexView::reload);
+		// An edit changes the content's bytes in place: this copy lets go
+		// first, so the edit copies nothing, and takes them again after.
+		connect(content_, &FileContent::aboutToEdit, this, [this] { bytes_ = QByteArray(); });
+		connect(content_, &FileContent::bytesEdited, this, [this] {
+			bytes_ = content_->bytes();
+			if (!pattern_.isEmpty())
+				countMatches();
+			changed();
+		});
+		connect(content_, &FileContent::editChanged, this, [this] {
+			nibble_ = 0;
+			changed();
+		});
+	}
 	reload();
 	Q_EMIT contentChanged();
+}
+
+bool HexView::editing() const
+{
+	return content_ && content_->editing();
+}
+
+bool HexView::typeDigit(int value)
+{
+	if (!editing() || bytes_.isEmpty())
+		return false;
+	const auto at = cursor_;
+	const auto byte = static_cast<unsigned char>(std::as_const(bytes_)[at]);
+	const bool second = nibble_ == 1;
+	const auto written = second ? (byte & 0xF0) | value : (value << 4) | (byte & 0x0F);
+	anchor_ = cursor_;
+	content_->overwrite(at, QByteArray(1, static_cast<char>(written)), true);
+	if (second) {
+		moveTo(std::min<qint64>(at + 1, bytes_.size() - 1));
+		nibble_ = 0;
+	} else {
+		nibble_ = 1;
+		changed();
+	}
+	return true;
+}
+
+bool HexView::typeLetter(char letter)
+{
+	if (!editing() || bytes_.isEmpty())
+		return false;
+	const auto at = cursor_;
+	anchor_ = cursor_;
+	content_->overwrite(at, QByteArray(1, letter), true);
+	moveTo(std::min<qint64>(at + 1, bytes_.size() - 1));
+	return true;
 }
 
 void HexView::setBytes(const QByteArray& bytes)
@@ -306,6 +357,7 @@ void HexView::moveTo(qint64 offset, bool extend)
 		return;
 	offset = std::clamp<qint64>(offset, 0, bytes_.size() - 1);
 	cursor_ = offset;
+	nibble_ = 0;
 	if (!extend)
 		anchor_ = offset;
 	ensureVisible(offset);
@@ -713,6 +765,8 @@ QString HexView::status() const
 		text += tr(" · In: %1 · %n bytes at 0x%2", nullptr, static_cast<int>(region->length))
 		            .arg(region->path.isEmpty() ? region->name : region->path)
 		            .arg(hex(region->offset, hexDigits()));
+	if (content_ && content_->isEdited(cursor_))
+		text += tr(" · Edited, not saved");
 	return text;
 }
 
@@ -720,7 +774,7 @@ QString HexView::accessibleText() const
 {
 	if (bytes_.isEmpty())
 		return tr("Hex view, empty file");
-	const auto byte = static_cast<unsigned char>(bytes_[cursor_]);
+	const auto byte = static_cast<unsigned char>(std::as_const(bytes_)[cursor_]);
 	auto text = printable(static_cast<char>(byte))
 	                ? tr("Offset %1 hex, %2. Byte %3 hex, %4, character %5.")
 	                      .arg(hex(cursor_, 1))
@@ -752,7 +806,7 @@ QVariantList HexView::inspector() const
 	const auto unsignedAt = [&](int width) {
 		quint64 value = 0;
 		for (int i = 0; i < width; ++i) {
-			const auto byte = static_cast<quint64>(static_cast<unsigned char>(bytes_[cursor_ + i]));
+			const auto byte = static_cast<quint64>(static_cast<unsigned char>(std::as_const(bytes_)[cursor_ + i]));
 			value |= bigEndian_ ? byte << (8 * (width - 1 - i)) : byte << (8 * i);
 		}
 		return value;
@@ -787,7 +841,7 @@ QVariantList HexView::inspector() const
 	} else
 		rows << row(QStringLiteral("float64"), QStringLiteral("—"), past);
 	if (remaining >= 1) {
-		const auto byte = static_cast<unsigned char>(bytes_[cursor_]);
+		const auto byte = static_cast<unsigned char>(std::as_const(bytes_)[cursor_]);
 		const auto bits = QStringLiteral("%1").arg(byte, 8, 2, QLatin1Char('0'));
 		rows << row(QStringLiteral("bits"), bits.left(4) + QLatin1Char(' ') + bits.mid(4));
 		// One UTF-8 character starting here, when it is one.
@@ -908,6 +962,35 @@ void HexView::keyPressEvent(QKeyEvent* event)
 	}
 	const bool extend = event->modifiers() & Qt::ShiftModifier;
 	const bool control = event->modifiers() & Qt::ControlModifier;
+	// Editing: a hex digit in the hex column, a printable letter in the text
+	// column, written over the byte at the cursor; Ctrl+Z and Ctrl+Y undo and redo.
+	if (editing()) {
+		const auto typed = event->text();
+		if (!control && !(event->modifiers() & Qt::AltModifier) && typed.size() == 1) {
+			const auto c = typed.at(0).unicode();
+			if (!textPane_) {
+				const int value = c >= '0' && c <= '9' ? c - '0'
+				                  : c >= 'a' && c <= 'f' ? c - 'a' + 10
+				                  : c >= 'A' && c <= 'F' ? c - 'A' + 10
+				                                         : -1;
+				if (value >= 0 && typeDigit(value)) {
+					event->accept();
+					return;
+				}
+			} else if (c >= 0x20 && c < 0x7f && typeLetter(static_cast<char>(c))) {
+				event->accept();
+				return;
+			}
+		}
+		if (control && (event->key() == Qt::Key_Z || event->key() == Qt::Key_Y)) {
+			if (event->key() == Qt::Key_Y || extend)
+				content_->redo();
+			else
+				content_->undo();
+			event->accept();
+			return;
+		}
+	}
 	const qint64 page = static_cast<qint64>(visibleRows()) * bytesPerRow_;
 	const auto rowStart = cursor_ - cursor_ % bytesPerRow_;
 	switch (event->key()) {
@@ -1087,19 +1170,30 @@ void HexView::paint(QPainter* painter)
 		// Each byte's two digits fall into one of three strings by how they are
 		// drawn - plain, dimmed (zero), selected - kept aligned with spaces.
 		const int hexChars = bytesPerRow_ * 3 + bytesPerRow_ / 8;
-		QString plain(hexChars, QLatin1Char(' ')), dim = plain, chosen = plain;
-		QString plainText(bytesPerRow_, QLatin1Char(' ')), dimText = plainText, chosenText = plainText;
+		QString plain(hexChars, QLatin1Char(' ')), dim = plain, chosen = plain, edited = plain;
+		QString plainText(bytesPerRow_, QLatin1Char(' ')), dimText = plainText, chosenText = plainText,
+		                                                   editedText = plainText;
+		bool rowEdited = false;
 		for (int i = 0; i < count; ++i) {
 			const auto offset = start + i;
-			const auto byte = static_cast<unsigned char>(bytes_[offset]);
+			const auto byte = static_cast<unsigned char>(std::as_const(bytes_)[offset]);
 			const bool selected = selectionLength() > 0 && offset >= selStart && offset < selEnd;
-			auto& target = selected ? chosen : byte == 0 ? dim : plain;
+			const bool changedByte = content_ && content_->isEdited(offset);
+			if (changedByte) {
+				rowEdited = true;
+				painter->setPen(QPen(selected ? selectedTextColor_ : editedColor_, 1));
+				const auto line = baseline(top) + 3;
+				painter->drawLine(QPointF(hexX(at, i), line), QPointF(hexX(at, i) + 2 * at.cell, line));
+				if (textColumn_)
+					painter->drawLine(QPointF(at.text + i * at.cell, line), QPointF(at.text + (i + 1) * at.cell, line));
+			}
+			auto& target = selected ? chosen : changedByte ? edited : byte == 0 ? dim : plain;
 			const auto pos = i * 3 + i / 8;
 			const auto digits = hex(byte, 2);
 			target[pos] = digits[0];
 			target[pos + 1] = digits[1];
 			const bool shown = printable(static_cast<char>(byte));
-			auto& textTarget = selected ? chosenText : shown ? plainText : dimText;
+			auto& textTarget = selected ? chosenText : changedByte ? editedText : shown ? plainText : dimText;
 			textTarget[i] = shown ? QChar(byte) : QChar(0x00b7);
 		}
 		const QPointF hexAt(at.hex, baseline(top));
@@ -1109,6 +1203,8 @@ void HexView::paint(QPainter* painter)
 		painter->drawText(hexAt, dim);
 		painter->setPen(selectedTextColor_);
 		painter->drawText(hexAt, chosen);
+		painter->setPen(editedColor_);
+		painter->drawText(hexAt, edited);
 		if (textColumn_) {
 			const QPointF textAt(at.text, baseline(top));
 			painter->setPen(textColor_);
@@ -1117,6 +1213,15 @@ void HexView::paint(QPainter* painter)
 			painter->drawText(textAt, dimText);
 			painter->setPen(selectedTextColor_);
 			painter->drawText(textAt, chosenText);
+			painter->setPen(editedColor_);
+			painter->drawText(textAt, editedText);
+		}
+		// A row with edits not saved: a dot before its offset.
+		if (rowEdited) {
+			painter->setPen(Qt::NoPen);
+			painter->setBrush(editedColor_);
+			painter->drawEllipse(QPointF(std::max<qreal>(4, at.offset / 2), top + rowHeight_ / 2), 3, 3);
+			painter->setBrush(Qt::NoBrush);
 		}
 	}
 
@@ -1154,6 +1259,10 @@ void HexView::paint(QPainter* painter)
 		frame(hexCell, !textPane_);
 		if (textColumn_)
 			frame(textCell.translated(column * at.cell, 0), textPane_);
+		if (editing() && !textPane_ && hasActiveFocus()) {
+			const auto x = hexX(at, column) + nibble_ * at.cell;
+			painter->fillRect(QRectF(x, top + rowHeight_ - 5, at.cell, 2), onSelection ? selectedTextColor_ : focusColor_);
+		}
 	}
 }
 } // namespace telemetry::ux

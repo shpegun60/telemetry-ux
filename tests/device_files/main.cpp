@@ -2130,6 +2130,103 @@ void capabilityCodec(const QString& folder)
 	      refused->format() == QStringLiteral("Binary"));
 }
 
+// Editing a file's bytes: off until asked; overwritten, never resized; the
+// bytes that differ from the copy on disk counted (a byte written back to its
+// value is not); one step to undo; Save writes through a temporary file and
+// reads text, table and codec again; a copy elsewhere; Discard; Reload drops
+// the edits; OpenFiles names what is not saved, saves or discards it all.
+void fileEditing(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	const auto onDisk = [](const QString& path) {
+		QFile file(path);
+		return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+	};
+	const auto path = write(QStringLiteral("edit.bin"), QByteArray("AB\x01" "DEFGH", 8));
+	FileContent content;
+	content.setLocalFile(path);
+	CHECK(content.loaded() && !content.textual() && !content.editing() && !content.modified());
+	CHECK(!content.overwrite(0, "X"));
+	content.setEditing(true);
+	CHECK(content.editing() && content.overwrite(0, "X", true) && content.isEdited(0) && content.editedBytes() == 1);
+	CHECK(content.overwrite(1, "Y", true) && content.editedBytes() == 2);
+	content.undo();
+	CHECK(content.bytes() == QByteArray("AB\x01" "DEFGH", 8) && !content.modified() && content.canRedo());
+	content.redo();
+	CHECK(content.bytes().startsWith("XY") && content.editedBytes() == 2);
+	// Undo and Redo with editing off too: a toolbar offers them then.
+	content.setEditing(false);
+	content.undo();
+	CHECK(!content.modified() && content.canRedo());
+	content.redo();
+	CHECK(content.editedBytes() == 2);
+	content.setEditing(true);
+	// Written back to its value: no longer a change.
+	CHECK(content.overwrite(1, "B") && content.editedBytes() == 1 && !content.isEdited(1));
+	// Past the end is cut, never added; outside the file nothing is written.
+	CHECK(content.overwrite(6, "123") && content.bytes().size() == 8 && content.bytes().mid(6) == "12");
+	CHECK(!content.overwrite(8, "Z") && !content.overwrite(-1, "Z"));
+	// Text now: Save writes it and reads it again as text.
+	CHECK(content.overwrite(2, "C") && content.save().isEmpty() && !content.modified() && content.textual() &&
+	      onDisk(path) == QByteArray("XBCDEF12"));
+	// Typed after a save: a step of its own, so one Undo keeps what was saved.
+	CHECK(content.overwrite(3, "Q", true));
+	content.undo();
+	CHECK(!content.modified() && content.bytes() == QByteArray("XBCDEF12"));
+	// Undo past the save: a change again, against what was saved.
+	content.undo();
+	CHECK(content.modified() && content.isEdited(2));
+	content.discard();
+	CHECK(!content.modified() && !content.canUndo() && content.bytes() == QByteArray("XBCDEF12"));
+	// A copy elsewhere: this one keeps its edits.
+	CHECK(content.overwrite(0, "Q"));
+	const auto copy = folder + QStringLiteral("/edit-copy.bin");
+	CHECK(content.saveCopyAs(QUrl::fromLocalFile(copy)).isEmpty() && onDisk(copy) == QByteArray("QBCDEF12") &&
+	      content.modified() && onDisk(path) == QByteArray("XBCDEF12"));
+	// Reload: the copy on disk again, editing off, nothing to undo.
+	content.reload();
+	CHECK(!content.modified() && !content.editing() && !content.canUndo() && content.bytes() == QByteArray("XBCDEF12"));
+
+	telemetry::ux::OpenFiles open;
+	const auto first = write(QStringLiteral("first.bin"), "11111111");
+	const auto second = write(QStringLiteral("second.bin"), "22222222");
+	open.open(first);
+	open.open(second);
+	open.contentFor(first)->setEditing(true);
+	open.contentFor(second)->setEditing(true);
+	open.contentFor(first)->overwrite(0, "A");
+	CHECK(open.modifiedNames() == QStringList{QStringLiteral("first.bin")});
+	open.contentFor(second)->overwrite(0, "B");
+	CHECK(open.modifiedNames().size() == 2 && open.saveAll().isEmpty() && open.modifiedNames().isEmpty() &&
+	      onDisk(first) == QByteArray("A1111111") && onDisk(second) == QByteArray("B2222222"));
+	open.contentFor(first)->overwrite(1, "C");
+	// Opened again, or read again from a device, a file keeps its edits: the host asks first.
+	open.open(first);
+	CHECK(open.contentFor(first)->modified() && open.contentFor(first)->bytes() == QByteArray("AC111111"));
+	CHECK(open.reading(first, QString()) == open.rowOf(first) && open.contentFor(first)->modified() &&
+	      !open.contentFor(first)->loading());
+	open.discardAll();
+	CHECK(open.modifiedNames().isEmpty() && open.contentFor(first)->bytes() == QByteArray("A1111111"));
+
+	// Edits never copy the file: the working copy parts from the one on disk
+	// once, and every edit after writes in place.
+	const auto large = write(QStringLiteral("large.bin"), QByteArray(4 * 1024 * 1024, '\0'));
+	FileContent big;
+	big.setLocalFile(large);
+	big.setEditing(true);
+	CHECK(big.overwrite(0, "A"));
+	const auto* buffer = big.bytes().constData();
+	for (int i = 1; i < 64; ++i)
+		big.overwrite(i * 4096, "B");
+	CHECK(big.bytes().constData() == buffer && big.editedBytes() == 64);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -2177,6 +2274,7 @@ int main(int argc, char** argv)
 	bigValues();
 	jsonCodec(folder.path());
 	capabilityCodec(folder.path());
+	fileEditing(folder.path());
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

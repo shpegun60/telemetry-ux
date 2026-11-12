@@ -6,6 +6,7 @@
 #include <Telemetry/UX/FileContent.hpp>
 #include <Telemetry/UX/HexView.hpp>
 #include <Telemetry/UX/QmlTypes.hpp>
+#include <Telemetry/UX/ToolIcon.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
@@ -14,8 +15,10 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QPainter>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQuickItem>
@@ -24,6 +27,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QThread>
 
 #include <array>
@@ -385,6 +389,113 @@ void hexView()
 	press(&view, Qt::Key_Right);
 	CHECK(view.cursor() == 0 && view.rowCount() == 0 && view.status() == QStringLiteral("This file is empty."));
 }
+
+// Types text as keys with that text, as a keyboard does.
+void type(QObject* target, const QString& text)
+{
+	for (const QChar c : text) {
+		const auto upper = c.toUpper().unicode();
+		const int key = upper >= 'A' && upper <= 'Z' ? Qt::Key_A + (upper - 'A')
+		                : upper >= '0' && upper <= '9' ? Qt::Key_0 + (upper - '0')
+		                                             : Qt::Key_unknown;
+		QKeyEvent down(QEvent::KeyPress, key, Qt::NoModifier, QString(c));
+		QKeyEvent up(QEvent::KeyRelease, key, Qt::NoModifier, QString(c));
+		QCoreApplication::sendEvent(target, &down);
+		QCoreApplication::sendEvent(target, &up);
+	}
+}
+
+// Editing in the grid: nothing until Edit; then two hex digits write a byte
+// and move on, a letter in the text column writes one; one Ctrl+Z takes back
+// what was typed in one go, Ctrl+Y brings it back; the status says a byte at
+// the cursor is edited and not saved.
+void hexEditing(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	using telemetry::ux::HexView;
+	const auto path = folder + QStringLiteral("/editing.bin");
+	{
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write("ABCDEFGH") == 8);
+	}
+	FileContent content;
+	content.setLocalFile(path);
+	HexView view;
+	view.setSize(QSizeF(3000, 600));
+	view.setContent(&content);
+	view.moveTo(0);
+	type(&view, QStringLiteral("41"));
+	CHECK(content.bytes() == QByteArray("ABCDEFGH") && view.cursor() == 0);
+	content.setEditing(true);
+	type(&view, QStringLiteral("5"));
+	// The first digit is the byte's high one; the cursor stays for the second.
+	CHECK(content.bytes().at(0) == 0x51 && view.cursor() == 0 && content.editedBytes() == 1);
+	type(&view, QStringLiteral("a"));
+	CHECK(content.bytes().at(0) == 0x5A && view.cursor() == 1);
+	// The grid lets go of its copy before each edit and reads without
+	// detaching: typing writes in place, never copying the file.
+	const auto* buffer = content.bytes().constData();
+	type(&view, QStringLiteral("42"));
+	CHECK(content.bytes().constData() == buffer && content.bytes().at(1) == 0x42);
+	press(&view, Qt::Key_Left);
+	press(&view, Qt::Key_Tab);
+	type(&view, QStringLiteral("z"));
+	CHECK(content.bytes().startsWith("Zz") && view.cursor() == 2 && content.editedBytes() == 2);
+	view.moveTo(1);
+	CHECK(view.status().contains(QStringLiteral("Edited, not saved")));
+	// One step for what was typed in one go.
+	press(&view, Qt::Key_Z, Qt::ControlModifier);
+	CHECK(content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 0 && !content.canUndo());
+	press(&view, Qt::Key_Y, Qt::ControlModifier);
+	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2);
+	// A letter outside the printable range is not typed; a hex digit in the
+	// text column is a letter there.
+	view.moveTo(7);
+	type(&view, QStringLiteral("7"));
+	CHECK(content.bytes().at(7) == '7' && view.cursor() == 7);
+	CHECK(content.save().isEmpty() && !content.modified());
+	QFile saved(path);
+	CHECK(saved.open(QIODevice::ReadOnly) && saved.readAll() == QByteArray("ZzCDEFG7"));
+	content.setEditing(false);
+	type(&view, QStringLiteral("q"));
+	CHECK(content.bytes() == QByteArray("ZzCDEFG7"));
+}
+
+// The pictograms: each name draws in the colour given, undo's arrow on the
+// left and redo's on the right; an unknown name draws nothing.
+void toolIcons()
+{
+	using telemetry::ux::ToolIcon;
+	const auto drawn = [](const QString& name) {
+		ToolIcon icon;
+		icon.setSize(QSizeF(24, 24));
+		icon.setName(name);
+		icon.setColor(QColor(255, 0, 0));
+		QImage image(24, 24, QImage::Format_ARGB32_Premultiplied);
+		image.fill(Qt::transparent);
+		QPainter painter(&image);
+		icon.paint(&painter);
+		painter.end();
+		return image;
+	};
+	const auto ink = [](const QImage& image, int x, int y) {
+		const QRgb pixel = image.pixel(x, y);
+		return qAlpha(pixel) > 128 && qRed(pixel) > 128 && qGreen(pixel) < 64;
+	};
+	const auto inked = [&](const QImage& image) {
+		int count = 0;
+		for (int y = 0; y < image.height(); ++y)
+			for (int x = 0; x < image.width(); ++x)
+				count += ink(image, x, y) ? 1 : 0;
+		return count;
+	};
+	for (const char* name : {"edit", "save", "undo", "redo"})
+		CHECK(inked(drawn(QString::fromLatin1(name))) > 20);
+	CHECK(inked(drawn(QStringLiteral("nothing"))) == 0);
+	const auto undo = drawn(QStringLiteral("undo"));
+	const auto redo = drawn(QStringLiteral("redo"));
+	CHECK(ink(undo, 5, 9) && !ink(undo, 19, 9) && ink(redo, 19, 9) && !ink(redo, 5, 9));
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -403,6 +514,8 @@ int main(int argc, char** argv)
 	CHECK(folder.isValid());
 	telemetry::ux::registerQmlTypes();
 	hexView();
+	hexEditing(folder.path());
+	toolIcons();
 
 	Peer peer;
 	qt::ConnectionSession session;
@@ -580,6 +693,15 @@ int main(int argc, char** argv)
 	CHECK(files.markedCount() == files.fileCount());
 	press(treeItem, Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier);
 	CHECK(files.markedCount() == 0);
+	// Ctrl+S on the tree is Download even beside a window's own Ctrl+S (a
+	// host's Save): typed through the window, the list claims it first.
+	files.setMarked(files.index(0, 0), true);
+	root->setProperty("lastSelection", QVariantList{});
+	treeItem->forceActiveFocus();
+	QTest::keyClick(qobject_cast<QWindow*>(root), Qt::Key_S, Qt::ControlModifier);
+	CHECK(await([&] { return !root->property("lastSelection").toList().isEmpty(); }));
+	CHECK(root->property("windowSaves").toInt() == 0);
+	files.markAll(false);
 
 	// The current row is highlighted and framed while the tree has the
 	// keyboard; Enter on a folder folds and unfolds it.
@@ -676,6 +798,18 @@ int main(int argc, char** argv)
 	CHECK(QMetaObject::invokeMethod(child(root, "textGotoField"), "accepted"));
 	CHECK(child(root, "textGotoProblem")->property("text").toString() == QStringLiteral("No line 9: the text has 3 lines"));
 	CHECK(QMetaObject::invokeMethod(textPane, "closeGoto"));
+	// Editing's pictograms on the viewer's row, each named with the file:
+	// Edit shows the bytes and starts editing, pressed again it stops; Save
+	// waits for an edit.
+	auto* editTool = child(root, "hexEdit");
+	CHECK(editTool && editTool->property("visible").toBool() &&
+	      editTool->property("text").toString().contains(QStringLiteral("viewer.csv")));
+	CHECK(!child(root, "hexSave")->property("enabled").toBool());
+	CHECK(QMetaObject::invokeMethod(editTool, "clicked"));
+	CHECK(viewer->property("shownMode").toString() == QStringLiteral("hex") && viewerContent.editing() &&
+	      editTool->property("switchedOn").toBool());
+	CHECK(QMetaObject::invokeMethod(editTool, "clicked"));
+	CHECK(!viewerContent.editing() && !viewerContent.modified());
 	// The file's actions are in its ⋯ menu: Save as hands the host the local
 	// copy, Copy path the device's path.
 	CHECK(child(root, "fileViewerMore") && !child(root, "fileViewerMore")->property("text").toString().isEmpty());
