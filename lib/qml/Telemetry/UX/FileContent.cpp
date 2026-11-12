@@ -423,6 +423,14 @@ void FileContent::findReference()
 	}
 }
 
+void FileContent::refreshReference()
+{
+	if (!loaded_)
+		return;
+	findReference();
+	Q_EMIT editChanged();
+}
+
 void FileContent::undo()
 {
 	undo_.undo();

@@ -16,7 +16,8 @@
  * kept locally until there is a project to keep it in).
  *
  * Nothing here reads a device: DeviceFileTransfers keeps a record when a file
- * read for the Viewer is written, and a host gives OpenFiles the lookup.
+ * read for the Viewer is written, and when a copy written to the device is
+ * read back; a host gives OpenFiles the lookup.
  */
 #ifndef TELEMETRY_UX_DEVICE_BYTES_HPP
 #define TELEMETRY_UX_DEVICE_BYTES_HPP
@@ -38,6 +39,9 @@ public:
 		qint64 size = 0;
 		QDateTime readAt;
 		QByteArray sha256;
+		// Read back after this copy was written to the device, not read for
+		// the Viewer.
+		bool written = false;
 	};
 
 	// The folder that holds the records: `.device-bytes` in a device's folder.
@@ -48,6 +52,17 @@ public:
 	// is not kept). On Windows the `.device-bytes` folder is hidden.
 	static QString keep(const QString& deviceFolder, const QString& localFile, const QString& devicePath,
 	                    const QDateTime& readAt);
+	// The same from bytes in memory: the device's file as just read back after
+	// a write (written), which may not be the copy's bytes. keep() reads the
+	// copy and comes here.
+	static QString keepBytes(const QString& deviceFolder, const QString& localFile,
+	                         const QString& devicePath, const QByteArray& bytes, const QDateTime& readAt,
+	                         bool written = false);
+	// Whether bytes - the device's devicePath read now - are what localFile's
+	// record holds: false without a record, or with one of another path.
+	static bool matches(const QString& localFile, const QString& devicePath, const QByteArray& bytes);
+	// Whether localFile is inside deviceFolder, where its record can be kept.
+	static bool inside(const QString& deviceFolder, const QString& localFile);
 	// The record for localFile: looked for in the `.device-bytes` of each
 	// folder above it, nearest first; only when its bytes are there at the
 	// size it gives. The bytes are not read or checked here.

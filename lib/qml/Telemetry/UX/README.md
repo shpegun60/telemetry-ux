@@ -237,6 +237,34 @@ every write to disk:
   failed download never leaves a truncated file under the real name, and reports
   progress, rate and time left in the designer's words. It owns its readers: one
   whose request is still in flight is handed to the session when the model goes.
+- `upload(path, fileIndex, localFile, deviceFolder, overwrite, viewer)` writes a
+  saved copy inside the connected device's folder back to the device, in the
+  same queue and rows (`UploadRole`, states `Writing` and `Written`, the
+  running step in `StepRole`: `Check`, `Write`, `Save`, `Verify`):
+  1. the index must still name the path; the device's file is read and
+     compared with the copy's record of that path (`DeviceBytes::matches`) -
+     changed since it was read, or never read here, and nothing is written
+     unless `overwrite`; another size is refused;
+  2. the copy is written whole with the SDK's `FileWriter`;
+  3. it is saved when the device keeps files (Savable), or the row says it is
+     kept until the device restarts;
+  4. it is read back: those bytes become the record, marked as written
+     (`DeviceBytes::keepBytes`), and the viewer's reference
+     (`FileContent::refreshReference`); a byte the device keeps differently is
+     counted. The copy is never changed.
+
+  `OutcomeRole` says how it ended, for a row's buttons and colour: `Checked`,
+  `ReadBackDiffers` and `NotChecked` (written); `Changed`, `NotKnown`,
+  `SizeDiffers` and `NotWritable` (nothing written); `Partial` (stopped part
+  way: the device's file may be part old, part new, and the record is
+  forgotten); `Failed` (nothing written: the connection, a read, a cancel
+  before writing). `retry(row, true)` writes it anyway after `Changed`,
+  `NotKnown` or `Partial`; plain `retry(row)` tries again after `Failed` or
+  `NotChecked`. A cancel waits for the request in flight and never starts the
+  next step. The check and the write are not one step on the device: the
+  protocol has no lock. Live is not paused here; a host pauses the file's
+  `DeviceFileLive` while its row is active, and saves edits first - the job
+  writes the copy on disk.
 - The panel asks for a destination with `downloadRequested(selection)` - a save
   dialog for one file, a folder for several, kept below by the device's folders
   (`DeviceFileTransfers.localPathFor`) - for a viewer with `openRequested(file)`,

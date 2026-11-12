@@ -1,13 +1,22 @@
 /*
  * @file DeviceFileTransfers.hpp
- * @brief Downloads of the device's files: one at a time, with progress, never blocking.
+ * @brief The device's files read and written back: one at a time, with progress, never waiting on the device.
  * @author Ruslan Kovtun (shpegun60)
  * SPDX-License-Identifier: MIT
  *
  * Each download reads one file through the session's queue with a FileReader
  * and writes it with QSaveFile, so a cancelled or failed download never leaves
  * a truncated file under the real name. The bytes are the device's exactly.
- * This model owns its readers: a reader with a request in flight is never
+ *
+ * An upload writes a saved copy back to the device's file of the same size:
+ * the device's file read first and compared with its record (DeviceBytes) -
+ * a device changed since it was read stops it unless overwrite says so - then
+ * written with a FileWriter, saved when the device keeps files (Savable), and
+ * read back; the bytes read back become the record. The check and the write
+ * are not one step on the device: the protocol has no lock, so a change in
+ * between is not seen.
+ *
+ * This model owns its readers and writers: one with a request in flight is never
  * destroyed; when the model goes first, the session keeps it until it ends.
  * That relies on the session draining in its own destructor; destroying the
  * session from inside one of its own callbacks is outside its lifecycle
@@ -40,9 +49,50 @@ public:
 		Reading,
 		Saved,
 		Cancelled,
-		Failed
+		Failed,
+		// An upload running: checking, writing, saving or reading it back.
+		Writing,
+		// An upload ended with the copy written; ResultRole says how it was
+		// checked and kept.
+		Written
 	};
 	Q_ENUM(State)
+
+	// How an upload ended (OutcomeRole), for the buttons and colour a row
+	// offers; None for downloads. Cancelled or Failed is the State.
+	enum class Outcome {
+		None,
+		// Written, read back as the copy.
+		Checked,
+		// Written, read back with bytes the device keeps its own way.
+		ReadBackDiffers,
+		// Written, not read back.
+		NotChecked,
+		// Nothing written: the device's file changed since it was read.
+		Changed,
+		// Nothing written: no record here of what the device's file was.
+		NotKnown,
+		// Nothing written: the device's file has another size.
+		SizeDiffers,
+		// Nothing written: the device does not allow writing it, or refused
+		// the content.
+		NotWritable,
+		// Stopped part way: the device's file may be part old, part new.
+		Partial,
+		// Nothing written: anything else - the connection, a read, a cancel
+		// before writing.
+		Failed
+	};
+	Q_ENUM(Outcome)
+
+	// An upload's steps, in order (StepRole).
+	enum class Step {
+		Check,
+		Write,
+		Save,
+		Verify
+	};
+	Q_ENUM(Step)
 
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -55,7 +105,10 @@ public:
 		FiguresRole,  // "96 / 128 KiB · 42 KiB/s · about 1 s left"
 		ResultRole,   // the line that replaces the bar when it ends
 		ActiveRole,
-		OpeningRole   // read to be shown in a viewer, not saved for the user
+		OpeningRole,  // read to be shown in a viewer, not saved for the user
+		UploadRole,   // a copy written to the device
+		OutcomeRole,  // Outcome
+		StepRole      // Step, while an upload runs
 	};
 	Q_ENUM(Role)
 
@@ -78,7 +131,19 @@ public:
 	// bytes as read are kept (setKeepDeviceBytes); without it none are.
 	Q_INVOKABLE int openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
 	                       const QString& localFile, const QString& deviceFolder = {});
-	// Cancels the read that writes localFile, if one is running or waiting.
+	// Writes localFile, a saved copy inside deviceFolder (the connected
+	// device's folder), to the device's file path at fileIndex, whole: the
+	// device's file is read first and, unless overwrite, must still be what
+	// localFile's record says it was, or nothing is written; then written,
+	// saved when the device keeps files, and read back. The bytes read back
+	// become the record (setKeepDeviceBytes); the copy is never changed.
+	// viewer (an OpenFiles) has the copy's reference refreshed. Returns the
+	// row, or -1 when it cannot be queued (no folder, or the copy not in it).
+	Q_INVOKABLE int upload(const QString& path, int fileIndex, const QString& localFile,
+	                       const QString& deviceFolder = {}, bool overwrite = false,
+	                       QObject* viewer = nullptr);
+	// Cancels the read that writes localFile, if one is running or waiting;
+	// never an upload of it, which a closed tab must not cut part way.
 	Q_INVOKABLE void cancelFor(const QString& localFile);
 	// The local file for a device path inside folder, keeping the device's own
 	// folders below it. Each segment becomes a plain local name (no drive, no
@@ -110,16 +175,18 @@ public:
 	// finished ones are cleared, so a host keys its own records by this.
 	Q_INVOKABLE QString localFileAt(int row) const;
 	Q_INVOKABLE void cancel(int row);
-	// Starts a failed or cancelled download again, in its own row, from the
-	// first byte. False when the row is still running, saved, or not connected.
-	Q_INVOKABLE bool retry(int row);
+	// Starts a failed or cancelled download or upload again, in its own row,
+	// from the first byte; an upload with overwrite as given ("Write anyway").
+	// False when the row is still running, has ended well, or not connected.
+	Q_INVOKABLE bool retry(int row, bool overwrite = false);
 	Q_INVOKABLE void cancelAll();
 	// Forgets the rows that have ended.
 	Q_INVOKABLE void clearFinished();
-	// Whether a file read for the viewer (openIn, given its device's folder)
-	// also leaves the device's bytes as read there (DeviceBytes), for the
-	// device's layer and Restore; off by default. Any other download that
-	// writes a copy with a record removes it: it would no longer be true.
+	// Whether a file read for the viewer (openIn, given its device's folder),
+	// and a copy written to the device and read back, leave the device's
+	// bytes there (DeviceBytes), for the device's layer and Restore; off by
+	// default. Any other download that writes a copy with a record removes
+	// it: it would no longer be true.
 	void setKeepDeviceBytes(bool keep) noexcept { keepDeviceBytes_ = keep; }
 
 	int rowCount(const QModelIndex& parent = {}) const override;
@@ -132,7 +199,7 @@ public:
 
 Q_SIGNALS:
 	void summaryChanged();
-	// One download ended; state is Saved, Cancelled or Failed.
+	// One row ended; state is Saved, Written, Cancelled or Failed.
 	void finished(int row, State state, const QString& result);
 
 private:
@@ -144,6 +211,10 @@ private:
 	void schedulePoll();
 	void poll();
 	void startNext();
+	bool beginUpload(Job& job);
+	// An upload's next step after its reader or writer ended; true once it
+	// has ended.
+	bool advanceUpload(Job& job);
 	void end(Job& job, State state, QString result);
 	void publish(int row);
 

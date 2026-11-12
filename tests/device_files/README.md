@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 743 checks):
+- **Models** (`main.cpp`, 791 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -12,6 +12,19 @@ over localhost TCP to the SDK's native server. No board.
     when cancelled.
   - A transfers model destroyed in the middle of a read hands its reader to the
     session, which stays usable.
+  - Uploads (`DeviceFileTransfers::upload`) to writable files of a device of
+    its own, each ending with its `Outcome`: written, saved and read back, the
+    record (marked as written) and the open viewer's reference then the new
+    bytes; a device changed since it was read writes nothing, then is written
+    anyway by `retry(row, true)`; no record, or one of another path, not
+    known; a copy outside the device's folder not queued; an index that no
+    longer names the path refused; a file without `save()` kept until the
+    device restarts; a byte the device keeps its own way counted and recorded
+    as the device holds it; the device refusing the content (the record
+    kept); another size and a read-only file refused; a small file cancelled
+    while checking writes nothing; a 64 KiB write - its check and progress
+    seen - cancelled part way (`Partial`, the record forgotten), then written
+    whole by `retry(row, true)`.
   - A device without a descriptor still lists and downloads its files.
   - `localPathFor` keeps hostile device paths inside the chosen folder: `..`,
     backslashes, a drive, a UNC prefix, reserved Windows names, forbidden and

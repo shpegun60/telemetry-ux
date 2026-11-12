@@ -300,6 +300,9 @@ public:
 	// step to undo, editing on or off; saved like any edit. Empty when done;
 	// otherwise why not (not known, another size, nothing differs).
 	Q_INVOKABLE QString restoreReference();
+	// Looks for the reference again - the device's bytes kept anew after this
+	// copy was written to the device - without reading the copy again.
+	Q_INVOKABLE void refreshReference();
 	// Whether a byte differs from the copy on disk, for the hex view.
 	bool isEdited(qint64 offset) const noexcept
 	{
