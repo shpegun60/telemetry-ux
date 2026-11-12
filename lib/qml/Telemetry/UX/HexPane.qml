@@ -5,8 +5,9 @@
 // Shift+Enter / Shift+F3 previous), Ctrl+G go to, Ctrl+E select a block,
 // Ctrl+Shift+C copy as, Ctrl+C copy, Ctrl+A select all, Esc collapses the
 // selection or closes a bar. Editing is off until Edit: then hex digits (or
-// letters in the text column) write over the bytes, Ctrl+Z and Ctrl+Y undo
-// and redo; the viewer's Ctrl+S saves. The status line says how many bytes are changed and
+// letters in the text column) write over the bytes, Ctrl+V pastes over them,
+// Ctrl+H replaces what Find finds, Ctrl+Z and Ctrl+Y undo and redo; the
+// viewer's Ctrl+S saves. The status line says how many bytes are changed and
 // not saved - Save writes this computer's copy, never the device's file. The
 // actions are the viewer's (FileEditTools, on its row or the host's toolbar,
 // and its `⋯` menu): they call startEditing(), stopEditing(), save(),
@@ -70,9 +71,34 @@ FocusScope {
         if (bar === "find")
             grid.clearFind()
         bar = ""
+        replacing = false
         barProblem.text = ""
+        replaceResult.text = ""
         grid.forceActiveFocus()
     }
+    // Replace (Ctrl+H) opens under Find, only while editing.
+    property bool replacing: false
+    function openReplace() {
+        if (!pane.content || grid.size === 0)
+            return
+        // Without Edit: Find, and why Replace is not there.
+        if (!pane.content.editing) {
+            openBar("find")
+            barProblem.text = qsTr("Turn on Edit to replace.")
+            return
+        }
+        pane.replacing = true
+        openBar("find")
+        if (findField.text.length > 0)
+            Qt.callLater(function() { replaceField.forceActiveFocus(); replaceField.selectAll() })
+    }
+    function replaceNext(all) {
+        barProblem.text = ""
+        replaceResult.text = grid.replace(findField.text, findKind, findWidths[findWidthBox.currentIndex] || 4,
+                                          replaceField.text, all)
+        replaceResult.outcome = grid.outcome
+    }
+    function paste() { return grid.paste() }
     // Why the last save did not happen; empty after one that did.
     property string saveProblem: ""
     // A copy of a device's file: Save writes this computer's copy, never the device's.
@@ -115,6 +141,12 @@ FocusScope {
         // Only while the hex view has the keyboard: elsewhere these keys are others'.
         enabled: pane.visible && pane.activeFocus && findField.text.length > 0
         onActivated: pane.findNext(false)
+    }
+    Shortcut {
+        sequence: "Ctrl+H"
+        // Only while the hex view has the keyboard; without Edit it says why.
+        enabled: pane.visible && pane.activeFocus && !!pane.content && grid.size > 0
+        onActivated: pane.openReplace()
     }
     Shortcut {
         sequence: "Ctrl+G"
@@ -181,6 +213,18 @@ FocusScope {
             text: pane.content && pane.content.editing ? qsTr("Stop &editing") : qsTr("&Edit bytes")
             enabled: grid.size > 0
             onTriggered: pane.content.editing ? pane.content.editing = false : pane.startEditing()
+        }
+        MenuItem {
+            objectName: "hexPasteItem"
+            text: qsTr("&Paste over the bytes\tCtrl+V")
+            enabled: !!pane.content && pane.content.editing && grid.size > 0
+            onTriggered: grid.paste()
+        }
+        MenuItem {
+            objectName: "hexReplaceItem"
+            text: qsTr("Repl&ace…\tCtrl+H")
+            enabled: !!pane.content && pane.content.editing && grid.size > 0
+            onTriggered: pane.openReplace()
         }
         MenuSeparator {}
         MenuItem {
@@ -406,6 +450,81 @@ FocusScope {
             }
         }
 
+        // Replace (Ctrl+H, while editing), under Find: the same kind of value,
+        // the same length, so the file keeps its size.
+        RowLayout {
+            objectName: "hexReplaceBar"
+            visible: pane.bar === "find" && pane.replacing && !!pane.content && pane.content.editing
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Layout.bottomMargin: 4
+            spacing: 8
+            Label {
+                text: qsTr("Replace with")
+                color: Theme.textSecondary
+            }
+            TextField {
+                id: replaceField
+                objectName: "hexReplaceField"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 96
+                Layout.maximumWidth: 260
+                font.family: pane.findKind === "text" ? Qt.application.font.family : Type.fixedFamily
+                placeholderText: qsTr("The same length as what is found")
+                Accessible.name: qsTr("Replace with")
+                onAccepted: pane.replaceNext(false)
+                Keys.onEscapePressed: pane.closeBar()
+            }
+            // The replacement's length beside it, in the error colour when it
+            // is not what Find finds: seen before pressing.
+            Label {
+                objectName: "hexReplaceSize"
+                readonly property int width_: pane.findWidths[findWidthBox.currentIndex] || 4
+                readonly property int replaceBytes: replaceField.text.length > 0 ? grid.patternBytes(replaceField.text, pane.findKind, width_) : -1
+                readonly property int findBytes: findField.text.length > 0 ? grid.patternBytes(findField.text, pane.findKind, width_) : -1
+                visible: replaceBytes >= 0
+                font.pointSize: Type.caption
+                color: findBytes >= 0 && replaceBytes !== findBytes ? Theme.error : Theme.textSecondary
+                text: findBytes >= 0 && replaceBytes !== findBytes
+                      ? qsTr("%Ln bytes, not %1", "", replaceBytes).arg(findBytes)
+                      : qsTr("%Ln bytes", "", replaceBytes)
+            }
+            LinkButton {
+                objectName: "hexReplaceOne"
+                tint: Theme.textSecondary
+                text: qsTr("Replace")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.text: qsTr("Write over the match selected and select the next (Enter)")
+                onClicked: pane.replaceNext(false)
+            }
+            LinkButton {
+                objectName: "hexReplaceAll"
+                tint: Theme.textSecondary
+                text: qsTr("Replace all")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.text: qsTr("Write over every match; one Undo takes it all back")
+                onClicked: pane.replaceNext(true)
+            }
+            Item { Layout.fillWidth: true }
+        }
+        // What Replace did ("Replaced 12"), or why not, whole: a line of its
+        // own under the Replace row, wrapped, never cut. Its colour from the
+        // outcome the grid gives, never from the words.
+        Label {
+            id: replaceResult
+            objectName: "hexReplaceResult"
+            property string outcome: ""
+            visible: pane.bar === "find" && pane.replacing && text.length > 0
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Layout.bottomMargin: 4
+            wrapMode: Text.Wrap
+            color: outcome === "done" ? Theme.textSecondary : outcome === "partial" ? Theme.warning : Theme.error
+            Accessible.role: Accessible.AlertMessage
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -551,8 +670,14 @@ FocusScope {
                 Layout.minimumWidth: 0
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
-                color: grid.notice.length > 0 ? Theme.warning : Theme.textSecondary
+                // A paste that went in whole is news; cut short a warning; refused an error.
+                color: grid.notice.length === 0 || grid.outcome === "done" ? Theme.textSecondary
+                     : grid.outcome === "refused" ? Theme.error : Theme.warning
                 text: grid.notice.length > 0 ? grid.notice : grid.status
+                // Cut by a narrow Viewer: the whole of it on hover.
+                HoverHandler { id: statusHover }
+                ToolTip.visible: statusHover.hovered && truncated
+                ToolTip.text: text
             }
             LinkButton {
                 objectName: "hexInspectorToggle"

@@ -249,6 +249,24 @@ private:
 	bool typing_;
 };
 
+// Several places at once - Replace all: one step, one announcement.
+class RunsStep final : public QUndoCommand {
+public:
+	RunsStep(FileContent& content, std::vector<FileContent::Run> before, std::vector<FileContent::Run> after,
+	         const QString& text)
+	    : content_(content), before_(std::move(before)), after_(std::move(after))
+	{
+		setText(text);
+	}
+
+	void redo() override { content_.putRuns(after_); }
+	void undo() override { content_.putRuns(before_); }
+
+private:
+	FileContent& content_;
+	std::vector<FileContent::Run> before_, after_;
+};
+
 FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this)
 {
 	connect(&undo_, &QUndoStack::canUndoChanged, this, &FileContent::editChanged);
@@ -276,20 +294,53 @@ bool FileContent::overwrite(qint64 offset, const QByteArray& bytes, bool typing)
 	return true;
 }
 
+bool FileContent::overwriteRuns(const std::vector<Run>& runs, const QString& text)
+{
+	if (!editing_ || !loaded_)
+		return false;
+	std::vector<Run> before, after;
+	for (const auto& [offset, bytes] : runs) {
+		if (offset < 0 || offset >= bytes_.size() || bytes.isEmpty())
+			continue;
+		auto written = bytes.left(bytes_.size() - offset);
+		auto was = bytes_.mid(offset, written.size());
+		if (was == written)
+			continue;
+		before.emplace_back(offset, std::move(was));
+		after.emplace_back(offset, std::move(written));
+	}
+	if (after.empty())
+		return !runs.empty();
+	undo_.push(new RunsStep(*this, std::move(before), std::move(after), text));
+	return true;
+}
+
 void FileContent::put(qint64 offset, const QByteArray& bytes)
 {
+	putRuns({Run{offset, bytes}});
+}
+
+void FileContent::putRuns(const std::vector<Run>& runs)
+{
+	if (runs.empty())
+		return;
 	Q_EMIT aboutToEdit();
 	// The first edit after a read parts the working copy from the one on disk.
 	auto* data = bytes_.data();
 	const auto* disk = saved_.constData();
-	for (qsizetype i = 0; i < bytes.size(); ++i) {
-		const auto at = offset + i;
-		const bool was = at < saved_.size() && data[at] != disk[at];
-		data[at] = bytes[i];
-		const bool is = at < saved_.size() && data[at] != disk[at];
-		edited_ += static_cast<int>(is) - static_cast<int>(was);
+	qint64 first = runs.front().first, last = first;
+	for (const auto& [offset, bytes] : runs) {
+		for (qsizetype i = 0; i < bytes.size(); ++i) {
+			const auto at = offset + i;
+			const bool was = at < saved_.size() && data[at] != disk[at];
+			data[at] = bytes[i];
+			const bool is = at < saved_.size() && data[at] != disk[at];
+			edited_ += static_cast<int>(is) - static_cast<int>(was);
+		}
+		first = std::min(first, offset);
+		last = std::max(last, offset + static_cast<qint64>(bytes.size()));
 	}
-	Q_EMIT bytesEdited(offset, bytes.size());
+	Q_EMIT bytesEdited(first, last - first);
 	Q_EMIT editChanged();
 }
 

@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 704 checks):
+- **Models** (`main.cpp`, 709 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -65,14 +65,15 @@ over localhost TCP to the SDK's native server. No board.
   - Editing a file's bytes (`FileContent`): off until asked; overwritten, never
     resized; the bytes that differ from the copy on disk counted (one written
     back to its value is not); one step to undo for what was typed in one go,
-    undone and redone with editing off too;
+    undone and redone with editing off too; several places as one step
+    (Replace all), the view told once;
     Save through a temporary file, the text, table and codec read again; a copy
     elsewhere; Discard; Reload dropping the edits; `OpenFiles` naming what is
     not saved, saving or discarding it all.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
-- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 199 checks). It calls
+- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 225 checks). It calls
   `telemetry::ux::registerQmlTypes()` first, as a host does. It checks the hex grid
   (`HexView`) on its own:
   - **Layout:** 32, 16 or 8 bytes a row by width, the text column dropped first.
@@ -93,6 +94,12 @@ over localhost TCP to the SDK's native server. No board.
   - **Editing:** nothing until Edit; two hex digits write a byte, the first the
     high one, a letter in the text column one; typing writes in place without
     copying the file; one Ctrl+Z per run of typing, Ctrl+Y; saved to disk.
+  - **Paste over the bytes:** hex in the hex column, UTF-8 in the text column,
+    never past a selection or the file's end, each message, bad hex refused,
+    one step to undo each; **Replace:** a first press finds, the next writes
+    over and finds on - a one-byte match too - Replace all as one step, the
+    hex kind, another length, the same bytes and no Edit refused; each
+    outcome (done, partial, refused) given apart from its words.
   - **The pictograms** (`ToolIcon`): each name draws, undo's arrow on the left
     and redo's on the right; an unknown name draws nothing.
 
