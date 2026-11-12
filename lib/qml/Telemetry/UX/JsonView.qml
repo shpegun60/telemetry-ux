@@ -1,8 +1,8 @@
 // The JSON codec's view: what the file holds at its top ("object, 12 keys"),
 // and every value as a tree - name, value, type - in the file's own order.
 // The tree opens with the top level only; an object's members and an array's
-// elements are made when their row is opened, 256 at a time behind a
-// "Show 256 more" row. Find narrows the tree to what matches by name, path or
+// elements are made when their row is opened, a long one as ranges of 256 -
+// [0 … 255], [256 … 511], … - as Eclipse shows a long array. Find narrows the tree to what matches by name, path or
 // value. Copy takes a value, a path, or a value exactly as the file writes it.
 // MIT.
 //
@@ -57,19 +57,16 @@ FocusScope {
         const value = view.decoded.valueOf(view.current())
         Clipboard.setText(value.length > 0 ? value : view.decoded.jsonOf(view.current()))
     }
+    // A range has no path of its own: nothing is copied, the clipboard kept.
+    function copyPath() {
+        const path = view.decoded.pathOf(view.current())
+        if (path.length > 0)
+            Clipboard.setText(path)
+    }
     function openMenu(index, from, x, y) {
         if (index && index.valid)
             tree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
         nodeMenu.popup(from, x, y)
-    }
-    // A "Show 256 more" row: the next members, the first of them current.
-    function showMore(index) {
-        const row = tree.rowAtIndex(index)
-        if (!view.decoded.showMore(index))
-            return
-        const next = tree.index(row, 0)
-        if (next.valid)
-            tree.selectionModel.setCurrentIndex(next, ItemSelectionModel.NoUpdate)
     }
     // After Find: the matches' parents open, the matches folded. Cleared:
     // folded again, as it opened, with the current row in view.
@@ -111,7 +108,7 @@ FocusScope {
             objectName: "jsonCopyPath"
             text: qsTr("Copy &path\tAlt+Shift+C")
             enabled: view.hasCurrent
-            onTriggered: Clipboard.setText(view.decoded.pathOf(view.current()))
+            onTriggered: view.copyPath()
         }
         MenuItem {
             objectName: "jsonCopyJson"
@@ -241,14 +238,11 @@ FocusScope {
                 } else if (control && shift && event.key === Qt.Key_C) {
                     Clipboard.setText(view.decoded.jsonOf(view.current()))
                 } else if (alt && shift && event.key === Qt.Key_C) {
-                    Clipboard.setText(view.decoded.pathOf(view.current()))
+                    view.copyPath()
                 } else if (control && event.key === Qt.Key_C) {
                     view.copyValue()
                 } else if (control && event.key === Qt.Key_F) {
                     findField.forceActiveFocus()
-                } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space)
-                           && view.decoded.isMore(view.current())) {
-                    view.showMore(view.current())
                 } else {
                     return
                 }
@@ -264,13 +258,12 @@ FocusScope {
                 if (event.accepted)
                     tree.collapse(tree.currentRow)
             }
-            // The Values tree's row: name, value, type, and the "more" link.
+            // The Values tree's row: name, value, type; a range like any row.
             delegate: ValuesRow {
                 valueWidth: view.valueWidth
                 typeWidth: view.typeWidth
                 typeShown: view.typeShown
                 onContextMenuRequested: function(index, x, y) { view.openMenu(index, this, x, y) }
-                onMoreRequested: function(index) { view.showMore(index) }
             }
             ScrollBar.vertical: ScrollBar {}
         }

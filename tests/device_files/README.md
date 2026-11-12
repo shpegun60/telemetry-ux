@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 661 checks):
+- **Models** (`main.cpp`, 674 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -28,20 +28,23 @@ over localhost TCP to the SDK's native server. No board.
     a CSV named by the device only, a missing file; the same copy opened twice is
     one row.
   - The Descriptor and Values trees are lazy: a struct's members and an array's
-    elements are made when their row is first opened, an array 256 elements at a
-    time behind a "Show 256 more" row. Find makes the rows that lead to its
-    matches, wherever they are; Copy writes what is not opened from the parsed
+    elements are made when their row is first opened. A long array opens as
+    Eclipse shows one: ranges of 256, `[0 … 255]`, `[256 … 511]`, …, ranges of
+    ranges past 65 536, so any element is a few levels down and only the rows on
+    the way are made. Find makes the rows that lead to its matches, wherever
+    they are; Copy writes what is not opened from the parsed
     descriptor and the shown snapshot, and under Find only what is shown. Both
     stop at a bound and say so: Find as "N+ matches", Copy with a last line;
-    Find's rows stay within 100 000 even for one match deep in a long array.
+    Find's rows stay within 100 000; through ranges a match deep in a long
+    array costs a few hundred.
     Live marks a Field whose bytes changed, folded or not, and counts it on its
     group's row.
   - Measured (Release, this machine): a descriptor whose 20 endpoints hold
     54 612 member rows each opens in under 1 ms, finds in about 20 ms and copies
     the first 500 000 rows in about 200 ms. A values file of 10 MB (160 Fields of
     16 000 floats, each token under a READ's 65 535 bytes) opens in about 7 ms,
-    takes a newer snapshot in about 6 ms (18 ms with the 100 000 rows a Find
-    made), finds in about 200 ms and copies in about 200 ms. Find with a filter already on once took 59 s on the descriptor:
+    takes a newer snapshot in about 8 ms, finds in about 100 ms (making about
+    2 000 rows through the ranges) and copies in about 230 ms. Find with a filter already on once took 59 s on the descriptor:
     a filtering proxy looks through every made row below a parent for each row
     added there, so the contents clear the filter before they make rows.
   - JSON as a tree: the file's own key order (read from the text; QJsonObject
@@ -51,9 +54,10 @@ over localhost TCP to the SDK's native server. No board.
     without an extension guessed from its first bytes (a guess that fails, such
     as a log starting `[INFO]`, stays text and says nothing), escapes in keys,
     surrogate pairs and `\/`. A JSON file of 10.5 MB (160 000 small objects)
-    opens in about 135 ms and finds a value nine tenths in in about 430 ms; at
-    its very end the way there would make more than 100 000 rows, so that find
-    stops short and says so.
+    opens in about 135 ms and finds a value at its very end in about 290 ms -
+    three ranges of 65 536, then one of 256, on the way. An object of many
+    keys opens as ranges too, named by their first and last key; a range copied
+    as JSON is its members in brackets, as the file writes them.
   - The read-many and batch capability records (TRM1, TBM1), written by the
     SDK's own `writeCapability`: every field in words, the descriptor they
     bind to (the connected device's, or another in the warning colour), their

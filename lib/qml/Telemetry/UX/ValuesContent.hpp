@@ -29,6 +29,7 @@
 #include <QtCore/QAbstractItemModel>
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonValue>
 #include <QtCore/QObject>
 #include <QtCore/QUrl>
@@ -57,7 +58,7 @@ class ValuesTreeModel final : public QAbstractItemModel {
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
-		KindRole,        // "group", "field", "member", "element", "more"
+		KindRole,        // "group", "field", "member", "element", "range"
 		TypeRole,        // the type in words: "u32", "f32[3]", "struct, 4 members"
 		ValueRole,       // the value as text; empty for a struct or a group
 		UnavailableRole, // the device served this Field without a value
@@ -65,7 +66,7 @@ public:
 		CountRole,       // Fields in a group
 		PathRole,        // "group.Field.member[2]"
 		NumericRole,     // a number: shown right-aligned
-		FindRole,        // the name Find looks in: none for a "Show more" row
+		FindRole,        // the name Find looks in: none for a range
 		ChangedFieldsRole // a group's Fields whose bytes the latest snapshot changed
 	};
 	Q_ENUM(Role)
@@ -80,7 +81,8 @@ public:
 		QString jsonText;
 		// Below a Field: its type, its place in its parent (member or element
 		// index), how many members or elements it has, how many are made.
-		std::uint32_t typeId = 0, slot = 0, total = 0, loaded = 0;
+		// A range's first element; a range's typeId is its array's.
+		std::uint32_t typeId = 0, slot = 0, total = 0, first = 0;
 		// The Field it belongs to, its index in the file; -1 for a group.
 		int field = -1;
 		Node* parent = nullptr;
@@ -96,9 +98,8 @@ public:
 	void touched(const std::vector<const Node*>& nodes);
 	// Makes a row's children the first time it is opened.
 	std::function<void(Node&)> populate;
-	// Appends made rows below a node, or takes its last row away.
+	// Appends made rows below a node.
 	void append(Node& under, std::vector<std::unique_ptr<Node>> rows);
-	void removeLast(Node& under);
 
 	bool hasChildren(const QModelIndex& parent = {}) const override;
 	bool canFetchMore(const QModelIndex& parent) const override;
@@ -202,12 +203,10 @@ public:
 	Q_INVOKABLE QString textOf(const QModelIndex& index, const QString& format) const;
 	// Everything shown, the same three ways.
 	Q_INVOKABLE QString textOfAll(const QString& format) const;
-	// A "Show 256 more" row opened: the array's next elements. True when it was one.
-	Q_INVOKABLE bool showMore(const QModelIndex& index);
-	// Whether a shown row is such a row.
-	Q_INVOKABLE bool isMore(const QModelIndex& index) const;
-	// Elements made per step of a large array.
-	static constexpr std::uint32_t elementsPerStep = 256;
+	// An array of more than rangeSize elements opens as ranges of that many,
+	// [0 … 255], [256 … 511], …, and ranges of ranges past 65 536 - as Eclipse
+	// shows a long array: any element is a few levels down.
+	static constexpr std::uint32_t rangeSize = 256;
 	// Bounds that keep a large file quick: the values Find looks at, the
 	// matches it opens and the rows it makes on the way to them, and the
 	// values a copy writes (the copy then says it was cut short).
@@ -237,16 +236,19 @@ private:
 	QString adopt(const QByteArray& descriptor);
 	QString show(const QByteArray& bytes);
 	const Node* nodeOf(const QModelIndex& index) const;
-	// The rows below a node, first made: a struct's members, an array's first
-	// elements - filled from the snapshot shown.
+	// The rows below a node, first made: a struct's members, an array's
+	// elements or its ranges - filled from the snapshot shown.
 	void populate(Node& node);
-	void loadStep(Node& array);
+	void makeElements(Node& under, std::uint32_t first, std::uint32_t count);
+	// The row for a member or element index below parent, made on the way
+	// through any ranges; rows made are added to made.
+	Node* childAt(Node& parent, std::uint32_t slot, std::size_t& made);
 	// The shown snapshot's value at a node below a Field; false when it has none.
 	bool viewOf(const Node& node, runtime::DynamicValueView& out) const;
-	// A row whose children are not all made: Copy reads its data instead -
-	// when the row is shown whole, not narrowed by Find.
-	bool partial(const Node& node) const;
+	// A row at or below a match of Find, or every row with Find off: Copy
+	// reads its data rather than its rows.
 	bool wholeShown(const QModelIndex& index) const;
+	void appendShown(QJsonArray& array, const QModelIndex& index, schema_text::RowBudget& budget) const;
 	// Makes the rows Find matches, and the way to them.
 	void openMatches(const QString& text);
 	QString linesOf(const QModelIndex& index, int depth, bool withSelf, schema_text::RowBudget& budget) const;

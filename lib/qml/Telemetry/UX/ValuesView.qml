@@ -1,8 +1,9 @@
 // The values codec's view: which descriptor the file was written with (its
 // fingerprint, with Copy), what it holds, and every Field as a tree with its
 // value - group, Field, a struct's members, an array's elements. The tree
-// opens folded; what is below a row is made when it is opened, an array 256
-// elements at a time, so a file of megabytes opens at once. Live reads
+// opens folded; what is below a row is made when it is opened, and a long
+// array opens as ranges of 256 - [0 … 255], [256 … 511], … - as Eclipse shows
+// one, so a file of megabytes opens at once and any element is a few levels down. Live reads
 // the device's file again and again - never more often than every 200 ms, and
 // never before the last read has ended; Hold keeps what is shown while the
 // reads go on, and shows the newest on release. The values that changed in
@@ -98,20 +99,16 @@ FocusScope {
         if (view.running || view.decoded.held)
             view.decoded.held = !view.decoded.held
     }
+    // A range has no path of its own: nothing is copied, the clipboard kept.
+    function copyPath() {
+        const path = view.decoded.pathOf(view.current())
+        if (path.length > 0)
+            Clipboard.setText(path)
+    }
     function openMenu(index, from, x, y) {
         if (index && index.valid)
             tree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
         nodeMenu.popup(from, x, y)
-    }
-    // A "Show 256 more" row: the array's next elements, the first of
-    // them current - where the row was.
-    function showMore(index) {
-        const row = tree.rowAtIndex(index)
-        if (!view.decoded.showMore(index))
-            return
-        const next = tree.index(row, 0)
-        if (next.valid)
-            tree.selectionModel.setCurrentIndex(next, ItemSelectionModel.NoUpdate)
     }
     function timeText(time) {
         return isNaN(time) ? "" : Qt.formatTime(time, "HH:mm:ss.zzz")
@@ -172,7 +169,7 @@ FocusScope {
             objectName: "valuesCopyPath"
             text: qsTr("Copy &path\tAlt+Shift+C")
             enabled: view.hasCurrent
-            onTriggered: Clipboard.setText(view.decoded.pathOf(view.current()))
+            onTriggered: view.copyPath()
         }
         MenuItem {
             objectName: "valuesCopyRow"
@@ -507,16 +504,13 @@ FocusScope {
                 } else if (control && shift && event.key === Qt.Key_C) {
                     view.copyAs("text", false)
                 } else if (alt && shift && event.key === Qt.Key_C) {
-                    Clipboard.setText(view.decoded.pathOf(view.current()))
+                    view.copyPath()
                 } else if (control && event.key === Qt.Key_C) {
                     view.copyValue()
                 } else if (control && event.key === Qt.Key_F) {
                     findField.forceActiveFocus()
                 } else if (!control && !alt && event.key === Qt.Key_H) {
                     view.toggleHold()
-                } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space)
-                           && view.decoded.isMore(view.current())) {
-                    view.showMore(view.current())
                 } else {
                     return
                 }
@@ -537,7 +531,6 @@ FocusScope {
                 typeWidth: view.typeWidth
                 typeShown: view.typeShown
                 onContextMenuRequested: function(index, x, y) { view.openMenu(index, this, x, y) }
-                onMoreRequested: function(index) { view.showMore(index) }
             }
             ScrollBar.vertical: ScrollBar {}
         }

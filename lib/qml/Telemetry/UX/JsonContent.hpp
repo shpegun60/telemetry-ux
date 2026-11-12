@@ -9,8 +9,8 @@
  * its keys keep the file's order (QJsonObject sorts them) and Copy gives a
  * value exactly as the file writes it. The tree opens with the top level
  * only; an object's members and an array's elements are made when their row
- * is first opened, 256 at a time behind a "Show 256 more" row, so a file of
- * megabytes opens at once. Find looks through the text, not the rows made so
+ * is first opened - a long one as ranges of 256, as Eclipse shows a long
+ * array - so a file of megabytes opens at once. Find looks through the text, not the rows made so
  * far - names, paths and values - and makes the way to what it finds, up to
  * bounds it names. Qt only.
  */
@@ -22,6 +22,7 @@
 #include <QtCore/QAbstractItemModel>
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 #include <QtCore/QVariantList>
 #include <cstddef>
 #include <cstdint>
@@ -39,7 +40,7 @@ class JsonTreeModel final : public QAbstractItemModel {
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
-		KindRole,        // "object", "array", "string", "number", "bool", "null", "more"
+		KindRole,        // "object", "array", "string", "number", "bool", "null", "range"
 		TypeRole,        // "object, 3 keys", "array, 600 items", "string", ...
 		ValueRole,       // a scalar as the file writes it; a container's first members
 		UnavailableRole, // never: the Values row's role
@@ -56,10 +57,14 @@ public:
 		QString name, kind, value, type, path;
 		// What Find looks in besides the path: the name, and a scalar's text.
 		QString find;
-		// The value's bytes in the text, and a container's next member not made yet.
-		qsizetype start = 0, end = 0, next = 0;
-		// A container's members, and how many are made.
-		std::uint32_t total = 0, loaded = 0;
+		// The value's bytes in the text.
+		qsizetype start = 0, end = 0;
+		// A container's or a range's members, and a range's first.
+		std::uint32_t total = 0, first = 0;
+		// A container of more than rangeSize members: where every 256th
+		// begins, and an object's first and last key of each block.
+		std::vector<qsizetype> marks;
+		QStringList blockKeys;
 		int row = 0;
 		Node* parent = nullptr;
 		std::vector<std::unique_ptr<Node>> children;
@@ -73,7 +78,6 @@ public:
 	// Makes a row's children the first time it is opened.
 	std::function<void(Node&)> populate;
 	void append(Node& under, std::vector<std::unique_ptr<Node>> rows);
-	void removeLast(Node& under);
 
 	bool hasChildren(const QModelIndex& parent = {}) const override;
 	bool canFetchMore(const QModelIndex& parent) const override;
@@ -126,11 +130,10 @@ public:
 	Q_INVOKABLE QString jsonOf(const QModelIndex& index) const;
 	// The whole file's text.
 	Q_INVOKABLE QString jsonOfAll() const;
-	// A "Show 256 more" row opened: the next members. True when it was one.
-	Q_INVOKABLE bool showMore(const QModelIndex& index);
-	Q_INVOKABLE bool isMore(const QModelIndex& index) const;
-
-	static constexpr std::uint32_t elementsPerStep = 256;
+	// An array or an object of more than rangeSize members opens as ranges of
+	// that many, [0 … 255], [256 … 511], …, and ranges of ranges past 65 536 -
+	// as Eclipse shows a long array: any member is a few levels down.
+	static constexpr std::uint32_t rangeSize = 256;
 	// Bounds that keep Find quick: the values it looks at (two million: the
 	// whole of a 10 MB file of small objects, in about half a second), the
 	// matches it opens and the rows it makes on the way.
@@ -147,7 +150,12 @@ private:
 	using Node = JsonTreeModel::Node;
 	const Node* nodeOf(const QModelIndex& index) const;
 	void populate(Node& node);
-	void loadStep(Node& container);
+	// A container's members from first, or the ranges over them.
+	void makeMembers(Node& under, Node& container, std::uint32_t first, std::uint32_t count);
+	void markBlocks(Node& container) const;
+	// The row for a member index below parent, made on the way through any
+	// ranges; rows made are added to made.
+	Node* childAt(Node& parent, std::uint32_t slot, std::size_t& made);
 	void openMatches(const QString& text);
 	// A value at the text's offset made a row: its kind, words and members counted.
 	std::unique_ptr<Node> make(const QString& name, const QString& path, qsizetype start, qsizetype end) const;
