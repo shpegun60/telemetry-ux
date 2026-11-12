@@ -16,7 +16,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
-import Telemetry.UX
 
 FocusScope {
     id: pane
@@ -304,10 +303,10 @@ FocusScope {
             objectName: "hexBar"
             visible: pane.bar.length > 0
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
+            spacing: Type.padding
 
             Label {
                 text: pane.bar === "find" ? qsTr("Find") : pane.bar === "goto" ? qsTr("Go to offset") : qsTr("Select from")
@@ -441,8 +440,8 @@ FocusScope {
             ToolButton {
                 objectName: "hexBarClose"
                 flat: true
-                implicitWidth: 24
-                implicitHeight: 24
+                implicitWidth: Type.rowHeight
+                implicitHeight: Type.rowHeight
                 text: qsTr("×")
                 Accessible.name: qsTr("Close the bar")
                 ToolTip.visible: hovered || visualFocus
@@ -457,10 +456,10 @@ FocusScope {
             objectName: "hexReplaceBar"
             visible: pane.bar === "find" && pane.replacing && !!pane.content && pane.content.editing
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
+            spacing: Type.padding
             Label {
                 text: qsTr("Replace with")
                 color: Theme.textSecondary
@@ -518,9 +517,9 @@ FocusScope {
             property string outcome: ""
             visible: pane.bar === "find" && pane.replacing && text.length > 0
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
             wrapMode: Text.Wrap
             color: outcome === "done" ? Theme.textSecondary : outcome === "partial" ? Theme.warning : Theme.error
             Accessible.role: Accessible.AlertMessage
@@ -600,9 +599,9 @@ FocusScope {
         RowLayout {
             visible: pane.inspectorOpen && !pane.inspectorBeside && grid.size > 0
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 6
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.spacing
             LinkButton {
                 objectName: "hexByteOrder"
                 tint: Theme.textSecondary
@@ -636,9 +635,9 @@ FocusScope {
         // The status line: where the cursor is, what is selected, a notice.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 12
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.groupSpacing
             // Editing, or edits not saved: said first, in the warning colour; a
             // save that failed says why here.
             Label {

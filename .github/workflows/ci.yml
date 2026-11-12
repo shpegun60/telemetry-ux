@@ -36,16 +36,16 @@ jobs:
       # Pinned CI helper; independent of the UX revision checked out as the test input.
       - name: Bound Ubuntu package downloads
         uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
-      - name: Install Qt without any Telemetry SDK checkout
+      - name: Install the build tools without any Telemetry SDK checkout
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev \
-            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+          sudo apt-get install -y cmake ninja-build
+      - name: Install the project's Qt
+        uses: ./.github/actions/setup-qt
       - name: Install, relocate and embed the view in an independent host
         run: |
           python3 -B tests/qml_package/run.py --build-dir "$RUNNER_TEMP/ux-qml-package" \
-            --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja
+            --qt-prefix "$QT_ROOT_DIR" --cxx g++ --cmake cmake --ninja ninja
       - name: Retain package and consumer receipts
         if: always()
         uses: actions/upload-artifact@v4
@@ -70,7 +70,7 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUTF8: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '9bb37322c527aadf1ee52c9f5cc351efb797ad99' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'a4490473edb9c93980791aae9322dc2429820337' }}
     steps:
       - name: Checkout UX
         uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 45
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '9bb37322c527aadf1ee52c9f5cc351efb797ad99' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'a4490473edb9c93980791aae9322dc2429820337' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,12 +139,14 @@ jobs:
           persist-credentials: false
       - name: Bound Ubuntu package downloads
         uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
-      - name: Install Qt host development and QML runtime
+      - name: Install the host compilers and build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-18 cmake ninja-build qt6-base-dev qt6-declarative-dev libqt6serialport6-dev \
-            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+          sudo apt-get install -y clang-18 cmake ninja-build
+      - name: Install the project's Qt with SerialPort
+        uses: ./.github/actions/setup-qt
+        with:
+          modules: qtserialport
       - name: Install and relocate the SDK prefix
         run: |
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
@@ -158,20 +160,19 @@ jobs:
       - name: Actual Inspector models, input and QML windows
         run: |
           python3 -B tests/inspector_qml/run.py --build-dir "$RUNNER_TEMP/ux-inspector-qml" \
-            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix "$QT_ROOT_DIR" --cxx g++ --cmake cmake --ninja ninja
       - name: Sanitized UX TCP discovery and QML window
         run: |
           python3 -B tests/inspector_tcp/run.py --build-dir "$RUNNER_TEMP/ux-inspector-tcp" \
-            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix "$QT_ROOT_DIR" --cxx clang++-18 --sanitize --cmake cmake --ninja ninja
       - name: Theme colour roles meet WCAG 2.2 contrast
         run: python3 -B tests/theme_contrast/run.py
       # The panels' geometry, search, bulk selection, Trend and tree actions on
-      # the distribution's Qt 6.4, the library's floor: an API newer than 6.4
-      # fails here even when a newer desktop Qt passes.
-      - name: Panel layout and interaction on Qt 6.4
+      # Qt 6.12 LTS, the library's floor.
+      - name: Panel layout and interaction on Qt 6.12
         run: |
           python3 -B tests/qml_layout/run.py --build-dir "$RUNNER_TEMP/ux-qml-layout" \
-            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix /usr --cxx g++ --cmake cmake --ninja ninja --jobs 2
+            --sdk-prefix "$RUNNER_TEMP/sdk-prefix" --qt-prefix "$QT_ROOT_DIR" --cxx g++ --cmake cmake --ninja ninja --jobs 2
       - name: Retain separate UX and installed SDK evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -191,7 +192,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '9bb37322c527aadf1ee52c9f5cc351efb797ad99' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'a4490473edb9c93980791aae9322dc2429820337' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -496,7 +497,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || '9bb37322c527aadf1ee52c9f5cc351efb797ad99' }}
+      SDK_EXPECTED_REVISION: ${{ inputs.sdk_revision || 'a4490473edb9c93980791aae9322dc2429820337' }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -519,16 +520,14 @@ jobs:
           python-version: "3.12"
       - name: Bound Ubuntu package downloads
         uses: shpegun60/telemetry-sdk/.github/actions/setup-apt@4f467a2092ea1cdde613b2b93b427505d79d1f65
-      - name: Install Qt runtime, compilers and pinned wheel builders
+      - name: Install the project's Qt
+        uses: ./.github/actions/setup-qt
+      - name: Install compilers and pinned wheel builders
         run: |
           set -euo pipefail
           test "$(git -C .ci/telemetry-sdk rev-parse HEAD)" = "$SDK_EXPECTED_REVISION"
           sudo apt-get update
-          sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv \
-            qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
-            qml6-module-qtquick-window qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript \
-            qml6-module-qtquick-dialogs qml6-module-qtqml-models
+          sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv
           python -m venv "$RUNNER_TEMP/qml-builder"
           "$RUNNER_TEMP/qml-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1
       - name: Install matching core and UX generator wheels outside checkouts
@@ -579,31 +578,31 @@ jobs:
             python -B tests/codegen_qml/run.py --build-dir "$RUNNER_TEMP/ux-generated-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/static_qml_configurator/run.py --build-dir "$RUNNER_TEMP/ux-static-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
               --codegen-python "$RUNNER_TEMP/qml-codegen/bin/python" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/dynamic_qml_configurator/run.py --build-dir "$RUNNER_TEMP/ux-dynamic-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/qt_connection/run.py --build-dir "$RUNNER_TEMP/ux-qt-connection-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/device_files/run.py --build-dir "$RUNNER_TEMP/ux-device-files-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/presentation_metadata/run.py --build-dir "$RUNNER_TEMP/ux-presentation-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
             python -B tests/project_starter/run.py --qt-connection --output "$RUNNER_TEMP/ux-created-qml-$profile" \
               --sdk-prefix "$RUNNER_TEMP/qml-sdk-prefix-$profile" \
               --ux-prefix "$RUNNER_TEMP/static-ux-prefix-$profile" \
-              --qt-prefix /usr --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
+              --qt-prefix "$QT_ROOT_DIR" --cxx "$compiler" --cmake cmake --ninja ninja "${checks[@]}"
           done
       - name: Retain generated QML and installed package evidence
         if: always()

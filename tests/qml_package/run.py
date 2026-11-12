@@ -162,11 +162,11 @@ def main():
               'Installed URI or public component name/version changed')
         check(not re.search(r'^\s*(?:optional\s+)?plugin\s', module, re.MULTILINE),
               'Pure view unexpectedly requires a runtime plugin')
-        check('prefer :/qt-project.org/imports/Telemetry/UX/' in module, 'Qt 6.4 resource import prefix changed')
+        check('prefer :/qt/qml/Telemetry/UX/' in module, 'The module left the standard /qt/qml resource prefix')
         check(any(path.endswith('share/telemetry-ux/LICENSE') for path in report['installed_sha256_before']),
               'Installed view license is missing')
         report['module'] = dict(uri='Telemetry.UX', version='1.0', package_version='0.1.0',
-            target='TelemetryUX::configurator', resource_prefix='/qt-project.org/imports',
+            target='TelemetryUX::configurator', resource_prefix='/qt/qml',
             plugin=False, cachegen=False, sdk_dependency=False, export_sha256=digest(exports[0]),
             qmldir_sha256=digest(qmldirs[0]), config_sha256=digest(configs[0]))
         consumer = output / 'consumer'

@@ -735,6 +735,6 @@ void installJsonCodec(OpenFiles& files)
 		    }
 		    return content;
 	    },
-	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/JsonView.qml"))});
+	    QUrl(QStringLiteral("qrc:/qt/qml/Telemetry/UX/JsonView.qml"))});
 }
 } // namespace telemetry::ux

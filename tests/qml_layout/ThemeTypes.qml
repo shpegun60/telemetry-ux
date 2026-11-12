@@ -8,6 +8,15 @@ QtObject {
     readonly property real caption: Type.caption
     readonly property real heading: Type.heading
     readonly property int rowHeight: Type.rowHeight
+    readonly property int controlHeight: Type.controlHeight
+    readonly property int chipHeight: Type.chipHeight
+    readonly property int padding: Type.padding
+    readonly property int spacing: Type.spacing
+    readonly property int groupSpacing: Type.groupSpacing
+    readonly property int tight: Type.tight
+    readonly property int iconSize: Type.iconSize
+    readonly property int checkSize: Type.checkSize
+    readonly property real bodyPixels: Type.bodyPixels
     readonly property color surfaceWindow: Theme.surfaceWindow
     readonly property color muted: Theme.textMuted
     property color accentBefore

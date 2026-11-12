@@ -12,9 +12,9 @@ import QtQuick.Controls.Basic as Basic
 Basic.ToolButton {
     id: link
     property color tint: Theme.textSecondary
-    implicitHeight: 24
-    leftPadding: 4
-    rightPadding: 4
+    implicitHeight: Type.rowHeight
+    leftPadding: Type.tight
+    rightPadding: Type.tight
     topPadding: 0
     bottomPadding: 0
     focusPolicy: Qt.StrongFocus

@@ -51,14 +51,9 @@ int TreeFilter::setText(const QString& text)
 	// The same text again: the rows shown stay as they are, only counted.
 	if (trimmed == text_)
 		return text_.isEmpty() || !sourceModel() ? 0 : count({}, false);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
 	beginFilterChange();
 	text_ = trimmed;
 	endFilterChange(Direction::Rows);
-#else
-	text_ = trimmed;
-	invalidateFilter();
-#endif
 	return text_.isEmpty() || !sourceModel() ? 0 : count({}, false);
 }
 

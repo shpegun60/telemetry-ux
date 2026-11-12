@@ -82,6 +82,42 @@ int main(int argc, char** argv) {
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
         CHECK(window);
         settle();
+        // Watch boxes (T-1) on the library's floor Qt: a box is watched at
+        // once and shows what the provider says; a Command has none; while
+        // polling the boxes are off and the line says why; a refusal at
+        // capacity is said and changes nothing.
+        {
+            auto* boxesWindow = window->findChild<QQuickWindow*>(QStringLiteral("boxesWindow"));
+            CHECK(boxesWindow);
+            auto* boxTree = named(boxesWindow->contentItem(), "boxTree");
+            CHECK(boxTree);
+            auto* boxes = boxTree->property("provider").value<QObject*>();
+            auto* firstRow = named(boxTree, "endpointRow", 0);
+            auto* firstBox = firstRow ? named(firstRow, "endpointWatchCheck") : nullptr;
+            auto* status = named(boxTree, "endpointWatchSelectionStatus");
+            CHECK(boxes && firstRow && firstBox && status && evaluate(boxTree, "watchApi").toBool());
+            CHECK(!named(boxTree, "endpointAddSelectedWatches")->isVisible());
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 1 && firstRow->property("watchState").toInt() == Qt::Checked);
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 2 && firstRow->property("watchState").toInt() == Qt::Unchecked);
+            CHECK(evaluate(boxTree, "stateOf(searchSource.index(40, 0), watchRevision)").toInt() == -1);
+            CHECK(boxes->setProperty("watchActive", true));
+            settle();
+            CHECK(!firstBox->isEnabled() && status->property("text").toString() == QStringLiteral("Stop polling first"));
+            CHECK(boxes->setProperty("watchActive", false));
+            CHECK(boxes->setProperty("full", true));
+            settle();
+            click(boxesWindow, firstBox);
+            CHECK(status->property("text").toString().startsWith(QStringLiteral("No room")) &&
+                  firstRow->property("watchState").toInt() == Qt::Unchecked);
+            CHECK(boxes->setProperty("full", false));
+            // The checks below type into the main window: give it back the keyboard.
+            boxesWindow->close();
+            window->requestActivate();
+            CHECK(QTest::qWaitForWindowActive(window));
+            settle();
+        }
         auto* panel = named(window->contentItem(), "bulkTree");
         auto* tree = named(panel, "endpointTree");
         auto* first = named(panel, "endpointRow", 0);
@@ -89,24 +125,30 @@ int main(int argc, char** argv) {
         auto* add = named(panel, "endpointAddSelectedWatches");
         auto* provider = panel->property("provider").value<QObject*>();
         CHECK(panel && tree && first && checkBox && add && provider);
-        auto* title = named(panel, "endpointTreeTitle");
-        CHECK(title && !add->isVisible());
+        auto* search = named(panel, "endpointSearch");
+        auto* status = named(panel, "endpointWatchSelectionStatus");
+        CHECK(search && status && !add->isVisible() && !named(panel, "endpointTreeTitle"));
+        // The row is the type scale's row height; its box is the scale's even
+        // check size, drawn in a row-square target (RowCheckBox).
+        const qreal rowHeight = evaluate(panel, "Type.rowHeight").toReal();
+        const qreal checkSize = evaluate(panel, "Type.checkSize").toReal();
+        CHECK(qAbs(first->height() - rowHeight) < 0.5);
+        auto* box = named(first, "endpointWatchBox");
+        CHECK(box && checkSize >= 12 && int(checkSize) % 2 == 0 && box->width() == checkSize &&
+              box->height() == checkSize && qAbs(checkBox->height() - rowHeight) < 0.5);
         click(window, checkBox);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
-        // A narrow dock must not paint the bulk actions over the title.
+        // A narrow dock must not paint the bulk actions over the search.
         window->setWidth(280); settle();
         CHECK(add->isVisible());
-        const auto titleRect = title->mapRectToScene(QRectF(0, 0, title->width(), title->height()));
+        const auto searchRect = search->mapRectToScene(QRectF(0, 0, search->width(), search->height()));
         const auto addRect = add->mapRectToScene(QRectF(0, 0, add->width(), add->height()));
-        CHECK(!titleRect.intersects(addRect));
-        CHECK(titleRect.right() <= panel->mapRectToScene(QRectF(0, 0, panel->width(), panel->height())).right());
-        auto* help = named(panel, "endpointTreeHelp");
-        CHECK(help && help->isVisible());
+        CHECK(!searchRect.intersects(addRect));
+        CHECK(searchRect.right() <= panel->mapRectToScene(QRectF(0, 0, panel->width(), panel->height())).right());
+        // A short dock keeps the tree and the reserved status line.
         window->setHeight(280); settle();
-        CHECK(!help->isVisible());
-        CHECK(tree->height() >= 60);
+        CHECK(tree->height() >= 60 && status->isVisible() && status->height() > 0);
         window->setHeight(700); settle();
-        CHECK(help->isVisible());
         window->setWidth(600); settle();
         CHECK(provider->property("selections").toInt() == 0 && provider->property("submissions").toInt() == 0);
         CHECK(provider->property("draft").toString() == QStringLiteral("untouched"));

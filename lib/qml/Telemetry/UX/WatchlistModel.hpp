@@ -12,6 +12,7 @@
 #include "WatchSample.hpp"
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <QtCore/QAbstractListModel>
+#include <QtCore/QSet>
 #include <QtCore/QVector>
 #include <limits>
 #include <functional>
@@ -44,6 +45,20 @@ public:
 	bool addMany(const QVector<QPair<quint32, QString>>& entries);
 	bool remove(int row);
 	void clear();
+	// A row taken out by removeIds, to be put back by restore.
+	struct Removed {
+		int row = 0;
+		quint32 id = 0;
+		QString name;
+	};
+	// Removes every row whose Field is in ids, one removal per run of
+	// neighbouring rows so persistent indexes follow; the rows in their order.
+	QVector<Removed> removeIds(const QSet<quint32>& ids);
+	// Puts rows back where removeIds took them from, in its order; false, and
+	// nothing changed, when that no longer fits (a Field already held, no room).
+	bool restore(const QVector<Removed>& rows);
+	// Moves whenever the set of Fields held changes.
+	[[nodiscard]] quint64 membership() const noexcept;
 	void invalidateValues();
 	// The sample is required: a reading published without its typed number would
 	// be shown but never plotted. Pass sampleOf() of the value formatted as text.
@@ -81,6 +96,7 @@ private:
 	std::uint32_t session_ = 0;
 	std::uint64_t admission_ = 0;
 	quint64 sampleEpoch_ = 0;
+	quint64 membership_ = 0;
 };
 } // namespace telemetry::ux
 #endif

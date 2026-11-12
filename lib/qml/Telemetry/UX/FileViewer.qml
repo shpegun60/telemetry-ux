@@ -22,7 +22,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQml.Models
-import Telemetry.UX
 
 Pane {
     id: viewer
@@ -124,7 +123,7 @@ Pane {
         property string problem: ""
         ColumnLayout {
             width: parent.width
-            spacing: 8
+            spacing: Type.padding
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -201,8 +200,8 @@ Pane {
             // Nothing to hold - one view, the actions elsewhere - takes no room.
             visible: viewer.modeCount > 1 || viewer.editToolsShown || viewer.menuButtonShown
             Layout.fillWidth: true
-            Layout.margins: 8
-            spacing: 4
+            Layout.margins: Type.padding
+            spacing: Type.tight
 
             // The ways this file can be shown; hidden when there is only one.
             ButtonGroup { id: modes }
@@ -340,7 +339,7 @@ Pane {
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: parent.height / 3 - height / 2
                 width: Math.min(320, parent.width - 32)
-                spacing: 8
+                spacing: Type.padding
 
                 Label {
                     Layout.fillWidth: true
@@ -374,8 +373,8 @@ Pane {
             objectName: "fileViewerError"
             visible: !viewer.reading && viewer.problem.length > 0
             Layout.fillWidth: true
-            Layout.margins: 8
-            spacing: 8
+            Layout.margins: Type.padding
+            spacing: Type.padding
 
             Label {
                 Layout.fillWidth: true
@@ -398,9 +397,9 @@ Pane {
             objectName: "fileViewerCodecProblem"
             visible: viewer.ready && !!viewer.content.codecError && viewer.content.codecError.length > 0
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
             wrapMode: Text.Wrap
             color: Theme.warning
             text: visible ? qsTr("! %1").arg(viewer.content.codecError) : ""
@@ -465,7 +464,7 @@ Pane {
             objectName: "fileViewerFooter"
             visible: viewer.ready
             Layout.fillWidth: true
-            Layout.margins: 8
+            Layout.margins: Type.padding
             elide: Text.ElideMiddle
             font.pointSize: Type.caption
             color: Theme.textSecondary

@@ -1,6 +1,6 @@
 # Two Dynamic QML panels in your application
 
-Open this `CMakeLists.txt` in Qt Creator with a Qt 6.4+ C++20 kit. Set
+Open this `CMakeLists.txt` in Qt Creator with a Qt 6.12+ C++20 kit. Set
 `CMAKE_PREFIX_PATH` to your installed matching SDK and UX prefixes. The example
 uses only installed packages; it does not include Inspector application files or
 require generated DTOs, Python, a physical board or a network server.

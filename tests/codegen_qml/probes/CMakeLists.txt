@@ -1,8 +1,8 @@
 # Independent Qt scalar and real-JavaScript snapshot qualification.
 # Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(TelemetryQmlValueProbes LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Qml)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Qml)
 if(NOT DEFINED GENERATED_SDK)
     message(FATAL_ERROR "GENERATED_SDK must name the external explicit fixture output")
 endif()

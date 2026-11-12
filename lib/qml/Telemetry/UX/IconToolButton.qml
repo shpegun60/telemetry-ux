@@ -10,16 +10,15 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
-import Telemetry.UX
 
 Basic.ToolButton {
     id: tool
     property string iconName
     property string shortcutText
     property bool switchedOn: false
-    implicitWidth: 32
-    implicitHeight: 32
-    padding: 6
+    implicitWidth: Type.controlHeight
+    implicitHeight: Type.controlHeight
+    padding: Type.spacing
     focusPolicy: Qt.TabFocus
     display: AbstractButton.IconOnly
     contentItem: ToolIcon {

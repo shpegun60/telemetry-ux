@@ -1,8 +1,8 @@
 # Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(telemetry_codegen_qml_example LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
-qt_standard_project_setup(REQUIRES 6.4)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+qt_standard_project_setup(REQUIRES 6.12)
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml")
 find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS
     core encoded_server encoded_backend rpc_backend rpc_sessions)
@@ -13,7 +13,7 @@ add_subdirectory(fixture)
 add_subdirectory("${GENERATED_SDK}/qml" generated)
 qt_add_executable(telemetry_qml_example main.cpp)
 qt_add_qml_module(telemetry_qml_example URI Telemetry.Example VERSION 1.0
-    RESOURCE_PREFIX /qt/qml QML_FILES Main.qml)
+    QML_FILES Main.qml)
 target_compile_features(telemetry_qml_example PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qml_example PRIVATE QT_NO_KEYWORDS QT_NO_FOREACH)
 target_link_libraries(telemetry_qml_example PRIVATE telemetry_qml_device_api

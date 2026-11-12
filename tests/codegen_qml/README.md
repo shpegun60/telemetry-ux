@@ -32,7 +32,7 @@ python tests/codegen_qml/run.py `
   --build-dir C:/Users/admin/.codex/artifacts/telemetry-qml-2026-10-18/windows `
   --sdk-prefix C:/external/sdk-prefix `
   --codegen-python C:/external/codegen-env/Scripts/python.exe `
-  --qt-prefix C:/Qt/6.10.1/mingw_64 `
+  --qt-prefix C:/Qt/6.12.0/mingw_64 `
   --cxx C:/Qt/Tools/mingw1310_64/bin/g++.exe `
   --cmake C:/Qt/Tools/CMake_64/bin/cmake.exe `
   --ninja C:/Qt/Tools/Ninja/ninja.exe
@@ -40,7 +40,7 @@ python tests/codegen_qml/run.py `
 
 Use the compiler distributed for that Qt build. The runner puts its directory
 before other MinGW installations in `PATH`. On Linux, pass the Qt CMake prefix
-and explicit compiler/CMake/Ninja paths. Qt 6.4 or newer with Core, Gui, Qml,
+and explicit compiler/CMake/Ninja paths. Qt 6.12 or newer with Core, Gui, Qml,
 Quick, and Test is required. Example validation additionally uses QuickControls2.
 
 The checks cover asynchronous tokens, direct and RPC requests for all four

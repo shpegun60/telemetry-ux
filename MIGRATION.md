@@ -145,3 +145,49 @@ with the same `0.1.0` label may not have the new export. Browser import maps and
 deployed assets must include the SDK carrier module. The reference demo and
 assets exporter do so without pulling in the optional owned Session coordinator.
 There is no change to borrowed socket ownership, frame handling or execution.
+
+## Qt 6.12 and the compact type scale (November 2026)
+
+Hosts of the `Telemetry.UX` module see these changes. The package still says
+`0.1.0`; take the SDK/UX pair together.
+
+**Qt 6.12 LTS is required.** CMake must be 3.25 or newer.
+
+**Resource prefix.** The module now sits under the standard `/qt/qml` prefix. A
+host that loads a file by URL must write `qrc:/qt/qml/Telemetry/UX/...` where it
+wrote `qrc:/qt-project.org/imports/Telemetry/UX/...`. A codec that reuses a UX
+view is one such host. Importing the module by name is unchanged.
+
+**Sizes follow the body.**
+- `Type` derives every size from `body` in pixels: rows, controls, chips,
+  icons, the check box and the room. `body` is the application font, at least
+  10 pt.
+- To zoom, assign `Type.body`.
+- Do not assign the size tokens themselves: an assigned token stops following
+  the zoom.
+
+**EndpointPanel.**
+- With nothing selected it shows one line, and no heading or actions.
+- `framed: false` drops the card.
+- The footnote below the values is gone. Refresh's tooltip and a caption note
+  for a draft, a Command or a Service carry its text.
+
+**DeviceFilesPanel.**
+- The transfer list moved into `DeviceTransfersPanel`. It is shown under the
+  files while `transfersShown` is true, which is the default, and is not made
+  at all otherwise.
+- `deviceFilesActions` and `deviceFilesMarked` are gone. The count and the
+  marked size are in `deviceFilesSummary`.
+- `deviceFilesDownload` and `deviceFilesRefresh` are icon buttons now. Their
+  `text` is the action's name, which shows as the tooltip.
+
+**The Device tree.** The box at the start of a row is `RowCheckBox`, shared
+with Device files. Its tooltip opens after 700 ms.
+
+**Generated QML API on Qt 6.12.** Qt reads a JavaScript argument's getters
+while it converts the argument.
+- A getter that throws: the generated method still runs and refuses the
+  incomplete value as `Validation`, and the exception then reaches the QML
+  caller. No request leaves.
+- A getter that changes the session: it runs before the method looks. The
+  refusal is `Schema` instead of `Validation`, and again nothing is sent.

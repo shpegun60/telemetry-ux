@@ -12,7 +12,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQml.Models
-import Telemetry.UX
 
 FocusScope {
     id: view
@@ -134,13 +133,13 @@ FocusScope {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 4
+        spacing: Type.tight
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label {
                 text: qsTr("JSON")
                 color: Theme.textPrimary
@@ -159,9 +158,9 @@ FocusScope {
         // Find: the matches and their parents, the rest folded away.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             TextField {
                 id: findField
                 objectName: "jsonFind"
@@ -196,13 +195,13 @@ FocusScope {
         // The columns' titles, at the rows' widths.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label { Layout.fillWidth: true; text: qsTr("Name"); font.pointSize: Type.caption; color: Theme.textSecondary }
             Label {
                 Layout.preferredWidth: 10 + view.valueWidth
-                leftPadding: 10
+                leftPadding: Type.groupSpacing
                 text: qsTr("Value")
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
@@ -219,6 +218,11 @@ FocusScope {
 
         TreeView {
             id: tree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (tree) tree.forceLayout() }) }
+            }
             objectName: "jsonTree"
             Layout.fillWidth: true
             Layout.fillHeight: true

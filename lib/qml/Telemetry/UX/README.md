@@ -75,6 +75,39 @@ Actions retain the existing provider signatures:
   endpoint and any open draft untouched and sending no request. The map holds
   `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
   `duplicate`, `unsupported` and `capacity`.
+- **The Device tree's watch boxes.** Both providers have them, Dynamic and Static
+  alike:
+  - `watchState(QModelIndex) -> int`:
+    - `-1` when nothing at or under a row can be watched (a Command, a Service, a
+      Field the Watchlist cannot hold, a stale index);
+    - otherwise `Qt.Unchecked`, `Qt.PartiallyChecked` or `Qt.Checked` for none,
+      some or all of the Fields under it.
+  - `setWatchMany(QVariantList, bool watched) -> QVariantMap` watches, or stops
+    watching, every Field the Watchlist can hold at or under each index, in tree
+    order, as one change and with no request sent.
+    - The map holds `status` (`ok`, `refused`, `invalid`, `stale` or
+      `capacity`) and `changed`, `unchanged`, `fields`, `room`.
+    - All or nothing: a group that does not fit changes nothing, and `room` says
+      how many more fit.
+  - `undoWatch() -> QVariantMap` undoes the last such change: removed rows go
+    back in their places. `canUndoWatch` says whether it can: nothing else may
+    have changed the Watchlist or the tree since, and the Watchlist must not be
+    polling.
+  - `watchRevision` moves whenever a box may show something else: the Fields
+    held, the tree, or whether boxes can be answered at all (a model update, a
+    new connection, the Watchlist's source). A view asks `watchState` again
+    then. `watchLimit` is 1024.
+  - Nothing is answered until it can be: without a current session, or while
+    the Watchlist cannot tell which Fields it holds, `watchState` is `-1` and
+    no empty answer is kept. A read into Details does not hold the boxes.
+  - The first question after the tree changes builds `WatchCoverage`:
+    - in Dynamic, one walk collects the Field ids, the Watchlist is asked once
+      which of them it can hold, and a second walk builds the coverage;
+    - in Static, one walk builds it.
+
+    After that each question is a hash lookup, and a change of the Watchlist
+    costs one pass over the tree. An index the walk did not see (a tree since
+    replaced) is `stale`.
 
 The Watchlist and the rest of the panel work together. While it polls, selecting
 an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all

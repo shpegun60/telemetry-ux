@@ -31,6 +31,9 @@ struct WatchlistSource {
 	std::function<bool()> current, busy;
 	std::function<std::optional<Limits>()> capability;
 	std::function<std::optional<unsigned>(quint32)> fieldBytes;
+	// Optional: every Field of the current device fieldBytes accepts, found in
+	// one pass. Without it each Field is asked through fieldBytes.
+	std::function<QSet<quint32>()> holdable;
 	// Accepted submissions retain their callback and backing storage until drain.
 	// The completion slot receives owned copies only; it cannot publish Qt signals.
 	std::function<client::Submission(std::span<const std::uint32_t>, Completion)> readMany;
@@ -56,6 +59,19 @@ public:
 	QVariantMap addMany(const QVector<QPair<quint32, QString>>& entries);
 	void remove(int row);
 	void clear();
+	// Which of ids the Watchlist can hold: a Field of 1 to 8 bytes of the
+	// current device. nullopt while it cannot tell (no source, not current,
+	// or in the middle of a change), so a caller does not keep an empty answer.
+	std::optional<QSet<quint32>> holdable(const QSet<quint32>& ids) const;
+	// Whether holdable can answer now; cheap.
+	bool canTellHoldable() const;
+	// The Fields held, and a counter that moves whenever they change.
+	QSet<quint32> held() const;
+	quint64 membership() const;
+	// Takes every row of ids out, and puts such rows back; refused (empty,
+	// false) while polling or while the Watchlist cannot change.
+	QVector<WatchlistModel::Removed> removeMany(const QSet<quint32>& ids);
+	bool restore(const QVector<WatchlistModel::Removed>& rows);
 	int count() const;
 	QString status() const;
 	bool individual() const;

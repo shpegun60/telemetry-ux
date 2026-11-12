@@ -30,11 +30,114 @@ Pane {
     readonly property bool bulkWatchAvailable: provider &&
         typeof provider.addWatchMany === "function" &&
         typeof provider.watchCandidate === "function"
+    // A provider with watch boxes (watchState, setWatchMany, undoWatch): a
+    // box means watched, at once, on Fields and on groups alike. Without them
+    // the boxes mark Fields for "Add N", as before.
+    readonly property bool watchApi: provider &&
+        typeof provider.watchState === "function" &&
+        typeof provider.setWatchMany === "function"
+    // Moves whenever a box may show something else; the rows ask again then.
+    readonly property int watchRevision: watchApi ? provider.watchRevision : 0
+    readonly property bool watchLocked: provider && provider.watchActive === true
+    // The revision the status line spoke at: another change clears it.
+    property int statusRevision: -1
+    property bool statusUndo: false
+    // The status line is short; this is the whole sentence, for its tooltip
+    // and for a screen reader.
+    property string watchStatusFull: ""
+    readonly property string pollingShort: qsTr("Stop polling first")
+    readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
+
+    // A row's box: -1 none, else Qt.Unchecked, PartiallyChecked or Checked.
+    // revision is only there so a binding asks again when it moves.
+    function stateOf(index, revision) {
+        return watchApi && index && index.valid ? provider.watchState(index) : -1
+    }
+    function fieldsText(count) {
+        return count === 1 ? qsTr("1 Field") : qsTr("%L1 Fields").arg(count)
+    }
+    // Ticks or unticks a row: a Field, or every Field under a group. All of
+    // a group or none: a group that does not fit changes nothing.
+    function toggleWatch(index) {
+        if (!watchApi || !index || !index.valid)
+            return false
+        if (watchLocked) {
+            say(pollingShort, pollingFull, false)
+            return false
+        }
+        const state = stateOf(index, watchRevision)
+        if (state < 0)
+            return false
+        const group = isGroup(index)
+        // A group by its own name ("signals"), a Field by its path.
+        return applyWatch([index], state !== Qt.Checked, group ? nameOf(index) : pathOf(index), group)
+    }
+    // Watches or stops watching the Fields under indexes, as one change, and
+    // says what it did. A single Field says nothing when it worked.
+    function applyWatch(indexes, watched, label, group) {
+        if (watchLocked) {
+            say(pollingShort, pollingFull, false)
+            return false
+        }
+        const result = provider.setWatchMany(indexes, watched)
+        if (!result || result.status === "capacity") {
+            const fields = result ? result.fields : 0, room = result ? result.room : 0
+            say(qsTr("No room: %L1 Fields, %L2 free").arg(fields).arg(room),
+                qsTr("%1 has %L2 Fields; the Watchlist has room for %L3 more of its %L4.")
+                    .arg(label).arg(fields).arg(room).arg(provider.watchLimit), false)
+            return false
+        }
+        if (result.status !== "ok") {
+            say(qsTr("Not changed: %1").arg(result.status),
+                qsTr("Could not change the Watchlist: %1.").arg(result.status), false)
+            return false
+        }
+        if (!group)
+            say("", "", false)
+        else if (result.changed === 0)
+            say(watched ? qsTr("Already watched") : qsTr("Nothing watched"),
+                watched ? qsTr("Everything in %1 is already watched.").arg(label)
+                        : qsTr("Nothing in %1 is watched.").arg(label), false)
+        else if (watched)
+            say(qsTr("Added %L1").arg(result.changed),
+                qsTr("Added %1 from %2 to the Watchlist.").arg(fieldsText(result.changed)).arg(label), true)
+        else
+            say(qsTr("Removed %L1").arg(result.changed),
+                qsTr("Removed %1 of %2 from the Watchlist.").arg(fieldsText(result.changed)).arg(label), true)
+        return result.changed > 0
+    }
+    function undoWatch() {
+        if (!watchApi || typeof provider.undoWatch !== "function")
+            return false
+        const result = provider.undoWatch()
+        const done = result && result.status === "ok"
+        say(done ? qsTr("Undone") : qsTr("Nothing to undo"),
+            done ? qsTr("The last change to the Watchlist is undone.") : qsTr("There is nothing to undo."), false)
+        return done
+    }
+    // Says what the last action did, at the revision it left: a short line,
+    // and the whole sentence for its tooltip.
+    function say(text, full, undoable) {
+        watchMarkStatus = text
+        watchStatusFull = full
+        statusUndo = undoable
+        statusRevision = watchRevision
+    }
+    onWatchRevisionChanged: {
+        if (statusRevision >= 0 && watchRevision !== statusRevision) {
+            watchMarkStatus = ""
+            watchStatusFull = ""
+            statusUndo = false
+            statusRevision = -1
+        }
+    }
 
     function clearWatchMarks() {
         ++watchMarkGeneration
         watchMarks = []
         watchMarkStatus = ""
+        watchStatusFull = ""
+        statusUndo = false
         // The open menu holds a plain index too: it never outlives a change.
         if (endpointMenu.visible)
             endpointMenu.close()
@@ -158,9 +261,13 @@ Pane {
         return result.added > 0
     }
     function watchIndex(index) {
+        if (watchApi)
+            return stateOf(index, watchRevision) >= 0 ? applyWatch([index], true, pathOf(index), false) : false
         return canMarkWatch(index) ? watchIndexes([index], pathOf(index), false, false) : false
     }
     function watchGroup(index) {
+        if (watchApi)
+            return applyWatch([index], true, nameOf(index), true)
         const walk = groupCandidates(index)
         return watchIndexes(walk.indexes, pathOf(index), true, walk.limited)
     }
@@ -169,6 +276,12 @@ Pane {
     function watchAll() {
         if (!searchSource)
             return false
+        if (watchApi) {
+            const roots = []
+            for (let row = 0; row < searchSource.rowCount(); ++row)
+                roots.push(searchSource.index(row, 0))
+            return applyWatch(roots, true, qsTr("the device"), true)
+        }
         const walk = candidatesUnder(searchSource.index(-1, -1))
         return watchIndexes(walk.indexes, "the device", true, walk.limited)
     }
@@ -213,7 +326,7 @@ Pane {
         const first = searchResults[0]
         if (first.generation !== searchGeneration || !first.index.valid)
             return false
-        if (canMarkWatch(first.index))
+        if (watchApi ? stateOf(first.index, watchRevision) >= 0 : canMarkWatch(first.index))
             watchIndex(first.index)
         else
             provider.selectEndpoint(first.index)
@@ -236,7 +349,7 @@ Pane {
         const first = searchResults[0]
         if (!first.index || !first.index.valid)
             return ""
-        if (!canMarkWatch(first.index))
+        if (watchApi ? stateOf(first.index, watchRevision) < 0 : !canMarkWatch(first.index))
             return "; Enter shows the first"
         return provider.watchActive === true ? "" : "; Enter watches the first"
     }
@@ -344,15 +457,34 @@ Pane {
         }
         MenuItem {
             objectName: "endpointMenuWatch"
-            text: "Watch"
-            enabled: panel.provider.watchActive !== true && panel.canMarkWatch(endpointMenu.target)
-            onTriggered: { const target = panel.menuTarget(); if (target) panel.watchIndex(target) }
+            readonly property int boxState: panel.watchApi && endpointMenu.targetIsEndpoint
+                                            ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
+            text: boxState === Qt.Checked ? qsTr("Stop watching") : qsTr("Watch")
+            enabled: panel.provider.watchActive !== true &&
+                     (panel.watchApi ? boxState >= 0 : panel.canMarkWatch(endpointMenu.target))
+            onTriggered: {
+                const target = panel.menuTarget()
+                if (target && panel.watchApi)
+                    panel.toggleWatch(target)
+                else if (target)
+                    panel.watchIndex(target)
+            }
         }
         MenuItem {
             objectName: "endpointMenuWatchGroup"
-            text: "Watch this group"
-            enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true
-            onTriggered: { const target = panel.menuTarget(); if (target) panel.watchGroup(target) }
+            readonly property int boxState: panel.watchApi && endpointMenu.targetIsGroup
+                                            ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
+            text: !panel.watchApi ? qsTr("Watch this group")
+                : boxState === Qt.Checked ? qsTr("Stop watching group") : qsTr("Watch all in group")
+            enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true &&
+                     (!panel.watchApi || boxState >= 0)
+            onTriggered: {
+                const target = panel.menuTarget()
+                if (target && panel.watchApi)
+                    panel.toggleWatch(target)
+                else if (target)
+                    panel.watchGroup(target)
+            }
         }
         MenuItem {
             objectName: "endpointMenuWatchAll"
@@ -374,33 +506,31 @@ Pane {
         }
     }
     Timer { id: searchTimer; repeat: false; onTriggered: panel.scanSearch() }
-    palette.window: "#11151c"
-    palette.windowText: "#e8edf5"
-    palette.base: "#17202b"
-    palette.alternateBase: "#1c2836"
-    palette.text: "#e8edf5"
-    palette.button: "#233349"
-    palette.buttonText: "#e8edf5"
-    palette.highlight: "#215a68"
-    palette.highlightedText: "#ffffff"
-    palette.placeholderText: "#718297"
-    background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: 10 }
+    // The defaults are the Theme's roles; a host may still set the palette.
+    palette.window: Theme.surfaceWindow
+    palette.windowText: Theme.textPrimary
+    palette.base: Theme.surface
+    palette.alternateBase: Theme.surfaceAlternate
+    palette.text: Theme.textPrimary
+    palette.button: Theme.buttonFill
+    palette.buttonText: Theme.textPrimary
+    palette.highlight: Theme.stateSelected
+    palette.highlightedText: Theme.selectedForeground
+    palette.placeholderText: Theme.textMuted
+    // A card on its own; inside a dock, which titles and frames it, a plain
+    // surface edge to edge.
+    property bool framed: true
+    // Whether a new tree opens its Fields as it arrives; a program that leaves
+    // every branch for the user to open sets it false.
+    property bool openOnLoad: true
+    padding: framed ? 12 : 6
+    background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: panel.framed ? 10 : 0 }
     ColumnLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: Type.spacing
         // Qt Quick has no clipboard API; a hidden editor copies its selection.
         // Inside the layout so the Pane still sizes itself from one child.
         TextEdit { id: clipboardHelper; visible: false; textFormat: TextEdit.PlainText }
-        Label {
-            objectName: "endpointTreeTitle"
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            text: "DEVICE ENDPOINTS"
-            elide: Text.ElideRight
-            color: panel.palette.text
-            font.pixelSize: 11
-            font.letterSpacing: 1
-        }
         RowLayout {
             Layout.fillWidth: true
             visible: panel.bulkWatchAvailable && panel.watchMarks.length > 0
@@ -420,35 +550,48 @@ Pane {
                 Accessible.name: "Clear selected Watchlist fields"
             }
         }
-        RowLayout {
+        TextField {
+            id: searchInput
+            objectName: "endpointSearch"
             Layout.fillWidth: true
-            TextField {
-                id: searchInput
-                objectName: "endpointSearch"
-                Layout.fillWidth: true
-                placeholderText: "Search endpoints"
-                maximumLength: 256
-                onTextChanged: panel.scheduleSearch()
-                Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
-                Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
-                // Down moves into the results (or the tree) with the keyboard.
-                Keys.onDownPressed: function(event) {
-                    if (searchList.visible && searchList.count > 0) {
-                        searchList.currentIndex = 0
-                        searchList.positionViewAtBeginning()
-                        if (searchList.currentItem)
-                            searchList.currentItem.forceActiveFocus()
-                    } else if (endpointTree.visible) {
-                        endpointTree.forceActiveFocus()
-                    }
-                    event.accepted = true
+            placeholderText: qsTr("Find by name (Ctrl+K)")
+            maximumLength: 256
+            // Room for the clear button inside the field.
+            rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
+            onTextChanged: panel.scheduleSearch()
+            Keys.onEscapePressed: function(event) {
+                if (text.length === 0)
+                    return
+                clear()
+                event.accepted = true
+            }
+            Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
+            Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
+            // Down moves into the results (or the tree) with the keyboard.
+            Keys.onDownPressed: function(event) {
+                if (searchList.visible && searchList.count > 0) {
+                    searchList.currentIndex = 0
+                    searchList.positionViewAtBeginning()
+                    if (searchList.currentItem)
+                        searchList.currentItem.forceActiveFocus()
+                } else if (endpointTree.visible) {
+                    endpointTree.forceActiveFocus()
                 }
+                event.accepted = true
             }
             ToolButton {
-                text: "Clear"
-                enabled: searchInput.text.length > 0
+                id: searchClear
+                objectName: "endpointSearchClear"
+                anchors.right: parent.right
+                anchors.rightMargin: 2
+                anchors.verticalCenter: parent.verticalCenter
+                width: height
+                height: parent.height - 6
+                visible: searchInput.text.length > 0
+                focusPolicy: Qt.NoFocus
+                text: "✕"
                 onClicked: { searchInput.clear(); searchInput.forceActiveFocus() }
-                Accessible.name: "Clear endpoint search"
+                Accessible.name: qsTr("Clear the search")
             }
         }
         Label {
@@ -456,22 +599,20 @@ Pane {
             visible: searchInput.text.trim().length > 0
             Layout.fillWidth: true
             wrapMode: Text.Wrap
+            font.pointSize: Type.caption
             color: panel.palette.text
             text: panel.searchRunning ? "Searching…" :
                   panel.searchLimited ? "Search limited; refine search" :
                   panel.searchResults.length === 0 ? "No matching endpoints" :
                   panel.searchResults.length + " matching endpoints" + panel.enterHint()
         }
-        Label {
-            objectName: "endpointWatchSelectionStatus"
-            visible: text.length > 0
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            color: panel.palette.text
-            text: panel.watchMarkStatus
-        }
         TreeView {
             id: endpointTree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() }) }
+            }
             objectName: "endpointTree"
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -494,7 +635,12 @@ Pane {
             }
             Keys.onSpacePressed: function(event) {
                 const index = endpointTree.selectionModel.currentIndex
-                if (panel.canMarkWatch(index)) {
+                if (panel.watchApi) {
+                    if (panel.stateOf(index, panel.watchRevision) >= 0) {
+                        panel.toggleWatch(index)
+                        event.accepted = true
+                    }
+                } else if (panel.canMarkWatch(index)) {
                     panel.toggleWatchMark(index)
                     event.accepted = true
                 }
@@ -507,86 +653,59 @@ Pane {
                 const row = index.valid ? endpointTree.rowAtIndex(index) : -1
                 if (row < 0)
                     return
-                // itemAtCell, not itemAtIndex: the library's floor is Qt 6.4.
                 // A row scrolled out of view has no delegate until shown.
-                let cell = endpointTree.itemAtCell(Qt.point(0, row))
+                let cell = endpointTree.itemAtIndex(index)
                 if (!cell) {
-                    endpointTree.positionViewAtRow(row, TableView.Contain)
+                    endpointTree.positionViewAtIndex(index, TableView.Contain)
                     endpointTree.forceLayout()
-                    cell = endpointTree.itemAtCell(Qt.point(0, row))
+                    cell = endpointTree.itemAtIndex(index)
                 }
                 if (cell && panel.openEndpointMenu(index, cell.isEndpoint, cell))
                     event.accepted = true
             }
+            // Trees are not striped: stripes blur the indentation.
+            alternatingRows: false
             columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
             onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
-            delegate: TreeViewDelegate {
+            // A retired model may have no role data before its reset; the row
+            // reads its required roles, never model.display.
+            delegate: EndpointTreeRow {
                 id: endpointDelegate
-                objectName: "endpointRow"
-                required property string name
-                required property string detail
-                required property bool isEndpoint
-                readonly property var sourceIndex: endpointTree.modelIndex(Qt.point(0, row))
-                implicitWidth: endpointTree.width
-                implicitHeight: 38
-                text: name
                 // Optional for third-party providers. Selection stays owned by the
                 // provider, including when it refuses a click while busy.
                 highlighted: isEndpoint && panel.selectedEndpointIndex !== undefined
-                    && endpointTree.modelIndex(Qt.point(0, row)) === panel.selectedEndpointIndex
-                Rectangle {
-                    objectName: "endpointFocusIndicator"
-                    anchors.fill: parent
-                    color: "transparent"
-                    border.color: endpointDelegate.highlighted ? endpointDelegate.palette.highlightedText : panel.palette.text
-                    border.width: 2
-                    radius: 3
-                    visible: endpointTree.activeFocus && endpointDelegate.current
-                }
-                PlainToolTip {
-                    objectName: "endpointToolTip"
-                    visible: endpointDelegate.hovered && endpointDelegate.detail.length > 0
-                    text: endpointDelegate.detail
-                }
-                // Basic TreeViewDelegate reads model.display directly.
-                // A retired model may have no role data before its reset.
-                contentItem: Label {
-                    textFormat: Text.PlainText
-                    text: endpointDelegate.name
-                    elide: Text.ElideRight
-                    leftPadding: treeWatchCheck.visible ? treeWatchCheck.implicitWidth + 4 : 0
-                    color: endpointDelegate.highlighted
-                        ? endpointDelegate.palette.highlightedText
-                        : endpointDelegate.palette.buttonText
-                    CheckBox {
-                        id: treeWatchCheck
-                        objectName: "endpointWatchCheck"
-                        focusPolicy: Qt.NoFocus
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: panel.canMarkWatch(endpointDelegate.sourceIndex)
-                        checked: panel.isWatchMarked(endpointDelegate.sourceIndex)
-                        onClicked: panel.toggleWatchMark(endpointDelegate.sourceIndex)
-                        Accessible.name: "Select " + endpointDelegate.name + " for Watchlist"
-                    }
+                    && sourceIndex === panel.selectedEndpointIndex
+                readonly property int boxState: panel.stateOf(sourceIndex, panel.watchRevision)
+                watchable: panel.watchApi ? boxState >= 0 : panel.canMarkWatch(sourceIndex)
+                watchState: panel.watchApi ? Math.max(0, boxState)
+                          : panel.isWatchMarked(sourceIndex) ? Qt.Checked : Qt.Unchecked
+                watchEnabled: !panel.watchApi || !panel.watchLocked
+                watchOffReason: panel.pollingFull
+                // A group with nothing the Watchlist can hold says so.
+                hint: panel.watchApi && boxState < 0 && hasChildren
+                      ? qsTr("Nothing in %1 can be watched.").arg(name) : detail
+                watchName: !panel.watchApi ? "Select " + name + " for Watchlist"
+                         : hasChildren ? qsTr("Watch every Field in %1").arg(name) : qsTr("Watch %1").arg(name)
+                onWatchToggled: {
+                    if (panel.watchApi)
+                        panel.toggleWatch(sourceIndex)
+                    else
+                        panel.toggleWatchMark(sourceIndex)
                 }
                 onClicked: {
                     if (isEndpoint)
-                        panel.provider.selectEndpoint(endpointTree.modelIndex(Qt.point(0, row)))
+                        panel.provider.selectEndpoint(sourceIndex)
                 }
-                TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onTapped: function(point) {
-                        panel.openEndpointMenu(endpointDelegate.sourceIndex, endpointDelegate.isEndpoint,
-                                               endpointDelegate, point.position.x, point.position.y)
-                    }
+                onContextMenuRequested: function(x, y) {
+                    panel.openEndpointMenu(sourceIndex, isEndpoint, endpointDelegate, x, y)
                 }
             }
             ScrollBar.vertical: ScrollBar {}
             Component.onCompleted: Qt.callLater(function() {
                 if (!endpointTree) return
                 endpointTree.forceLayout()
-                endpointTree.expandRecursively(0, 2)
+                if (panel.openOnLoad)
+                    endpointTree.expandRecursively(0, 2)
             })
         }
         ListView {
@@ -614,7 +733,14 @@ Pane {
                 Keys.onReturnPressed: function(event) { activateResult(); event.accepted = true }
                 Keys.onEnterPressed: function(event) { activateResult(); event.accepted = true }
                 Keys.onSpacePressed: function(event) {
-                    if (modelData.generation === panel.searchGeneration && panel.canMarkWatch(modelData.index)) {
+                    if (modelData.generation !== panel.searchGeneration)
+                        return
+                    if (panel.watchApi) {
+                        if (panel.stateOf(modelData.index, panel.watchRevision) >= 0) {
+                            panel.toggleWatch(modelData.index)
+                            event.accepted = true
+                        }
+                    } else if (panel.canMarkWatch(modelData.index)) {
                         panel.toggleWatchMark(modelData.index)
                         event.accepted = true
                     }
@@ -669,17 +795,86 @@ Pane {
                         focusPolicy: Qt.NoFocus
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
+                        readonly property int boxState: panel.stateOf(searchDelegate.modelData.index,
+                                                                      panel.watchRevision)
                         visible: searchDelegate.modelData.generation === panel.searchGeneration &&
-                                 panel.canMarkWatch(searchDelegate.modelData.index)
-                        checked: panel.isWatchMarked(searchDelegate.modelData.index)
-                        onClicked: panel.toggleWatchMark(searchDelegate.modelData.index)
+                                 (panel.watchApi ? boxState >= 0
+                                                 : panel.canMarkWatch(searchDelegate.modelData.index))
+                        enabled: !panel.watchApi || !panel.watchLocked
+                        checked: panel.watchApi ? boxState === Qt.Checked
+                                                : panel.isWatchMarked(searchDelegate.modelData.index)
+                        // The provider decides; the box shows what it decided.
+                        nextCheckState: function() { return checkState }
+                        onClicked: {
+                            if (panel.watchApi)
+                                panel.toggleWatch(searchDelegate.modelData.index)
+                            else
+                                panel.toggleWatchMark(searchDelegate.modelData.index)
+                        }
                         Accessible.name: "Select " + searchDelegate.text + " for Watchlist"
                     }
                 }
             }
             ScrollBar.vertical: ScrollBar {}
         }
-        Label { objectName: "endpointTreeHelp"; visible: panel.height >= 360; textFormat: Text.PlainText; text: "Commands and Services have an explicit Request editor. Each action submits one request."; color: panel.palette.text; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+        // What the last watch action did, on one line kept at the bottom: always
+        // reserved, so nothing moves when it speaks; blank when idle. The whole
+        // of a cut line on hover.
+        // A fixed height: the tree above takes every other pixel.
+        // Undo follows the words it undoes: "Added 4 · Undo".
+        RowLayout {
+            id: statusRow
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: Math.max(statusMetrics.height + 4, 24)
+            Layout.maximumHeight: Layout.preferredHeight
+            spacing: Type.spacing
+            Label {
+                id: watchStatus
+                objectName: "endpointWatchSelectionStatus"
+                // As wide as its words, and cut only when the line is too narrow.
+                Layout.maximumWidth: Math.max(0, statusRow.width - (undoLink.visible
+                    ? undoLink.implicitWidth + statusDot.implicitWidth + 2 * statusRow.spacing : 0))
+                Layout.alignment: Qt.AlignVCenter
+                verticalAlignment: Text.AlignVCenter
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                color: panel.palette.text
+                // While the Watchlist polls, why the boxes are off, over the
+                // last message; that comes back when polling stops.
+                readonly property bool polling: panel.watchApi && panel.watchLocked
+                readonly property string full: polling ? panel.pollingFull
+                                             : panel.watchStatusFull.length > 0 ? panel.watchStatusFull
+                                             : panel.watchMarkStatus
+                text: polling ? panel.pollingShort : panel.watchMarkStatus
+                Accessible.description: full
+                HoverHandler { id: watchStatusHover }
+                PlainToolTip {
+                    visible: watchStatusHover.hovered && watchStatus.full.length > 0 &&
+                             (watchStatus.truncated || watchStatus.full !== watchStatus.text)
+                    text: watchStatus.full
+                }
+                FontMetrics { id: statusMetrics; font: watchStatus.font }
+            }
+            Label {
+                id: statusDot
+                visible: undoLink.visible
+                text: "·"
+                color: Theme.textMuted
+                font.pointSize: Type.caption
+                Accessible.ignored: true
+            }
+            LinkButton {
+                id: undoLink
+                objectName: "endpointWatchUndo"
+                visible: panel.statusUndo && panel.watchApi && panel.provider.canUndoWatch === true
+                text: qsTr("Undo")
+                font.pointSize: Type.caption
+                onClicked: panel.undoWatch()
+            }
+            Item { Layout.fillWidth: true }
+        }
     }
     Connections {
         target: panel.provider.endpoints
@@ -687,7 +882,7 @@ Pane {
         function onModelAboutToBeReset() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onModelReset() {
             panel.scheduleSearch()
-            Qt.callLater(function() { if (endpointTree) endpointTree.expandRecursively(0, 2) })
+            Qt.callLater(function() { if (endpointTree && panel.openOnLoad) endpointTree.expandRecursively(0, 2) })
         }
         function onRowsAboutToBeRemoved() { panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsRemoved() { panel.scheduleSearch() }

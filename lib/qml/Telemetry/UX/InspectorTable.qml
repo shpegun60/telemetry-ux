@@ -8,17 +8,17 @@ import QtQuick.Layouts
 Pane {
     id: inspector
     objectName: "hexInspector"
-    padding: 8
+    padding: Type.padding
 
     required property var view
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 4
+        spacing: Type.tight
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: Type.tight
             Label {
                 Layout.fillWidth: true
                 text: qsTr("Inspector")
@@ -72,8 +72,8 @@ Pane {
                 Accessible.description: row.modelData.description
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 4
-                    anchors.rightMargin: 4
+                    anchors.leftMargin: Type.tight
+                    anchors.rightMargin: Type.tight
                     Label {
                         Layout.preferredWidth: 80
                         text: row.modelData.type

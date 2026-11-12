@@ -81,10 +81,41 @@ QPainterPath upload()
 	return path;
 }
 
+// Download: an arrow down into an open tray, upload's counterpart.
+QPainterPath download()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 14);
+	path.lineTo(4.5, 19.5);
+	path.lineTo(19.5, 19.5);
+	path.lineTo(19.5, 14);
+	path.moveTo(12, 4.5);
+	path.lineTo(12, 15.5);
+	path.moveTo(7.5, 11);
+	path.lineTo(12, 15.5);
+	path.lineTo(16.5, 11);
+	return path;
+}
+// Refresh: three quarters of a circle with an arrowhead at its open end.
+QPainterPath refresh()
+{
+	QPainterPath path;
+	// Radius 7 about (12, 12), from the upper right round to the top.
+	path.arcMoveTo(5, 5, 14, 14, 45);
+	path.arcTo(5, 5, 14, 14, 45, 270);
+	path.moveTo(17, 3.5);
+	path.lineTo(17, 7.5);
+	path.lineTo(13, 7.5);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("edit"))
 		return pencil();
+	if (name == QLatin1String("download"))
+		return download();
+	if (name == QLatin1String("refresh"))
+		return refresh();
 	if (name == QLatin1String("save"))
 		return disk();
 	if (name == QLatin1String("upload"))

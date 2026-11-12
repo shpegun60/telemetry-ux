@@ -123,7 +123,13 @@ QQuickItem* control(QQuickItem* parent, const QString& name, const QString& text
 
 void click(QQuickWindow& window, QQuickItem& item)
 {
-	item.ensurePolished();
+	// Layouts that just became visible (a header shown once something is
+	// selected) place the item only when they are polished: from the top down.
+	QList<QQuickItem*> chain;
+	for (auto* level = &item; level; level = level->parentItem())
+		chain.prepend(level);
+	for (auto* level : chain)
+		level->ensurePolished();
 	const auto point = item.mapToScene({item.width() / 2, item.height() / 2}).toPoint();
 	CHECK(item.isEnabled() && point.x() >= 0 && point.y() >= 0 && point.x() < window.width() &&
 	      point.y() < window.height());
@@ -300,6 +306,90 @@ void bulkSessionWatch()
 	const auto destroyed = doomed->addWatchMany({QVariant::fromValue(doomedIndex)});
 	CHECK(!doomed && destroyed.value("added").toInt() == 1 && peer.requests() == requests);
 	connection.disconnect();
+}
+
+// The Device tree's watch boxes (T-1). A group's box covers every Field under
+// it the Watchlist can hold, and shows all, some or none. It watches or stops
+// watching them in one change with no request sent. Undo puts the rows back
+// where they were, and is gone once anything else changes the Watchlist.
+void groupWatchBoxes()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	auto* other = presentation.createProvider();
+	connect(connection, peer);
+	auto* model = provider->endpoints();
+	const auto first = endpoint(model, QStringLiteral("Value_0"));
+	const auto second = endpoint(model, QStringLiteral("Value_1"));
+	const auto third = endpoint(model, QStringLiteral("Value_2"));
+	const auto command = endpoint(model, QStringLiteral("Execute"));
+	CHECK(first.isValid() && second.isValid() && third.isValid() && command.isValid());
+	const auto group = first.parent();
+	int holdable = 0;
+	for (int row = 0; row < model->rowCount(group); ++row)
+		holdable += provider->watchState(model->index(row, 0, group)) >= 0 ? 1 : 0;
+	CHECK(holdable >= 3 && holdable <= 1024);
+	const auto requests = peer.requests();
+	const auto watched = [&](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
+	// A Command has no box; the Fields start empty.
+	CHECK(provider->watchState(command) == -1 && provider->watchState(first) == Qt::Unchecked &&
+	      provider->watchState(group) == Qt::Unchecked && !provider->canUndoWatch());
+	CHECK(provider->watchLimit() == 1024);
+	auto result = provider->setWatchMany(watched(first), true);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
+	CHECK(provider->watchState(first) == Qt::Checked && provider->watchState(group) == Qt::PartiallyChecked);
+	// The group: every Field it holds, the one already watched unchanged.
+	QSignalSpy inserted(provider->watchlist(), &QAbstractItemModel::rowsInserted);
+	result = provider->setWatchMany(watched(group), true);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == holdable - 1 &&
+	      result.value("unchanged").toInt() == 1 && result.value("fields").toInt() == holdable);
+	CHECK(inserted.count() == 1 && provider->watchCount() == holdable &&
+	      provider->watchState(group) == Qt::Checked && provider->canUndoWatch());
+	// Undo takes back what the group added, and only that.
+	result = provider->undoWatch();
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == holdable - 1);
+	CHECK(provider->watchCount() == 1 && provider->watchState(group) == Qt::PartiallyChecked &&
+	      !provider->canUndoWatch() && provider->undoWatch().value("status") == "refused");
+	// Unwatching the group, then Undo: the rows come back in their order.
+	CHECK(provider->setWatchMany(watched(third), true).value("changed").toInt() == 1);
+	CHECK(provider->setWatchMany(watched(second), true).value("changed").toInt() == 1);
+	const auto names = [&] {
+		QStringList list;
+		for (int row = 0; row < provider->watchlist()->rowCount(); ++row)
+			list << provider->watchlist()->index(row, 0).data(Qt::DisplayRole).toString();
+		return list;
+	};
+	const auto before = names();
+	CHECK(before.size() == 3);
+	QSignalSpy removed(provider->watchlist(), &QAbstractItemModel::rowsRemoved);
+	result = provider->setWatchMany(watched(group), false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 3 &&
+	      provider->watchCount() == 0 && provider->watchState(group) == Qt::Unchecked &&
+	      removed.count() == 1);
+	CHECK(provider->undoWatch().value("changed").toInt() == 3 && names() == before);
+	// Rows apart from one another: taken out run by run, put back in place.
+	const auto fourth = endpoint(model, QStringLiteral("Value_3"));
+	CHECK(provider->setWatchMany(watched(fourth), true).value("changed").toInt() == 1);
+	const auto four = names();
+	result = provider->setWatchMany({QVariant::fromValue(first), QVariant::fromValue(second)}, false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && provider->watchCount() == 2);
+	CHECK(provider->undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(provider->setWatchMany(watched(fourth), false).value("changed").toInt() == 1);
+	// Another change of the Watchlist takes Undo away.
+	CHECK(provider->setWatchMany(watched(group), true).value("status") == "ok" && provider->canUndoWatch());
+	provider->removeWatch(0);
+	CHECK(!provider->canUndoWatch());
+	// Another provider's index is refused; nothing was sent to the device.
+	CHECK(provider->setWatchMany(watched(endpoint(other->endpoints(), QStringLiteral("Value_0"))), true)
+	          .value("status") == "invalid");
+	CHECK(peer.requests() == requests && connection.workbench()->pending() == 0);
+	connection.disconnect();
+	CHECK(provider->watchState(group) == -1 &&
+	      provider->setWatchMany(watched(group), true).value("status") == "refused");
 }
 
 // The Watchlist and the rest of the panel work together. Selecting a Command or
@@ -896,6 +986,7 @@ int main(int argc, char** argv)
 	});
 	twoPanels();
 	bulkSessionWatch();
+	groupWatchBoxes();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();

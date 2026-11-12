@@ -1193,6 +1193,72 @@ static void bulkWatch()
 	CHECK(!doomed && destruction.value("added").toInt() == 1 && destroyed.calls.isEmpty());
 }
 
+// The Device tree's watch boxes (T-1), with the Dynamic provider's contracts: a
+// group's box covers its Fields and shows all, some or none; one change and no
+// request; Undo puts rows back in their places and goes once anything else
+// changes the Watchlist; a group that does not fit changes nothing.
+static void groupWatchBoxes()
+{
+	Api api, other;
+	StaticConfiguratorProvider p(watchBinding(api, 65)), foreign(watchBinding(other));
+	const auto group = p.endpoints()->index(0, 0);
+	const auto watched = [](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
+	CHECK(p.watchState(group) == Qt::Unchecked && p.watchState(endpoint(p, 0)) == Qt::Unchecked &&
+	      !p.canUndoWatch() && p.watchLimit() == 1024);
+	auto result = p.setWatchMany(watched(endpoint(p, 0)), true);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
+	CHECK(p.watchState(endpoint(p, 0)) == Qt::Checked && p.watchState(group) == Qt::PartiallyChecked);
+	int inserts = 0;
+	QObject::connect(p.watchlist(), &QAbstractItemModel::rowsInserted, &p, [&] { ++inserts; });
+	result = p.setWatchMany(watched(group), true);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 64 &&
+	      result.value("unchanged").toInt() == 1 && result.value("fields").toInt() == 65);
+	CHECK(inserts == 1 && p.watchCount() == 65 && p.watchState(group) == Qt::Checked && p.canUndoWatch());
+	result = p.undoWatch();
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 64);
+	CHECK(p.watchCount() == 1 && p.watchState(group) == Qt::PartiallyChecked && !p.canUndoWatch());
+	// Unwatching the group, then Undo: the rows come back in their order.
+	CHECK(p.setWatchMany(watched(endpoint(p, 2)), true).value("changed").toInt() == 1);
+	CHECK(p.setWatchMany(watched(endpoint(p, 1)), true).value("changed").toInt() == 1);
+	const auto names = [&] {
+		QStringList list;
+		for (int row = 0; row < p.watchlist()->rowCount(); ++row)
+			list << p.watchlist()->index(row, 0).data(Qt::DisplayRole).toString();
+		return list;
+	};
+	const auto before = names();
+	CHECK(before.size() == 3);
+	result = p.setWatchMany(watched(group), false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 3 && p.watchCount() == 0 &&
+	      p.watchState(group) == Qt::Unchecked);
+	CHECK(p.undoWatch().value("changed").toInt() == 3 && names() == before);
+	// Rows apart from one another: taken out run by run, put back in place,
+	// fresh and not read yet.
+	CHECK(p.setWatchMany(watched(endpoint(p, 3)), true).value("changed").toInt() == 1);
+	const auto four = names();
+	result = p.setWatchMany({QVariant::fromValue(endpoint(p, 0)), QVariant::fromValue(endpoint(p, 1))}, false);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && p.watchCount() == 2);
+	CHECK(p.undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(p.watchlist()->index(0, 0).data(role(p.watchlist(), "status")).toString() == "NotRead");
+	CHECK(p.setWatchMany(watched(endpoint(p, 3)), false).value("changed").toInt() == 1);
+	// Another change of the Watchlist takes Undo away.
+	CHECK(p.setWatchMany(watched(group), true).value("status") == "ok" && p.canUndoWatch());
+	p.removeWatch(0);
+	CHECK(!p.canUndoWatch() && p.undoWatch().value("status") == "refused");
+	// Another provider's index is refused; nothing reached the device.
+	CHECK(p.setWatchMany(watched(endpoint(foreign, 0)), true).value("status") == "invalid");
+	CHECK(api.calls.isEmpty());
+
+	// More Fields than the Watchlist holds: nothing changes, and room says why.
+	Api wide;
+	StaticConfiguratorProvider large(watchBinding(wide, 1030));
+	const auto all = large.endpoints()->index(0, 0);
+	result = large.setWatchMany(watched(all), true);
+	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == 1030 &&
+	      result.value("room").toInt() == 1024 && large.watchCount() == 0 &&
+	      large.watchState(all) == Qt::Unchecked && !large.canUndoWatch());
+}
+
 static void largeWatchCycle()
 {
 	Api api;
@@ -1257,6 +1323,7 @@ int main(int argc, char** argv)
 	staticSampleRoles();
 	watchBoundsAndReentrancy();
 	bulkWatch();
+	groupWatchBoxes();
 	largeWatchCycle();
 	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
 	return failures ? 1 : 0;

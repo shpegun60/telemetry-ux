@@ -20,7 +20,7 @@ BASELINE = {
         "qml/QmlInput.hpp": "0420e0887f797811274dfdc62e021cc1884ddb38e2a839db115dee1af021bb0f",
         "qml/QmlRpcAdapter.hpp": "a48905b862702858dc43e613c2136919ef6040b9bc6909982cbd3199f099ba1c",
         "qml/DeviceClientAdapter.hpp": "a48a71d3ec5087d430e76bb8e0aae3d3dd12468d708332a01f2ee7627186efde",
-        "qml/CMakeLists.txt": "b9e79528d6de6847ca0ebc775a4d72ec095b967af39bb0e6d8e19ed4896ff529",
+        "qml/CMakeLists.txt": "0507209dc81e94f138b06d640c5ba425b683a0d3c506489c2d27a1c03de5b285",
     },
     "mixed": {
         "qml/DeviceApi.hpp": "85a696c2d19327e4b9c183d15c7522838f9e353f6f761ded0e1b45e7697bcfdd",
@@ -29,7 +29,7 @@ BASELINE = {
         "qml/QmlInput.hpp": "9e40cac1dc7c5c249247071da2e99a8bb4adb21e739bc089214365225c14cb95",
         "qml/QmlRpcAdapter.hpp": "fb099c8c193ada3efc3d179225014803ec71c80288a508e0ed3f183a656d638e",
         "qml/DeviceClientAdapter.hpp": "6d0528f21d6a022ec8cb286c17cbe64ab95dbfabcc238397276f78a9a9a96407",
-        "qml/CMakeLists.txt": "b9e79528d6de6847ca0ebc775a4d72ec095b967af39bb0e6d8e19ed4896ff529",
+        "qml/CMakeLists.txt": "0507209dc81e94f138b06d640c5ba425b683a0d3c506489c2d27a1c03de5b285",
     },
 }
 

@@ -8,7 +8,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import Telemetry.UX
 
 FocusScope {
     id: view
@@ -21,13 +20,13 @@ FocusScope {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 8
+        anchors.leftMargin: Type.padding
+        anchors.rightMargin: Type.padding
+        spacing: Type.padding
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Type.padding
             Label {
                 objectName: "capabilityKind"
                 text: view.decoded.kind
@@ -71,8 +70,8 @@ FocusScope {
             objectName: "capabilityFields"
             Layout.fillWidth: true
             columns: 3
-            columnSpacing: 16
-            rowSpacing: 6
+            columnSpacing: Type.groupSpacing
+            rowSpacing: Type.spacing
             Repeater {
                 model: view.decoded.fields
                 delegate: Label {

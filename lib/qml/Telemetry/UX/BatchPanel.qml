@@ -13,7 +13,7 @@ Pane {
     ColumnLayout {
         id: batchLayout
         anchors.fill: parent
-        spacing: 6
+        spacing: Type.spacing
         RowLayout {
             Layout.fillWidth: true
             CheckBox {
@@ -137,6 +137,11 @@ Pane {
                     Layout.fillHeight: true
                     TreeView {
                         id: responseTree
+                        // A zoom changes the row height: the rows already laid out follow it.
+                        Connections {
+                            target: Type
+                            function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) }
+                        }
                         objectName: "batchResponseTree"
                         anchors.fill: parent
                         clip: true
@@ -153,7 +158,7 @@ Pane {
                             required property int childCount
                             required property int loadedCount
                             implicitWidth: responseTree.width
-                            implicitHeight: 40
+                            implicitHeight: Type.rowHeight
                             text: name
                             PlainToolTip { text: response.detail; visible: response.hovered && text.length > 0 }
                             contentItem: RowLayout {

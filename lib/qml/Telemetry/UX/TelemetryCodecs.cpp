@@ -64,7 +64,7 @@ void installTelemetryCodecs(OpenFiles& files)
 		    }
 		    return content;
 	    },
-	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/DescriptorView.qml"))});
+	    QUrl(QStringLiteral("qrc:/qt/qml/Telemetry/UX/DescriptorView.qml"))});
 
 	files.addCodec(FileCodec{
 	    QStringLiteral("Values"),
@@ -94,7 +94,7 @@ void installTelemetryCodecs(OpenFiles& files)
 		    }
 		    return content;
 	    },
-	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/ValuesView.qml"))});
+	    QUrl(QStringLiteral("qrc:/qt/qml/Telemetry/UX/ValuesView.qml"))});
 
 	files.addCodec(FileCodec{
 	    QStringLiteral("Capability"),
@@ -113,7 +113,7 @@ void installTelemetryCodecs(OpenFiles& files)
 		    }
 		    return content;
 	    },
-	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/CapabilityView.qml"))});
+	    QUrl(QStringLiteral("qrc:/qt/qml/Telemetry/UX/CapabilityView.qml"))});
 
 	// JSON is no Telemetry format, but a device's files are often JSON.
 	installJsonCodec(files);

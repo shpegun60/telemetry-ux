@@ -18,7 +18,6 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQml.Models
-import Telemetry.UX
 
 FocusScope {
     id: view
@@ -211,14 +210,14 @@ FocusScope {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 4
+        spacing: Type.tight
 
         // Which descriptor the file was written with: its fingerprint, with Copy.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label {
                 text: qsTr("Values")
                 color: Theme.textPrimary
@@ -254,9 +253,9 @@ FocusScope {
             objectName: "valuesNeedsDescriptor"
             visible: view.decoded.needsDescriptor
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -293,8 +292,8 @@ FocusScope {
             objectName: "valuesSummary"
             visible: view.decoded.valid
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
             elide: Text.ElideRight
             font.pointSize: Type.caption
             color: Theme.textSecondary
@@ -307,9 +306,9 @@ FocusScope {
             objectName: "valuesLiveBar"
             visible: view.decoded.valid && !!view.live
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             // Shown pressed while on; the state is the reader's, never the button's own.
             Button {
                 objectName: "valuesLive"
@@ -370,8 +369,8 @@ FocusScope {
         RowLayout {
             visible: view.decoded.valid && !!view.live
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
             Label {
                 objectName: "valuesLiveState"
                 Layout.fillWidth: true
@@ -411,9 +410,9 @@ FocusScope {
         RowLayout {
             visible: view.decoded.valid
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             TextField {
                 id: findField
                 objectName: "valuesFind"
@@ -460,14 +459,14 @@ FocusScope {
         RowLayout {
             visible: view.decoded.valid
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label { Layout.fillWidth: true; text: qsTr("Name"); font.pointSize: Type.caption; color: Theme.textSecondary }
             Label {
                 objectName: "valuesValueHeading"
                 Layout.preferredWidth: 10 + view.valueWidth
-                leftPadding: 10
+                leftPadding: Type.groupSpacing
                 text: view.decoded.held ? qsTr("Value · held") : qsTr("Value")
                 font.pointSize: Type.caption
                 color: view.decoded.held ? Theme.info : Theme.textSecondary
@@ -484,6 +483,11 @@ FocusScope {
 
         TreeView {
             id: tree
+            // A zoom changes the row height: the rows already laid out follow it.
+            Connections {
+                target: Type
+                function onRowHeightChanged() { Qt.callLater(function() { if (tree) tree.forceLayout() }) }
+            }
             objectName: "valuesTree"
             visible: view.decoded.valid
             Layout.fillWidth: true

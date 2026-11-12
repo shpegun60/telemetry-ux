@@ -1,8 +1,8 @@
 # Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(telemetry_inspector_qml_checks LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
-qt_standard_project_setup(REQUIRES 6.4)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
+qt_standard_project_setup(REQUIRES 6.12)
 get_filename_component(TELEMETRY_UX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(BUILD_TESTING OFF CACHE BOOL "Build only the maintained Inspector checks" FORCE)
 # Import in the test directory so Qt deferred finalization can resolve every
@@ -62,7 +62,7 @@ endforeach()
 # Different host chrome embeds the same explicit-provider view, without a context singleton.
 qt_add_executable(telemetry_configurator_embedding_check Embedded.cpp)
 qt_add_qml_module(telemetry_configurator_embedding_check
-    URI Telemetry.EmbeddingHost VERSION 1.0 RESOURCE_PREFIX /qt/qml QML_FILES Embedded.qml)
+    URI Telemetry.EmbeddingHost VERSION 1.0 QML_FILES Embedded.qml)
 target_compile_features(telemetry_configurator_embedding_check PRIVATE cxx_std_20)
 target_link_libraries(telemetry_configurator_embedding_check PRIVATE inspector_qml_support
     Qt6::Quick Qt6::QuickControls2 Qt6::Test)

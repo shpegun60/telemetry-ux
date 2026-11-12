@@ -1,10 +1,10 @@
 # Installed Session -> installed UX, actual TCP/QML acceptance. MIT.
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(telemetry_qt_connection_checks LANGUAGES CXX)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Test)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Test)
 find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection tcp_server)
 find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
-qt_standard_project_setup(REQUIRES 6.4)
+qt_standard_project_setup(REQUIRES 6.12)
 qt_add_executable(telemetry_qt_connection_check main.cpp
     ../../examples/inspector/DemoPeer.cpp ../../examples/inspector/TcpDemoServer.cpp)
 qt_add_resources(telemetry_qt_connection_check "entry" PREFIX "/"

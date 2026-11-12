@@ -19,7 +19,7 @@ wire versions) separately from the UX revision, and fingerprints all files in
 the actual installed prefix before and after execution. SDK or UX input drift
 fails qualification. The prefix and fresh output directory must be disjoint.
 
-Requires Qt 6.4 or newer with Network, Quick Controls and Test. On Windows select
+Requires Qt 6.12 or newer with Network, Quick Controls and Test. On Windows select
 the matching Qt MinGW kit explicitly. The runner puts that compiler and Qt runtime
 first in `PATH`, keeps builds/logs outside the source tree, and retains before/after
 source hashes, binary hashes and a machine-readable result. Source drift fails the

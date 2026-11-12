@@ -37,7 +37,7 @@ RowLayout {
     }
 
     visible: false
-    spacing: 8
+    spacing: Type.padding
 
     Label {
         text: qsTr("Find")
@@ -100,8 +100,8 @@ RowLayout {
     ToolButton {
         objectName: bar.objectName + "Close"
         flat: true
-        implicitWidth: 24
-        implicitHeight: 24
+        implicitWidth: Type.rowHeight
+        implicitHeight: Type.rowHeight
         text: qsTr("×")
         Accessible.name: qsTr("Close Find")
         ToolTip.visible: hovered || visualFocus

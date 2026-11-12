@@ -610,9 +610,9 @@ def generate(schema, configurator=False):
     uri = "Telemetry.Generated." + schema.namespace.replace("::", ".")
     cmake = f'''# Generated Qt 6 module; the core SDK has no Qt or RPC dependency.
 # SPDX-License-Identifier: MIT
-cmake_minimum_required(VERSION 3.21)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Qml)
-qt_standard_project_setup(REQUIRES 6.4)
+cmake_minimum_required(VERSION 3.25)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Qml)
+qt_standard_project_setup(REQUIRES 6.12)
 qt_add_qml_module({target} STATIC
     URI {uri}
     VERSION 1.0

@@ -30,7 +30,13 @@ Item {
     }
     function throwingGetter() {
         let v = configValue(); Object.defineProperty(v, "serial", {get: function() {throw 42}});
-        return apiObject.device.writeConfig(v)
+        // Qt 6.12 reads the getter while converting the argument: the call
+        // throws here, before the generated method runs, and no request leaves.
+        try {
+            return apiObject.device.writeConfig(v)
+        } catch (e) {
+            return e === 42 ? "thrown" : "unexpected"
+        }
     }
     function typedArray() {
         let v = configValue(); v.samples = new Uint16Array([1,256,65535]);

@@ -2,6 +2,7 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QItemSelectionModel>
@@ -639,11 +640,16 @@ int main(int argc, char** argv)
             auto* okRow = rowAt(narrowList, 0);
             auto* failedRow = rowAt(narrowList, 1);
             CHECK(columns && columns->isVisible() && valueTitle && statusTitle && okRow && failedRow);
+            // A one-line row is Type's row: the body (the application font, at
+            // least 10 pt) in pixels x 1.65.
+            const qreal bodyPixels = std::max<qreal>(10.0, QGuiApplication::font().pointSizeF()) *
+                                     QGuiApplication::primaryScreen()->logicalDotsPerInch() / 72.0;
+            const qreal typeRow = std::round(bodyPixels * 1.65);
             for (auto* row : {okRow, failedRow}) {
                 auto* rowValue = item(row, QStringLiteral("watchValueText"));
                 auto* rowRemove = item(row, QStringLiteral("removeWatchButton"));
                 CHECK(rowValue && rowRemove);
-                CHECK(qAbs(row->height() - 28) < 0.5);
+                CHECK(qAbs(row->height() - typeRow) < 0.5);
                 CHECK(rowValue->property("paintedHeight").toReal() <= row->height());
                 CHECK(rowValue->property("text").toString() == QStringLiteral("18446744073709551615"));
                 CHECK(rowValue->property("horizontalAlignment").toInt() == Qt::AlignRight);
@@ -887,17 +893,19 @@ int main(int argc, char** argv)
         auto* resultBackground = resultRow->property("background").value<QObject*>();
         auto* resultLabel = resultRow->property("contentItem").value<QObject*>();
         auto* treeBackground = item(searchPanel, QStringLiteral("endpointTreePanelBackground"));
-        auto* treeTitle = item(searchPanel, QStringLiteral("endpointTreeTitle"));
-        auto* treeHelp = item(searchPanel, QStringLiteral("endpointTreeHelp"));
-        CHECK(resultBackground && resultLabel && treeBackground && treeTitle && treeHelp);
+        // No heading repeats the dock's title and no standing note takes rows;
+        // the watch status line is reserved at the bottom, blank when idle.
+        auto* watchStatus = item(searchPanel, QStringLiteral("endpointWatchSelectionStatus"));
+        CHECK(resultBackground && resultLabel && treeBackground && watchStatus);
+        CHECK(!item(searchPanel, QStringLiteral("endpointTreeTitle")) &&
+              !item(searchPanel, QStringLiteral("endpointTreeHelp")) && watchStatus->isVisible());
         const auto treeColor = [&] { return treeBackground->property("color").value<QColor>(); };
         const auto textColor = [&] { return resultLabel->property("color").value<QColor>(); };
         CHECK(!resultRow->property("highlighted").toBool());
         CHECK(resultBackground->property("color").value<QColor>().alpha() == 0);
         CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
         CHECK(contrastRatio(textColor(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(watchStatus->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
         resultRow->forceActiveFocus(Qt::TabFocusReason);
         settle();
@@ -921,8 +929,7 @@ int main(int argc, char** argv)
         CHECK(searchWindow->setProperty("testText", QColor(QStringLiteral("#121212"))));
         settle();
         CHECK(treeColor() == QColor(QStringLiteral("#ffffff")));
-        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(watchStatus->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(resultBackground->property("color").value<QColor>() == QColor(QStringLiteral("#c3e0ff")));
         CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#121212")));
