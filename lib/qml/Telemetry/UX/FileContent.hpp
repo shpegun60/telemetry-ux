@@ -29,6 +29,7 @@
 #include "FileTextModels.hpp"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -168,6 +169,13 @@ class FileContent final : public QObject {
 	Q_PROPERTY(bool modified READ modified NOTIFY editChanged)
 	Q_PROPERTY(bool canUndo READ canUndo NOTIFY editChanged)
 	Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
+	// The device's layer: whether the device's bytes as read are known for
+	// this copy, what to call them in a sentence, and how many bytes of the
+	// working copy differ from them, edits not saved included. Without them
+	// the layer is not known - never taken to be the same.
+	Q_PROPERTY(bool hasReference READ hasReference NOTIFY editChanged)
+	Q_PROPERTY(QString referenceLabel READ referenceLabel NOTIFY editChanged)
+	Q_PROPERTY(qint64 referenceDiffers READ referenceDiffers NOTIFY editChanged)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
@@ -223,6 +231,17 @@ public:
 	// (Live), parented to the content it is for; null when it cannot.
 	using LiveFactory = std::function<QObject*(const QString& devicePath, QObject* parent)>;
 	void setLiveFactory(const LiveFactory* factory) noexcept { liveFactory_ = factory; }
+	// What a copy is compared against - for a device file, the device's bytes
+	// as read (DeviceBytes) - and its name in a sentence ("the device's bytes
+	// as read at 14:02"). Looked up after each read of the copy, with the
+	// device's path it was read from (empty for a file from disk).
+	struct Reference {
+		QByteArray bytes;
+		QString label;
+	};
+	using ReferenceLookup =
+	    std::function<std::optional<Reference>(const QString& localFile, const QString& devicePath)>;
+	void setReferenceLookup(const ReferenceLookup* lookup) noexcept { referenceLookup_ = lookup; }
 	// The device file's live reader, made on first use and kept with this
 	// content: null for a file from disk, or when the host reads no device.
 	// It offers `running`, `periodMs`, `problem` and the signal
@@ -261,6 +280,26 @@ public:
 	Q_INVOKABLE QString saveCopyAs(const QUrl& file);
 	// Drops the edits not saved: the bytes on disk again, nothing to undo.
 	Q_INVOKABLE void discard();
+	bool hasReference() const noexcept { return hasReference_; }
+	QString referenceLabel() const { return referenceLabel_; }
+	qint64 referenceDiffers() const noexcept { return referenceDiffers_; }
+	// Whether a byte of the working copy differs from the device's as read.
+	bool differsFromReference(qint64 offset) const noexcept
+	{
+		return hasReference_ && offset >= 0 && offset < bytes_.size() &&
+		       (offset >= reference_.size() || bytes_[offset] != reference_[offset]);
+	}
+	// The device's byte at offset as read, or -1 when it is not known.
+	int referenceByte(qint64 offset) const noexcept
+	{
+		return hasReference_ && offset >= 0 && offset < reference_.size()
+		           ? static_cast<unsigned char>(reference_[offset])
+		           : -1;
+	}
+	// Restore the device's version: every byte the device's as read, as one
+	// step to undo, editing on or off; saved like any edit. Empty when done;
+	// otherwise why not (not known, another size, nothing differs).
+	Q_INVOKABLE QString restoreReference();
 	// Whether a byte differs from the copy on disk, for the hex view.
 	bool isEdited(qint64 offset) const noexcept
 	{
@@ -285,6 +324,14 @@ Q_SIGNALS:
 private:
 	friend class OverwriteStep;
 	friend class RunsStep;
+	friend class WholeStep;
+	// The working copy replaced whole (Restore), its counts made again.
+	void putWhole(const QByteArray& bytes);
+	// The reference for localFile, from the lookup, after a read.
+	void findReference();
+	void clearReference();
+	// Bytes that differ between two copies, and their lengths' difference.
+	static qint64 differing(const QByteArray& a, const QByteArray& b) noexcept;
 	// Writes bytes at offset, the edited count kept: what an undo step does.
 	void put(qint64 offset, const QByteArray& bytes);
 	// The same for several places, announced once over the span they cover.
@@ -309,6 +356,11 @@ private:
 	const std::vector<FileCodec>* codecs_ = nullptr;
 	const FileCodecContext* context_ = nullptr;
 	const LiveFactory* liveFactory_ = nullptr;
+	const ReferenceLookup* referenceLookup_ = nullptr;
+	QByteArray reference_;
+	QString referenceLabel_;
+	bool hasReference_ = false;
+	qint64 referenceDiffers_ = 0;
 	QObject* decoded_ = nullptr; // a child of this
 	QObject* live_ = nullptr;    // a child of this, for devicePath_
 	QUrl codecView_;
@@ -343,6 +395,8 @@ public:
 	void setContext(FileCodecContext context) { context_ = std::move(context); }
 	// How a device file is read live, for the views that show it so.
 	void setLiveFactory(FileContent::LiveFactory factory) { liveFactory_ = std::move(factory); }
+	// How a copy finds what it is compared against (DeviceBytes::lookup()).
+	void setReferenceLookup(FileContent::ReferenceLookup lookup) { referenceLookup_ = std::move(lookup); }
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
 	// it again when that copy is already open - not one with edits not saved;
 	// returns its row.
@@ -379,6 +433,7 @@ private:
 	std::vector<FileCodec> codecs_;
 	FileCodecContext context_;
 	FileContent::LiveFactory liveFactory_;
+	FileContent::ReferenceLookup referenceLookup_;
 	std::vector<std::unique_ptr<FileContent>> files_;
 };
 } // namespace telemetry::ux

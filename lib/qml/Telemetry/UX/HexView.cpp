@@ -630,7 +630,7 @@ QString HexView::paste()
 		return told(selected > 0 ? tr("Pasted %L1 of %L2 bytes: as many as are selected").arg(count).arg(all)
 		                         : tr("Pasted %L1 of %L2 bytes: the rest would pass the file's end").arg(count).arg(all),
 		            partial);
-	return told(tr("Pasted %Ln bytes", nullptr, count), QStringLiteral("done"));
+	return told(count == 1 ? tr("Pasted 1 byte") : tr("Pasted %L1 bytes").arg(count), QStringLiteral("done"));
 }
 
 int HexView::patternBytes(const QString& query, const QString& kind, int width) const
@@ -889,6 +889,11 @@ QString HexView::status() const
 		            .arg(hex(region->offset, hexDigits()));
 	if (content_ && content_->isEdited(cursor_))
 		text += tr(" · Edited, not saved");
+	// The device's byte where this copy's differs: what Restore would put back.
+	if (content_ && content_->differsFromReference(cursor_)) {
+		const auto device = content_->referenceByte(cursor_);
+		text += device >= 0 ? tr(" · The device's: %1").arg(hex(device, 2)) : tr(" · Not on the device");
+	}
 	return text;
 }
 
@@ -1300,10 +1305,10 @@ void HexView::paint(QPainter* painter)
 		// Each byte's two digits fall into one of three strings by how they are
 		// drawn - plain, dimmed (zero), selected - kept aligned with spaces.
 		const int hexChars = bytesPerRow_ * 3 + bytesPerRow_ / 8;
-		QString plain(hexChars, QLatin1Char(' ')), dim = plain, chosen = plain, edited = plain;
+		QString plain(hexChars, QLatin1Char(' ')), dim = plain, chosen = plain, edited = plain, device = plain;
 		QString plainText(bytesPerRow_, QLatin1Char(' ')), dimText = plainText, chosenText = plainText,
-		                                                   editedText = plainText;
-		bool rowEdited = false;
+		                                                   editedText = plainText, deviceText = plainText;
+		bool rowEdited = false, rowDevice = false;
 		for (int i = 0; i < count; ++i) {
 			const auto offset = start + i;
 			const auto byte = static_cast<unsigned char>(std::as_const(bytes_)[offset]);
@@ -1317,13 +1322,27 @@ void HexView::paint(QPainter* painter)
 				if (textColumn_)
 					painter->drawLine(QPointF(at.text + i * at.cell, line), QPointF(at.text + (i + 1) * at.cell, line));
 			}
-			auto& target = selected ? chosen : changedByte ? edited : byte == 0 ? dim : plain;
+			// Saved here but not the device's as read: the info colour, dotted.
+			const bool deviceByte = !changedByte && content_ && content_->differsFromReference(offset);
+			rowDevice = rowDevice || deviceByte;
+			if (deviceByte) {
+				painter->setPen(QPen(selected ? selectedTextColor_ : deviceColor_, 1, Qt::DotLine));
+				const auto line = baseline(top) + 3;
+				painter->drawLine(QPointF(hexX(at, i), line), QPointF(hexX(at, i) + 2 * at.cell, line));
+				if (textColumn_)
+					painter->drawLine(QPointF(at.text + i * at.cell, line), QPointF(at.text + (i + 1) * at.cell, line));
+			}
+			auto& target = selected ? chosen : changedByte ? edited : deviceByte ? device : byte == 0 ? dim : plain;
 			const auto pos = i * 3 + i / 8;
 			const auto digits = hex(byte, 2);
 			target[pos] = digits[0];
 			target[pos + 1] = digits[1];
 			const bool shown = printable(static_cast<char>(byte));
-			auto& textTarget = selected ? chosenText : changedByte ? editedText : shown ? plainText : dimText;
+			auto& textTarget = selected     ? chosenText
+			                   : changedByte ? editedText
+			                   : deviceByte  ? deviceText
+			                   : shown       ? plainText
+			                                 : dimText;
 			textTarget[i] = shown ? QChar(byte) : QChar(0x00b7);
 		}
 		const QPointF hexAt(at.hex, baseline(top));
@@ -1335,6 +1354,8 @@ void HexView::paint(QPainter* painter)
 		painter->drawText(hexAt, chosen);
 		painter->setPen(editedColor_);
 		painter->drawText(hexAt, edited);
+		painter->setPen(deviceColor_);
+		painter->drawText(hexAt, device);
 		if (textColumn_) {
 			const QPointF textAt(at.text, baseline(top));
 			painter->setPen(textColor_);
@@ -1345,13 +1366,20 @@ void HexView::paint(QPainter* painter)
 			painter->drawText(textAt, chosenText);
 			painter->setPen(editedColor_);
 			painter->drawText(textAt, editedText);
+			painter->setPen(deviceColor_);
+			painter->drawText(textAt, deviceText);
 		}
-		// A row with edits not saved: a dot before its offset.
+		// A row with edits not saved: a dot before its offset; one saved here
+		// but not the device's: a hollow dot.
 		if (rowEdited) {
 			painter->setPen(Qt::NoPen);
 			painter->setBrush(editedColor_);
 			painter->drawEllipse(QPointF(std::max<qreal>(4, at.offset / 2), top + rowHeight_ / 2), 3, 3);
 			painter->setBrush(Qt::NoBrush);
+		} else if (rowDevice) {
+			painter->setPen(QPen(deviceColor_, 1.2));
+			painter->setBrush(Qt::NoBrush);
+			painter->drawEllipse(QPointF(std::max<qreal>(4, at.offset / 2), top + rowHeight_ / 2), 2.5, 2.5);
 		}
 	}
 

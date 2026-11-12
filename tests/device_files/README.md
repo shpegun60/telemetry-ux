@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 709 checks):
+- **Models** (`main.cpp`, 743 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -66,7 +66,15 @@ over localhost TCP to the SDK's native server. No board.
     resized; the bytes that differ from the copy on disk counted (one written
     back to its value is not); one step to undo for what was typed in one go,
     undone and redone with editing off too; several places as one step
-    (Replace all), the view told once;
+    (Replace all), the view told once; the device's layer (`DeviceBytes`):
+    the bytes as read kept in the device's folder and found from the copy
+    alone, a copy outside it refused, the count of bytes that differ through
+    edits, a save and a read from disk, Restore as one step undone and
+    redone, Discard recounting, a record that no longer checks or is another
+    device path's taken as not known, forget; a file read for the viewer
+    leaving its record in the device's folder the host names, a plain
+    download over it removing it, a folder that does not hold the copy
+    keeping none and saying why in the row;
     Save through a temporary file, the text, table and codec read again; a copy
     elsewhere; Discard; Reload dropping the edits; `OpenFiles` naming what is
     not saved, saving or discarding it all.

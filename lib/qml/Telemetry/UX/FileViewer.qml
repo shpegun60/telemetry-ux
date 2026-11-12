@@ -80,6 +80,13 @@ Pane {
         return problem
     }
     function askDiscard() { hexPane.askDiscard() }
+    // Restore the device's version: asked with how many bytes go back, edits
+    // not saved included; one step, so Undo takes it back.
+    readonly property bool restorable: !!content && content.hasReference && content.referenceDiffers > 0
+    function askRestore() {
+        if (viewer.ready && viewer.restorable)
+            restoreDialog.open()
+    }
     // Paste over the bytes and Replace, from a menu: in Hex, while editing.
     function paste() {
         if (!viewer.ready || !viewer.content.editing)
@@ -104,6 +111,55 @@ Pane {
                     function() { viewer.content.discard() }, function() { viewer.reloadRequested() })
     }
     UnsavedChangesDialog { id: unsaved }
+    Dialog {
+        id: restoreDialog
+        objectName: "restoreDeviceDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.max(280, Math.min(480, (parent ? parent.width : 480) - 32))
+        modal: true
+        title: qsTr("Restore the device's version?")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        property string problem: ""
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: !viewer.content ? ""
+                      : viewer.content.referenceDiffers === 1
+                      ? qsTr("1 byte of this copy goes back to %1, edits not saved included. Undo takes it back. Nothing is written until you save.")
+                            .arg(viewer.content.referenceLabel)
+                      : qsTr("%L1 bytes of this copy go back to %2, edits not saved included. Undo takes it back. Nothing is written until you save.")
+                            .arg(viewer.content.referenceDiffers).arg(viewer.content.referenceLabel)
+            }
+            Label {
+                objectName: "restoreDeviceProblem"
+                visible: restoreDialog.problem.length > 0
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.error
+                text: restoreDialog.problem
+                Accessible.role: Accessible.AlertMessage
+            }
+        }
+        Component.onCompleted: standardButton(Dialog.Ok).text = qsTr("Restore")
+        onOpened: {
+            problem = ""
+            standardButton(Dialog.Cancel).forceActiveFocus()
+        }
+        onAccepted: {
+            const problem = viewer.content.restoreReference()
+            if (problem.length > 0) {
+                restoreDialog.problem = problem
+                Qt.callLater(restoreDialog.open)
+                return
+            }
+            viewer.mode = "hex"
+            hexPane.focusContent()
+        }
+    }
     // Ctrl+S while the keyboard is anywhere in this viewer - Hex, Text, Table.
     Shortcut {
         sequences: [StandardKey.Save]
@@ -210,6 +266,13 @@ Pane {
                 height: visible ? implicitHeight : 0
                 text: qsTr("Save the &edited bytes as…")
                 onTriggered: viewer.saveEditedCopy()
+            }
+            MenuItem {
+                objectName: "fileViewerRestore"
+                visible: viewer.restorable
+                height: visible ? implicitHeight : 0
+                text: qsTr("Restore the &device's version…")
+                onTriggered: viewer.askRestore()
             }
             MenuItem {
                 objectName: "hexDiscard"
@@ -415,6 +478,16 @@ Pane {
                     .arg(Qt.formatTime(viewer.content.readAt, "HH:mm:ss"))
                     .arg(viewer.content.format)
                     .arg(viewer.content.devicePath.length > 0 ? viewer.content.devicePath : viewer.content.localFile)
+            // The device's layer, one hover away: the same as the device's
+            // bytes, how many differ, or not known - which look alike on screen.
+            readonly property string deviceLayer: !viewer.ready || viewer.content.devicePath.length === 0 ? ""
+                : !viewer.content.hasReference ? qsTr("The device's bytes are not known for this copy.")
+                : viewer.content.referenceDiffers === 0 ? qsTr("The same as %1.").arg(viewer.content.referenceLabel)
+                : viewer.content.referenceDiffers === 1 ? qsTr("1 byte differs from %1.").arg(viewer.content.referenceLabel)
+                : qsTr("%L1 bytes differ from %2.").arg(viewer.content.referenceDiffers).arg(viewer.content.referenceLabel)
+            HoverHandler { id: footerHover }
+            ToolTip.visible: footerHover.hovered && (truncated || deviceLayer.length > 0)
+            ToolTip.text: deviceLayer.length > 0 ? text + "\n" + deviceLayer : text
         }
     }
 }
