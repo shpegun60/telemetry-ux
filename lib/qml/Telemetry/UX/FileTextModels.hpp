@@ -115,6 +115,10 @@ public:
 
 	// A heading clicked: ascending, then descending, then the file's order.
 	Q_INVOKABLE void sortBy(int column);
+	// The same by name, for the keyboard's menu: a column and a direction,
+	// or back to the file's order.
+	Q_INVOKABLE void sortColumn(int column, bool descending);
+	Q_INVOKABLE void clearSort();
 	// Only the rows with text in some cell (ignoring case); empty shows all.
 	// Returns the rows shown.
 	Q_INVOKABLE int setFilter(const QString& text);

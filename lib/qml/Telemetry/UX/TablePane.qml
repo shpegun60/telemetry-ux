@@ -109,13 +109,30 @@ FocusScope {
                 filterField.selectAll()
             }
         }
+        MenuSeparator {}
         MenuItem {
-            text: qsTr("File's &order")
+            objectName: "tableSortAscending"
+            readonly property int column: pane.current().valid ? pane.current().column : -1
+            text: column < 0 ? qsTr("Sort &ascending") : qsTr("Sort &ascending by %1").arg(pane.rows.heading(column))
+            enabled: column >= 0
+            checkable: true
+            checked: column >= 0 && pane.rows.sortedColumn === column && !pane.rows.descending
+            onTriggered: pane.rows.sortColumn(column, false)
+        }
+        MenuItem {
+            objectName: "tableSortDescending"
+            readonly property int column: pane.current().valid ? pane.current().column : -1
+            text: column < 0 ? qsTr("Sort &descending") : qsTr("Sort &descending by %1").arg(pane.rows.heading(column))
+            enabled: column >= 0
+            checkable: true
+            checked: column >= 0 && pane.rows.sortedColumn === column && pane.rows.descending
+            onTriggered: pane.rows.sortColumn(column, true)
+        }
+        MenuItem {
+            objectName: "tableClearSort"
+            text: qsTr("Clear sort (file &order)")
             enabled: pane.rows && pane.rows.sortedColumn >= 0
-            onTriggered: {
-                while (pane.rows.sortedColumn >= 0)
-                    pane.rows.sortBy(pane.rows.sortedColumn)
-            }
+            onTriggered: pane.rows.clearSort()
         }
         onClosed: table.forceActiveFocus()
     }
@@ -131,6 +148,10 @@ FocusScope {
             Layout.rightMargin: 8
             Layout.bottomMargin: 4
             spacing: 8
+            Label {
+                text: qsTr("Filter")
+                color: Theme.textSecondary
+            }
             TextField {
                 id: filterField
                 objectName: "tableFilter"
@@ -141,6 +162,21 @@ FocusScope {
                 onTextChanged: pane.rows.setFilter(text)
                 Keys.onEscapePressed: {
                     text = ""
+                    table.forceActiveFocus()
+                }
+            }
+            ToolButton {
+                objectName: "tableFilterClear"
+                visible: filterField.text.length > 0
+                flat: true
+                implicitWidth: 24
+                implicitHeight: 24
+                text: qsTr("×")
+                Accessible.name: qsTr("Clear filter")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.text: qsTr("Clear filter (Esc)")
+                onClicked: {
+                    filterField.text = ""
                     table.forceActiveFocus()
                 }
             }
@@ -184,6 +220,7 @@ FocusScope {
                 required property int column
                 required property string display
                 readonly property bool sorted: pane.rows && pane.rows.sortedColumn === column
+                readonly property bool numeric: pane.rows && pane.rows.numeric(column)
                 implicitWidth: Math.max(72, title.implicitWidth + 32)
                 implicitHeight: Type.rowHeight
                 color: hover.hovered ? Theme.stateHover : Theme.surfaceBar
@@ -194,18 +231,17 @@ FocusScope {
                 Label {
                     id: title
                     anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 20
+                    anchors.leftMargin: heading.numeric ? 20 : 8
+                    anchors.rightMargin: heading.numeric ? 8 : 20
                     verticalAlignment: Text.AlignVCenter
-                    horizontalAlignment: pane.rows && pane.rows.numeric(heading.column) ? Text.AlignRight : Text.AlignLeft
+                    horizontalAlignment: heading.numeric ? Text.AlignRight : Text.AlignLeft
                     elide: Text.ElideRight
                     font.weight: Type.headingWeight
                     color: Theme.textPrimary
                     text: heading.display
                 }
                 Label {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 6
+                    x: heading.numeric ? 6 : parent.width - width - 6
                     anchors.verticalCenter: parent.verticalCenter
                     visible: heading.sorted
                     color: Theme.accent
@@ -217,7 +253,10 @@ FocusScope {
                     onTapped: pane.rows.sortBy(heading.column)
                 }
                 ToolTip.visible: hover.hovered
-                ToolTip.text: qsTr("Sort by %1").arg(heading.display)
+                // What the next click does.
+                ToolTip.text: !heading.sorted ? qsTr("Sort ascending by %1").arg(heading.display)
+                            : !pane.rows.descending ? qsTr("Sort descending by %1").arg(heading.display)
+                            : qsTr("Back to file order")
             }
         }
 
@@ -259,8 +298,8 @@ FocusScope {
                 implicitWidth: Math.min(360, Math.max(72, cell.implicitWidth + 16))
                 implicitHeight: Type.rowHeight
                 color: match ? Theme.infoContainer : row % 2 ? Theme.surfaceAlternate : Theme.surface
-                border.width: current ? 2 : 0
-                border.color: table.activeFocus ? Theme.focusRing : Theme.outline
+                border.width: current ? 2 : match ? 1 : 0
+                border.color: current ? (table.activeFocus ? Theme.focusRing : Theme.outline) : Theme.info
                 Accessible.role: Accessible.Cell
                 Accessible.name: qsTr("%1: %2").arg(pane.rows.heading(tableCell.column)).arg(tableCell.display)
                 Label {
@@ -287,8 +326,12 @@ FocusScope {
                     }
                 }
             }
-            ScrollBar.vertical: ScrollBar {}
-            ScrollBar.horizontal: ScrollBar {}
+            ScrollBar.vertical: ScrollBar {
+                policy: table.contentHeight > table.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
+            ScrollBar.horizontal: ScrollBar {
+                policy: table.contentWidth > table.width ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
         }
     }
 }

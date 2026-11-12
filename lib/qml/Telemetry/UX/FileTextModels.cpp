@@ -286,18 +286,26 @@ QString TableRowsModel::heading(int column) const
 
 void TableRowsModel::sortBy(int column)
 {
-	if (column != sorted_) {
-		sorted_ = column;
-		descending_ = false;
-	} else if (!descending_) {
-		descending_ = true;
-	} else {
-		sorted_ = -1;
-		descending_ = false;
-	}
+	if (column != sorted_)
+		sortColumn(column, false);
+	else if (!descending_)
+		sortColumn(column, true);
+	else
+		clearSort();
+}
+
+void TableRowsModel::sortColumn(int column, bool descending)
+{
+	sorted_ = column;
+	descending_ = column >= 0 && descending;
 	clearFind();
 	sort(sorted_, descending_ ? Qt::DescendingOrder : Qt::AscendingOrder);
 	Q_EMIT sortChanged();
+}
+
+void TableRowsModel::clearSort()
+{
+	sortColumn(-1, false);
 }
 
 bool TableRowsModel::lessThan(const QModelIndex& left, const QModelIndex& right) const
@@ -314,8 +322,11 @@ bool TableRowsModel::lessThan(const QModelIndex& left, const QModelIndex& right)
 			return x < y;
 	}
 	const int compared = naturalCompare(a, b);
-	// Equal cells keep the file's order.
-	return compared != 0 ? compared < 0 : left.row() < right.row();
+	if (compared != 0)
+		return compared < 0;
+	// Equal cells keep the file's order, either way: sorted descending, the
+	// proxy asks lessThan(right, left), so the rows' order is turned here too.
+	return descending_ ? left.row() > right.row() : left.row() < right.row();
 }
 
 int TableRowsModel::setFilter(const QString& text)

@@ -260,8 +260,13 @@ FocusScope {
                     event.accepted = true
                 }
             }
-            ScrollBar.vertical: ScrollBar {}
-            ScrollBar.horizontal: ScrollBar { visible: !pane.wrap }
+            // Scroll bars whenever there is more than shows, as Hex has them.
+            ScrollBar.vertical: ScrollBar {
+                policy: list.contentHeight > list.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
+            ScrollBar.horizontal: ScrollBar {
+                policy: !pane.wrap && list.contentWidth > list.width ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
 
             delegate: Item {
                 id: lineItem
@@ -318,6 +323,8 @@ FocusScope {
                         height: from.height
                         radius: 2
                         color: modelData[0] === lineItem.currentMatch ? Theme.selectionFill : Theme.infoContainer
+                        border.width: modelData[0] === lineItem.currentMatch ? 0 : 1
+                        border.color: Theme.info
                     }
                 }
                 TextEdit {
@@ -343,6 +350,26 @@ FocusScope {
                             pane.editor = null
                         }
                     }
+                }
+                // The current match's characters over its fill, in the selected
+                // foreground: the line's own colour is too faint on the selection.
+                Text {
+                    readonly property int length: {
+                        for (let i = 0; i < lineItem.matches.length; ++i)
+                            if (lineItem.matches[i][0] === lineItem.currentMatch)
+                                return lineItem.matches[i][1]
+                        return 0
+                    }
+                    readonly property rect at: lineItem.currentMatch >= 0 ? lineText.positionToRectangle(lineItem.currentMatch)
+                                                                         : Qt.rect(0, 0, 0, 0)
+                    visible: lineItem.currentMatch >= 0 && length > 0
+                    x: lineText.x + at.x
+                    y: lineText.y + at.y
+                    textFormat: Text.PlainText
+                    font: lineText.font
+                    color: Theme.selectedForeground
+                    text: visible ? lineItem.line.substr(lineItem.currentMatch, length) : ""
+                    Accessible.ignored: true
                 }
                 TapHandler {
                     acceptedButtons: Qt.RightButton

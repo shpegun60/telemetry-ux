@@ -853,6 +853,24 @@ void textAndTable()
 	// Copy: a row as TSV, everything shown as CSV with its quoting.
 	CHECK(rows.rowText(0, QStringLiteral("tsv")) == QStringLiteral("item 10\t5"));
 	CHECK(rows.shownText(QStringLiteral("csv")) == QStringLiteral("name,value\nitem 10,5\nitem 2,10\nitem 1,\n\"a, b\",7\n"));
+	// Equal values keep the file's order, ascending and descending; by name, as the menu sorts.
+	{
+		FileTableModel ties;
+		CHECK(ties.setText(QStringLiteral("k,v\na,1\nb,2\nc,1\n")));
+		TableRowsModel tied(&ties);
+		const auto keys = [&] {
+			QStringList cells;
+			for (int r = 0; r < tied.rowCount(); ++r)
+				cells << tied.cellText(r, 0);
+			return cells.join(QLatin1Char('|'));
+		};
+		tied.sortColumn(1, true);
+		CHECK(keys() == QStringLiteral("b|a|c") && tied.descending() && tied.sortedColumn() == 1);
+		tied.sortColumn(1, false);
+		CHECK(keys() == QStringLiteral("a|c|b") && !tied.descending());
+		tied.clearSort();
+		CHECK(keys() == QStringLiteral("a|b|c") && tied.sortedColumn() == -1);
+	}
 	// A new file resets the order and the filter.
 	rows.sortBy(0);
 	rows.setFilter(QStringLiteral("item"));

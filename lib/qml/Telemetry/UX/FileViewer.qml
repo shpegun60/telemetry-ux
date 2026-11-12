@@ -158,6 +158,20 @@ Pane {
                 onTriggered: viewer.openExternallyRequested(viewer.content.localFile)
             }
             MenuSeparator {}
+            // The view's own options.
+            MenuItem {
+                objectName: "fileViewerWrap"
+                visible: viewer.shownMode === "text"
+                height: visible ? implicitHeight : 0
+                text: qsTr("&Wrap lines\tAlt+Z")
+                checkable: true
+                checked: textPane.wrap
+                onTriggered: textPane.wrap = checked
+            }
+            MenuSeparator {
+                visible: viewer.shownMode === "text"
+                height: visible ? implicitHeight : 0
+            }
             MenuItem {
                 objectName: "fileViewerClose"
                 text: qsTr("&Close\tCtrl+W")
