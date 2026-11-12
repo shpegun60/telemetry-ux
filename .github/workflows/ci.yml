@@ -527,7 +527,7 @@ jobs:
           sudo apt-get install -y clang-18 cmake ninja-build g++ python3-venv \
             qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
             qml6-module-qtquick-window qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtqml-workerscript \n            qml6-module-qtquick-dialogs qml6-module-qtqml-models
           python -m venv "$RUNNER_TEMP/qml-builder"
           "$RUNNER_TEMP/qml-builder/bin/python" -m pip install setuptools==80.9.0 wheel==0.45.1
       - name: Install matching core and UX generator wheels outside checkouts
