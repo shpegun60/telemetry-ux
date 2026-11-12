@@ -25,6 +25,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
+#include "FileTextModels.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -61,6 +62,9 @@ public:
 	QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 	// Every filled cell of the column reads as a number: shown right-aligned.
 	Q_INVOKABLE bool numeric(int column) const;
+	// A cell's text without a QVariant, for sorting and filtering many rows;
+	// empty outside the table.
+	const QString& cell(int row, int column) const noexcept;
 
 private:
 	QStringList header_;
@@ -144,14 +148,18 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QString codecError READ codecError NOTIFY changed)
 	Q_PROPERTY(QString text READ text NOTIFY changed)
 	Q_PROPERTY(QAbstractItemModel* table READ table CONSTANT)
+	// The text as numbered lines with Find, and the table sorted and filtered.
+	Q_PROPERTY(QAbstractItemModel* lines READ lines CONSTANT)
+	Q_PROPERTY(QAbstractItemModel* rows READ rows CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* hex READ hex CONSTANT)
 	// Reads the device's file again and again for a live view; see live().
 	Q_PROPERTY(QObject* live READ live NOTIFY changed)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
-	// Above this, text is not offered (a text view of it would not be usable).
-	static constexpr qint64 maxTextBytes = 8 * 1024 * 1024;
+	// Above this, text is not offered. The text view makes only the lines on
+	// screen, so a log of 10 MB reads as easily as a short one.
+	static constexpr qint64 maxTextBytes = 16 * 1024 * 1024;
 
 	explicit FileContent(QObject* parent = nullptr);
 
@@ -179,6 +187,8 @@ public:
 	QString format() const;
 	QString text() const { return text_; }
 	QAbstractItemModel* table() { return &table_; }
+	QAbstractItemModel* lines() { return &lines_; }
+	QAbstractItemModel* rows() { return &rows_; }
 	QAbstractItemModel* hex() { return &hex_; }
 	// The bytes as read: shared, so a viewer's copy costs nothing.
 	const QByteArray& bytes() const noexcept { return bytes_; }
@@ -244,6 +254,8 @@ private:
 	bool loaded_ = false, loading_ = false, textual_ = false, tabular_ = false;
 	FileHexModel hex_;
 	FileTableModel table_;
+	TextLinesModel lines_;
+	TableRowsModel rows_;
 };
 
 // The files open in a viewer, one row each, for a host's tabs: name, device

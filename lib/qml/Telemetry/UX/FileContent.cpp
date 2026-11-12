@@ -178,6 +178,14 @@ int FileTableModel::columnCount(const QModelIndex& parent) const
 	return parent.isValid() ? 0 : static_cast<int>(header_.size());
 }
 
+const QString& FileTableModel::cell(int row, int column) const noexcept
+{
+	static const QString none;
+	if (row < 0 || row >= rowCount() || column < 0 || column >= columnCount())
+		return none;
+	return rows_[static_cast<std::size_t>(row)].at(column);
+}
+
 QVariant FileTableModel::data(const QModelIndex& index, int role) const
 {
 	if (!index.isValid() || role != Qt::DisplayRole || index.row() >= rowCount() || index.column() >= columnCount())
@@ -199,7 +207,7 @@ bool FileTableModel::numeric(int column) const
 	return column >= 0 && column < static_cast<int>(numeric_.size()) && numeric_[static_cast<std::size_t>(column)];
 }
 
-FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this) {}
+FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this) {}
 
 void FileContent::setLocalFile(const QString& path)
 {
@@ -398,6 +406,7 @@ bool FileContent::reload()
 	bytes_.clear();
 	hex_.setBytes(nullptr);
 	table_.clear();
+	lines_.clear();
 	forgetDecoded();
 	if (localFile_.isEmpty()) {
 		Q_EMIT changed();
@@ -418,6 +427,7 @@ bool FileContent::reload()
 		if (bytes_.size() <= maxTextBytes && looksLikeText(bytes_)) {
 			textual_ = true;
 			text_ = QString::fromUtf8(bytes_);
+			lines_.setText(text_);
 			const auto name = (devicePath_.isEmpty() ? localFile_ : devicePath_).toLower();
 			if (name.endsWith(QStringLiteral(".csv")))
 				tabular_ = table_.setText(text_);

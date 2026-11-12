@@ -25,6 +25,7 @@ PAIRS = [
                    'neutralContainer'], TEXT, 'section labels, times, descriptions, placeholders'),
     ('selectedForeground', ['stateSelected', 'selectionFill'], TEXT, 'text on a selected row, selected bytes'),
     ('selectionFill', ['surface', 'surfaceAlternate'], GRAPHIC, 'a hex selection, its fill the only cue'),
+    ('info', ['infoContainer', 'surface', 'surfaceAlternate'], GRAPHIC, 'the outline of a Find match in text and tables'),
     ('textPrimary', ['regionTint'], TEXT, 'bytes in a codec region'),
     ('textMuted', ['regionTint'], TEXT, 'zero bytes in a codec region'),
     ('outline', ['regionTint'], GRAPHIC, 'the outline of the region at the cursor'),
