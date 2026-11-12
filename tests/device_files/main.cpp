@@ -3,7 +3,9 @@
 // exactly, cancel, a model destroyed mid-download, and a files-only device. MIT.
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
+#include <Telemetry/UX/DescriptorContent.hpp>
 #include <Telemetry/UX/FileContent.hpp>
+#include <Telemetry/UX/TelemetryCodecs.hpp>
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
@@ -419,8 +421,10 @@ void fileContent(const QString& folder)
 void codecs(const QString& folder)
 {
 	using telemetry::ux::FileCodec;
+	using telemetry::ux::FileCodecContext;
 	using telemetry::ux::FileContent;
 	using telemetry::ux::FileIdentity;
+	using telemetry::ux::FileMatch;
 	const auto write = [&](const char* name, const QByteArray& bytes) {
 		const auto path = folder + QLatin1Char('/') + QLatin1String(name);
 		QFile file(path);
@@ -434,9 +438,9 @@ void codecs(const QString& folder)
 	    QStringLiteral("Demo"),
 	    [&](const FileIdentity& identity) {
 		    seenPath = identity.devicePath;
-		    return identity.head.startsWith("DEMO");
+		    return identity.head.startsWith("DEMO") ? FileMatch::Signature : FileMatch::No;
 	    },
-	    [&](const QByteArray& bytes, QString& error) -> std::unique_ptr<QObject> {
+	    [&](const QByteArray& bytes, const FileCodecContext&, QString& error) -> std::unique_ptr<QObject> {
 		    ++parses;
 		    if (bytes.size() < 8) {
 			    error = QStringLiteral("shorter than its header");
@@ -690,6 +694,125 @@ void identityFolders(const QString& folder)
 }
 } // namespace
 
+// The descriptor codec, on the bytes of this test's own model: offered first
+// for /telemetry/descriptor.bin and for a renamed copy (by its "TDS3"), its
+// fingerprint, the header's fields and sections as regions, the endpoint tree,
+// Find, and Copy as text, JSON and TSV. Something else under the descriptor's
+// name says why and stays hex; a surer codec is tried before an earlier one.
+void descriptorCodec(const QString& folder)
+{
+	using telemetry::ux::DescriptorContent;
+	using telemetry::ux::FileCodec;
+	using telemetry::ux::FileCodecContext;
+	using telemetry::ux::FileIdentity;
+	using telemetry::ux::FileMatch;
+	const auto write = [&](const char* name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + QLatin1String(name);
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	const QByteArray bytes(reinterpret_cast<const char*>(packed.data()), static_cast<qsizetype>(packed.size()));
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	const auto local = write("descriptor.bin", bytes);
+	open.open(local, QStringLiteral("/telemetry/descriptor.bin"));
+	auto* content = open.contentFor(local);
+	CHECK(content && content->codecName() == QStringLiteral("Descriptor") && content->format() == QStringLiteral("Descriptor"));
+	auto* decoded = qobject_cast<DescriptorContent*>(content->decoded());
+	CHECK(decoded && decoded->valid() && decoded->fieldCount() == 1);
+	CHECK(decoded->fingerprint() ==
+	      QStringLiteral("0x") + QStringLiteral("%1").arg(descriptor.fingerprint(), 16, 16, QLatin1Char('0')).toUpper());
+	CHECK(decoded->fingerprintGroups().split(QLatin1Char(' ')).size() == 4);
+	CHECK(content->codecView().toString().endsWith(QStringLiteral("DescriptorView.qml")));
+
+	// The header's 17 fields under "header", and its sections.
+	const auto regions = content->regions();
+	int fields = 0;
+	QStringList names;
+	for (const auto& entry : regions) {
+		const auto region = entry.toMap();
+		names << region.value(QStringLiteral("name")).toString();
+		if (region.value(QStringLiteral("depth")).toInt() == 1)
+			++fields;
+	}
+	CHECK(fields == 17 && names.contains(QStringLiteral("fingerprint")) && names.contains(QStringLiteral("endpoints")));
+	CHECK(regions.front().toMap().value(QStringLiteral("length")).toInt() == 64);
+
+	// The tree: Fields › test › Value, with its type and access.
+	auto* model = decoded->endpoints();
+	CHECK(model->rowCount() == 1);
+	const auto category = model->index(0, 0);
+	CHECK(model->data(category).toString() == QStringLiteral("Fields"));
+	const auto group = model->index(0, 0, category);
+	const auto value = model->index(0, 0, group);
+	CHECK(model->data(group).toString() == QStringLiteral("test") && model->data(value).toString() == QStringLiteral("Value"));
+	CHECK(decoded->pathOf(value) == QStringLiteral("test.Value"));
+	CHECK(decoded->rowOf(value) == QStringLiteral("Value\tu32\tread"));
+	CHECK(decoded->textOfAll(QStringLiteral("tsv")).contains(QStringLiteral("test.Value\tendpoint\tu32\tread")));
+	// An endpoint's JSON: its type and access by name, members (none here) apart.
+	CHECK(decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"access\": \"read\"")));
+	CHECK(decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"Value\"")) &&
+	      decoded->textOf(value, QStringLiteral("json")).contains(QStringLiteral("\"u32\"")));
+	CHECK(decoded->textOf(group, QStringLiteral("text")) == QStringLiteral("test\n  Value: u32 (read)\n"));
+
+	// Find keeps the matches and their parents; nothing matching leaves nothing.
+	// The tree under it is never rebuilt: a kept index follows its row through
+	// a find that keeps it, and is gone - naming nothing - once it is hidden.
+	const QPersistentModelIndex kept(value);
+	CHECK(decoded->setFilter(QStringLiteral("val")) == 1 && model->rowCount() == 1);
+	CHECK(kept.isValid() && decoded->pathOf(kept) == QStringLiteral("test.Value") &&
+	      decoded->matches(kept) && !decoded->matches(model->index(0, 0)));
+	CHECK(decoded->setFilter(QStringLiteral("nothing here")) == 0 && model->rowCount() == 0);
+	CHECK(!kept.isValid() && decoded->textOf(kept, QStringLiteral("text")).isEmpty() &&
+	      decoded->pathOf(kept).isEmpty() && decoded->textOfAll(QStringLiteral("text")).isEmpty());
+	CHECK(decoded->setFilter(QString()) == 0 && model->rowCount() == 1);
+	// A match inside a match counts once: the group, not also its endpoint.
+	CHECK(decoded->setFilter(QStringLiteral("test")) == 1);
+	CHECK(decoded->setFilter(QString()) == 0);
+	// An index of another model names nothing here.
+	CHECK(decoded->textOf(open.index(0, 0), QStringLiteral("text")).isEmpty() &&
+	      decoded->rowOf(open.index(0, 0)).isEmpty());
+
+	// A renamed copy is still a descriptor, by its signature.
+	const auto renamed = write("copy.dat", bytes);
+	open.open(renamed);
+	CHECK(open.contentFor(renamed)->codecName() == QStringLiteral("Descriptor"));
+
+	// Something else under its name: why not, and the file stays hex.
+	const auto other = write("not-a-descriptor.bin", QByteArray(80, '\x07'));
+	open.open(other, QStringLiteral("/telemetry/descriptor.bin"));
+	auto* broken = open.contentFor(other);
+	CHECK(broken && !broken->decoded() && broken->codecError().startsWith(QStringLiteral("Not a valid Descriptor file:")) &&
+	      broken->format() == QStringLiteral("Binary"));
+
+	// The surer match first: a later codec that knows the signature beats an
+	// earlier one that only knows the name.
+	telemetry::ux::OpenFiles ranked;
+	int byName = 0, bySignature = 0;
+	ranked.addCodec(FileCodec{QStringLiteral("ByName"),
+	                          [](const FileIdentity& identity) {
+		                          return identity.devicePath.endsWith(QStringLiteral(".x")) ? FileMatch::Path : FileMatch::No;
+	                          },
+	                          [&](const QByteArray&, const FileCodecContext&, QString&) -> std::unique_ptr<QObject> {
+		                          ++byName;
+		                          return std::make_unique<QObject>();
+	                          },
+	                          {}});
+	ranked.addCodec(FileCodec{QStringLiteral("BySignature"),
+	                          [](const FileIdentity& identity) {
+		                          return identity.head.startsWith("SIG") ? FileMatch::Signature : FileMatch::No;
+	                          },
+	                          [&](const QByteArray&, const FileCodecContext&, QString&) -> std::unique_ptr<QObject> {
+		                          ++bySignature;
+		                          return std::make_unique<QObject>();
+	                          },
+	                          {}});
+	const auto both = write("both.x", "SIG and a name");
+	ranked.open(both, QStringLiteral("/data/both.x"));
+	CHECK(ranked.contentFor(both)->codecName() == QStringLiteral("BySignature") && bySignature == 1 && byName == 0);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -728,6 +851,7 @@ int main(int argc, char** argv)
 	localPaths(folder.path());
 	fileContent(folder.path());
 	codecs(folder.path());
+	descriptorCodec(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);
 	return 0;
