@@ -436,8 +436,10 @@ int DeviceFileTransfers::openIn(QObject* viewer, const QString& path, int fileIn
 int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QString& localFile,
                                 const QString& deviceFolder, bool overwrite, QObject* viewer)
 {
+	// The protocol's own files are never written from here, whatever their Stat
+	// says: the session refuses them (ConnectionSession::protocolFile).
 	if (!session_ || !session_->filesSupported() || fileIndex < 0 || localFile.isEmpty() ||
-	    !DeviceBytes::inside(deviceFolder, localFile))
+	    !DeviceBytes::inside(deviceFolder, localFile) || session_->protocolFile(path))
 		return -1;
 	auto job = std::make_unique<Job>();
 	job->path = path;
@@ -651,6 +653,8 @@ QString writeFailure(files::WriteState state, client::Status clientStatus, resou
 		case files::WriteState::Stalled:
 			return DeviceFileTransfers::tr("the device stopped taking the file");
 		default:
+			if (clientStatus == client::Status::ReadOnly)
+				return DeviceFileTransfers::tr("it is one of the connection's own files");
 			return clientStatus == client::Status::Timeout || clientStatus == client::Status::OutcomeUnknown
 			           ? DeviceFileTransfers::tr("the device did not answer in time")
 			           : DeviceFileTransfers::tr("the connection dropped");
@@ -774,17 +778,21 @@ bool DeviceFileTransfers::advanceUpload(Job& job)
 			return false;
 		}
 		// Nothing reached the file when its Stat stopped it - or never came
-		// back, so no WRITE left - or the device refused the first piece;
-		// anything else may have changed it.
+		// back, so no WRITE left - or the device refused the first piece, or
+		// the session refused it before it left; anything else may have
+		// changed it.
 		const bool statted = job.writer->size() == job.size && job.size != 0;
+		const bool heldBack = job.writer->clientStatus() == client::Status::ReadOnly && job.sent == 0;
 		const bool untouched = state == files::WriteState::NotWritable ||
 		                       state == files::WriteState::SizeMismatch || (job.sent == 0 && !statted) ||
 		                       ((state == files::WriteState::Refused || state == files::WriteState::Cancelled) &&
-		                        job.sent == 0);
+		                        job.sent == 0) ||
+		                       heldBack;
 		if (untouched) {
 			if (state == files::WriteState::Cancelled)
 				return ending(State::Cancelled, Outcome::Failed, tr("Cancelled · nothing written"));
-			const bool refused = state == files::WriteState::NotWritable || state == files::WriteState::Refused;
+			const bool refused =
+			    state == files::WriteState::NotWritable || state == files::WriteState::Refused || heldBack;
 			return ending(State::Failed, refused ? Outcome::NotWritable : Outcome::Failed,
 			              tr("Not written: %1").arg(reason));
 		}

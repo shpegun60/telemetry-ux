@@ -17,7 +17,8 @@ over localhost TCP to the SDK's native server. No board.
     record (marked as written) and the open viewer's reference then the new
     bytes; a device changed since it was read writes nothing, then is written
     anyway by `retry(row, true)`; no record, or one of another path, not
-    known; a copy outside the device's folder not queued; an index that no
+    known; a copy outside the device's folder, or one for the protocol's own
+    `/telemetry/identity.bin` or `session.bin`, not queued; an index that no
     longer names the path refused; a file without `save()` kept until the
     device restarts; a byte the device keeps its own way counted and recorded
     as the device holds it; the device refusing the content (the record

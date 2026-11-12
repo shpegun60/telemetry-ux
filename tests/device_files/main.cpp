@@ -652,6 +652,10 @@ void uploads(const QString& folder)
 	CHECK(transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"),
 	                       folder + QStringLiteral("/outside.bin"), device) == -1 &&
 	      transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray) == -1);
+	// The protocol's own files, whatever their Stat says: not queued.
+	CHECK(transfers.upload(QStringLiteral("/telemetry/identity.bin"), indexOf("/cfg/kept.bin"), stray, device,
+	                       true) == -1 &&
+	      transfers.upload(QStringLiteral("/telemetry/session.bin"), indexOf("/cfg/kept.bin"), stray, device) == -1);
 	// An index that no longer names the path: refused before anything is read.
 	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/unkept.bin"), copyOf("/cfg/kept.bin"),
 	                       device, true);

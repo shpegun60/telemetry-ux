@@ -138,7 +138,8 @@ public:
 	// saved when the device keeps files, and read back. The bytes read back
 	// become the record (setKeepDeviceBytes); the copy is never changed.
 	// viewer (an OpenFiles) has the copy's reference refreshed. Returns the
-	// row, or -1 when it cannot be queued (no folder, or the copy not in it).
+	// row, or -1 when it cannot be queued (no folder, the copy not in it, or
+	// path one of the protocol's own files - ConnectionSession::protocolFile).
 	Q_INVOKABLE int upload(const QString& path, int fileIndex, const QString& localFile,
 	                       const QString& deviceFolder = {}, bool overwrite = false,
 	                       QObject* viewer = nullptr);
