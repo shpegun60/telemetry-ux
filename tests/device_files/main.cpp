@@ -1,6 +1,7 @@
 // The Device files models over a real session and the native TCP server:
 // the tree of the device's paths, marks and selection, downloads written
 // exactly, cancel, a model destroyed mid-download, and a files-only device. MIT.
+#include <Telemetry/UX/DeviceBytes.hpp>
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
 #include <Telemetry/UX/DescriptorContent.hpp>
@@ -20,6 +21,7 @@
 #include <wire/IdentityWire.hpp>
 #include <wire/ReadManyWire.hpp>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -484,6 +486,84 @@ void downloads(qt::ConnectionSession& session, DeviceFilesModel& files, const QS
 	CHECK(transfers.rowCount() == 0);
 }
 
+// The device's layer: the bytes as read, kept in the device's folder and
+// found from the copy alone; a copy compared with them, edits not saved
+// included; Restore as one step; a record that does not check is not known.
+void deviceLayer(const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	using telemetry::ux::FileContent;
+	const auto device = folder + QStringLiteral("/layer/Device [7]");
+	const auto local = device + QStringLiteral("/data/x.bin");
+	CHECK(QDir().mkpath(device + QStringLiteral("/data")));
+	const auto write = [](const QString& path, const QByteArray& bytes) {
+		QFile file(path);
+		return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size();
+	};
+	CHECK(write(local, QByteArray("ABCDEFGH")));
+	const auto readAt = QDateTime(QDate(2026, 11, 12), QTime(14, 2));
+	CHECK(DeviceBytes::keep(device, local, QStringLiteral("/data/x.bin"), readAt).isEmpty());
+	CHECK(QFile::exists(device + QStringLiteral("/.device-bytes/data/x.bin.json")));
+	const auto record = DeviceBytes::find(local);
+	CHECK(record && record->devicePath == QStringLiteral("/data/x.bin") && record->size == 8 && record->readAt == readAt);
+	// A copy outside the device's folder is not kept; one without a record has none.
+	CHECK(!DeviceBytes::keep(device, folder + QStringLiteral("/elsewhere.bin"), QStringLiteral("/e"), readAt).isEmpty());
+	CHECK(!DeviceBytes::find(device + QStringLiteral("/data/other.bin")));
+
+	const auto lookup = DeviceBytes::lookup();
+	FileContent content;
+	content.setReferenceLookup(&lookup);
+	content.setLocalFile(local);
+	CHECK(content.hasReference() && content.referenceDiffers() == 0 && content.referenceLabel().contains(QStringLiteral("as read")));
+	content.setEditing(true);
+	CHECK(content.overwrite(1, QByteArray("x")) && content.referenceDiffers() == 1 && content.differsFromReference(1) &&
+	      content.referenceByte(1) == 'B' && !content.differsFromReference(0));
+	// Saved here, still other than the device's; read again from disk, still.
+	CHECK(content.save().isEmpty() && content.referenceDiffers() == 1 && !content.modified());
+	CHECK(content.reload() && content.hasReference() && content.referenceDiffers() == 1);
+	// Discard: the device's count follows the bytes back.
+	content.setEditing(true);
+	CHECK(content.overwrite(2, QByteArray("zz")) && content.referenceDiffers() == 3);
+	content.discard();
+	CHECK(content.referenceDiffers() == 1 && content.bytes() == QByteArray("AxCDEFGH"));
+	// Restore: every byte the device's, as one step, then saved like an edit.
+	content.setEditing(true);
+	CHECK(content.overwrite(5, QByteArray("y")) && content.referenceDiffers() == 2);
+	CHECK(content.restoreReference().isEmpty() && content.referenceDiffers() == 0 &&
+	      content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 1);
+	content.undo();
+	CHECK(content.referenceDiffers() == 2 && content.bytes() == QByteArray("AxCDEyGH"));
+	content.redo();
+	CHECK(!content.restoreReference().isEmpty() && content.save().isEmpty());
+	{
+		QFile saved(local);
+		CHECK(saved.open(QIODevice::ReadOnly) && saved.readAll() == QByteArray("ABCDEFGH"));
+	}
+	// The device's bytes changed behind the record: not known, never "the same".
+	CHECK(write(device + QStringLiteral("/.device-bytes/data/x.bin"), QByteArray("ABCDEFGZ")));
+	CHECK(content.reload() && !content.hasReference() && content.referenceDiffers() == 0 &&
+	      !content.restoreReference().isEmpty());
+	// Another device path that names the same copy: not this record.
+	CHECK(write(device + QStringLiteral("/.device-bytes/data/x.bin"), QByteArray("ABCDEFGH")));
+	FileContent other;
+	other.setReferenceLookup(&lookup);
+	other.setDevicePath(QStringLiteral("/data/x_bin"));
+	other.setLocalFile(local);
+	CHECK(other.loaded() && !other.hasReference());
+	FileContent same;
+	same.setReferenceLookup(&lookup);
+	same.setDevicePath(QStringLiteral("/data/x.bin"));
+	same.setLocalFile(local);
+	CHECK(same.hasReference());
+	// Forgotten: no record left.
+	DeviceBytes::forget(local);
+	CHECK(!DeviceBytes::find(local) && !QFile::exists(device + QStringLiteral("/.device-bytes/data/x.bin.json")));
+	// Without a lookup there is no layer at all.
+	FileContent plain;
+	plain.setLocalFile(local);
+	CHECK(plain.loaded() && !plain.hasReference());
+}
+
 // Open: the viewer's tab is there before the first byte, reading; it then
 // shows the file, or says why it could not be read.
 void openInViewer(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
@@ -515,6 +595,42 @@ void openInViewer(qt::ConnectionSession& session, DeviceFilesModel& files, const
 	CHECK(transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString() ==
 	      QStringLiteral("Opened in the Viewer"));
 	CHECK(!open.data(open.index(0), OpenFiles::LoadingRole).toBool());
+	// Not in a device's folder (open/ is not logs/): no device's layer.
+	CHECK(!content->hasReference());
+
+	// Kept: read into the device's folder for the viewer, the device's bytes
+	// stay beside it, and the tab compares against them at once.
+	transfers.setKeepDeviceBytes(true);
+	open.setReferenceLookup(telemetry::ux::DeviceBytes::lookup());
+	const auto deviceFolder = folder + QStringLiteral("/Device [1]");
+	const auto kept = DeviceFileTransfers::localPathFor(deviceFolder, QStringLiteral("/logs/large.bin"));
+	CHECK(transfers.openIn(&open, QStringLiteral("/logs/large.bin"), files.data(large, DeviceFilesModel::FileIndexRole).toInt(),
+	                       largeBytes.size(), kept, deviceFolder) >= 0);
+	auto* keptContent = open.contentFor(kept);
+	CHECK(keptContent && await([&] { return !keptContent->loading(); }));
+	CHECK(keptContent->loaded() && keptContent->hasReference() && keptContent->referenceDiffers() == 0);
+	const auto record = telemetry::ux::DeviceBytes::find(kept);
+	CHECK(record && record->devicePath == QStringLiteral("/logs/large.bin") &&
+	      record->size == static_cast<qint64>(largeBytes.size()) &&
+	      QFileInfo(record->bytesFile).absolutePath().endsWith(QStringLiteral("Device [1]/.device-bytes/logs")));
+	open.close(open.rowOf(kept));
+	// A plain download over that copy keeps no record and leaves none.
+	const auto plainRow = transfers.download(QStringLiteral("/logs/large.bin"),
+	                                         files.data(large, DeviceFilesModel::FileIndexRole).toInt(),
+	                                         largeBytes.size(), kept);
+	CHECK(plainRow >= 0 && await([&] { return !transfers.data(transfers.index(plainRow), DeviceFileTransfers::ActiveRole).toBool(); }));
+	CHECK(!telemetry::ux::DeviceBytes::find(kept));
+	// A device's folder that does not hold the copy: none kept, and the row says why.
+	const auto wrongRow = transfers.openIn(&open, QStringLiteral("/logs/large.bin"),
+	                                       files.data(large, DeviceFilesModel::FileIndexRole).toInt(), largeBytes.size(), kept,
+	                                       folder + QStringLiteral("/Elsewhere"));
+	auto* wrong = open.contentFor(kept);
+	CHECK(wrongRow >= 0 && wrong && await([&] { return !wrong->loading(); }));
+	CHECK(wrong->loaded() && !wrong->hasReference() && !telemetry::ux::DeviceBytes::find(kept) &&
+	      transfers.data(transfers.index(wrongRow), DeviceFileTransfers::ResultRole)
+	          .toString()
+	          .startsWith(QStringLiteral("Opened in the Viewer · the device's bytes were not kept")));
+	open.close(open.rowOf(kept));
 
 	// A copy that cannot be written: the tab says why, and no reading is left.
 	const auto blocker = folder + QStringLiteral("/open-blocked");
@@ -2292,6 +2408,7 @@ int main(int argc, char** argv)
 	jsonCodec(folder.path());
 	capabilityCodec(folder.path());
 	fileEditing(folder.path());
+	deviceLayer(folder.path());
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

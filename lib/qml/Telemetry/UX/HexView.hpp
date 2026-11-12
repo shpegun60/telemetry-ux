@@ -97,6 +97,9 @@ class HexView : public QQuickPaintedItem {
 	// Bytes edited and not saved: their digits and letters, underlined, and a
 	// dot before their row's offset - three cues, not colour alone.
 	Q_PROPERTY(QColor editedColor MEMBER editedColor_ NOTIFY coloursChanged)
+	// A byte saved here that is not the device's as read: drawn in this
+	// colour with a dotted underline (an edit not saved draws as an edit).
+	Q_PROPERTY(QColor deviceColor MEMBER deviceColor_ NOTIFY coloursChanged)
 public:
 	// Copying more than this is refused: Save as… is the way for more.
 	static constexpr qint64 maxCopyBytes = 1024 * 1024;
@@ -278,6 +281,7 @@ private:
 	QColor regionColor_{0x1c, 0x2a, 0x3a}, outlineColor_{0x64, 0x7f, 0x9e};
 	QColor matchColor_{0x1d, 0x3a, 0x52}, matchOutlineColor_{0xa8, 0xd4, 0xf5};
 	QColor editedColor_{0xe0, 0xa8, 0x4a};
+	QColor deviceColor_{0xa8, 0xd4, 0xf5};
 };
 } // namespace telemetry::ux
 #endif

@@ -267,6 +267,23 @@ private:
 	std::vector<FileContent::Run> before_, after_;
 };
 
+// The whole working copy at once - Restore: before and after kept shared.
+class WholeStep final : public QUndoCommand {
+public:
+	WholeStep(FileContent& content, QByteArray before, QByteArray after, const QString& text)
+	    : content_(content), before_(std::move(before)), after_(std::move(after))
+	{
+		setText(text);
+	}
+
+	void redo() override { content_.putWhole(after_); }
+	void undo() override { content_.putWhole(before_); }
+
+private:
+	FileContent& content_;
+	QByteArray before_, after_;
+};
+
 FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this)
 {
 	connect(&undo_, &QUndoStack::canUndoChanged, this, &FileContent::editChanged);
@@ -328,20 +345,82 @@ void FileContent::putRuns(const std::vector<Run>& runs)
 	// The first edit after a read parts the working copy from the one on disk.
 	auto* data = bytes_.data();
 	const auto* disk = saved_.constData();
+	const auto* device = reference_.constData();
+	const auto deviceSize = hasReference_ ? reference_.size() : 0;
 	qint64 first = runs.front().first, last = first;
 	for (const auto& [offset, bytes] : runs) {
 		for (qsizetype i = 0; i < bytes.size(); ++i) {
 			const auto at = offset + i;
-			const bool was = at < saved_.size() && data[at] != disk[at];
+			const auto old = data[at];
+			const bool was = at < saved_.size() && old != disk[at];
 			data[at] = bytes[i];
 			const bool is = at < saved_.size() && data[at] != disk[at];
 			edited_ += static_cast<int>(is) - static_cast<int>(was);
+			if (at < deviceSize)
+				referenceDiffers_ += static_cast<int>(data[at] != device[at]) - static_cast<int>(old != device[at]);
 		}
 		first = std::min(first, offset);
 		last = std::max(last, offset + static_cast<qint64>(bytes.size()));
 	}
 	Q_EMIT bytesEdited(first, last - first);
 	Q_EMIT editChanged();
+}
+
+void FileContent::putWhole(const QByteArray& bytes)
+{
+	Q_EMIT aboutToEdit();
+	bytes_ = bytes;
+	edited_ = differing(bytes_, saved_);
+	referenceDiffers_ = hasReference_ ? differing(bytes_, reference_) : 0;
+	Q_EMIT bytesEdited(0, bytes_.size());
+	Q_EMIT editChanged();
+}
+
+qint64 FileContent::differing(const QByteArray& a, const QByteArray& b) noexcept
+{
+	const auto common = std::min(a.size(), b.size());
+	const auto* left = a.constData();
+	const auto* right = b.constData();
+	qint64 count = std::abs(static_cast<qint64>(a.size()) - static_cast<qint64>(b.size()));
+	for (qsizetype i = 0; i < common; ++i)
+		count += left[i] != right[i] ? 1 : 0;
+	return count;
+}
+
+QString FileContent::restoreReference()
+{
+	if (!loaded_ || !hasReference_)
+		return tr("The device's bytes are not known for this copy.");
+	if (reference_.size() != bytes_.size())
+		return tr("The device's file was %L1 bytes and this copy is %L2: a copy keeps its size, so read the file "
+		          "from the device again instead.")
+		    .arg(reference_.size())
+		    .arg(bytes_.size());
+	if (referenceDiffers_ == 0)
+		return tr("This copy already holds the device's bytes.");
+	undo_.push(new WholeStep(*this, bytes_, reference_, tr("Restore the device's version")));
+	return {};
+}
+
+void FileContent::clearReference()
+{
+	reference_.clear();
+	referenceLabel_.clear();
+	hasReference_ = false;
+	referenceDiffers_ = 0;
+}
+
+void FileContent::findReference()
+{
+	clearReference();
+	if (!referenceLookup_ || !*referenceLookup_ || localFile_.isEmpty())
+		return;
+	if (auto found = (*referenceLookup_)(localFile_, devicePath_)) {
+		reference_ = std::move(found->bytes);
+		referenceLabel_ = found->label;
+		hasReference_ = true;
+		referenceDiffers_ = differing(bytes_, reference_);
+	}
 }
 
 void FileContent::undo()
@@ -391,6 +470,7 @@ void FileContent::discard()
 	Q_EMIT aboutToEdit();
 	bytes_ = saved_;
 	edited_ = 0;
+	referenceDiffers_ = hasReference_ ? differing(bytes_, reference_) : 0;
 	undo_.clear();
 	Q_EMIT bytesEdited(0, bytes_.size());
 	Q_EMIT editChanged();
@@ -452,6 +532,7 @@ void FileContent::beginReading(const QString& localFile, const QString& devicePa
 	hex_.setBytes(nullptr);
 	bytes_.clear();
 	resetEdits();
+	clearReference();
 	table_.clear();
 	forgetDecoded();
 	Q_EMIT changed();
@@ -605,6 +686,7 @@ bool FileContent::reload()
 	text_.clear();
 	bytes_.clear();
 	resetEdits();
+	clearReference();
 	hex_.setBytes(nullptr);
 	table_.clear();
 	lines_.clear();
@@ -627,6 +709,9 @@ bool FileContent::reload()
 		readAt_ = QDateTime::currentDateTime();
 		hex_.setBytes(&bytes_);
 		interpret();
+		// The device's layer, from what was kept when the file was read from it.
+		findReference();
+		Q_EMIT editChanged();
 	}
 	Q_EMIT changed();
 	return loaded_;
@@ -697,6 +782,7 @@ int OpenFiles::append()
 	auto file = std::make_unique<FileContent>(this);
 	file->setCodecs(&codecs_, &context_);
 	file->setLiveFactory(&liveFactory_);
+	file->setReferenceLookup(&referenceLookup_);
 	const auto row = static_cast<int>(files_.size());
 	beginInsertRows({}, row, row);
 	files_.push_back(std::move(file));

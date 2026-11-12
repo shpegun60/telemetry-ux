@@ -74,8 +74,10 @@ public:
 	// The same, read to be shown: viewer gets a tab for it at once
 	// (OpenFiles::reading), which follows the read's progress and then shows the
 	// file, or says why it could not be read. The row reads "Opening".
+	// deviceFolder, the device's folder localFile is in, is where the device's
+	// bytes as read are kept (setKeepDeviceBytes); without it none are.
 	Q_INVOKABLE int openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
-	                       const QString& localFile);
+	                       const QString& localFile, const QString& deviceFolder = {});
 	// Cancels the read that writes localFile, if one is running or waiting.
 	Q_INVOKABLE void cancelFor(const QString& localFile);
 	// The local file for a device path inside folder, keeping the device's own
@@ -114,6 +116,11 @@ public:
 	Q_INVOKABLE void cancelAll();
 	// Forgets the rows that have ended.
 	Q_INVOKABLE void clearFinished();
+	// Whether a file read for the viewer (openIn, given its device's folder)
+	// also leaves the device's bytes as read there (DeviceBytes), for the
+	// device's layer and Restore; off by default. Any other download that
+	// writes a copy with a record removes it: it would no longer be true.
+	void setKeepDeviceBytes(bool keep) noexcept { keepDeviceBytes_ = keep; }
 
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
@@ -129,10 +136,11 @@ Q_SIGNALS:
 	void finished(int row, State state, const QString& result);
 
 private:
+	bool keepDeviceBytes_ = false;
 	struct Job;
 	bool inUse(const QString& folder, QObject* viewer) const;
 	int queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
-	          OpenFiles* viewer);
+	          OpenFiles* viewer, const QString& deviceFolder = {});
 	void schedulePoll();
 	void poll();
 	void startNext();

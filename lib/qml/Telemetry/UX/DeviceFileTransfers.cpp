@@ -5,9 +5,11 @@
  * SPDX-License-Identifier: MIT
  */
 #include "DeviceFileTransfers.hpp"
+#include "DeviceBytes.hpp"
 #include "DeviceFilesModel.hpp"
 #include "FileContent.hpp"
 #include <integration/files/Client.hpp>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QLocale>
@@ -39,6 +41,8 @@ struct DeviceFileTransfers::Job {
 	class Orphan;
 
 	QString path, name, localFile, result;
+	// The device's folder localFile is in, for the device's bytes as read.
+	QString deviceFolder;
 	int fileIndex = -1;
 	quint64 size = 0, lastReceived = 0;
 	State state = State::Waiting;
@@ -346,12 +350,12 @@ int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong
 }
 
 int DeviceFileTransfers::openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
-                                const QString& localFile)
+                                const QString& localFile, const QString& deviceFolder)
 {
 	auto* files = qobject_cast<OpenFiles*>(viewer);
 	if (!files)
 		return -1;
-	return queue(path, fileIndex, size, localFile, files);
+	return queue(path, fileIndex, size, localFile, files, deviceFolder);
 }
 
 void DeviceFileTransfers::cancelFor(const QString& localFile)
@@ -363,7 +367,7 @@ void DeviceFileTransfers::cancelFor(const QString& localFile)
 }
 
 int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
-                               OpenFiles* viewer)
+                               OpenFiles* viewer, const QString& deviceFolder)
 {
 	if (!session_ || !session_->filesSupported() || fileIndex < 0 || localFile.isEmpty())
 		return -1;
@@ -373,6 +377,7 @@ int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong si
 	job->fileIndex = fileIndex;
 	job->size = size;
 	job->localFile = localFile;
+	job->deviceFolder = deviceFolder;
 	if (viewer) {
 		// The tab is there before the first byte, reading.
 		viewer->reading(localFile, path);
@@ -456,7 +461,21 @@ void DeviceFileTransfers::poll()
 		if (job.reader->finished()) {
 			const auto state = job.reader->state();
 			if (state == files::ReadState::Complete) {
-				if (!job.file.commit())
+				const bool written = job.file.commit();
+				// A file read for the viewer: the device's bytes as read, kept in
+				// the device's folder the host named. Any other write of a copy
+				// with a record removes it, since it would no longer be true.
+				QString notKept;
+				if (written) {
+					if (keepDeviceBytes_ && job.opening && !job.deviceFolder.isEmpty())
+						notKept = DeviceBytes::keep(job.deviceFolder, job.localFile, job.path,
+						                            QDateTime::currentDateTime());
+					else
+						DeviceBytes::forget(job.localFile);
+					if (!notKept.isEmpty())
+						DeviceBytes::forget(job.localFile);
+				}
+				if (!written)
 					end(job, State::Failed,
 					    tr("Could not write %1: %2")
 					        .arg(QDir::toNativeSeparators(job.localFile), job.file.errorString()));
@@ -466,7 +485,10 @@ void DeviceFileTransfers::poll()
 					        .arg(DeviceFilesModel::sizeText(received),
 					             DeviceFilesModel::sizeText(job.size)));
 				else
-					end(job, State::Saved, job.opening ? tr("Opened in the Viewer") : tr("Saved"));
+					end(job, State::Saved,
+					    !notKept.isEmpty() ? tr("Opened in the Viewer · the device's bytes were not kept: %1").arg(notKept)
+					    : job.opening      ? tr("Opened in the Viewer")
+					                       : tr("Saved"));
 			} else {
 				const auto writeError = job.file.errorString();
 				job.file.cancelWriting();

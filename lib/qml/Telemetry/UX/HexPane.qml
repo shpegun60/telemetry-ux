@@ -487,8 +487,8 @@ FocusScope {
                 font.pointSize: Type.caption
                 color: findBytes >= 0 && replaceBytes !== findBytes ? Theme.error : Theme.textSecondary
                 text: findBytes >= 0 && replaceBytes !== findBytes
-                      ? qsTr("%Ln bytes, not %1", "", replaceBytes).arg(findBytes)
-                      : qsTr("%Ln bytes", "", replaceBytes)
+                      ? qsTr("%L1 bytes, not %L2").arg(replaceBytes).arg(findBytes)
+                      : replaceBytes === 1 ? qsTr("1 byte") : qsTr("%L1 bytes").arg(replaceBytes)
             }
             LinkButton {
                 objectName: "hexReplaceOne"
@@ -557,6 +557,7 @@ FocusScope {
                     matchColor: Theme.infoContainer
                     matchOutlineColor: Theme.info
                     editedColor: Theme.warning
+                    deviceColor: Theme.info
                     Accessible.role: Accessible.Table
                     Accessible.name: grid.accessibleText
                     Accessible.description: qsTr("Arrows move by byte. Tab switches to the text column.")
@@ -641,16 +642,26 @@ FocusScope {
             // save that failed says why here.
             Label {
                 objectName: "hexEditState"
-                visible: !!pane.content && (pane.content.editing || pane.content.modified || pane.saveProblem.length > 0)
+                // Saved here but not the device's as read: the third layer.
+                readonly property bool deviceDiffers: !!pane.content && pane.content.hasReference
+                                                      && pane.content.referenceDiffers > 0
+                readonly property bool editState: !!pane.content && (pane.content.editing || pane.content.modified)
+                visible: editState || deviceDiffers || pane.saveProblem.length > 0
                 Layout.maximumWidth: pane.width / 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
-                color: pane.saveProblem.length > 0 ? Theme.error : Theme.warning
+                color: pane.saveProblem.length > 0 ? Theme.error : editState ? Theme.warning : Theme.info
                 text: {
                     if (pane.saveProblem.length > 0)
                         return pane.saveProblem
                     if (!pane.content)
                         return ""
+                    if (!editState)
+                        // Short, so it fits beside the cursor's place; when the
+                        // device's bytes were read is in the tooltip.
+                        return pane.content.referenceDiffers === 1
+                               ? qsTr("Saved here · 1 byte differs from the device")
+                               : qsTr("Saved here · %L1 bytes differ from the device").arg(pane.content.referenceDiffers)
                     const edited = pane.content.editedBytes
                     const state = pane.content.editing ? qsTr("Editing") : qsTr("Not saved")
                     return edited === 0 ? state
@@ -658,8 +669,10 @@ FocusScope {
                          : qsTr("%1 · %L2 bytes changed").arg(state).arg(edited)
                 }
                 HoverHandler { id: editStateHover }
-                ToolTip.visible: editStateHover.hovered && !!pane.content && pane.content.editedBytes > 0
-                ToolTip.text: pane.onDevice ? qsTr("Changed in the copy on this computer, not saved; the device's file is unchanged")
+                ToolTip.visible: editStateHover.hovered && !!pane.content && (pane.content.editedBytes > 0 || deviceDiffers)
+                ToolTip.text: !editState ? qsTr("This copy is saved on this computer and differs from %1; Restore the device's version puts them back")
+                                                .arg(pane.content ? pane.content.referenceLabel : "")
+                            : pane.onDevice ? qsTr("Changed in the copy on this computer, not saved; the device's file is unchanged")
                                             : qsTr("Changed, not saved")
                 Accessible.role: Accessible.StaticText
                 Accessible.description: ToolTip.text
