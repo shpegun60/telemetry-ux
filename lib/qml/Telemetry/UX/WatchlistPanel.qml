@@ -340,8 +340,8 @@ Pane {
                                 visible: watchRow.writable && (rowHover.hovered || visualFocus)
                                 anchors.left: parent.left
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 24
-                                height: 24
+                                width: Type.rowHeight
+                                height: Type.rowHeight
                                 padding: 0
                                 onClicked: watchRow.startEdit()
                                 Accessible.name: "Write " + watchRow.name
@@ -371,7 +371,7 @@ Pane {
                         Item {
                             visible: !watchRow.compact && watchRow.ok
                             Layout.preferredWidth: panel.statusColumnWidth
-                            implicitHeight: 16
+                            implicitHeight: Type.iconSize
                             Rectangle {
                                 objectName: "watchOkDot"
                                 width: 8

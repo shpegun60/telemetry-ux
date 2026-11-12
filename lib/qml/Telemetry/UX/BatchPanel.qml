@@ -153,7 +153,7 @@ Pane {
                             required property int childCount
                             required property int loadedCount
                             implicitWidth: responseTree.width
-                            implicitHeight: 40
+                            implicitHeight: Type.rowHeight
                             text: name
                             PlainToolTip { text: response.detail; visible: response.hovered && text.length > 0 }
                             contentItem: RowLayout {

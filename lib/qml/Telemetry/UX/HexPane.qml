@@ -441,8 +441,8 @@ FocusScope {
             ToolButton {
                 objectName: "hexBarClose"
                 flat: true
-                implicitWidth: 24
-                implicitHeight: 24
+                implicitWidth: Type.rowHeight
+                implicitHeight: Type.rowHeight
                 text: qsTr("×")
                 Accessible.name: qsTr("Close the bar")
                 ToolTip.visible: hovered || visualFocus

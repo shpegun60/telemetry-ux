@@ -190,8 +190,8 @@ FocusScope {
                 objectName: "tableFilterClear"
                 visible: filterField.text.length > 0
                 flat: true
-                implicitWidth: 24
-                implicitHeight: 24
+                implicitWidth: Type.rowHeight
+                implicitHeight: Type.rowHeight
                 text: qsTr("×")
                 Accessible.name: qsTr("Clear filter")
                 ToolTip.visible: hovered || visualFocus
