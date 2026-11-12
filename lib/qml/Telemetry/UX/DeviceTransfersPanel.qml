@@ -52,7 +52,8 @@ Pane {
         id: transferList
         objectName: "deviceFilesTransfers"
         anchors.fill: parent
-        visible: count > 0
+        // Always shown: a view hidden while empty would never hear its count
+        // change, and the empty line above says when there is nothing.
         clip: true
         model: transfersPane.transfers
         spacing: Type.tight

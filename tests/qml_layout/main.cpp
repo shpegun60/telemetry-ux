@@ -426,7 +426,8 @@ int main(int argc, char** argv)
         settle();
         CHECK(!searchStatus->isVisible());
         CHECK(warnings == 0);
-        click(separateWindow, item(separateWatchPanel, QStringLiteral("addWatchButton")));
+        click(separateWindow, item(separateWatchPanel, QStringLiteral("watchMoreButton")));
+        click(separateWindow, item(separateWindow->contentItem(), QStringLiteral("addWatchItem")));
         CHECK(shared->property("watchCount").toInt() == 1);
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
         CHECK(shared->property("watchActive").toBool());
@@ -440,8 +441,8 @@ int main(int argc, char** argv)
         click(separateWindow, item(separateWatchPanel, QStringLiteral("startWatchButton")));
         CHECK(!shared->property("watchActive").toBool() && shared->property("stops").toInt() == 1);
         CHECK(warnings == 0);
-        // A small standalone dock must wrap its controls and offer real wheel
-        // scrolling without changing the provider's polling state.
+        // The Watchlist in a small dock: one toolbar row that stays put, the
+        // rows under it, and what gives way as the dock narrows.
         engine.setInitialProperties({});
         engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
         auto* narrowWindow = engine.rootObjects().size() > 2
@@ -450,14 +451,27 @@ int main(int argc, char** argv)
         settle();
         auto* narrowPanel = item(narrowWindow->contentItem(), QStringLiteral("narrowWatch"));
         auto* narrowProvider = narrowPanel ? narrowPanel->property("provider").value<QObject*>() : nullptr;
-        auto* narrowScroll = item(narrowPanel, QStringLiteral("watchlistScroll"));
-        auto* narrowFlick = narrowScroll ? qobject_cast<QQuickItem*>(narrowScroll->property("contentItem").value<QObject*>()) : nullptr;
-        CHECK(narrowPanel && narrowProvider && narrowScroll && narrowFlick);
+        auto* narrowList = narrowPanel ? item(narrowPanel, QStringLiteral("watchlistView")) : nullptr;
+        auto* toolbar = narrowPanel ? item(narrowPanel, QStringLiteral("watchToolbar")) : nullptr;
+        CHECK(narrowPanel && narrowProvider && narrowList && toolbar);
+        const auto named = [&](const char* name) {
+            auto* found = item(narrowPanel, QString::fromLatin1(name));
+            CHECK(found != nullptr);
+            return found;
+        };
+        // Menu items live in the menu's popup; they are found as the menu's children.
+        const auto menuItem = [&](const char* name) {
+            auto* found = narrowPanel->findChild<QQuickItem*>(QString::fromLatin1(name));
+            CHECK(found != nullptr);
+            return found;
+        };
+        auto* menu = narrowPanel->findChild<QObject*>(QStringLiteral("watchMoreMenu"));
+        CHECK(menu != nullptr);
         // The expand box and the panel's `expanded` are one state: a host that
         // opens the list sees the box ticked, and unticking it closes the list.
         {
-            auto* toggle = item(narrowPanel, QStringLiteral("watchlistExpanded"));
-            CHECK(toggle && !narrowPanel->property("expanded").toBool() && !toggle->property("checked").toBool());
+            auto* toggle = named("watchlistExpanded");
+            CHECK(!narrowPanel->property("expanded").toBool() && !toggle->property("checked").toBool());
             CHECK(narrowPanel->setProperty("expanded", true));
             settle();
             CHECK(toggle->property("checked").toBool());
@@ -471,69 +485,152 @@ int main(int argc, char** argv)
             settle();
             CHECK(!toggle->property("checked").toBool());
         }
-        const auto controlsVisible = [&] {
-            for (const auto* name : {"watchlistExpanded", "addWatchButton"}) {
-                auto* control = item(narrowPanel, QString::fromLatin1(name));
-                CHECK(control && rectangle(control).top() >= rectangle(narrowFlick).top() - 1);
-                CHECK(rectangle(control).bottom() <= rectangle(narrowFlick).bottom() + 1);
-            }
+        // A control of the toolbar: shown, inside the panel, inside the row.
+        const auto inBar = [&](const char* name) {
+            auto* control = named(name);
+            CHECK(control->isVisible());
+            const QRectF box = rectangle(control), bar = rectangle(toolbar), whole = rectangle(narrowPanel);
+            CHECK(box.left() >= whole.left() - 1 && box.right() <= whole.right() + 1);
+            CHECK(box.top() >= bar.top() - 1 && box.bottom() <= bar.bottom() + 1);
+            return control;
         };
-        controlsVisible();
-        for (const auto* name : {"watchlistExpanded", "addWatchButton", "refreshWatchButton", "startWatchButton"}) {
-            auto* control = item(narrowPanel, QString::fromLatin1(name));
-            CHECK(control && rectangle(control).left() >= rectangle(narrowPanel).left());
-            CHECK(rectangle(control).right() <= rectangle(narrowPanel).right());
+        // From wide to narrow "Every" gives way first, then Read once (into
+        // ⋯); the rest stays one row. The status is a line under it, below the row.
+        {
+            bool everySeen[2] = {}, readOnceSeen[2] = {};
+            for (int width = 900; width >= 320; width -= 10) {
+                narrowWindow->resize(width, 240);
+                settle();
+                for (const auto* name : {"watchlistExpanded", "startWatchButton", "watchInterval", "watchMoreButton"})
+                    inBar(name);
+                const bool every = named("watchEvery")->isVisible();
+                const bool readOnce = named("refreshWatchButton")->isVisible();
+                CHECK(!every || readOnce);
+                if (every) inBar("watchEvery");
+                if (readOnce) inBar("refreshWatchButton");
+                everySeen[every] = readOnceSeen[readOnce] = true;
+                auto* status = named("watchStatusLabel");
+                CHECK(status->isVisible() && rectangle(status).top() >= rectangle(toolbar).bottom() - 1);
+                CHECK(rectangle(status).right() <= rectangle(narrowPanel).right() + 1);
+            }
+            CHECK(everySeen[0] && everySeen[1] && readOnceSeen[0] && readOnceSeen[1]);
+            narrowWindow->resize(320, 240);
+            settle();
+            CHECK(named("watchStatusLabel")->property("text").toString() == QStringLiteral("Ready"));
         }
         const qreal collapsedHeight = narrowPanel->property("implicitHeight").toReal();
-        click(narrowWindow, item(narrowPanel, QStringLiteral("watchlistExpanded")));
+        click(narrowWindow, named("watchlistExpanded"));
         CHECK(narrowPanel->property("implicitHeight").toReal() >= collapsedHeight + 120);
-        controlsVisible();
-        click(narrowWindow, item(narrowPanel, QStringLiteral("watchlistExpanded")));
+        click(narrowWindow, named("watchlistExpanded"));
         CHECK(narrowPanel->property("implicitHeight").toReal() <= collapsedHeight + 1);
-        controlsVisible();
-        click(narrowWindow, item(narrowPanel, QStringLiteral("addWatchButton")));
+        // ⋯ opens under its button with what the row has no room for: here
+        // Read once, then Watch the selected Field, the read modes and Clear.
+        click(narrowWindow, named("watchMoreButton"));
+        CHECK(menu->property("visible").toBool());
+        CHECK(menuItem("refreshWatchItem")->isVisible() && !menuItem("refreshWatchItem")->isEnabled());
+        CHECK(menuItem("addWatchItem")->isVisible() && menuItem("addWatchItem")->isEnabled());
+        CHECK(menuItem("watchModeReadMany")->property("checked").toBool());
+        CHECK(!menuItem("watchModeFieldRead")->property("checked").toBool());
+        CHECK(!menuItem("clearWatchItem")->isEnabled());
+        // The menu stays inside the window, however small the dock.
+        CHECK(rectangle(menuItem("addWatchItem")).top() >= 0 &&
+              rectangle(menuItem("addWatchItem")).right() <= narrowWindow->width() + 1);
+        click(narrowWindow, menuItem("addWatchItem"));
+        CHECK(!menu->property("visible").toBool());
         CHECK(narrowProvider->property("watchCount").toInt() == 1);
-        QTest::qWait(300);
-        auto* addControl = item(narrowPanel, QStringLiteral("addWatchButton"));
-        auto* toggleControl = item(narrowPanel, QStringLiteral("watchlistExpanded"));
-        auto* active = narrowWindow->activeFocusItem();
-        std::printf("after add focus=%s current=%d origin=%.1f content=%.1f toggleY=%.1f viewY=%.1f\n",
-                    active ? active->objectName().toUtf8().constData() : "none", narrowFlick->property("currentIndex").toInt(),
-                    narrowFlick->property("originY").toReal(), narrowFlick->property("contentY").toReal(),
-                    rectangle(toggleControl).top(), rectangle(narrowFlick).top());
-        controlsVisible();
-        CHECK(!narrowWindow->activeFocusItem() ||
-              narrowWindow->activeFocusItem()->objectName() != QStringLiteral("watchlistRow"));
-        CHECK(narrowFlick->property("contentHeight").toReal() > narrowFlick->height());
-        // While expanded, adding from a deliberately scrolled position must
-        // retain that position; the recovery above only applies at the top.
-        const qreal manuallyScrolled = narrowFlick->property("originY").toReal() + 8;
-        narrowFlick->setProperty("contentY", manuallyScrolled);
+        // Adding opens the list through `expanded`, so the box shows it.
+        CHECK(narrowPanel->property("expanded").toBool() && named("watchlistExpanded")->property("checked").toBool());
+        CHECK(QMetaObject::invokeMethod(menuItem("refreshWatchItem"), "click"));
         settle();
-        click(narrowWindow, addControl);
-        CHECK(narrowProvider->property("watchCount").toInt() == 2);
-        CHECK(qAbs(narrowFlick->property("contentY").toReal() - manuallyScrolled) <= 1);
-        narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-before-wheel.png"));
-        auto* narrowBar = item(narrowPanel, QStringLiteral("watchlistScrollBar"));
-        CHECK(narrowBar && narrowBar->isVisible());
-        const QRectF bar = rectangle(narrowBar);
-        CHECK(bar.height() > 100 && bar.right() <= rectangle(narrowPanel).right());
-        const QPoint press = QPointF(bar.center().x(), bar.bottom() - 5).toPoint();
-        QTest::mouseClick(narrowWindow, Qt::LeftButton, Qt::NoModifier, press);
+        CHECK(narrowProvider->property("reads").toInt() == 1);
+        // The read modes: one is always chosen; choosing it again keeps it.
+        CHECK(QMetaObject::invokeMethod(menuItem("watchModeFieldRead"), "click"));
         settle();
-        const auto origin = narrowFlick->property("originY").toReal();
-        CHECK(narrowFlick->property("contentY").toReal() > origin);
-        QTest::mouseClick(narrowWindow, Qt::LeftButton, Qt::NoModifier,
-                          QPointF(bar.center().x(), bar.top() + 5).toPoint());
+        CHECK(narrowProvider->property("watchIndividual").toBool());
+        CHECK(menuItem("watchModeFieldRead")->property("checked").toBool() &&
+              !menuItem("watchModeReadMany")->property("checked").toBool());
+        CHECK(QMetaObject::invokeMethod(menuItem("watchModeFieldRead"), "click"));
         settle();
-        CHECK(narrowPanel->property("scrollAnchor").toString() == QStringLiteral("top"));
-        narrowWindow->resize(300, 240);
+        CHECK(narrowProvider->property("watchIndividual").toBool() &&
+              menuItem("watchModeFieldRead")->property("checked").toBool());
+        CHECK(QMetaObject::invokeMethod(menuItem("watchModeReadMany"), "click"));
         settle();
-        controlsVisible();
-        narrowWindow->resize(320, 240);
+        CHECK(!narrowProvider->property("watchIndividual").toBool() &&
+              menuItem("watchModeReadMany")->property("checked").toBool());
+        // Without ReadMany Fields are read one by one and there is no choice.
+        CHECK(narrowProvider->setProperty("watchReadManySupported", false));
         settle();
-        narrowFlick->setProperty("contentY", origin);
+        click(narrowWindow, named("watchMoreButton"));
+        CHECK(menu->property("visible").toBool());
+        CHECK(!menuItem("watchModeReadMany")->isVisible());
+        CHECK(menuItem("watchModeFieldRead")->property("checked").toBool() &&
+              !menuItem("watchModeFieldRead")->isEnabled());
+        QTest::keyClick(narrowWindow, Qt::Key_Escape);
         settle();
+        CHECK(!menu->property("visible").toBool());
+        CHECK(narrowProvider->setProperty("watchReadManySupported", true));
+        settle();
+        // The interval: the usual steps, then Other…; Continuous only where 0
+        // is accepted; a stored value outside the steps is offered as it is.
+        {
+            auto* interval = named("watchInterval");
+            auto* input = named("watchIntervalInput");
+            const auto count = [&] { return interval->property("count").toInt(); };
+            const auto index = [&] { return interval->property("currentIndex").toInt(); };
+            const auto ms = [&] { return narrowProvider->property("watchIntervalMs").toInt(); };
+            QString last;
+            CHECK(count() == 9 && index() == 0);
+            CHECK(QMetaObject::invokeMethod(interval, "textAt", Q_RETURN_ARG(QString, last), Q_ARG(int, 8)) &&
+                  last == QStringLiteral("Other…"));
+            CHECK(narrowProvider->setProperty("watchIntervalMinimumMs", 0));
+            settle();
+            CHECK(count() == 10 && index() == 1);
+            CHECK(narrowProvider->setProperty("watchIntervalMinimumMs", 1));
+            CHECK(narrowProvider->setProperty("watchIntervalMs", 1234));
+            settle();
+            CHECK(count() == 10 && index() == 4);
+            CHECK(interval->property("currentText").toString().endsWith(QStringLiteral(" s")));
+            CHECK(QMetaObject::invokeMethod(interval, "activated", Q_ARG(int, 3)));
+            settle();
+            CHECK(ms() == 1000 && count() == 9 && index() == 3);
+            // Other… puts a field for milliseconds in the list's place, the
+            // interval in it selected; Enter sets what is typed.
+            const auto other = [&] {
+                CHECK(QMetaObject::invokeMethod(interval, "activated", Q_ARG(int, count() - 1)));
+                settle();
+                CHECK(input->isVisible() && input->hasActiveFocus() && !interval->isVisible());
+                inBar("watchIntervalInput");
+            };
+            other();
+            QTest::keyClick(narrowWindow, '3');
+            QTest::keyClick(narrowWindow, '7');
+            QTest::keyClick(narrowWindow, Qt::Key_Return);
+            settle();
+            CHECK(ms() == 37 && !input->isVisible() && interval->isVisible());
+            CHECK(index() == 0 && interval->property("currentText").toString() == QStringLiteral("37 ms"));
+            // Below the provider's minimum Enter takes nothing; Esc goes back
+            // to the list, which shows the interval as it was, not Other….
+            other();
+            QTest::keyClick(narrowWindow, '0');
+            QTest::keyClick(narrowWindow, Qt::Key_Return);
+            settle();
+            CHECK(input->isVisible() && ms() == 37);
+            QTest::keyClick(narrowWindow, Qt::Key_Escape);
+            settle();
+            CHECK(!input->isVisible() && interval->isVisible() && ms() == 37);
+            CHECK(index() == 0 && interval->property("currentText").toString() == QStringLiteral("37 ms"));
+            CHECK(narrowProvider->setProperty("watchIntervalMs", 100));
+            settle();
+        }
+        // While polling the list, the mode and the interval keep still.
+        click(narrowWindow, named("startWatchButton"));
+        CHECK(narrowProvider->property("watchActive").toBool());
+        CHECK(named("startWatchButton")->property("text").toString() == QStringLiteral("Stop"));
+        CHECK(!named("watchInterval")->isEnabled() && !menuItem("clearWatchItem")->isEnabled() &&
+              !menuItem("addWatchItem")->isEnabled() && !menuItem("watchModeReadMany")->isEnabled());
+        click(narrowWindow, named("startWatchButton"));
+        CHECK(!narrowProvider->property("watchActive").toBool());
+        CHECK(narrowProvider->property("starts").toInt() == 1 && narrowProvider->property("stops").toInt() == 1);
         // Match Qt Quick Test's event delivery: the event enters the window
         // at a real pointer position, as a spontaneous input with a timestamp.
         const auto wheelAt = [&](QQuickWindow* target, QPointF pos, int delta) {
@@ -546,100 +643,98 @@ int main(int argc, char** argv)
             qApp->notify(target, &event);
             settle();
         };
-        wheelAt(narrowWindow, QPointF(100, 40), -360);
-        CHECK(narrowFlick->property("contentY").toReal() > origin);
-        CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("stops").toInt() == 0);
-        narrowFlick->setProperty("contentY", origin + narrowFlick->property("contentHeight").toReal() - narrowFlick->height());
-        settle();
-        auto* value = item(narrowPanel, QStringLiteral("watchValueText"));
-        auto* rowStatus = item(narrowPanel, QStringLiteral("watchRowStatus"));
-        auto* remove = item(narrowPanel, QStringLiteral("removeWatchButton"));
-        auto* narrowList = item(narrowPanel, QStringLiteral("watchlistView"));
-        CHECK(value && rowStatus && remove && narrowList);
-        CHECK(value->property("text").toString() == QStringLiteral("18446744073709551615"));
-        CHECK(rowStatus->property("text").toString() == QStringLiteral("SubmissionRefused"));
-        for (auto* label : {value, rowStatus}) {
-            std::printf("label %s h=%.2f paint=%.2f w=%.2f paintw=%.2f\n", label->objectName().toUtf8().constData(), label->height(), label->property("paintedHeight").toReal(), label->width(), label->property("paintedWidth").toReal());
-            CHECK(label->property("paintedHeight").isValid());
-            CHECK(label->property("paintedHeight").toReal() <= label->height() + 1);
-            CHECK(label->property("paintedWidth").toReal() <= label->width() + 1);
-        }
-        for (auto* control : {value, rowStatus, remove}) {
-            CHECK(rectangle(control).left() >= rectangle(narrowList).left() - 1);
-            CHECK(rectangle(control).right() <= rectangle(narrowList).right() + 1);
-            CHECK(rectangle(control).top() >= rectangle(narrowList).top() - 1);
-            CHECK(rectangle(control).bottom() <= rectangle(narrowList).bottom() + 1);
-            CHECK(rectangle(control).top() >= rectangle(narrowPanel).top() - 1);
-            CHECK(rectangle(control).bottom() <= rectangle(narrowPanel).bottom() + 1);
-        }
-        CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-watchlist.png")));
-        narrowFlick->setProperty("contentY", origin);
-        settle();
-        auto* interval = item(narrowPanel, QStringLiteral("watchFrequency"));
-        auto* clear = item(narrowPanel, QStringLiteral("clearWatchButton"));
-        CHECK(interval && clear);
-        CHECK(narrowPanel->setProperty("scrollAnchor", QStringLiteral("top")));
-        interval->forceActiveFocus(Qt::TabFocusReason);
-        settle();
-        QTest::keyClick(narrowWindow, Qt::Key_Tab);
-        settle();
-        CHECK(clear->hasActiveFocus());
-        CHECK(rectangle(clear).top() >= rectangle(narrowPanel).top() - 1);
-        CHECK(rectangle(clear).bottom() <= rectangle(narrowPanel).bottom() + 1);
-        CHECK(narrowPanel->property("scrollAnchor").toString() != QStringLiteral("top"));
-        narrowWindow->resize(290, 240);
-        settle();
-        CHECK(clear->hasActiveFocus());
-        CHECK(rectangle(clear).top() >= rectangle(narrowFlick).top() - 1);
-        CHECK(rectangle(clear).bottom() <= rectangle(narrowFlick).bottom() + 1);
-        narrowWindow->resize(320, 240);
-        settle();
-        CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("stops").toInt() == 0);
-        // A large watchlist stays a single virtualized viewport. Wheel input
-        // over the rows must scroll it without scheduling a read or polling.
+        // 65 Fields: the rows scroll under a toolbar that stays where it is,
+        // and the wheel never reads or polls.
         CHECK(QMetaObject::invokeMethod(narrowProvider, "populate", Q_ARG(QVariant, 65)));
         settle();
         CHECK(narrowProvider->property("watchCount").toInt() == 65);
-        CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
-        settle();
-        auto* longStatus = itemWithText(narrowPanel, QStringLiteral("watchRowStatus"),
-            QStringLiteral("SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable"));
-        CHECK(longStatus && longStatus->property("paintedHeight").toReal() > 40);
-        CHECK(longStatus->property("paintedHeight").toReal() <= longStatus->height() + 1);
-        const qreal beforeWheelUp = narrowFlick->property("contentY").toReal();
-        wheelAt(narrowWindow, QPointF(100, 175), 360);
-        CHECK(narrowFlick->property("contentY").toReal() < beforeWheelUp);
-        CHECK(narrowProvider->property("starts").toInt() == 0 &&
-              narrowProvider->property("stops").toInt() == 0 &&
-              narrowProvider->property("reads").toInt() == 0);
-        // A wide dock shows one 28 px table row per Field under column titles:
-        // the value right-aligned, a good reading as a dot, a problem as its
-        // status word cut to one line, and a small remove button.
+        auto* narrowBar = named("watchlistScrollBar");
+        CHECK(narrowBar->isVisible() && rectangle(narrowBar).right() <= rectangle(narrowPanel).right() + 1);
+        const QRectF barBefore = rectangle(toolbar);
+        const qreal topBefore = narrowList->property("contentY").toReal();
+        wheelAt(narrowWindow, rectangle(narrowList).center(), -360);
+        CHECK(narrowList->property("contentY").toReal() > topBefore);
+        CHECK(rectangle(toolbar) == barBefore);
+        inBar("startWatchButton");
+        CHECK(narrowProvider->property("starts").toInt() == 1 && narrowProvider->property("reads").toInt() == 1);
+        // Narrow rows take two lines: the name, then the value and the status,
+        // which wrap rather than run out of the list; × is always there.
+        std::function<QQuickItem*(QQuickItem*, int)> rowAt = [&](QQuickItem* root, int index) -> QQuickItem* {
+            if (root->objectName() == QStringLiteral("watchlistRow") && root->property("index").toInt() == index)
+                return root;
+            for (auto* child : root->childItems())
+                if (auto* found = rowAt(child, index))
+                    return found;
+            return nullptr;
+        };
+        {
+            CHECK(!narrowPanel->property("tableRows").toBool());
+            CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
+            settle();
+            // Two lines, each a row high: the name and ×, then the value and
+            // the status in a word, the provider's own word kept for the tooltip.
+            const qreal lineHeight = std::round(std::max<qreal>(10.0, QGuiApplication::font().pointSizeF()) *
+                                                QGuiApplication::primaryScreen()->logicalDotsPerInch() / 72.0 * 1.65);
+            auto* lastRow = rowAt(narrowList, 64);
+            CHECK(lastRow != nullptr && qAbs(lastRow->height() - 2 * lineHeight) < 0.5);
+            CHECK(lastRow->property("status").toString() ==
+                  QStringLiteral("SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable"));
+            auto* longStatus = item(lastRow, QStringLiteral("watchRowStatus"));
+            CHECK(longStatus && longStatus->property("text").toString() == QStringLiteral("Refused"));
+            CHECK(longStatus->property("paintedHeight").toReal() <= lineHeight);
+            auto* lastRemove = item(lastRow, QStringLiteral("removeWatchButton"));
+            auto* lastValue = item(lastRow, QStringLiteral("watchValueText"));
+            CHECK(lastRemove && lastValue && rectangle(lastRemove).bottom() <= rectangle(lastValue).top() + 1);
+            for (const auto* name : {"watchValueText", "watchRowStatus", "removeWatchButton"}) {
+                auto* control = item(lastRow, QString::fromLatin1(name));
+                CHECK(control && control->isVisible());
+                CHECK(control->property("paintedWidth").isValid() == false ||
+                      control->property("paintedWidth").toReal() <= control->width() + 1);
+                CHECK(rectangle(control).left() >= rectangle(narrowList).left() - 1);
+                CHECK(rectangle(control).right() <= rectangle(narrowList).right() + 1);
+                CHECK(!rectangle(control).intersects(rectangle(narrowBar)));
+            }
+            CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-watchlist.png")));
+        }
+        // The keyboard: Tab goes from ⋯ to the rows, the arrows move the
+        // current row, Delete removes it and the list keeps the focus.
+        {
+            CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtBeginning"));
+            settle();
+            named("watchMoreButton")->forceActiveFocus(Qt::TabFocusReason);
+            QTest::keyClick(narrowWindow, Qt::Key_Tab);
+            settle();
+            CHECK(narrowList->hasActiveFocus() && narrowList->property("currentIndex").toInt() == 0);
+            QTest::keyClick(narrowWindow, Qt::Key_Down);
+            settle();
+            CHECK(narrowList->property("currentIndex").toInt() == 1);
+            QTest::keyClick(narrowWindow, Qt::Key_Delete);
+            settle();
+            CHECK(narrowProvider->property("watchCount").toInt() == 64 && narrowList->hasActiveFocus());
+            CHECK(QMetaObject::invokeMethod(narrowProvider, "populate", Q_ARG(QVariant, 65)));
+            settle();
+        }
+        // A wide dock shows one row per Field under column titles: the value
+        // right-aligned, a good reading as a dot, a problem as its status
+        // word cut to one line, and × on the row under the pointer or the
+        // current one.
         {
             narrowWindow->resize(720, 360);
             settle();
             CHECK(narrowPanel->property("tableRows").toBool());
             CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtBeginning"));
             settle();
-            std::function<QQuickItem*(QQuickItem*, int)> rowAt = [&](QQuickItem* root, int index) -> QQuickItem* {
-                if (root->objectName() == QStringLiteral("watchlistRow") && root->property("index").toInt() == index)
-                    return root;
-                for (auto* child : root->childItems())
-                    if (auto* found = rowAt(child, index))
-                        return found;
-                return nullptr;
-            };
             auto* model = narrowProvider->property("watchlist").value<QObject*>();
             CHECK(model && QMetaObject::invokeMethod(model, "setProperty", Q_ARG(int, 0),
                                                      Q_ARG(QString, QStringLiteral("status")),
                                                      Q_ARG(QVariant, QStringLiteral("Ok"))));
             settle();
-            auto* columns = item(narrowPanel, QStringLiteral("watchColumns"));
-            auto* valueTitle = item(narrowPanel, QStringLiteral("watchColumnValue"));
-            auto* statusTitle = item(narrowPanel, QStringLiteral("watchColumnStatus"));
+            auto* columns = named("watchColumns");
+            auto* valueTitle = named("watchColumnValue");
+            auto* statusTitle = named("watchColumnStatus");
             auto* okRow = rowAt(narrowList, 0);
             auto* failedRow = rowAt(narrowList, 1);
-            CHECK(columns && columns->isVisible() && valueTitle && statusTitle && okRow && failedRow);
+            CHECK(columns->isVisible() && okRow && failedRow);
             // A one-line row is Type's row: the body (the application font, at
             // least 10 pt) in pixels x 1.65.
             const qreal bodyPixels = std::max<qreal>(10.0, QGuiApplication::font().pointSizeF()) *
@@ -656,18 +751,26 @@ int main(int argc, char** argv)
                 CHECK(qAbs(rectangle(rowValue).right() - rectangle(valueTitle).right()) <= 1);
                 CHECK(rowRemove->property("text").toString() == QStringLiteral("×"));
                 CHECK(rectangle(rowRemove).right() <= rectangle(narrowList).right() + 1);
-                // The overlay scrollbar never covers the remove button.
+                // The overlay scrollbar never covers ×.
                 CHECK(narrowBar->isVisible() && !rectangle(rowRemove).intersects(rectangle(narrowBar)));
                 CHECK(rectangle(rowRemove).top() >= rectangle(row).top() - 1);
                 CHECK(rectangle(rowRemove).bottom() <= rectangle(row).bottom() + 1);
             }
+            // × on the current row only, while nothing is under the pointer.
+            QTest::mouseMove(narrowWindow, rectangle(toolbar).center().toPoint());
+            narrowList->setProperty("currentIndex", 0);
+            narrowList->forceActiveFocus(Qt::TabFocusReason);
+            settle();
+            CHECK(item(okRow, QStringLiteral("removeWatchButton"))->isVisible());
+            CHECK(!item(failedRow, QStringLiteral("removeWatchButton"))->isVisible());
             auto* okStatus = item(okRow, QStringLiteral("watchRowStatus"));
             auto* failedStatus = item(failedRow, QStringLiteral("watchRowStatus"));
             CHECK(okStatus && !okStatus->isVisible());
             CHECK(failedStatus && failedStatus->isVisible());
-            // A writable row is written in place: double-click the value, type,
-            // Enter writes; Esc or clicking elsewhere cancels; a read-only row
-            // offers nothing, and neither does a provider without permission.
+            // A writable row is written in place: double-click the value or
+            // press F2, type, Enter writes; Esc or clicking elsewhere cancels;
+            // a read-only row offers nothing, and neither does a provider
+            // without permission.
             {
                 auto* okValue = item(okRow, QStringLiteral("watchValueText"));
                 auto* editor = item(okRow, QStringLiteral("watchValueEditor"));
@@ -685,18 +788,19 @@ int main(int argc, char** argv)
                 QTest::keyClick(narrowWindow, '2');
                 QTest::keyClick(narrowWindow, Qt::Key_Return);
                 settle();
-                CHECK(!editor->isVisible() && okValue->isVisible());
+                CHECK(!editor->isVisible() && okValue->isVisible() && narrowList->hasActiveFocus());
                 CHECK(narrowProvider->property("writes").toStringList() == QStringList{QStringLiteral("0:42")});
-                auto* outcome = item(narrowPanel, QStringLiteral("watchWriteOutcome"));
-                CHECK(outcome && outcome->property("text").toString() == QStringLiteral("Writing measure.Field0"));
-                doubleClick(okValue);
-                CHECK(editor->isVisible());
+                auto* outcome = named("watchWriteOutcome");
+                CHECK(outcome->property("text").toString() == QStringLiteral("Writing measure.Field0"));
+                QTest::keyClick(narrowWindow, Qt::Key_F2);
+                settle();
+                CHECK(editor->isVisible() && editor->hasActiveFocus());
                 QTest::keyClick(narrowWindow, Qt::Key_Escape);
                 settle();
-                CHECK(!editor->isVisible());
+                CHECK(!editor->isVisible() && narrowList->hasActiveFocus());
                 doubleClick(okValue);
                 CHECK(editor->isVisible());
-                item(narrowPanel, QStringLiteral("watchFrequency"))->forceActiveFocus();
+                named("watchInterval")->forceActiveFocus();
                 settle();
                 CHECK(!editor->isVisible());
                 CHECK(narrowProvider->property("writes").toStringList().size() == 1);
@@ -714,18 +818,24 @@ int main(int argc, char** argv)
             auto* okDot = item(okRow, QStringLiteral("watchOkDot"));
             auto* failedDot = item(failedRow, QStringLiteral("watchOkDot"));
             CHECK(okDot && okDot->isVisible() && failedDot && !failedDot->isVisible());
-            CHECK(failedStatus->property("text").toString() == QStringLiteral("SubmissionRefused"));
+            CHECK(failedStatus->property("text").toString() == QStringLiteral("Refused"));
             CHECK(qAbs(rectangle(failedStatus).left() - rectangle(statusTitle).left()) <= 1);
             CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/wide-watchlist.png")));
+            click(narrowWindow, named("watchMoreButton"));
+            CHECK(menu->property("visible").toBool() && !menuItem("refreshWatchItem")->isVisible());
+            CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/watch-menu.png")));
+            QTest::keyClick(narrowWindow, Qt::Key_Escape);
+            settle();
             CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
             settle();
             auto* lastRow = rowAt(narrowList, 64);
             auto* wideLongStatus = lastRow ? item(lastRow, QStringLiteral("watchRowStatus")) : nullptr;
-            CHECK(wideLongStatus && wideLongStatus->property("truncated").toBool());
-            CHECK(wideLongStatus->property("paintedHeight").toReal() < 24);
+            CHECK(wideLongStatus && wideLongStatus->property("text").toString() == QStringLiteral("Refused") &&
+                  !wideLongStatus->property("truncated").toBool());
+            CHECK(wideLongStatus->property("paintedHeight").toReal() < typeRow);
             // A host that docks the list for good hides the expand box.
-            auto* expandBox = item(narrowPanel, QStringLiteral("watchlistExpanded"));
-            CHECK(expandBox && expandBox->isVisible());
+            auto* expandBox = named("watchlistExpanded");
+            CHECK(expandBox->isVisible());
             CHECK(narrowPanel->setProperty("collapsible", false));
             settle();
             CHECK(!expandBox->isVisible() && narrowPanel->property("expanded").toBool());
@@ -736,134 +846,66 @@ int main(int argc, char** argv)
             CHECK(narrowPanel->setProperty("collapsible", true));
             settle();
             CHECK(!columns->isVisible() && narrowList->property("count").toInt() == 0);
-            // Add opens the list through `expanded`, so a host that closes it
-            // later also unticks the box.
-            auto* wideAdd = item(narrowPanel, QStringLiteral("addWatchButton"));
-            CHECK(wideAdd && QMetaObject::invokeMethod(wideAdd, "clicked"));
+            // Watching opens the list through `expanded`, so a host that
+            // closes it later also unticks the box.
+            CHECK(QMetaObject::invokeMethod(menuItem("addWatchItem"), "click"));
             settle();
             CHECK(narrowPanel->property("expanded").toBool() && expandBox->property("checked").toBool());
             CHECK(narrowPanel->setProperty("expanded", false));
             settle();
             CHECK(!expandBox->property("checked").toBool());
-            CHECK(narrowProvider->property("starts").toInt() == 0 && narrowProvider->property("reads").toInt() == 0);
+            CHECK(narrowProvider->property("starts").toInt() == 1 && narrowProvider->property("reads").toInt() == 1);
+            // Clear asks first; Esc keeps the list, Remove all empties it.
+            CHECK(narrowPanel->setProperty("expanded", true));
+            settle();
+            auto* clearDialog = narrowPanel->findChild<QObject*>(QStringLiteral("clearWatchDialog"));
+            CHECK(clearDialog != nullptr);
+            CHECK(QMetaObject::invokeMethod(menuItem("clearWatchItem"), "click"));
+            settle();
+            CHECK(clearDialog->property("visible").toBool());
+            auto* clearCancel = item(narrowWindow->contentItem(), QStringLiteral("clearWatchCancel"));
+            CHECK(clearCancel && clearCancel->hasActiveFocus());
+            CHECK(clearDialog->property("title").toString().contains(QStringLiteral("66")));
+            CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/watch-clear.png")));
+            QTest::keyClick(narrowWindow, Qt::Key_Escape);
+            settle();
+            CHECK(!clearDialog->property("visible").toBool() && narrowProvider->property("watchCount").toInt() == 66);
+            CHECK(QMetaObject::invokeMethod(menuItem("clearWatchItem"), "click"));
+            settle();
+            click(narrowWindow, item(narrowWindow->contentItem(), QStringLiteral("clearWatchConfirm")));
+            CHECK(!clearDialog->property("visible").toBool() && narrowProvider->property("watchCount").toInt() == 0);
+            auto* empty = named("watchEmpty");
+            CHECK(empty->isVisible() && empty->property("text").toString().contains(QStringLiteral("Watch the selected Field")));
         }
-        // Keyboard activation keeps the focus indicator and both top actions.
-        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
-        auto* keyboardWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(keyboardWindow && keyboardWindow != narrowWindow);
-        settle();
-        auto* keyboardPanel = item(keyboardWindow->contentItem(), QStringLiteral("narrowWatch"));
-        CHECK(keyboardPanel);
-        auto* keyboardAdd = item(keyboardPanel, QStringLiteral("addWatchButton"));
-        auto* keyboardToggle = item(keyboardPanel, QStringLiteral("watchlistExpanded"));
-        auto* keyboardViewport = item(keyboardPanel, QStringLiteral("watchlistView"));
-        CHECK(keyboardAdd && keyboardToggle && keyboardViewport);
-        keyboardAdd->forceActiveFocus(Qt::TabFocusReason);
-        std::printf("keyboard before origin=%.1f content=%.1f atBeginning=%d focus=%d\n",
-                    keyboardViewport->property("originY").toReal(), keyboardViewport->property("contentY").toReal(),
-                    keyboardViewport->property("atYBeginning").toBool(), keyboardAdd->hasActiveFocus());
-        QTest::keyClick(keyboardWindow, Qt::Key_Space);
-        settle();
-        QTest::qWait(300);
-        CHECK(keyboardAdd->hasActiveFocus() && keyboardAdd->property("visualFocus").toBool());
-        std::printf("keyboard origin=%.1f content=%.1f toggleY=%.1f viewY=%.1f\n",
-                    keyboardViewport->property("originY").toReal(),
-                    keyboardViewport->property("contentY").toReal(),
-                    rectangle(keyboardToggle).top(), rectangle(keyboardViewport).top());
-        for (auto* control : {keyboardAdd, keyboardToggle}) {
-            CHECK(rectangle(control).top() >= rectangle(keyboardViewport).top() - 1);
-            CHECK(rectangle(control).bottom() <= rectangle(keyboardViewport).bottom() + 1);
+        // Hidden and shown again, then narrowed, a dock keeps its toolbar in view.
+        {
+            engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
+            auto* lifecycleWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
+            CHECK(lifecycleWindow && lifecycleWindow != narrowWindow);
+            settle();
+            auto* lifecyclePanel = item(lifecycleWindow->contentItem(), QStringLiteral("narrowWatch"));
+            CHECK(lifecyclePanel);
+            auto* lifecycleToggle = item(lifecyclePanel, QStringLiteral("watchlistExpanded"));
+            auto* lifecycleStart = item(lifecyclePanel, QStringLiteral("startWatchButton"));
+            CHECK(lifecycleToggle && lifecycleStart);
+            lifecycleWindow->setVisible(false);
+            QTest::qWait(200);
+            lifecycleWindow->setVisible(true);
+            CHECK(lifecycleToggle->setProperty("checked", true));
+            lifecycleWindow->resize(320, 240);
+            settle();
+            QTest::qWait(300);
+            for (auto* control : {lifecycleToggle, lifecycleStart}) {
+                CHECK(rectangle(control).top() >= 0);
+                CHECK(rectangle(control).bottom() <= lifecycleWindow->height());
+                CHECK(rectangle(control).right() <= lifecycleWindow->width());
+            }
+            CHECK(lifecycleWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-reopened.png")));
+            // A window closed with its menu open leaves nothing behind.
+            click(lifecycleWindow, item(lifecyclePanel, QStringLiteral("watchMoreButton")));
+            delete lifecycleWindow;
+            QTest::qWait(300);
         }
-        wheelAt(keyboardWindow, QPointF(100, 170), -120);
-        CHECK(keyboardViewport->property("contentY").toReal() > keyboardViewport->property("originY").toReal());
-        CHECK(keyboardPanel->property("scrollAnchor").toString() != QStringLiteral("top"));
-        keyboardWindow->resize(290, 240);
-        settle();
-        CHECK(keyboardViewport->property("contentY").toReal() > keyboardViewport->property("originY").toReal() + 1);
-        // A host that deliberately positions the view has the same right to
-        // keep that position across a later width/layout change.
-        CHECK(keyboardPanel->setProperty("scrollAnchor", QStringLiteral("top")));
-        keyboardViewport->setProperty("contentY", keyboardViewport->property("originY").toReal() + 7);
-        settle();
-        CHECK(keyboardPanel->property("scrollAnchor").toString() != QStringLiteral("top"));
-        keyboardWindow->resize(320, 240);
-        settle();
-        std::printf("programmatic after resize origin=%.1f content=%.1f following=%d\n",
-                    keyboardViewport->property("originY").toReal(), keyboardViewport->property("contentY").toReal(),
-                    keyboardPanel->property("scrollAnchor").toString() == QStringLiteral("top"));
-        CHECK(keyboardViewport->property("contentY").toReal() > keyboardViewport->property("originY").toReal() + 1);
-        // A subsequent user focus change before layout settles must not be
-        // undone by the one-shot header adjustment after Add.
-        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
-        auto* raceWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(raceWindow && raceWindow != narrowWindow);
-        settle();
-        auto* racePanel = item(raceWindow->contentItem(), QStringLiteral("narrowWatch"));
-        CHECK(racePanel);
-        auto* raceAdd = item(racePanel, QStringLiteral("addWatchButton"));
-        CHECK(raceAdd);
-        QTest::mouseClick(raceWindow, Qt::LeftButton, Qt::NoModifier,
-                          rectangle(raceAdd).center().toPoint());
-        auto* raceMode = item(racePanel, QStringLiteral("watchMode"));
-        CHECK(raceMode && raceMode->isVisible());
-        raceMode->forceActiveFocus(Qt::TabFocusReason);
-        settle();
-        QTest::qWait(300);
-        CHECK(raceMode->hasActiveFocus());
-        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
-        auto* wheelRaceWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(wheelRaceWindow && wheelRaceWindow != raceWindow);
-        settle();
-        auto* wheelRacePanel = item(wheelRaceWindow->contentItem(), QStringLiteral("narrowWatch"));
-        CHECK(wheelRacePanel);
-        auto* wheelRaceAdd = item(wheelRacePanel, QStringLiteral("addWatchButton"));
-        auto* wheelRaceView = item(wheelRacePanel, QStringLiteral("watchlistView"));
-        CHECK(wheelRaceAdd && wheelRaceView);
-        QTest::mouseClick(wheelRaceWindow, Qt::LeftButton, Qt::NoModifier,
-                          rectangle(wheelRaceAdd).center().toPoint());
-        settle();
-        wheelAt(wheelRaceWindow, QPointF(100, 170), -120);
-        QTest::qWait(300);
-        CHECK(wheelRacePanel->property("scrollAnchor").toString() == QStringLiteral("free"));
-        CHECK(wheelRaceView->property("contentY").toReal() > wheelRaceView->property("originY").toReal());
-        // Reopening and resizing a dock may relayout an expanded header well
-        // after it was hidden. Check actual scene bounds, not just originY.
-        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
-        auto* lifecycleWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(lifecycleWindow && lifecycleWindow != raceWindow);
-        settle();
-        auto* lifecyclePanel = item(lifecycleWindow->contentItem(), QStringLiteral("narrowWatch"));
-        CHECK(lifecyclePanel);
-        auto* lifecycleToggle = item(lifecyclePanel, QStringLiteral("watchlistExpanded"));
-        auto* lifecycleAdd = item(lifecyclePanel, QStringLiteral("addWatchButton"));
-        auto* lifecycleView = item(lifecyclePanel, QStringLiteral("watchlistView"));
-        CHECK(lifecycleToggle && lifecycleAdd && lifecycleView);
-        lifecycleWindow->setVisible(false);
-        QTest::qWait(200);
-        lifecycleWindow->setVisible(true);
-        CHECK(lifecycleToggle->setProperty("checked", true));
-        lifecycleWindow->resize(300, 240);
-        settle();
-        QTest::qWait(300);
-        for (auto* control : {lifecycleToggle, lifecycleAdd}) {
-            CHECK(rectangle(control).top() >= rectangle(lifecycleView).top() - 1);
-            CHECK(rectangle(control).bottom() <= rectangle(lifecycleView).bottom() + 1);
-            CHECK(rectangle(control).top() >= 0);
-            CHECK(rectangle(control).bottom() <= lifecycleWindow->height());
-        }
-        CHECK(lifecycleWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/narrow-reopened.png")));
-        engine.load(QUrl(QStringLiteral("qrc:/Narrow.qml")));
-        auto* destroyWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(destroyWindow && destroyWindow != lifecycleWindow);
-        settle();
-        auto* destroyPanel = item(destroyWindow->contentItem(), QStringLiteral("narrowWatch"));
-        CHECK(destroyPanel);
-        auto* destroyAdd = item(destroyPanel, QStringLiteral("addWatchButton"));
-        CHECK(destroyAdd);
-        QTest::mouseClick(destroyWindow, Qt::LeftButton, Qt::NoModifier,
-                          rectangle(destroyAdd).center().toPoint());
-        delete destroyWindow;
-        QTest::qWait(300);
         CHECK(warnings == 0);
         SearchFixtureModel searchFixture;
         auto* alpha = searchFixture.append(nullptr, QStringLiteral("Alpha"), false);
@@ -876,7 +918,7 @@ int main(int argc, char** argv)
         engine.rootContext()->setContextProperty(QStringLiteral("searchFixtureModel"), &searchFixture);
         engine.load(QUrl(QStringLiteral("qrc:/Search.qml")));
         auto* searchWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
-        CHECK(searchWindow && searchWindow != lifecycleWindow);
+        CHECK(searchWindow && searchWindow != narrowWindow);
         settle();
         auto* searchPanel = item(searchWindow->contentItem(), QStringLiteral("searchTree"));
         auto* query = item(searchPanel, QStringLiteral("endpointSearch"));

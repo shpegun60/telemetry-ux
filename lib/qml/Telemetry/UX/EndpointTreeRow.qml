@@ -50,7 +50,10 @@ TreeViewDelegate {
 
     implicitWidth: treeView.width
     implicitHeight: Type.rowHeight
-    indentation: 16
+    indentation: Type.indent
+    // The panel's padding is the margin; Device files' rows line up with these.
+    leftMargin: 0
+    indicator: TreeChevron { row: treeRow }
     text: name
 
     contentItem: Label {

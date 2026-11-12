@@ -45,7 +45,7 @@ Pane {
     // The status line is short; this is the whole sentence, for its tooltip
     // and for a screen reader.
     property string watchStatusFull: ""
-    readonly property string pollingShort: qsTr("Stop polling first")
+    readonly property string pollingShort: qsTr("Stop polling to change the Watchlist.")
     readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
 
     // A row's box: -1 none, else Qt.Unchecked, PartiallyChecked or Checked.
@@ -523,7 +523,7 @@ Pane {
     // Whether a new tree opens its Fields as it arrives; a program that leaves
     // every branch for the user to open sets it false.
     property bool openOnLoad: true
-    padding: framed ? 12 : 6
+    padding: framed ? 12 : Type.padding
     background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: panel.framed ? 10 : 0 }
     ColumnLayout {
         anchors.fill: parent
@@ -701,6 +701,19 @@ Pane {
                 }
             }
             ScrollBar.vertical: ScrollBar {}
+            // Not connected, the tree says how it fills, on the view itself.
+            Label {
+                objectName: "endpointTreeEmpty"
+                parent: endpointTree
+                anchors.centerIn: parent
+                width: parent.width - 2 * Type.padding
+                visible: endpointTree.rows === 0 && panel.provider && panel.provider.connected === false
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                color: Theme.textMuted
+                text: qsTr("Connect to see the device's Fields, Commands and Services.")
+            }
             Component.onCompleted: Qt.callLater(function() {
                 if (!endpointTree) return
                 endpointTree.forceLayout()

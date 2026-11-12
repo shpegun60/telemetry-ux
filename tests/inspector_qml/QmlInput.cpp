@@ -190,7 +190,8 @@ void watchLayout(QQuickWindow& window, ui::InspectorController& controller)
 	CHECK(controller.connectDemo());
 	auto& endpoints = *qobject_cast<ui::EndpointModel*>(controller.endpoints());
 	CHECK(controller.selectEndpoint(endpoint(endpoints, QStringLiteral("Counter"))));
-	click(window, *control(window, QStringLiteral("addWatchButton")));
+	click(window, *control(window, QStringLiteral("watchMoreButton")));
+	click(window, *control(window, QStringLiteral("addWatchItem")));
 	CHECK(controller.watchCount() == 1);
 	click(window, *control(window, QStringLiteral("refreshWatchButton")));
 	const auto message = QStringLiteral(

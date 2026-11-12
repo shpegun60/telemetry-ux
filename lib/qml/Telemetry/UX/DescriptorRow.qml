@@ -9,6 +9,8 @@ import QtQuick.Layouts
 
 TreeViewDelegate {
     id: row
+    indentation: Type.indent
+    indicator: TreeChevron { row: row }
     objectName: "descriptorRow"
 
     required property string name

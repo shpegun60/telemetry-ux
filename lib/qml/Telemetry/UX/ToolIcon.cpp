@@ -108,6 +108,21 @@ QPainterPath refresh()
 	path.lineTo(13, 7.5);
 	return path;
 }
+// Warning: a triangle on its base with an exclamation mark, the dot a stroke
+// so short its round caps make it.
+QPainterPath warning()
+{
+	QPainterPath path;
+	path.moveTo(12, 3.5);
+	path.lineTo(21, 19.5);
+	path.lineTo(3, 19.5);
+	path.closeSubpath();
+	path.moveTo(12, 9.5);
+	path.lineTo(12, 13.5);
+	path.moveTo(12, 16.5);
+	path.lineTo(12, 16.6);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("edit"))
@@ -122,6 +137,8 @@ QPainterPath shape(const QString& name)
 		return upload();
 	if (name == QLatin1String("undo"))
 		return hookLeft();
+	if (name == QLatin1String("warning"))
+		return warning();
 	if (name == QLatin1String("redo"))
 		return QTransform(-1, 0, 0, 1, 24, 0).map(hookLeft());
 	return {};

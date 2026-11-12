@@ -169,6 +169,8 @@ Pane {
                 onWidthChanged: Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
                 delegate: TreeViewDelegate {
                     id: valueDelegate
+                    indentation: Type.indent
+                    indicator: TreeChevron { row: valueDelegate }
                     objectName: "valueRow"
                     required property string name
                     required property string detail
@@ -276,6 +278,8 @@ Pane {
                     onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
                     delegate: TreeViewDelegate {
                         id: responseDelegate
+                        indentation: Type.indent
+                        indicator: TreeChevron { row: responseDelegate }
                         objectName: "responseRow"
                         required property string name
                         required property string detail

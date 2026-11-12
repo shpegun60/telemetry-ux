@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
             CHECK(evaluate(boxTree, "stateOf(searchSource.index(40, 0), watchRevision)").toInt() == -1);
             CHECK(boxes->setProperty("watchActive", true));
             settle();
-            CHECK(!firstBox->isEnabled() && status->property("text").toString() == QStringLiteral("Stop polling first"));
+            CHECK(!firstBox->isEnabled() && status->property("text").toString() == QStringLiteral("Stop polling to change the Watchlist."));
             CHECK(boxes->setProperty("watchActive", false));
             CHECK(boxes->setProperty("full", true));
             settle();

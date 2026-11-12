@@ -150,6 +150,8 @@ Pane {
                         onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
                         delegate: TreeViewDelegate {
                             id: response
+                            indentation: Type.indent
+                            indicator: TreeChevron { row: response }
                             objectName: "batchResponseRow"
                             required property string name
                             required property string detail
