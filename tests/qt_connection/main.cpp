@@ -123,7 +123,13 @@ QQuickItem* control(QQuickItem* parent, const QString& name, const QString& text
 
 void click(QQuickWindow& window, QQuickItem& item)
 {
-	item.ensurePolished();
+	// Layouts that just became visible (a header shown once something is
+	// selected) place the item only when they are polished: from the top down.
+	QList<QQuickItem*> chain;
+	for (auto* level = &item; level; level = level->parentItem())
+		chain.prepend(level);
+	for (auto* level : chain)
+		level->ensurePolished();
 	const auto point = item.mapToScene({item.width() / 2, item.height() / 2}).toPoint();
 	CHECK(item.isEnabled() && point.x() >= 0 && point.y() >= 0 && point.x() < window.width() &&
 	      point.y() < window.height());

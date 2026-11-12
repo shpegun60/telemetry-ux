@@ -128,10 +128,14 @@ int main(int argc, char** argv) {
         auto* search = named(panel, "endpointSearch");
         auto* status = named(panel, "endpointWatchSelectionStatus");
         CHECK(search && status && !add->isVisible() && !named(panel, "endpointTreeTitle"));
-        // The row is the type scale's row height, its box 16 px in a 24 px target.
-        CHECK(qAbs(first->height() - evaluate(panel, "Type.rowHeight").toReal()) < 0.5);
+        // The row is the type scale's row height; its box is the scale's even
+        // check size, drawn in a row-square target (RowCheckBox).
+        const qreal rowHeight = evaluate(panel, "Type.rowHeight").toReal();
+        const qreal checkSize = evaluate(panel, "Type.checkSize").toReal();
+        CHECK(qAbs(first->height() - rowHeight) < 0.5);
         auto* box = named(first, "endpointWatchBox");
-        CHECK(box && box->width() == 16 && box->height() == 16 && checkBox->height() >= 24);
+        CHECK(box && checkSize >= 12 && int(checkSize) % 2 == 0 && box->width() == checkSize &&
+              box->height() == checkSize && qAbs(checkBox->height() - rowHeight) < 0.5);
         click(window, checkBox);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
         // A narrow dock must not paint the bulk actions over the search.

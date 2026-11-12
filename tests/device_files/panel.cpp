@@ -649,7 +649,7 @@ int main(int argc, char** argv)
 		return download->property("text").toString() == QStringLiteral("Download 2 files…");
 	}));
 	CHECK(download->property("enabled").toBool());
-	CHECK(child(root, "deviceFilesMarked")->property("text").toString().startsWith(QStringLiteral("2 marked")));
+	CHECK(child(root, "deviceFilesSummary")->property("text").toString().startsWith(QStringLiteral("2 marked")));
 	CHECK(QMetaObject::invokeMethod(download, "clicked"));
 	CHECK(await([&] {
 		return root->property("lastSelection").toList().size() == 2;

@@ -47,7 +47,7 @@ Dialog {
 
     ColumnLayout {
         width: parent.width
-        spacing: 8
+        spacing: Type.padding
         Label {
             Layout.fillWidth: true
             wrapMode: Text.Wrap

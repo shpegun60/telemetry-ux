@@ -527,7 +527,7 @@ Pane {
     background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: panel.framed ? 10 : 0 }
     ColumnLayout {
         anchors.fill: parent
-        spacing: 6
+        spacing: Type.spacing
         // Qt Quick has no clipboard API; a hidden editor copies its selection.
         // Inside the layout so the Pane still sizes itself from one child.
         TextEdit { id: clipboardHelper; visible: false; textFormat: TextEdit.PlainText }
@@ -824,7 +824,7 @@ Pane {
             Layout.fillHeight: false
             Layout.preferredHeight: Math.max(statusMetrics.height + 4, 24)
             Layout.maximumHeight: Layout.preferredHeight
-            spacing: 6
+            spacing: Type.spacing
             Label {
                 id: watchStatus
                 objectName: "endpointWatchSelectionStatus"

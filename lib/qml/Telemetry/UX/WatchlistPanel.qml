@@ -104,13 +104,13 @@ Pane {
                     panel.seenHeaderHeight = height
                 }
                 Component.onCompleted: panel.headerImplicitHeight = implicitHeight
-                spacing: 6
+                spacing: Type.spacing
                 Flow {
                     id: actions
                     objectName: "watchActions"
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
-                    spacing: 6
+                    spacing: Type.spacing
                     CheckBox {
                         id: watchPanelExpanded
                         objectName: "watchlistExpanded"
@@ -165,7 +165,7 @@ Pane {
                     visible: panel.open
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
-                    spacing: 6
+                    spacing: Type.spacing
                     ComboBox {
                         objectName: "watchMode"
                         width: Math.min(210, watchLayout.width)
@@ -230,11 +230,11 @@ Pane {
                     objectName: "watchColumns"
                     visible: panel.open && panel.tableRows && panel.provider.watchCount > 0
                     Layout.fillWidth: true
-                    Layout.topMargin: 4
-                    spacing: 8
-                    Label { objectName: "watchColumnName"; text: "Name"; color: "#8597ab"; font.pixelSize: 12; Layout.leftMargin: 8; Layout.preferredWidth: panel.nameColumnWidth - 8 }
-                    Label { objectName: "watchColumnValue"; text: "Value"; color: "#8597ab"; font.pixelSize: 12; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
-                    Label { objectName: "watchColumnStatus"; text: "Status"; color: "#8597ab"; font.pixelSize: 12; Layout.preferredWidth: panel.statusColumnWidth }
+                    Layout.topMargin: Type.tight
+                    spacing: Type.padding
+                    Label { objectName: "watchColumnName"; text: "Name"; color: Theme.textMuted; font.pointSize: Type.caption; Layout.leftMargin: Type.padding; Layout.preferredWidth: panel.nameColumnWidth - Type.padding }
+                    Label { objectName: "watchColumnValue"; text: "Value"; color: Theme.textMuted; font.pointSize: Type.caption; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
+                    Label { objectName: "watchColumnStatus"; text: "Status"; color: Theme.textMuted; font.pointSize: Type.caption; Layout.preferredWidth: panel.statusColumnWidth }
                     Item { Layout.preferredWidth: panel.removeColumnWidth; Layout.rightMargin: panel.scrollReserve }
                 }
             }
@@ -276,7 +276,7 @@ Pane {
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
                 readonly property bool problem: !ok && status !== "" && status !== "Pending" && status !== "Not read" && status !== "NotRead"
-                height: compact ? rowLayout.implicitHeight + 8 : 28
+                height: compact ? rowLayout.implicitHeight + Type.padding : Type.rowHeight
                 Rectangle {
                     anchors.fill: parent
                     anchors.rightMargin: panel.scrollReserve
@@ -301,13 +301,13 @@ Pane {
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: watchRow.compact ? 5 : 8
+                        spacing: watchRow.compact ? Type.spacing : Type.padding
                         Label {
                             visible: !watchRow.compact
                             textFormat: Text.PlainText
                             text: watchRow.name
-                            Layout.leftMargin: 8
-                            Layout.preferredWidth: panel.nameColumnWidth - 8
+                            Layout.leftMargin: Type.padding
+                            Layout.preferredWidth: panel.nameColumnWidth - Type.padding
                             elide: Text.ElideMiddle
                             ToolTip.visible: nameHover.hovered && truncated
                             ToolTip.text: watchRow.name
@@ -357,7 +357,7 @@ Pane {
                             horizontalAlignment: watchRow.compact ? TextInput.AlignLeft : TextInput.AlignRight
                             Layout.fillWidth: true
                             Layout.minimumWidth: 60
-                            Layout.preferredHeight: watchRow.compact ? implicitHeight : 24
+                            Layout.preferredHeight: watchRow.compact ? implicitHeight : Type.rowHeight
                             topPadding: 2
                             bottomPadding: 2
                             onAccepted: watchRow.commitEdit()
@@ -403,7 +403,7 @@ Pane {
                             text: watchRow.compact ? "Remove" : "×"
                             flat: !watchRow.compact
                             Layout.preferredWidth: watchRow.compact ? implicitWidth : panel.removeColumnWidth
-                            Layout.preferredHeight: watchRow.compact ? implicitHeight : 24
+                            Layout.preferredHeight: watchRow.compact ? implicitHeight : Type.rowHeight
                             enabled: !panel.provider.watchActive
                             onClicked: panel.provider.removeWatch(watchRow.index)
                             Accessible.name: "Remove " + watchRow.name

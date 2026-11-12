@@ -42,7 +42,7 @@ TreeViewDelegate {
     }
     readonly property color textColor: highlighted ? palette.highlightedText : palette.buttonText
     // The slot the box sits in, kept on every row.
-    readonly property int boxSlot: 24
+    readonly property int boxSlot: Type.rowHeight
 
     signal watchToggled()
     // A right click on the row: the panel opens its menu there.
@@ -61,19 +61,13 @@ TreeViewDelegate {
         text: treeRow.name
         color: treeRow.textColor
 
-        CheckBox {
+        RowCheckBox {
             id: watchBox
             objectName: "endpointWatchCheck"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             visible: treeRow.watchable
             enabled: treeRow.watchEnabled
-            focusPolicy: Qt.NoFocus
-            // The 24 px target; the box is drawn in its middle.
-            implicitWidth: treeRow.boxSlot
-            implicitHeight: treeRow.boxSlot
-            padding: 0
-            spacing: 0
             tristate: true
             checkState: treeRow.watchState
             // The provider decides; the box shows what it decided.
@@ -84,28 +78,8 @@ TreeViewDelegate {
             }
             Accessible.name: treeRow.watchName
             Accessible.description: watchBox.enabled ? "" : treeRow.watchOffReason
-            contentItem: Item {}
-            indicator: Rectangle {
-                objectName: "endpointWatchBox"
-                implicitWidth: 16
-                implicitHeight: 16
-                x: (watchBox.width - width) / 2
-                y: (watchBox.height - height) / 2
-                radius: 3
-                readonly property bool marked: watchBox.checkState !== Qt.Unchecked
-                color: !marked ? "transparent"
-                     : watchBox.enabled ? treeRow.palette.highlight : Theme.surfaceDisabled
-                border.width: 1
-                border.color: watchBox.enabled ? treeRow.textColor : Theme.textDisabled
-                Text {
-                    anchors.centerIn: parent
-                    visible: parent.marked
-                    text: watchBox.checkState === Qt.Checked ? "✓" : "–"
-                    color: watchBox.enabled ? treeRow.palette.highlightedText : Theme.textDisabled
-                    font.pointSize: Type.caption
-                    font.bold: true
-                }
-            }
+            edgeColor: treeRow.textColor
+            indicator.objectName: "endpointWatchBox"
             HoverHandler { id: boxHover }
             PlainToolTip {
                 visible: boxHover.hovered && !watchBox.enabled && treeRow.watchOffReason.length > 0

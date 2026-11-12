@@ -41,7 +41,7 @@ Control {
             id: workspace
             width: workspaceScroll.availableWidth
             height: implicitHeight
-            spacing: 16
+            spacing: Type.groupSpacing
             readonly property int visibleRows: 2 + Number(headerLoader.visible) + Number(watchLoader.visible)
                 + Number(batchLoader.visible) + Number(footerLoader.visible)
             readonly property real auxiliaryHeight: (headerLoader.visible ? headerLoader.implicitHeight : 0)

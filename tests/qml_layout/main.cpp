@@ -2,6 +2,7 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QItemSelectionModel>
@@ -639,11 +640,15 @@ int main(int argc, char** argv)
             auto* okRow = rowAt(narrowList, 0);
             auto* failedRow = rowAt(narrowList, 1);
             CHECK(columns && columns->isVisible() && valueTitle && statusTitle && okRow && failedRow);
+            // A one-line row is Type's row: the application font in pixels x 1.65.
+            const qreal bodyPixels = QGuiApplication::font().pointSizeF() *
+                                     QGuiApplication::primaryScreen()->logicalDotsPerInch() / 72.0;
+            const qreal typeRow = std::round(bodyPixels * 1.65);
             for (auto* row : {okRow, failedRow}) {
                 auto* rowValue = item(row, QStringLiteral("watchValueText"));
                 auto* rowRemove = item(row, QStringLiteral("removeWatchButton"));
                 CHECK(rowValue && rowRemove);
-                CHECK(qAbs(row->height() - 28) < 0.5);
+                CHECK(qAbs(row->height() - typeRow) < 0.5);
                 CHECK(rowValue->property("paintedHeight").toReal() <= row->height());
                 CHECK(rowValue->property("text").toString() == QStringLiteral("18446744073709551615"));
                 CHECK(rowValue->property("horizontalAlignment").toInt() == Qt::AlignRight);

@@ -46,7 +46,7 @@ TreeViewDelegate {
 
     implicitWidth: treeView.width
     implicitHeight: Type.rowHeight
-    rightPadding: 8
+    rightPadding: Type.padding
     text: name
     highlighted: current
 
@@ -59,7 +59,7 @@ TreeViewDelegate {
                    : qsTr("%1, %2, %3").arg(name).arg(value).arg(typeText)
 
     contentItem: RowLayout {
-        spacing: 8
+        spacing: Type.padding
         Label {
             Layout.fillWidth: true
             textFormat: Text.PlainText

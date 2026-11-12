@@ -37,7 +37,7 @@ TreeViewDelegate {
 
     implicitWidth: treeView.width
     implicitHeight: Type.rowHeight
-    rightPadding: 8
+    rightPadding: Type.padding
     text: name
     highlighted: current
 
@@ -49,11 +49,10 @@ TreeViewDelegate {
     Accessible.checked: marked === Qt.Checked
 
     contentItem: RowLayout {
-        spacing: 8
+        spacing: Type.padding
 
-        CheckBox {
+        RowCheckBox {
             objectName: "deviceFileMark"
-            focusPolicy: Qt.NoFocus
             enabled: fileRow.markable
             tristate: fileRow.isFolder
             checkState: fileRow.marked

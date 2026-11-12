@@ -37,7 +37,7 @@ RowLayout {
     }
 
     visible: false
-    spacing: 8
+    spacing: Type.padding
 
     Label {
         text: qsTr("Find")

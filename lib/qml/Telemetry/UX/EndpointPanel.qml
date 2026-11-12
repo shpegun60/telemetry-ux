@@ -1,20 +1,26 @@
-// Shared Field/Command/Service renderer; host-owned provider and I/O. MIT.
+// Shared Field/Command/Service renderer; host-owned provider and I/O. With
+// nothing selected it is one line; with a selection, the name and its actions
+// on one row, a caption line for a draft's, a Command's or a Service's note,
+// and the values a row high. `framed: false` drops the card for a dock. MIT.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
 Pane {
     id: panel
-    palette.window: "#11151c"
-    palette.windowText: "#e8edf5"
-    palette.base: "#17202b"
-    palette.alternateBase: "#1c2836"
-    palette.text: "#e8edf5"
-    palette.button: "#233349"
-    palette.buttonText: "#e8edf5"
-    palette.highlight: "#215a68"
-    palette.highlightedText: "#ffffff"
-    palette.placeholderText: "#718297"
+    palette.window: Theme.surfaceWindow
+    palette.windowText: Theme.textPrimary
+    palette.base: Theme.surface
+    palette.alternateBase: Theme.surfaceAlternate
+    palette.text: Theme.textPrimary
+    palette.button: Theme.buttonFill
+    palette.buttonText: Theme.textPrimary
+    palette.highlight: Theme.stateSelected
+    palette.highlightedText: Theme.selectedForeground
+    palette.placeholderText: Theme.textMuted
+    property bool framed: true
+    padding: framed ? Type.groupSpacing : Type.padding
+    readonly property bool hasSelection: provider.selection.length > 0
     required property var provider
     property int categoryFilter: 0
     property Component headerComponent: null
@@ -22,22 +28,28 @@ Pane {
     readonly property int selectedCategory: provider.commandSelected ? 2 : provider.serviceSelected ? 3 : 1
     readonly property bool selectionMatches: categoryFilter === 0 || (provider.selection.length > 0 && selectedCategory === categoryFilter)
     readonly property bool showResponse: (categoryFilter === 0 || categoryFilter === 3) && (provider.serviceSelected || provider.serviceResponseEndpoint.length > 0)
-    background: Rectangle { color: "#17202b"; radius: 10 }
+    background: Rectangle {
+        color: panel.framed ? Theme.surface : Theme.surfaceWindow
+        radius: panel.framed ? Type.radius * 2 : 0
+    }
     ColumnLayout {
         anchors.fill: parent
         visible: panel.selectionMatches
-        spacing: 16
+        spacing: Type.spacing
         Loader { Layout.fillWidth: true; active: panel.headerComponent !== null; sourceComponent: panel.headerComponent }
         GridLayout {
             id: selectionHeader
             Layout.fillWidth: true
+            // Nothing selected: the value area's one line says what to do.
+            visible: panel.hasSelection
             columns: width < 560 ? 1 : 2
+            columnSpacing: Type.spacing
+            rowSpacing: Type.tight
             Label {
                 objectName: "endpointSelectionTitle"
                 textFormat: Text.PlainText
-                text: panel.provider.selection.length ? panel.provider.selection : "Select a Field"
-                font.pixelSize: 21
-                font.weight: Font.DemiBold
+                text: panel.provider.selection
+                font.weight: Type.headingWeight
                 Layout.fillWidth: true
                 elide: Text.ElideMiddle
             }
@@ -46,7 +58,7 @@ Pane {
             Flow {
                 id: selectionActions
                 objectName: "endpointSelectionActions"
-                spacing: 6
+                spacing: Type.spacing
                 readonly property real rowWidth: {
                     let total = 0, shown = 0
                     for (let i = 0; i < children.length; ++i) {
@@ -59,7 +71,7 @@ Pane {
                 }
                 Layout.fillWidth: selectionHeader.columns === 1
                 Layout.preferredWidth: selectionHeader.columns === 1 ? -1 : rowWidth
-                BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: 30; implicitHeight: 30 }
+                BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: Type.controlHeight; implicitHeight: Type.controlHeight }
                 Button {
                     objectName: "editButton"
                     text: "Edit"
@@ -76,10 +88,13 @@ Pane {
                 }
                 Button {
                     objectName: "applyButton"
-                    text: "Apply + Refresh"
+                    text: qsTr("Apply")
                     visible: panel.provider.editing
                     enabled: panel.provider.canApply
                     onClicked: panel.provider.apply()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 700
+                    ToolTip.text: qsTr("Write once, then read the device again")
                 }
                 Button {
                     objectName: "executeButton"
@@ -101,8 +116,28 @@ Pane {
                     visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
                     enabled: panel.provider.canRefresh
                     onClicked: panel.provider.refresh()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 700
+                    ToolTip.text: qsTr("Read the device again. The values shown are from the last completed read; arrays load in batches as you expand them.")
                 }
             }
+        }
+        // A draft's, a Command's or a Service's note, one caption line under the name.
+        Label {
+            objectName: "endpointNote"
+            visible: panel.hasSelection && text.length > 0
+            textFormat: Text.PlainText
+            text: panel.provider.serviceSelected
+                ? qsTr("Request values start at zero. Call sends one request; the response stays until the next accepted change or session.")
+                : panel.provider.commandSelected
+                ? qsTr("Arguments start at zero; the device's defaults may differ. Accepted does not confirm it ran.")
+                : panel.provider.editing
+                ? qsTr("A local draft. Apply writes it once and reads the device again.")
+                : ""
+            color: Theme.textMuted
+            font.pointSize: Type.caption
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
         }
         GridLayout {
             id: valueColumns
@@ -140,7 +175,8 @@ Pane {
                     required property string editorText
                     TableView.onReused: scalarInput.inputValid = true
                     implicitWidth: valueTree.width
-                    implicitHeight: 40
+                    // A row with an editor is as tall as the editor, a control and a little room.
+                    implicitHeight: editable ? Type.controlHeight + Type.tight : Type.rowHeight
                     text: name
                     PlainToolTip {
                         objectName: "valueToolTip"
@@ -149,7 +185,7 @@ Pane {
                     }
                     contentItem: RowLayout {
                         Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Label { textFormat: Text.PlainText; visible: !editable; text: value; color: "#83e1ce"; font.family: "monospace" }
+                        Label { textFormat: Text.PlainText; visible: !editable; text: value; color: Theme.textPrimary; font.family: Type.fixedFamily }
                         TextField {
                             id: scalarInput
                             objectName: "scalarEditor"
@@ -157,6 +193,7 @@ Pane {
                             property bool inputValid: true
                             visible: valueDelegate.editable
                             Layout.preferredWidth: Math.min(230, Math.max(120, valueTree.width - 120))
+                            Layout.preferredHeight: Type.controlHeight
                             // Keep the operator's raw text while typing (for example
                             // the intermediate "4." in "4.25"). Invalid text also
                             // survives blur until corrected or the draft is cancelled.
@@ -165,7 +202,7 @@ Pane {
                                 when: !scalarInput.activeFocus && scalarInput.inputValid
                                 restoreMode: Binding.RestoreNone
                             }
-                            font.family: "monospace"
+                            font.family: Type.fixedFamily
                             selectByMouse: true
                             onTextEdited: inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
                             onEditingFinished: inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
@@ -192,8 +229,9 @@ Pane {
                         ? panel.provider.serviceSelected ? "Waiting for the Service result…" : panel.provider.commandSelected ? "Waiting for the Command result…" : "Reading the selected Field…"
                         : panel.provider.serviceSelected ? "No argument values to edit. Call submits one Service request."
                         : panel.provider.commandSelected ? "No argument values to edit. Execute sends the Command once."
-                        : "Select a Field, then press Refresh."
-                    color: "#99abbf"
+                        : panel.hasSelection ? qsTr("Not read yet. Refresh reads it.")
+                        : qsTr("Select a Field, Command or Service in the Device tree.")
+                    color: Theme.textSecondary
                 }
             }
             ColumnLayout {
@@ -208,7 +246,7 @@ Pane {
                     textFormat: Text.PlainText
                     text: panel.provider.serviceResponseEndpoint.length
                         ? "Last response · " + panel.provider.serviceResponseEndpoint : "Last response"
-                    color: "#99abbf"
+                    color: Theme.textSecondary
                     Layout.fillWidth: true
                     elide: Text.ElideMiddle
                 }
@@ -236,7 +274,7 @@ Pane {
                         required property int childCount
                         required property int loadedCount
                         implicitWidth: responseTree.width
-                        implicitHeight: 40
+                        implicitHeight: Type.rowHeight
                         text: name
                         PlainToolTip {
                             objectName: "responseToolTip"
@@ -245,7 +283,7 @@ Pane {
                         }
                         contentItem: RowLayout {
                             Label { textFormat: Text.PlainText; text: name; elide: Text.ElideRight; Layout.fillWidth: true }
-                            Label { textFormat: Text.PlainText; text: value; color: "#83e1ce"; font.family: "monospace" }
+                            Label { textFormat: Text.PlainText; text: value; color: Theme.textPrimary; font.family: Type.fixedFamily }
                             Button {
                                 visible: isAggregate && childCount > 128
                                 enabled: loadedCount < childCount
@@ -265,31 +303,17 @@ Pane {
                         wrapMode: Text.Wrap
                         visible: responseTree.rows === 0
                         text: panel.provider.busy ? "Waiting for a response…" : "No owned response value."
-                        color: "#99abbf"
+                        color: Theme.textSecondary
                     }
                 }
             }
         }
         Label {
             textFormat: Text.PlainText
-            text: panel.provider.serviceSelected
-                ? "Initial request values are zero. Call submits one request; the read-only response is owned until a new accepted mutation or session change."
-                : panel.provider.commandSelected
-                ? "Initial request values are zero; device defaults may differ. Accepted does not confirm execution."
-                : panel.provider.editing
-                ? "Local draft only. Edit scalar values, then Apply to write once and read the device again."
-                : "Values belong to the last completed read. Arrays load in batches as you expand them."
-            color: "#99abbf"
-            font.pixelSize: 11
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-        Label {
-            textFormat: Text.PlainText
             objectName: "writeOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 1) && panel.provider.writeOutcome.length > 0
             text: qsTr("Last write: %1").arg(panel.provider.writeOutcome)
-            color: "#e6c57b"
+            color: Theme.warning
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
@@ -298,7 +322,7 @@ Pane {
             objectName: "commandOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 2) && panel.provider.commandOutcome.length > 0
             text: qsTr("Last command: %1").arg(panel.provider.commandOutcome)
-            color: "#e6c57b"
+            color: Theme.warning
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
@@ -307,7 +331,7 @@ Pane {
             objectName: "serviceOutcomeLabel"
             visible: (panel.categoryFilter === 0 || panel.categoryFilter === 3) && panel.provider.serviceOutcome.length > 0
             text: qsTr("Last service: %1").arg(panel.provider.serviceOutcome)
-            color: "#e6c57b"
+            color: Theme.warning
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }

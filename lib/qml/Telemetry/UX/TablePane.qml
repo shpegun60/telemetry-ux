@@ -160,10 +160,10 @@ FocusScope {
         // Filter: only the rows with this text in some cell.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
+            spacing: Type.padding
             Label {
                 text: qsTr("Filter")
                 color: Theme.textSecondary
@@ -217,9 +217,9 @@ FocusScope {
             id: findBar
             objectName: "tableFind"
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
             countText: !pane.rows || pane.rows.matchCount === 0 ? ""
                      : pane.rows.matchesCapped ? qsTr("%1 of %2+").arg(pane.rows.matchIndex).arg(pane.rows.matchCount)
                      : qsTr("%1 of %2").arg(pane.rows.matchIndex).arg(pane.rows.matchCount)
@@ -334,8 +334,8 @@ FocusScope {
                 Label {
                     id: cell
                     anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
+                    anchors.leftMargin: Type.padding
+                    anchors.rightMargin: Type.padding
                     verticalAlignment: Text.AlignVCenter
                     horizontalAlignment: pane.rows.numeric(tableCell.column) ? Text.AlignRight : Text.AlignLeft
                     textFormat: Text.PlainText

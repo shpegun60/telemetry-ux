@@ -168,9 +168,9 @@ FocusScope {
             id: findBar
             objectName: "textFind"
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
             caseOption: true
             // Past the cap a match has no number: only how many there are at least.
             countText: !pane.lines || pane.lines.matchCount === 0 ? ""
@@ -190,10 +190,10 @@ FocusScope {
             objectName: "textGotoBar"
             visible: false
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            Layout.bottomMargin: 4
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
+            spacing: Type.padding
             Label {
                 text: qsTr("Go to line")
                 color: Theme.textSecondary

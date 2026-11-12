@@ -13,8 +13,8 @@ Basic.ToolButton {
     id: link
     property color tint: Theme.textSecondary
     implicitHeight: 24
-    leftPadding: 4
-    rightPadding: 4
+    leftPadding: Type.tight
+    rightPadding: Type.tight
     topPadding: 0
     bottomPadding: 0
     focusPolicy: Qt.StrongFocus

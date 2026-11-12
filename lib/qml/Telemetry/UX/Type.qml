@@ -4,10 +4,9 @@
 // A modular scale on the major second (1.125), the compact ratio for dense data.
 // The base is the application font: a host sets it once with
 // QGuiApplication::setFont before the first window loads (Qt.application.font
-// does not notify later changes), as max(12 pt, the system font x 4/3): a 16 px
-// body, or larger when the system font is larger. Every panel and menu follows;
-// the other steps derive from it here. Points follow display scaling. Use at most
-// three steps on one screen.
+// does not notify later changes) and assigns `body` to zoom afterwards. Every
+// panel and menu follows; the other steps and every size derive from it here.
+// Points follow display scaling. Use at most three steps on one screen.
 pragma Singleton
 import QtQuick
 
@@ -43,8 +42,29 @@ QtObject {
                                : Qt.platform.os === "osx" || Qt.platform.os === "ios" ? "Menlo"
                                : "DejaVu Sans Mono"
 
-    // One height for rows and controls, a little less for chips.
-    property int rowHeight: 32
-    property int controlHeight: 32
-    property int chipHeight: 30
+    // The body in device-independent pixels: every size below is a multiple of
+    // it, so a host that zooms by changing the body scales rows, controls and
+    // room together, never the text alone (WINDOW_LAYOUT.md in the client).
+    readonly property real bodyPixels: body * logicalDpi / 72
+
+    // One height for rows, controls a little taller, chips a little shorter:
+    // compact, as an IDE's (22 / 24 / 20 px at a 13.3 px body).
+    property int rowHeight: Math.round(bodyPixels * 1.65)
+    property int controlHeight: Math.round(bodyPixels * 1.8)
+    property int chipHeight: Math.round(bodyPixels * 1.5)
+    // Glyphs on buttons and in rows, and one level of a tree's indent.
+    property int iconSize: Math.round(bodyPixels * 1.2)
+    property int indent: iconSize
+    // A check box: even, so it sits on whole pixels in a row (14 px).
+    property int checkSize: 2 * Math.round(bodyPixels * 0.55)
+    // Every control's corners.
+    property int radius: 3
+
+    // Room around and between things: inside a panel's edge, between the
+    // items of one group, between groups, and the least that still separates
+    // (6 / 4 / 8 / 3 px at a 13.3 px body).
+    property int padding: Math.round(bodyPixels * 0.45)
+    property int spacing: Math.round(bodyPixels * 0.3)
+    property int groupSpacing: Math.round(bodyPixels * 0.6)
+    property int tight: Math.max(2, Math.round(bodyPixels * 0.2))
 }

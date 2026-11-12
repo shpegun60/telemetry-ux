@@ -13,7 +13,7 @@ Pane {
     ColumnLayout {
         id: batchLayout
         anchors.fill: parent
-        spacing: 6
+        spacing: Type.spacing
         RowLayout {
             Layout.fillWidth: true
             CheckBox {

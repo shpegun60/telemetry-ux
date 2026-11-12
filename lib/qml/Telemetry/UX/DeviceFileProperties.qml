@@ -9,7 +9,7 @@ import Telemetry.UX
 Popup {
     id: properties
     objectName: "deviceFileProperties"
-    padding: 12
+    padding: Type.groupSpacing
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
@@ -29,8 +29,8 @@ Popup {
         Accessible.role: Accessible.Dialog
         Accessible.name: qsTr("Properties of %1").arg(properties.file.name || "")
         columns: 2
-        columnSpacing: 12
-        rowSpacing: 6
+        columnSpacing: Type.groupSpacing
+        rowSpacing: Type.spacing
 
         Label {
             Layout.columnSpan: 2
@@ -41,7 +41,7 @@ Popup {
         }
         Label { text: qsTr("Path"); color: Theme.textSecondary; font.pointSize: Type.caption }
         RowLayout {
-            spacing: 8
+            spacing: Type.padding
             Label {
                 objectName: "deviceFilePropertiesPath"
                 Layout.maximumWidth: 360

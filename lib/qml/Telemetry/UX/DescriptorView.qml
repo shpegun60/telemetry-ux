@@ -134,14 +134,14 @@ FocusScope {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 4
+        spacing: Type.tight
 
         // Which descriptor: its fingerprint, in groups of four, with Copy.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label {
                 text: qsTr("Descriptor")
                 color: Theme.textPrimary
@@ -174,8 +174,8 @@ FocusScope {
         Label {
             objectName: "descriptorSummary"
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
             elide: Text.ElideRight
             font.pointSize: Type.caption
             color: Theme.textSecondary
@@ -185,9 +185,9 @@ FocusScope {
         // Find: the matches and their parents, the rest folded away.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             TextField {
                 id: findField
                 objectName: "descriptorFind"
@@ -233,9 +233,9 @@ FocusScope {
         // The columns' titles, at the rows' widths.
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-            spacing: 8
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.padding
             Label { Layout.fillWidth: true; text: qsTr("Name"); font.pointSize: Type.caption; color: Theme.textSecondary }
             Label { Layout.preferredWidth: view.typeWidth; text: qsTr("Type"); font.pointSize: Type.caption; color: Theme.textSecondary }
             Label {
