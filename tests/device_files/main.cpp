@@ -6,6 +6,8 @@
 #include <Telemetry/UX/DescriptorContent.hpp>
 #include <Telemetry/UX/DeviceFileLive.hpp>
 #include <Telemetry/UX/ValuesContent.hpp>
+#include <Telemetry/UX/CapabilityContent.hpp>
+#include <Telemetry/UX/JsonContent.hpp>
 #include <Telemetry/UX/FileContent.hpp>
 #include <Telemetry/UX/FileTextModels.hpp>
 #include <Telemetry/UX/TelemetryCodecs.hpp>
@@ -14,7 +16,9 @@
 #include <integration/telemetry/v3/ValuesFile.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <wire/BatchWire.hpp>
 #include <wire/IdentityWire.hpp>
+#include <wire/ReadManyWire.hpp>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
@@ -1835,6 +1839,205 @@ void liveValues(const QString& folder)
 	device.value = 42;
 }
 
+// JSON as a tree: the file's own key order, members made when opened and 256
+// at a time, Find by name, path or value, a value copied as the file writes
+// it, where a broken file is wrong, and a large file opened at once.
+void jsonCodec(const QString& folder)
+{
+	using telemetry::ux::JsonContent;
+	using telemetry::ux::JsonTreeModel;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	QByteArray list = "[";
+	for (int i = 0; i < 600; ++i)
+		list += (i ? ", " : "") + QByteArray::number(i);
+	list += "]";
+	const QByteArray text = "\xEF\xBB\xBF{\n  \"zeta\": 1,\n  \"alpha\": {\"b\": [1, 2.50, \"x\\ny\"], \"a\": null},\n"
+	                        "  \"list\": " + list + ",\n  \"flag\": true,\n  \"u\": \"caf\\u00e9\"\n}\n";
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	const auto local = write(QStringLiteral("settings.json"), text);
+	open.open(local, QStringLiteral("/cfg/settings.json"));
+	auto* content = open.contentFor(local);
+	CHECK(content && content->codecName() == QStringLiteral("JSON") &&
+	      content->codecView().toString().endsWith(QStringLiteral("JsonView.qml")));
+	auto* json = qobject_cast<JsonContent*>(content->decoded());
+	CHECK(json && json->valid() && json->summary() == QStringLiteral("object, 5 keys") && json->regions().size() == 5);
+	auto* nodes = json->nodes();
+	const auto name = [&](const QModelIndex& index) { return nodes->data(index).toString(); };
+	const auto value = [&](const QModelIndex& index) { return nodes->data(index, JsonTreeModel::ValueRole).toString(); };
+	const auto type = [&](const QModelIndex& index) { return nodes->data(index, JsonTreeModel::TypeRole).toString(); };
+	// The file's order, not the alphabet's.
+	CHECK(nodes->rowCount() == 5 && name(nodes->index(0, 0)) == QStringLiteral("zeta") &&
+	      name(nodes->index(1, 0)) == QStringLiteral("alpha") && name(nodes->index(4, 0)) == QStringLiteral("u"));
+	const auto alpha = nodes->index(1, 0);
+	CHECK(type(alpha) == QStringLiteral("object, 2 keys") && value(alpha) == QStringLiteral("{b: […], a: null}") &&
+	      nodes->rowCount(alpha) == 0 && nodes->hasChildren(alpha) && nodes->canFetchMore(alpha));
+	CHECK(value(nodes->index(0, 0)) == QStringLiteral("1") &&
+	      nodes->data(nodes->index(0, 0), JsonTreeModel::NumericRole).toBool());
+	// Copied as the file writes it; a string's value without its quotes or escapes.
+	CHECK(json->jsonOf(alpha) == QStringLiteral("{\"b\": [1, 2.50, \"x\\ny\"], \"a\": null}"));
+	CHECK(json->valueOf(nodes->index(4, 0)) == QStringLiteral("café") &&
+	      value(nodes->index(4, 0)) == QStringLiteral("\"caf\\u00e9\"") && json->valueOf(alpha).isEmpty());
+	nodes->fetchMore(alpha);
+	const auto b = nodes->index(0, 0, alpha);
+	CHECK(nodes->rowCount(alpha) == 2 && json->pathOf(b) == QStringLiteral("alpha.b") && type(b) == QStringLiteral("array, 3 items"));
+	nodes->fetchMore(b);
+	CHECK(value(nodes->index(1, 0, b)) == QStringLiteral("2.50") && json->valueOf(nodes->index(2, 0, b)) == QStringLiteral("x\ny") &&
+	      json->pathOf(nodes->index(2, 0, b)) == QStringLiteral("alpha.b[2]"));
+	// A long array: 256 at a time behind a "more" row.
+	const auto listIndex = [&] { return nodes->index(2, 0); };
+	CHECK(type(listIndex()) == QStringLiteral("array, 600 items"));
+	nodes->fetchMore(listIndex());
+	CHECK(nodes->rowCount(listIndex()) == 257 && json->isMore(nodes->index(256, 0, listIndex())) &&
+	      name(nodes->index(256, 0, listIndex())) == QStringLiteral("Show 256 more · 256 of 600 shown"));
+	CHECK(json->showMore(nodes->index(256, 0, listIndex())) && nodes->rowCount(listIndex()) == 513);
+	CHECK(json->rowOf(nodes->index(300, 0, listIndex())) == QStringLiteral("[300]\t300\tnumber"));
+	// Find by value, into rows not made: the steps on the way are made.
+	CHECK(json->setFilter(QStringLiteral("599")) == 1 && !json->findLimited());
+	CHECK(json->setFilter(QStringLiteral("café")) == 1);
+	CHECK(json->setFilter(QStringLiteral("nothing here")) == 0 && json->setFilter(QString()) == 0);
+	CHECK(nodes->rowCount(listIndex()) == 600);
+	CHECK(json->jsonOfAll() == QString::fromUtf8(text));
+
+	// Broken: where, as a person counts; the file stays text.
+	const auto broken = write(QStringLiteral("broken.json"), "{\n  \"a\": ,\n}");
+	open.open(broken, QStringLiteral("/cfg/broken.json"));
+	auto* refused = open.contentFor(broken);
+	CHECK(refused && !refused->decoded() && refused->codecError().startsWith(QStringLiteral("Not a valid JSON file:")) &&
+	      refused->codecError().contains(QStringLiteral("line 2")) && refused->textual());
+	// No extension: its first bytes decide; a .txt that begins with "{" stays text.
+	const auto bare = write(QStringLiteral("state"), "[1, 2]");
+	open.open(bare);
+	CHECK(open.contentFor(bare)->codecName() == QStringLiteral("JSON"));
+	const auto notes = write(QStringLiteral("notes.txt"), "{ not json at all");
+	open.open(notes);
+	CHECK(open.contentFor(notes)->codecName().isEmpty() && open.contentFor(notes)->codecError().isEmpty());
+	// A log without an extension that begins with "[": only a guess, so it is
+	// text with no word of JSON.
+	const auto log = write(QStringLiteral("log"), "[INFO] start\n[INFO] ready\n");
+	open.open(log);
+	CHECK(open.contentFor(log)->codecName().isEmpty() && open.contentFor(log)->codecError().isEmpty() &&
+	      open.contentFor(log)->textual());
+
+	// Escapes as Qt reads them: a quote and a backslash in a key, a surrogate pair, "\/".
+	JsonContent escaped(QByteArrayLiteral("{\"k\\\"ey\\\\\": \"\\ud83d\\ude00\", \"slash\": \"a\\/b\"}"));
+	CHECK(escaped.valid() && escaped.nodes()->rowCount() == 2);
+	const auto first = escaped.nodes()->index(0, 0);
+	CHECK(escaped.nodes()->data(first).toString() == QStringLiteral("k\"ey\\") &&
+	      escaped.valueOf(first) == QString::fromUtf8("\xF0\x9F\x98\x80") &&
+	      escaped.valueOf(escaped.nodes()->index(1, 0)) == QStringLiteral("a/b"));
+
+	// About 10 MB: open at once, find within bounds.
+	QByteArray big = "[";
+	for (int i = 0; i < 160000; ++i)
+		big += (i ? ",\n" : "") + QByteArrayLiteral("{\"id\": ") + QByteArray::number(i) +
+		       QByteArrayLiteral(", \"name\": \"item ") + QByteArray::number(i) +
+		       QByteArrayLiteral("\", \"samples\": [1.5, 2.5, 3.5]}");
+	big += "]";
+	QElapsedTimer clock;
+	clock.start();
+	JsonContent large(big);
+	const auto openMs = clock.elapsed();
+	if (!large.valid() || large.nodes()->rowCount() != 257)
+		std::fprintf(stderr, "json large: valid %d error '%s' summary '%s' rows %d\n", int(large.valid()),
+		             qPrintable(large.error()), qPrintable(large.summary()), large.nodes()->rowCount());
+	CHECK(large.valid() && large.summary() == QStringLiteral("array, 160000 items") && large.nodes()->rowCount() == 257);
+	clock.restart();
+	const auto found = large.setFilter(QStringLiteral("item 90000"));
+	const auto findMs = clock.elapsed();
+	CHECK(found == 1 && !large.findLimited());
+	// At the very end of a file just opened: found, but the way there would
+	// make more rows than one find may - it stops short and says so.
+	{
+		JsonContent fresh(big);
+		CHECK(fresh.setFilter(QStringLiteral("item 159999")) == 0 && fresh.findLimited());
+		CHECK(fresh.setFilter(QString()) == 0);
+		int made = 0;
+		for (int row = 0; row < fresh.nodes()->rowCount(); ++row)
+			made += 1 + fresh.nodes()->rowCount(fresh.nodes()->index(row, 0));
+		CHECK(made <= static_cast<int>(JsonContent::maxFindRows + 2 * JsonContent::elementsPerStep));
+	}
+	clock.restart();
+	const auto many = large.setFilter(QStringLiteral("samples"));
+	const auto manyMs = clock.elapsed();
+	CHECK(many > 0 && large.findLimited());
+	std::printf("json %lld bytes: open %lld ms, find one at nine tenths %lld ms, find many %lld ms\n",
+	            static_cast<long long>(big.size()), static_cast<long long>(openMs), static_cast<long long>(findMs),
+	            static_cast<long long>(manyMs));
+	CHECK(openMs < 2000 && findMs < 5000 && manyMs < 5000);
+}
+
+// The read-many and batch capability records: every field in words, the
+// descriptor they bind to, their regions, and a record this program cannot read.
+void capabilityCodec(const QString& folder)
+{
+	using telemetry::ux::CapabilityContent;
+	namespace readMany = telemetry::protocol::encoded::read_many;
+	namespace batch = telemetry::protocol::encoded::batch;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	std::array<std::byte, readMany::capabilityBytes> trm{};
+	CHECK(readMany::writeCapability(trm, readMany::Capability{0x1234abcdu, descriptor.fingerprint(), 32, 130, 514}).status ==
+	      telemetry::protocol::encoded::Status::Ok);
+	std::array<std::byte, batch::capabilityBytes> tbm{};
+	CHECK(batch::writeCapability(tbm, batch::Capability{7, descriptor.fingerprint() ^ 1, 16, 4096, 8192}).status ==
+	      telemetry::protocol::encoded::Status::Ok);
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	telemetry::ux::FileCodecContext context;
+	context.connectedFingerprint = [](quint64& fingerprint) {
+		fingerprint = descriptor.fingerprint();
+		return true;
+	};
+	open.setContext(context);
+
+	const auto readManyFile = write(QStringLiteral("read-many.bin"), bytesOf(trm));
+	open.open(readManyFile, QStringLiteral("/telemetry/read-many.bin"));
+	auto* content = open.contentFor(readManyFile);
+	CHECK(content && content->codecName() == QStringLiteral("Capability") &&
+	      content->codecView().toString().endsWith(QStringLiteral("CapabilityView.qml")));
+	auto* record = qobject_cast<CapabilityContent*>(content->decoded());
+	CHECK(record && record->valid() && record->kind() == QStringLiteral("Read many") &&
+	      record->binding() == QStringLiteral("connected") && record->regions().size() == 9);
+	const auto fields = record->fields();
+	const auto fieldAt = [&](int i, const char* key) { return fields.at(i).toMap().value(QLatin1String(key)); };
+	CHECK(fields.size() == 5 && fieldAt(0, "value").toString() == QStringLiteral("32") && fieldAt(0, "meaning").toString() == QStringLiteral("the protocol's maximum") &&
+	      fieldAt(1, "value").toString() == QStringLiteral("130 bytes") &&
+	      fieldAt(2, "value").toString() == QStringLiteral("514 bytes") &&
+	      fieldAt(3, "value").toString() == QStringLiteral("0x1234ABCD") && !fieldAt(4, "warn").toBool());
+	CHECK(record->text().contains(QStringLiteral("Most items in a request\t32")));
+
+	// A batch record bound to another descriptor: said, in the warning colour.
+	const auto batchFile = write(QStringLiteral("batch.bin"), bytesOf(tbm));
+	open.open(batchFile, QStringLiteral("/telemetry/batch.bin"));
+	auto* other = qobject_cast<CapabilityContent*>(open.contentFor(batchFile)->decoded());
+	CHECK(other && other->kind() == QStringLiteral("Batch") && other->binding() == QStringLiteral("other") &&
+	      other->fields().at(4).toMap().value(QStringLiteral("warn")).toBool() &&
+	      other->fields().at(2).toMap().value(QStringLiteral("value")).toString() == QStringLiteral("8192 bytes"));
+	// Below the protocol's ceiling: how far, with the unit.
+	CHECK(other->fields().at(1).toMap().value(QStringLiteral("meaning")).toString() ==
+	      QStringLiteral("the protocol allows up to 65535 bytes"));
+
+	// A version this program does not read: why, and the file stays hex.
+	auto wrong = bytesOf(trm);
+	wrong[4] = 2;
+	const auto wrongFile = write(QStringLiteral("read-many-2.bin"), wrong);
+	open.open(wrongFile, QStringLiteral("/telemetry/read-many.bin"));
+	auto* refused = open.contentFor(wrongFile);
+	CHECK(refused && !refused->decoded() &&
+	      refused->codecError().startsWith(QStringLiteral("Not a valid Capability file:")) &&
+	      refused->format() == QStringLiteral("Binary"));
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -1880,6 +2083,8 @@ int main(int argc, char** argv)
 	lazyValues();
 	lazyDescriptor();
 	bigValues();
+	jsonCodec(folder.path());
+	capabilityCodec(folder.path());
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

@@ -29,7 +29,8 @@ class ConnectionSession;
 namespace telemetry::ux {
 class DeviceFilesModel;
 class OpenFiles;
-// Registers the Telemetry formats' codecs, after any the host added before.
+// Registers the Telemetry formats' codecs - descriptor, values, the read-many
+// and batch capability records - and JSON's, after any the host added before.
 void installTelemetryCodecs(OpenFiles& files);
 // Lets the viewer reach a device: a values.bin is read against the connected
 // device's descriptor, or a descriptor.bin with the same fingerprint

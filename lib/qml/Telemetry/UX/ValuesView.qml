@@ -42,7 +42,7 @@ FocusScope {
         const limited = text.length > 0 && view.decoded.findLimited()
         matches.limited = limited
         matches.text = text.length === 0 ? ""
-                     : limited ? (found === 0 ? qsTr("No match in the part searched")
+                     : limited ? (found === 0 ? qsTr("No match within Find's bounds · narrow the search")
                                               : qsTr("%L1+ matches · narrow the search").arg(found))
                      : found === 1 ? qsTr("1 match") : qsTr("%L1 matches").arg(found)
         showLater.restart()

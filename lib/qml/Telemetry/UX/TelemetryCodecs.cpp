@@ -5,10 +5,12 @@
  * SPDX-License-Identifier: MIT
  */
 #include "TelemetryCodecs.hpp"
+#include "CapabilityContent.hpp"
 #include "DescriptorContent.hpp"
 #include "DeviceFileLive.hpp"
 #include "DeviceFilesModel.hpp"
 #include "FileContent.hpp"
+#include "JsonContent.hpp"
 #include "ValuesContent.hpp"
 #include <integration/qt/ConnectionSession.hpp>
 #include <integration/qt/ConnectionStorage.hpp>
@@ -93,6 +95,28 @@ void installTelemetryCodecs(OpenFiles& files)
 		    return content;
 	    },
 	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/ValuesView.qml"))});
+
+	files.addCodec(FileCodec{
+	    QStringLiteral("Capability"),
+	    [](const FileIdentity& identity) {
+		    if (CapabilityContent::signature(identity.head))
+			    return FileMatch::Signature;
+		    return CapabilityContent::names(identity.devicePath) ? FileMatch::Path : FileMatch::No;
+	    },
+	    [](const QByteArray& bytes, const FileCodecContext& context, QString& error) -> std::unique_ptr<QObject> {
+		    quint64 connected = 0;
+		    const bool hasConnected = context.connectedFingerprint && context.connectedFingerprint(connected);
+		    auto content = std::make_unique<CapabilityContent>(bytes, hasConnected, connected);
+		    if (!content->valid()) {
+			    error = content->error();
+			    return nullptr;
+		    }
+		    return content;
+	    },
+	    QUrl(QStringLiteral("qrc:/qt-project.org/imports/Telemetry/UX/CapabilityView.qml"))});
+
+	// JSON is no Telemetry format, but a device's files are often JSON.
+	installJsonCodec(files);
 }
 
 void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession* session,
