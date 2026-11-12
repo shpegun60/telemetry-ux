@@ -75,6 +75,29 @@ Actions retain the existing provider signatures:
   endpoint and any open draft untouched and sending no request. The map holds
   `status` (`ok`, `refused`, `stale` or `invalid`) and the counts `added`,
   `duplicate`, `unsupported` and `capacity`.
+- **The Device tree's watch boxes.** Both providers have them, Dynamic and Static
+  alike:
+  - `watchState(QModelIndex) -> int`:
+    - `-1` when nothing at or under a row can be watched (a Command, a Service, a
+      Field the Watchlist cannot hold, a stale index);
+    - otherwise `Qt.Unchecked`, `Qt.PartiallyChecked` or `Qt.Checked` for none,
+      some or all of the Fields under it.
+  - `setWatchMany(QVariantList, bool watched) -> QVariantMap` watches, or stops
+    watching, every Field the Watchlist can hold at or under each index, in tree
+    order, as one change and with no request sent.
+    - The map holds `status` (`ok`, `refused`, `invalid`, `stale` or
+      `capacity`) and `changed`, `unchanged`, `fields`, `room`.
+    - All or nothing: a group that does not fit changes nothing, and `room` says
+      how many more fit.
+  - `undoWatch() -> QVariantMap` undoes the last such change: removed rows go
+    back in their places. `canUndoWatch` says whether it can: nothing else may
+    have changed the Watchlist or the tree since, and the Watchlist must not be
+    polling.
+  - `watchRevision` moves whenever a box may show something else; a view asks
+    `watchState` again then. `watchLimit` is 1024.
+  - The first question after the tree changes walks it once; after that each
+    question is a hash lookup, and a change of the Watchlist costs one pass over
+    the tree (`WatchCoverage`).
 
 The Watchlist and the rest of the panel work together. While it polls, selecting
 an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all

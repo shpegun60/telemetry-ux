@@ -112,6 +112,7 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 	rows_.push_back(
 	    {endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0, {}, writable});
 	++count_;
+	++membership_;
 	endInsertRows();
 	return true;
 }
@@ -141,6 +142,7 @@ bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 		                 {}, writable});
 	}
 	count_ += static_cast<int>(entries.size());
+	++membership_;
 	endInsertRows();
 	return true;
 }
@@ -153,8 +155,81 @@ bool WatchlistModel::remove(int row)
 	beginRemoveRows({}, row, row);
 	rows_.removeAt(row);
 	--count_;
+	++membership_;
 	endRemoveRows();
 	return true;
+}
+
+QVector<WatchlistModel::Removed> WatchlistModel::removeIds(const QSet<quint32>& ids)
+{
+	QVector<Removed> removed;
+	if (changing_ || ids.isEmpty())
+		return removed;
+	for (int row = 0; row < count_; ++row)
+		if (ids.contains(rows_[row].id))
+			removed.push_back({row, rows_[row].id, rows_[row].name});
+	if (removed.isEmpty())
+		return removed;
+	Mutation mutation{changing_};
+	// From the last run to the first, so the rows of the runs before stay put.
+	for (auto end = removed.size(); end > 0;) {
+		auto start = end - 1;
+		while (start > 0 && removed[start - 1].row == removed[start].row - 1)
+			--start;
+		const int first = removed[start].row, last = removed[end - 1].row;
+		beginRemoveRows({}, first, last);
+		rows_.remove(first, last - first + 1);
+		count_ -= last - first + 1;
+		endRemoveRows();
+		end = start;
+	}
+	++membership_;
+	return removed;
+}
+
+bool WatchlistModel::restore(const QVector<Removed>& rows)
+{
+	if (changing_ || rows.isEmpty() || rows.size() > maxRows - count_ || nextToken_ == 0 ||
+	    static_cast<quintptr>(rows.size() - 1) > std::numeric_limits<quintptr>::max() - nextToken_)
+		return false;
+	QSet<quint32> held;
+	for (int row = 0; row < count_; ++row)
+		held.insert(rows_[row].id);
+	// In removeIds' order, each row's place is where it was among the rows
+	// put back before it, so the places must rise and fit.
+	int previous = -1;
+	for (int i = 0; i < rows.size(); ++i) {
+		const auto& entry = rows[i];
+		if (entry.name.isEmpty() || held.contains(entry.id) || entry.row <= previous ||
+		    entry.row > count_ + i)
+			return false;
+		held.insert(entry.id);
+		previous = entry.row;
+	}
+	Mutation mutation{changing_};
+	for (auto start = qsizetype(0); start < rows.size();) {
+		auto end = start + 1;
+		while (end < rows.size() && rows[end].row == rows[end - 1].row + 1)
+			++end;
+		const int first = rows[start].row, last = rows[end - 1].row;
+		beginInsertRows({}, first, last);
+		for (auto i = start; i < end; ++i) {
+			const auto& entry = rows[i];
+			const bool writable = writable_ && writable_(entry.id);
+			rows_.insert(entry.row, Row{entry.id, nextToken_++, entry.name, QStringLiteral("Not read"),
+			                            {}, {}, 0, {}, writable});
+			++count_;
+		}
+		endInsertRows();
+		start = end;
+	}
+	++membership_;
+	return true;
+}
+
+quint64 WatchlistModel::membership() const noexcept
+{
+	return membership_;
 }
 
 void WatchlistModel::clear()
@@ -172,6 +247,7 @@ void WatchlistModel::clear()
 	beginResetModel();
 	rows_.clear();
 	count_ = 0;
+	++membership_;
 	endResetModel();
 	owner_ = nullptr;
 	current_ = {};

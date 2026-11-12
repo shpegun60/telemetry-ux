@@ -671,6 +671,63 @@ void DynamicWatchlist::clear()
 	}
 }
 
+QSet<quint32> DynamicWatchlist::holdable(const QSet<quint32>& ids) const
+{
+	auto p = d;
+	QSet<quint32> found;
+	if (p->guarded() || !p->current() || !p->source.fieldBytes || ids.isEmpty())
+		return found;
+	if (p->source.holdable) {
+		const auto all = p->source.holdable();
+		for (const auto id : ids)
+			if (all.contains(id))
+				found.insert(id);
+		return found;
+	}
+	for (const auto id : ids) {
+		const auto bytes = p->source.fieldBytes(id);
+		if (bytes && *bytes && *bytes <= 8)
+			found.insert(id);
+	}
+	return found;
+}
+
+QSet<quint32> DynamicWatchlist::held() const
+{
+	QSet<quint32> ids;
+	for (int row = 0; row < d->model.count(); ++row)
+		ids.insert(d->model.id(row));
+	return ids;
+}
+
+quint64 DynamicWatchlist::membership() const
+{
+	return d->model.membership();
+}
+
+QVector<WatchlistModel::Removed> DynamicWatchlist::removeMany(const QSet<quint32>& ids)
+{
+	auto p = d;
+	if (p->guarded() || p->active() || !p->current())
+		return {};
+	const auto removed = p->model.removeIds(ids);
+	if (!removed.isEmpty()) {
+		++p->revision;
+		p->changed();
+	}
+	return removed;
+}
+
+bool DynamicWatchlist::restore(const QVector<WatchlistModel::Removed>& rows)
+{
+	auto p = d;
+	if (p->guarded() || p->active() || !p->current() || !p->model.restore(rows))
+		return false;
+	++p->revision;
+	p->changed();
+	return true;
+}
+
 void DynamicWatchlist::setWritable(std::function<bool(quint32)> writable)
 {
 	d->model.setWritable(std::move(writable));

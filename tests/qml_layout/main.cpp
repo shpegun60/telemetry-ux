@@ -887,17 +887,19 @@ int main(int argc, char** argv)
         auto* resultBackground = resultRow->property("background").value<QObject*>();
         auto* resultLabel = resultRow->property("contentItem").value<QObject*>();
         auto* treeBackground = item(searchPanel, QStringLiteral("endpointTreePanelBackground"));
-        auto* treeTitle = item(searchPanel, QStringLiteral("endpointTreeTitle"));
-        auto* treeHelp = item(searchPanel, QStringLiteral("endpointTreeHelp"));
-        CHECK(resultBackground && resultLabel && treeBackground && treeTitle && treeHelp);
+        // No heading repeats the dock's title and no standing note takes rows;
+        // the watch status line is reserved at the bottom, blank when idle.
+        auto* watchStatus = item(searchPanel, QStringLiteral("endpointWatchSelectionStatus"));
+        CHECK(resultBackground && resultLabel && treeBackground && watchStatus);
+        CHECK(!item(searchPanel, QStringLiteral("endpointTreeTitle")) &&
+              !item(searchPanel, QStringLiteral("endpointTreeHelp")) && watchStatus->isVisible());
         const auto treeColor = [&] { return treeBackground->property("color").value<QColor>(); };
         const auto textColor = [&] { return resultLabel->property("color").value<QColor>(); };
         CHECK(!resultRow->property("highlighted").toBool());
         CHECK(resultBackground->property("color").value<QColor>().alpha() == 0);
         CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
         CHECK(contrastRatio(textColor(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(watchStatus->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
         resultRow->forceActiveFocus(Qt::TabFocusReason);
         settle();
@@ -921,8 +923,7 @@ int main(int argc, char** argv)
         CHECK(searchWindow->setProperty("testText", QColor(QStringLiteral("#121212"))));
         settle();
         CHECK(treeColor() == QColor(QStringLiteral("#ffffff")));
-        CHECK(contrastRatio(treeTitle->property("color").value<QColor>(), treeColor()) >= 4.5);
-        CHECK(contrastRatio(treeHelp->property("color").value<QColor>(), treeColor()) >= 4.5);
+        CHECK(contrastRatio(watchStatus->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(contrastRatio(status->property("color").value<QColor>(), treeColor()) >= 4.5);
         CHECK(resultBackground->property("color").value<QColor>() == QColor(QStringLiteral("#c3e0ff")));
         CHECK(resultLabel->property("color").value<QColor>() == QColor(QStringLiteral("#121212")));

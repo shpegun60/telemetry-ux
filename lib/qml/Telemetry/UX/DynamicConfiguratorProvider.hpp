@@ -1,6 +1,7 @@
 // Independent Qt panel over one borrowed native view. Ruslan Kovtun, codexAi. MIT.
 #pragma once
 #include "DynamicConfiguratorBinding.hpp"
+#include "WatchSample.hpp"
 #include <QtCore/QAbstractItemModel>
 #include <memory>
 
@@ -39,6 +40,13 @@ class DynamicConfiguratorProvider final : public QObject {
 	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
 	// The smallest interval accepted: 0 reads continuously at low priority.
 	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
+	// The Device tree's watch boxes: a number that moves whenever a box may show
+	// something else (the Watchlist's Fields or the tree changed), whether the
+	// last change made through setWatchMany can be undone, and the most Fields
+	// the Watchlist holds.
+	Q_PROPERTY(int watchRevision READ watchRevision NOTIFY stateChanged)
+	Q_PROPERTY(bool canUndoWatch READ canUndoWatch NOTIFY stateChanged)
+	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
 	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
@@ -105,6 +113,21 @@ public:
 	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
 	Q_INVOKABLE void clearWatch();
+	int watchRevision() const;
+	bool canUndoWatch() const;
+	static constexpr int watchLimit() noexcept { return watchlistRowLimit; }
+	// A tree row's watch box: -1 when nothing at or below it can be watched
+	// (a Command, a Service, a Field the Watchlist cannot hold, a stale index);
+	// otherwise Qt::Unchecked, Qt::PartiallyChecked or Qt::Checked as an int.
+	Q_INVOKABLE int watchState(const QModelIndex& index) const;
+	// Watches, or stops watching, every Field the Watchlist can hold at or
+	// under each index, in tree order, as one change: {status: ok, refused,
+	// invalid, stale or capacity, changed, unchanged, fields, room}. At
+	// capacity nothing changes; room says how many more fit.
+	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
+	// Undoes the last change setWatchMany made, while nothing else has changed
+	// the Watchlist or the tree since: {status, changed}.
+	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();

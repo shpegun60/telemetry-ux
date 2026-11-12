@@ -132,6 +132,22 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 			return {};
 		return type->wireBytes;
 	};
+	// The same rule as fieldBytes, over every Field in one pass, for the Device
+	// tree's watch boxes: binding each Field by id would search the schema
+	// once per Field.
+	source.holdable = [storage, current]() -> QSet<quint32> {
+		QSet<quint32> ids;
+		if (!current())
+			return ids;
+		for (const auto& endpoint : storage->schema.endpoints(telemetry::descriptor::Category::Field)) {
+			// A Field read answers with the Field's own type (DynamicClient::contract).
+			const auto* type = storage->schema.type(endpoint.typeId);
+			if (type && (type->kind == TypeKind::Scalar || type->kind == TypeKind::Enum) &&
+			    type->wireBytes != 0 && type->wireBytes <= 8)
+				ids.insert(endpoint.id);
+		}
+		return ids;
+	};
 	source.readMany = [session, current](std::span<const std::uint32_t> ids,
 	                                     WatchlistSource::Completion done) -> client::Submission {
 		if (!current())

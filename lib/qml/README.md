@@ -106,9 +106,36 @@ at most the first 500 matches, with a depth limit of 64 levels; the status says
 when traversal is limited, even if there are no additional matches. Refine the
 query to narrow the results.
 
+**Watch boxes.** With a provider that has `watchState` and `setWatchMany` (both
+the library's providers do), a box means "watched", at once:
+- **Fields and groups.** A Field's box watches that Field. A group's or a
+  category's box watches every Field under it the Watchlist can hold. It shows
+  all, some or none (✓, –, empty).
+- **Clicking and Space.** A click or Space on the current row watches all when
+  the box shows some or none, and stops watching all when it shows all.
+- **Rows without a box.** A row with nothing that can be watched has no box but
+  keeps its slot, so names line up. A group says so in its tooltip.
+- **The status line.** One reserved line at the bottom, never wrapping, says
+  what the last change did: "Added 65 · Undo", "Removed 69 · Undo",
+  "No room: 1,500 Fields, 524 free". Its tooltip gives the whole sentence.
+- **While the Watchlist polls.** The boxes are off and the line says "Stop
+  polling first".
+- **Older providers.** A provider without these methods keeps the older ticked
+  marks and **Add N**.
+
+The tree has no heading of its own (its dock names it) and no standing
+footnote.
+- **Rows** are `Type.rowHeight` tall with a 16 px indent, and are not striped.
+- **The search** has its clear button inside the field.
+- **Inside a dock**, a host sets `framed: false` for a plain surface edge to edge.
+- **Starting closed:** a host that leaves every branch for the user to open sets
+  `openOnLoad: false`.
+
 Every row and search result has actions on a right click, the Menu key or
-Shift+F10: **Watch** (one Field), **Watch this group** (every Field under a group,
-nested, in tree order; at most 4096 rows are visited), **Watch all Fields** (the
+Shift+F10: **Watch** (one Field; **Stop watching** when it is watched), **Watch
+this group** (every Field under a group, nested, in tree order; at most 4096 rows
+are visited; with watch boxes **Watch all in group** or **Stop watching group**,
+as the box shows), **Watch all Fields** (the
 same over the whole tree; `watchAll()` for a host's own menu), **Show details**
 (selects the endpoint, as a click does) and **Copy path** (the dotted path, for
 example `measure.Voltage`). Watching goes straight to the provider's `addWatchMany` and

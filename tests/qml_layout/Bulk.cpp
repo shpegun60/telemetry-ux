@@ -89,24 +89,26 @@ int main(int argc, char** argv) {
         auto* add = named(panel, "endpointAddSelectedWatches");
         auto* provider = panel->property("provider").value<QObject*>();
         CHECK(panel && tree && first && checkBox && add && provider);
-        auto* title = named(panel, "endpointTreeTitle");
-        CHECK(title && !add->isVisible());
+        auto* search = named(panel, "endpointSearch");
+        auto* status = named(panel, "endpointWatchSelectionStatus");
+        CHECK(search && status && !add->isVisible() && !named(panel, "endpointTreeTitle"));
+        // The row is the type scale's row height, its box 16 px in a 24 px target.
+        CHECK(qAbs(first->height() - evaluate(panel, "Type.rowHeight").toReal()) < 0.5);
+        auto* box = named(first, "endpointWatchBox");
+        CHECK(box && box->width() == 16 && box->height() == 16 && checkBox->height() >= 24);
         click(window, checkBox);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
-        // A narrow dock must not paint the bulk actions over the title.
+        // A narrow dock must not paint the bulk actions over the search.
         window->setWidth(280); settle();
         CHECK(add->isVisible());
-        const auto titleRect = title->mapRectToScene(QRectF(0, 0, title->width(), title->height()));
+        const auto searchRect = search->mapRectToScene(QRectF(0, 0, search->width(), search->height()));
         const auto addRect = add->mapRectToScene(QRectF(0, 0, add->width(), add->height()));
-        CHECK(!titleRect.intersects(addRect));
-        CHECK(titleRect.right() <= panel->mapRectToScene(QRectF(0, 0, panel->width(), panel->height())).right());
-        auto* help = named(panel, "endpointTreeHelp");
-        CHECK(help && help->isVisible());
+        CHECK(!searchRect.intersects(addRect));
+        CHECK(searchRect.right() <= panel->mapRectToScene(QRectF(0, 0, panel->width(), panel->height())).right());
+        // A short dock keeps the tree and the reserved status line.
         window->setHeight(280); settle();
-        CHECK(!help->isVisible());
-        CHECK(tree->height() >= 60);
+        CHECK(tree->height() >= 60 && status->isVisible() && status->height() > 0);
         window->setHeight(700); settle();
-        CHECK(help->isVisible());
         window->setWidth(600); settle();
         CHECK(provider->property("selections").toInt() == 0 && provider->property("submissions").toInt() == 0);
         CHECK(provider->property("draft").toString() == QStringLiteral("untouched"));

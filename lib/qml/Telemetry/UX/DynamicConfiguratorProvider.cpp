@@ -3,6 +3,7 @@
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "ScalarEditor.hpp"
+#include "WatchCoverage.hpp"
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
@@ -11,6 +12,7 @@
 #include <array>
 #include <charconv>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace telemetry::ux {
@@ -278,6 +280,71 @@ struct DynamicConfiguratorProvider::Impl {
 	bool allowed = false, updating = false;
 	QSet<quintptr> invalid;
 	QMetaObject::Connection changed, destroyed;
+	// The Device tree's watch boxes: what can be watched under each node,
+	// a counter that moves when the tree changes, the Fields held as of a
+	// membership count, and the last change setWatchMany made.
+	WatchCoverage coverage;
+	quint64 treeEpoch = 0;
+	QSet<quint64> heldKeys;
+	quint64 heldMembership = ~quint64{0};
+	struct WatchUndo {
+		bool valid = false, added = false;
+		QSet<quint32> addedIds;
+		QVector<WatchlistModel::Removed> removed;
+		quint64 membership = 0, treeEpoch = 0;
+	} undo;
+
+	const QSet<quint64>& held()
+	{
+		if (heldMembership != watch.membership()) {
+			heldKeys.clear();
+			for (const auto id : watch.held())
+				heldKeys.insert(id);
+			heldMembership = watch.membership();
+		}
+		return heldKeys;
+	}
+
+	// Built on first use after the tree changed: the Fields the Watchlist can
+	// hold are asked once for the whole tree, then the tree walked once.
+	void ensureCoverage()
+	{
+		if (coverage.built() || !current() || endpoints.changing())
+			return;
+		QSet<quint32> fields;
+		QVector<QModelIndex> stack{QModelIndex{}};
+		while (!stack.isEmpty()) {
+			const auto parent = stack.takeLast();
+			for (int row = 0, rows = endpoints.rowCount(parent); row < rows; ++row) {
+				const auto child = endpoints.index(row, 0, parent);
+				if (endpoints.data(child, EndpointModel::IsEndpointRole).toBool()) {
+					if (endpoints.data(child, EndpointModel::CategoryRole).toInt() == 1 &&
+					    endpoints.data(child, EndpointModel::ReadableRole).toBool())
+						fields.insert(endpoints.data(child, EndpointModel::EndpointIdRole).toUInt());
+				} else if (endpoints.rowCount(child) > 0) {
+					stack.push_back(child);
+				}
+			}
+		}
+		const auto holdable = watch.holdable(fields);
+		coverage.build(endpoints, [this, &holdable](const QModelIndex& index)
+		                              -> std::optional<WatchCoverage::Holdable> {
+			if (!endpoints.data(index, EndpointModel::IsEndpointRole).toBool() ||
+			    endpoints.data(index, EndpointModel::CategoryRole).toInt() != 1 ||
+			    !endpoints.data(index, EndpointModel::ReadableRole).toBool())
+				return std::nullopt;
+			const auto id = endpoints.data(index, EndpointModel::EndpointIdRole).toUInt();
+			if (!holdable.contains(id))
+				return std::nullopt;
+			return WatchCoverage::Holdable{id, endpoints.endpoint(index).value(QStringLiteral("path")).toString()};
+		});
+	}
+
+	void treeChanged()
+	{
+		coverage.reset();
+		++treeEpoch;
+	}
 
 	explicit Impl(DynamicConfiguratorProvider* owner) : q(owner), watch(owner)
 	{}
@@ -624,6 +691,16 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 			    Q_EMIT p->q->batchFinished();
 		    }
 	    });
+	// Any change of the tree's shape makes the watch boxes' coverage stale.
+	const auto treeChanged = [weak] {
+		if (auto p = weak.lock())
+			p->treeChanged();
+	};
+	connect(&d->endpoints, &QAbstractItemModel::modelReset, this, treeChanged);
+	connect(&d->endpoints, &QAbstractItemModel::rowsInserted, this, treeChanged);
+	connect(&d->endpoints, &QAbstractItemModel::rowsRemoved, this, treeChanged);
+	connect(&d->endpoints, &QAbstractItemModel::rowsMoved, this, treeChanged);
+	connect(&d->endpoints, &QAbstractItemModel::layoutChanged, this, treeChanged);
 	setBinding(binding);
 }
 
@@ -1009,6 +1086,131 @@ void DynamicConfiguratorProvider::clearWatch()
 {
 	auto p = d;
 	p->watch.clear();
+}
+
+int DynamicConfiguratorProvider::watchRevision() const
+{
+	return static_cast<int>((d->watch.membership() + d->treeEpoch) & 0x7fffffffU);
+}
+
+bool DynamicConfiguratorProvider::canUndoWatch() const
+{
+	const auto& undo = d->undo;
+	return undo.valid && undo.membership == d->watch.membership() &&
+	       undo.treeEpoch == d->treeEpoch && d->current() && !d->updating && !d->watch.active();
+}
+
+int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
+{
+	auto p = d;
+	if (!p->current() || p->updating || p->endpoints.changing() || !index.isValid() ||
+	    index.model() != &p->endpoints)
+		return -1;
+	p->ensureCoverage();
+	return p->coverage.state(index, p->held(), p->watch.membership());
+}
+
+QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexes, bool watched)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("changed"), 0}, {QStringLiteral("unchanged"), 0},
+	                   {QStringLiteral("fields"), 0}, {QStringLiteral("room"), 0}};
+	// A read or a write in Details does not hold the tree's boxes; polling,
+	// a model update and a stale connection do.
+	if (!p->current() || p->updating || p->endpoints.changing() || p->watch.active())
+		return result;
+	p->ensureCoverage();
+	QVector<WatchCoverage::Holdable> fields;
+	QSet<quint64> seen;
+	for (const auto& value : indexes) {
+		const auto index = value.value<QModelIndex>();
+		if (!value.canConvert<QModelIndex>() || !index.isValid() || index.model() != &p->endpoints) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		for (const auto& field : p->coverage.holdableUnder(index))
+			if (!seen.contains(field.key)) {
+				seen.insert(field.key);
+				fields.push_back(field);
+			}
+	}
+	const auto& held = p->held();
+	const int room = watchlistRowLimit - p->watch.count();
+	result[QStringLiteral("fields")] = static_cast<int>(fields.size());
+	result[QStringLiteral("room")] = room;
+	if (watched) {
+		QVector<QPair<quint32, QString>> add;
+		for (const auto& field : fields)
+			if (!held.contains(field.key))
+				add.push_back({static_cast<quint32>(field.key), field.name});
+		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - add.size());
+		// All of them or none: a part would leave the box partly ticked, and the
+		// next tick would try again.
+		if (add.size() > room) {
+			result[QStringLiteral("status")] = QStringLiteral("capacity");
+			return result;
+		}
+		if (!add.isEmpty()) {
+			const auto added = p->watch.addMany(add);
+			if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
+				result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+				return result;
+			}
+			const int count = added.value(QStringLiteral("added")).toInt();
+			result[QStringLiteral("changed")] = count;
+			if (count > 0) {
+				p->undo = {};
+				p->undo.valid = true;
+				p->undo.added = true;
+				for (const auto& entry : add)
+					p->undo.addedIds.insert(entry.first);
+				p->undo.membership = p->watch.membership();
+				p->undo.treeEpoch = p->treeEpoch;
+			}
+		}
+	} else {
+		QSet<quint32> ids;
+		for (const auto& field : fields)
+			if (held.contains(field.key))
+				ids.insert(static_cast<quint32>(field.key));
+		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - ids.size());
+		if (!ids.isEmpty()) {
+			const auto removed = p->watch.removeMany(ids);
+			if (removed.isEmpty())
+				return result;
+			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
+			p->undo = {};
+			p->undo.valid = true;
+			p->undo.removed = removed;
+			p->undo.membership = p->watch.membership();
+			p->undo.treeEpoch = p->treeEpoch;
+		}
+	}
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	p->notify();
+	return result;
+}
+
+QVariantMap DynamicConfiguratorProvider::undoWatch()
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("changed"), 0}};
+	if (!canUndoWatch())
+		return result;
+	const auto undo = std::exchange(p->undo, {});
+	int changed = 0;
+	if (undo.added)
+		changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
+	else if (p->watch.restore(undo.removed))
+		changed = static_cast<int>(undo.removed.size());
+	if (changed == 0)
+		return result;
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	result[QStringLiteral("changed")] = changed;
+	p->notify();
+	return result;
 }
 
 void DynamicConfiguratorProvider::refreshWatch()

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "StaticConfiguratorBinding.hpp"
+#include "WatchSample.hpp"
 #include <QtCore/QAbstractItemModel>
 #include <memory>
 
@@ -47,6 +48,10 @@ class StaticConfiguratorProvider final : public QObject {
 	    int watchIntervalMs READ watchIntervalMs WRITE setWatchIntervalMs NOTIFY stateChanged)
 	// The smallest interval accepted: 0 reads continuously at low priority.
 	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
+	// The Device tree's watch boxes, as DynamicConfiguratorProvider has them.
+	Q_PROPERTY(int watchRevision READ watchRevision NOTIFY stateChanged)
+	Q_PROPERTY(bool canUndoWatch READ canUndoWatch NOTIFY stateChanged)
+	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
 public:
 	explicit StaticConfiguratorProvider(StaticConfiguratorBinding binding,
 	                                    QObject* parent = nullptr);
@@ -116,6 +121,13 @@ public:
 	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
 	Q_INVOKABLE void clearWatch();
+	int watchRevision() const;
+	bool canUndoWatch() const;
+	static constexpr int watchLimit() noexcept { return watchlistRowLimit; }
+	// The same contracts as DynamicConfiguratorProvider's.
+	Q_INVOKABLE int watchState(const QModelIndex& index) const;
+	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
+	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();
