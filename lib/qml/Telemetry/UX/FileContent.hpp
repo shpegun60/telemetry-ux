@@ -23,6 +23,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
 #include <QtCore/QObject>
+#include <QtGui/QUndoStack>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
 #include "FileTextModels.hpp"
@@ -157,6 +158,15 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QAbstractItemModel* hex READ hex CONSTANT)
 	// Reads the device's file again and again for a live view; see live().
 	Q_PROPERTY(QObject* live READ live NOTIFY changed)
+	// Editing, in Hex only: bytes overwritten in memory - a device file has a
+	// fixed size, so nothing is inserted or taken out - undone and redone,
+	// and written to localFile by Save. Off until the view turns it on.
+	Q_PROPERTY(bool editing READ editing WRITE setEditing NOTIFY editChanged)
+	// The bytes that differ from the copy on disk, and whether there are any.
+	Q_PROPERTY(qint64 editedBytes READ editedBytes NOTIFY editChanged)
+	Q_PROPERTY(bool modified READ modified NOTIFY editChanged)
+	Q_PROPERTY(bool canUndo READ canUndo NOTIFY editChanged)
+	Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
@@ -218,8 +228,37 @@ public:
 	// `snapshot(bytes)`; a codec view shows its snapshots.
 	QObject* live();
 
-	// Reads localFile again: after a new download, or Reload.
+	// Reads localFile again: after a new download, or Reload. Unsaved edits
+	// go with it: a host asks first (modified).
 	Q_INVOKABLE bool reload();
+
+	bool editing() const noexcept { return editing_; }
+	void setEditing(bool editing);
+	qint64 editedBytes() const noexcept { return edited_; }
+	bool modified() const noexcept { return edited_ > 0; }
+	bool canUndo() const { return undo_.canUndo(); }
+	bool canRedo() const { return undo_.canRedo(); }
+	// Overwrites bytes at offset, cut at the file's end: one step to undo,
+	// joined to the one before when typing goes on where it stopped (or writes
+	// a byte's second digit). False when nothing was written: not editing, not
+	// loaded, or the offset outside the file.
+	Q_INVOKABLE bool overwrite(qint64 offset, const QByteArray& bytes, bool typing = false);
+	// Editing on or off: they change only the bytes in memory.
+	Q_INVOKABLE void undo();
+	Q_INVOKABLE void redo();
+	// Writes the bytes as edited to localFile, through a temporary file so a
+	// failure leaves the old copy whole; the text, table and codec are read
+	// again from them. Empty when written, else why not.
+	Q_INVOKABLE QString save();
+	// Writes the bytes as edited to another file; this copy keeps its edits.
+	Q_INVOKABLE QString saveCopyAs(const QUrl& file);
+	// Drops the edits not saved: the bytes on disk again, nothing to undo.
+	Q_INVOKABLE void discard();
+	// Whether a byte differs from the copy on disk, for the hex view.
+	bool isEdited(qint64 offset) const noexcept
+	{
+		return offset >= 0 && offset < bytes_.size() && offset < saved_.size() && bytes_[offset] != saved_[offset];
+	}
 	// Offers the bytes to the codecs again when the model waits for the
 	// context (`needsDescriptor`), and takes the new model only when it no
 	// longer waits or says something else (`connectedFingerprintGroups`) -
@@ -230,8 +269,20 @@ public:
 
 Q_SIGNALS:
 	void changed();
+	void editChanged();
+	// Bytes are about to change in place: a view holding a copy lets it go,
+	// so an edit does not copy the whole file.
+	void aboutToEdit();
+	void bytesEdited(qint64 offset, qint64 length);
 
 private:
+	friend class OverwriteStep;
+	// Writes bytes at offset, the edited count kept: what an undo step does.
+	void put(qint64 offset, const QByteArray& bytes);
+	// The text, the table and the codec, from bytes_.
+	void interpret();
+	// No edits, nothing to undo: after a read.
+	void resetEdits();
 	// Offers the bytes to the codecs; the first that reads them wins.
 	void decode();
 	// The same, made and returned, nothing of this content changed.
@@ -252,6 +303,11 @@ private:
 	QObject* live_ = nullptr;    // a child of this, for devicePath_
 	QUrl codecView_;
 	QByteArray bytes_;
+	// The bytes as on disk: what an edit is told from, and Discard goes back to.
+	QByteArray saved_;
+	qint64 edited_ = 0;
+	bool editing_ = false;
+	QUndoStack undo_;
 	QDateTime readAt_;
 	qreal progress_ = -1;
 	bool loaded_ = false, loading_ = false, textual_ = false, tabular_ = false;
@@ -278,10 +334,12 @@ public:
 	// How a device file is read live, for the views that show it so.
 	void setLiveFactory(FileContent::LiveFactory factory) { liveFactory_ = std::move(factory); }
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
-	// it again when that copy is already open; returns its row.
+	// it again when that copy is already open - not one with edits not saved;
+	// returns its row.
 	Q_INVOKABLE int open(const QString& localFile, const QString& devicePath = {});
 	// A tab for a device file whose copy is still being read into localFile:
-	// made at once (or reused), in its reading state; returns its row.
+	// made at once (or reused), in its reading state; returns its row. One
+	// with edits not saved is left as it is: the host asks before reading it again.
 	Q_INVOKABLE int reading(const QString& localFile, const QString& devicePath);
 	// The content that shows localFile, or null.
 	FileContent* contentFor(const QString& localFile) const;
@@ -291,6 +349,11 @@ public:
 	Q_INVOKABLE void close(int row);
 	// The row showing localFile, or -1.
 	Q_INVOKABLE int rowOf(const QString& localFile) const;
+	// The files with edits not saved, by name: a host asks before it quits.
+	Q_INVOKABLE QStringList modifiedNames() const;
+	// Saves every file with edits; empty when all were written, else the first reason.
+	Q_INVOKABLE QString saveAll();
+	Q_INVOKABLE void discardAll();
 
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;

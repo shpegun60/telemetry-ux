@@ -90,6 +90,9 @@ class HexView : public QQuickPaintedItem {
 	Q_PROPERTY(QColor outlineColor MEMBER outlineColor_ NOTIFY coloursChanged)
 	Q_PROPERTY(QColor matchColor MEMBER matchColor_ NOTIFY coloursChanged)
 	Q_PROPERTY(QColor matchOutlineColor MEMBER matchOutlineColor_ NOTIFY coloursChanged)
+	// Bytes edited and not saved: their digits and letters, underlined, and a
+	// dot before their row's offset - three cues, not colour alone.
+	Q_PROPERTY(QColor editedColor MEMBER editedColor_ NOTIFY coloursChanged)
 public:
 	// Copying more than this is refused: Save as… is the way for more.
 	static constexpr qint64 maxCopyBytes = 1024 * 1024;
@@ -219,6 +222,11 @@ private:
 	const Region* regionAt(qint64 offset) const;
 	void changed();
 	void countMatches();
+	// Editing: a hex digit at the cursor (the byte's first, then its second),
+	// or a letter in the text column; both write over the byte.
+	bool typeDigit(int value);
+	bool typeLetter(char letter);
+	bool editing() const;
 
 	QPointer<FileContent> content_;
 	QByteArray pattern_;
@@ -234,6 +242,8 @@ private:
 	bool textColumn_ = true, decimalOffsets_ = false, textPane_ = false, bigEndian_ = false;
 	bool headingHovered_ = false;
 	qint64 topRow_ = 0, cursor_ = 0, anchor_ = 0;
+	// Which of the cursor byte's hex digits the next one typed writes.
+	int nibble_ = 0;
 	QString notice_;
 	QVariantList regionList_;
 	std::vector<Region> regions_;
@@ -241,6 +251,7 @@ private:
 	QColor selectionColor_{0x2f, 0x7d, 0x91}, selectedTextColor_{Qt::white}, focusColor_{0x6f, 0xd4, 0xbf};
 	QColor regionColor_{0x1c, 0x2a, 0x3a}, outlineColor_{0x64, 0x7f, 0x9e};
 	QColor matchColor_{0x1d, 0x3a, 0x52}, matchOutlineColor_{0xa8, 0xd4, 0xf5};
+	QColor editedColor_{0xe0, 0xa8, 0x4a};
 };
 } // namespace telemetry::ux
 #endif

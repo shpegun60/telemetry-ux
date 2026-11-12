@@ -3,7 +3,7 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 674 checks):
+- **Models** (`main.cpp`, 704 checks):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, sizes and access in words, three-state marks and
     the selection a download takes.
@@ -62,10 +62,17 @@ over localhost TCP to the SDK's native server. No board.
     SDK's own `writeCapability`: every field in words, the descriptor they
     bind to (the connected device's, or another in the warning colour), their
     regions, and a version this program does not read left as hex.
+  - Editing a file's bytes (`FileContent`): off until asked; overwritten, never
+    resized; the bytes that differ from the copy on disk counted (one written
+    back to its value is not); one step to undo for what was typed in one go,
+    undone and redone with editing off too;
+    Save through a temporary file, the text, table and codec read again; a copy
+    elsewhere; Discard; Reload dropping the edits; `OpenFiles` naming what is
+    not saved, saving or discarding it all.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
-- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 172 checks). It calls
+- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 199 checks). It calls
   `telemetry::ux::registerQmlTypes()` first, as a host does. It checks the hex grid
   (`HexView`) on its own:
   - **Layout:** 32, 16 or 8 bytes a row by width, the text column dropped first.
@@ -83,6 +90,11 @@ over localhost TCP to the SDK's native server. No board.
   - **Regions:** a codec's region named in the status.
   - **The context menu** requested by the Menu key and Shift+F10.
   - **An empty file.**
+  - **Editing:** nothing until Edit; two hex digits write a byte, the first the
+    high one, a letter in the text column one; typing writes in place without
+    copying the file; one Ctrl+Z per run of typing, Ctrl+Y; saved to disk.
+  - **The pictograms** (`ToolIcon`): each name draws, undo's arrow on the left
+    and redo's on the right; an unknown name draws nothing.
 
   The panel itself:
   - the not-connected words, the tree once connected, the column headings;
@@ -93,6 +105,10 @@ over localhost TCP to the SDK's native server. No board.
   - a download that cannot be written: `! Could not write …` with Retry, which
     saves it in the same row once the obstacle is gone; Clear finished;
   - the current row highlighted, and Enter folding and unfolding a folder;
+  - the viewer's editing pictograms, named with the file: Edit shows the bytes
+    and starts editing, pressed again it stops; Save waits for an edit;
+  - Ctrl+S on the tree is Download even beside a window's own Ctrl+S (a host's
+    Save), typed through the window as a key is;
   - not one QML warning (only the offscreen platform's font notice is set aside).
 
 ```sh

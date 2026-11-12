@@ -1,12 +1,19 @@
 // The Viewer's Hex mode: the grid, its scroll bar, Find, Go to, Select block,
-// Copy as, the status line and the inspector. MIT.
+// Copy as, the status line, the inspector, and editing. MIT.
 //
 // The host gives `content`, a FileContent. Keys: Ctrl+F find (Enter / F3 next,
 // Shift+Enter / Shift+F3 previous), Ctrl+G go to, Ctrl+E select a block,
 // Ctrl+Shift+C copy as, Ctrl+C copy, Ctrl+A select all, Esc collapses the
-// selection or closes a bar.
+// selection or closes a bar. Editing is off until Edit: then hex digits (or
+// letters in the text column) write over the bytes, Ctrl+Z and Ctrl+Y undo
+// and redo; the viewer's Ctrl+S saves. The status line says how many bytes are changed and
+// not saved - Save writes this computer's copy, never the device's file. The
+// actions are the viewer's (FileEditTools, on its row or the host's toolbar,
+// and its `⋯` menu): they call startEditing(), stopEditing(), save(),
+// askDiscard() and saveCopy() here.
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 FocusScope {
@@ -66,6 +73,30 @@ FocusScope {
         barProblem.text = ""
         grid.forceActiveFocus()
     }
+    // Why the last save did not happen; empty after one that did.
+    property string saveProblem: ""
+    // A copy of a device's file: Save writes this computer's copy, never the device's.
+    readonly property bool onDevice: !!content && content.devicePath.length > 0
+    function startEditing() {
+        pane.content.editing = true
+        grid.forceActiveFocus()
+    }
+    function stopEditing() {
+        pane.content.editing = false
+        if (pane.visible)
+            grid.forceActiveFocus()
+    }
+    function save() {
+        pane.saveProblem = pane.content.save()
+        return pane.saveProblem
+    }
+    function askDiscard() { discardDialog.open() }
+    function saveCopy() { copyDialog.open() }
+    // A new edit makes an old save problem stale.
+    Connections {
+        target: pane.content
+        function onBytesEdited() { pane.saveProblem = "" }
+    }
 
     Shortcut {
         sequence: "Ctrl+F"
@@ -104,10 +135,54 @@ FocusScope {
         onActivated: copyMenu.popup(grid, 16, grid.headerHeight)
     }
 
+    // Discarding loses work: asked, with how much.
+    Dialog {
+        id: discardDialog
+        objectName: "hexDiscardDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        // A set width: a text that changes with the count would otherwise
+        // resize the dialog round its buttons. Over the window, not the pane,
+        // which is narrow or not laid out at all while its tab is behind.
+        width: Math.max(280, Math.min(440, (parent ? parent.width : 440) - 32))
+        modal: true
+        title: qsTr("Discard the changes?")
+        standardButtons: Dialog.Discard | Dialog.Cancel
+        // In a layout, as in UnsavedChangesDialog: a wrapped label straight
+        // in a dialog loops its implicit height through the popup's content size.
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: !pane.content || pane.content.editedBytes === 1 ? qsTr("The changed byte goes back to the copy on this computer.")
+                      : qsTr("%L1 changed bytes go back to the copy on this computer.").arg(pane.content.editedBytes)
+            }
+        }
+        onDiscarded: {
+            pane.content.discard()
+            close()
+        }
+        onClosed: grid.forceActiveFocus()
+    }
+    FileDialog {
+        id: copyDialog
+        title: qsTr("Save a copy of the edited bytes")
+        fileMode: FileDialog.SaveFile
+        onAccepted: pane.saveProblem = pane.content.saveCopyAs(selectedFile)
+    }
+
     // The grid's own menu, on a right click, the Menu key or Shift+F10.
     Menu {
         id: contextMenu
         objectName: "hexContextMenu"
+        MenuItem {
+            objectName: "hexEditItem"
+            text: pane.content && pane.content.editing ? qsTr("Stop &editing") : qsTr("&Edit bytes")
+            enabled: grid.size > 0
+            onTriggered: pane.content.editing ? pane.content.editing = false : pane.startEditing()
+        }
+        MenuSeparator {}
         MenuItem {
             text: qsTr("&Copy\tCtrl+C")
             enabled: grid.size > 0
@@ -362,6 +437,7 @@ FocusScope {
                     outlineColor: Theme.outline
                     matchColor: Theme.infoContainer
                     matchOutlineColor: Theme.info
+                    editedColor: Theme.warning
                     Accessible.role: Accessible.Table
                     Accessible.name: grid.accessibleText
                     Accessible.description: qsTr("Arrows move by byte. Tab switches to the text column.")
@@ -442,6 +518,33 @@ FocusScope {
             Layout.leftMargin: 8
             Layout.rightMargin: 8
             spacing: 12
+            // Editing, or edits not saved: said first, in the warning colour; a
+            // save that failed says why here.
+            Label {
+                objectName: "hexEditState"
+                visible: !!pane.content && (pane.content.editing || pane.content.modified || pane.saveProblem.length > 0)
+                Layout.maximumWidth: pane.width / 2
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                color: pane.saveProblem.length > 0 ? Theme.error : Theme.warning
+                text: {
+                    if (pane.saveProblem.length > 0)
+                        return pane.saveProblem
+                    if (!pane.content)
+                        return ""
+                    const edited = pane.content.editedBytes
+                    const state = pane.content.editing ? qsTr("Editing") : qsTr("Not saved")
+                    return edited === 0 ? state
+                         : edited === 1 ? qsTr("%1 · 1 byte changed").arg(state)
+                         : qsTr("%1 · %L2 bytes changed").arg(state).arg(edited)
+                }
+                HoverHandler { id: editStateHover }
+                ToolTip.visible: editStateHover.hovered && !!pane.content && pane.content.editedBytes > 0
+                ToolTip.text: pane.onDevice ? qsTr("Changed in the copy on this computer, not saved; the device's file is unchanged")
+                                            : qsTr("Changed, not saved")
+                Accessible.role: Accessible.StaticText
+                Accessible.description: ToolTip.text
+            }
             Label {
                 objectName: "hexStatus"
                 Layout.fillWidth: true

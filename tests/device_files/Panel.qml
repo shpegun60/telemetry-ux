@@ -17,6 +17,13 @@ ApplicationWindow {
     property var lastOpenWith: null
     property string lastShown: ""
     property string lastSaveAs: ""
+    // A window's own Ctrl+S, as a host's Save: the files list must keep its
+    // Ctrl+S (Download) from it.
+    property int windowSaves: 0
+    Shortcut {
+        sequences: [StandardKey.Save]
+        onActivated: root.windowSaves++
+    }
 
     DeviceFilesPanel {
         objectName: "panel"
