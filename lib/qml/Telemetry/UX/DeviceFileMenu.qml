@@ -7,6 +7,7 @@
 // model's fileAt(index), or the folder's path) before popup().
 import QtQuick
 import QtQuick.Controls
+import Telemetry.UX
 
 Menu {
     id: menu
