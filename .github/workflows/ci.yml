@@ -556,7 +556,7 @@ jobs:
               checks+=(--sanitize)
             fi
             cmake -S .ci/telemetry-sdk -B "$RUNNER_TEMP/qml-sdk-build-$profile" -G Ninja \
-              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions;workbench;qt_connection;tcp_server' \
+              '-DTELEMETRY_COMPONENTS=core;encoded_server;encoded_backend;rpc_backend;rpc_sessions;workbench;qt_connection;tcp_server;resource_adapter' \
               -DCMAKE_CXX_COMPILER="$compiler" \
               -DCMAKE_BUILD_TYPE=Release -DTELEMETRY_SOURCE_REVISION="$SDK_EXPECTED_REVISION" \
               -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qml-sdk-stage-$profile" "${flags[@]}" \
