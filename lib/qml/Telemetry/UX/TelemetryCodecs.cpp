@@ -82,6 +82,9 @@ void installTelemetryCodecs(OpenFiles& files)
 				    descriptor = context.descriptor(fingerprint);
 		    }
 		    auto content = std::make_unique<ValuesContent>(bytes, descriptor);
+		    quint64 connected = 0;
+		    if (content->needsDescriptor() && context.connectedFingerprint && context.connectedFingerprint(connected))
+			    content->setConnectedFingerprint(connected);
 		    if (!content->valid() && !content->needsDescriptor()) {
 			    error = content->error();
 			    return nullptr;
@@ -118,6 +121,15 @@ void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession
 		}
 		return {};
 	};
+	context.connectedFingerprint = [connected](quint64& fingerprint) {
+		if (!connected)
+			return false;
+		const auto storage = connected->storage();
+		if (!storage || !storage->schema.valid())
+			return false;
+		fingerprint = storage->schema.fingerprint();
+		return true;
+	};
 	files.setContext(std::move(context));
 	const QPointer<DeviceFilesModel> listed(deviceFiles);
 	files.setLiveFactory([connected, listed](const QString& devicePath, QObject* parent) -> QObject* {
@@ -125,11 +137,11 @@ void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession
 			return nullptr;
 		return new DeviceFileLive(connected, listed, devicePath, parent);
 	});
-	// A file that waited for its descriptor gets another try once a device is admitted.
+	// A file that waits for its descriptor gets another try whenever the
+	// connection changes: a device admitted may have it, and what the view
+	// says about the connected device stays true.
 	if (session)
-		QObject::connect(session, &integration::qt::ConnectionSession::stateChanged, &files, [&files, connected] {
-			if (connected && connected->ready())
-				files.contextChanged();
-		});
+		QObject::connect(session, &integration::qt::ConnectionSession::stateChanged, &files,
+		                 [&files] { files.contextChanged(); });
 }
 } // namespace telemetry::ux

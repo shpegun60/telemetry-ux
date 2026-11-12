@@ -89,6 +89,9 @@ class ValuesContent final : public QObject {
 	Q_PROPERTY(QString error READ error NOTIFY shownChanged)
 	// A values file whose descriptor was not found: useDescriptor() supplies it.
 	Q_PROPERTY(bool needsDescriptor READ needsDescriptor NOTIFY shownChanged)
+	// While it needs one: the connected device's descriptor fingerprint in
+	// groups of four (another than this file's), or empty when not connected.
+	Q_PROPERTY(QString connectedFingerprintGroups READ connectedFingerprintGroups CONSTANT)
 	// The descriptor the file needs, in groups of four: "3F2A 91C0 7BE4 0D11".
 	Q_PROPERTY(QString fingerprintGroups READ fingerprintGroups CONSTANT)
 	// "4 Fields in 2 groups · 1 unavailable"
@@ -118,6 +121,9 @@ public:
 	bool needsDescriptor() const noexcept { return needsDescriptor_; }
 	QString error() const { return error_; }
 	quint64 fingerprint() const noexcept { return fingerprint_; }
+	QString connectedFingerprintGroups() const { return connectedGroups_; }
+	// Set by the codec when it is made; the view's words depend on it.
+	void setConnectedFingerprint(quint64 fingerprint);
 	QString fingerprintGroups() const { return fingerprintGroups_; }
 	QString summary() const;
 	QVariantList regions() const { return regions_; }
@@ -176,7 +182,7 @@ private:
 
 	bool valid_ = false, held_ = false, needsDescriptor_ = false;
 	quint64 fingerprint_ = 0;
-	QString error_, fingerprintGroups_;
+	QString error_, fingerprintGroups_, connectedGroups_;
 	QVariantList regions_;
 	// The file as opened, the shown snapshot, and the newest one waiting while held.
 	QByteArray original_, last_, pending_;

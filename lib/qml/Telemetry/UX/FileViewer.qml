@@ -366,10 +366,13 @@ Pane {
             font.pointSize: Type.caption
             color: Theme.textSecondary
             // The path is the device's text: it goes in last, under the highest number.
+            // Once Live has read the device's file, this copy's time is when it
+            // was downloaded; the view says when the shown values were read.
+            readonly property bool readSince: !!viewer.content && !!viewer.content.live && viewer.content.live.reads > 0
             text: !viewer.ready ? ""
-                : qsTr("%1 · read %2 · %3 · %4")
+                : (readSince ? qsTr("%1 · downloaded %2 · %3 · %4") : qsTr("%1 · read %2 · %3 · %4"))
                     .arg(viewer.content.sizeText)
-                    .arg(viewer.content.readAt.toLocaleTimeString(Qt.locale(), Locale.LongFormat))
+                    .arg(Qt.formatTime(viewer.content.readAt, "HH:mm:ss"))
                     .arg(viewer.content.format)
                     .arg(viewer.content.devicePath.length > 0 ? viewer.content.devicePath : viewer.content.localFile)
         }

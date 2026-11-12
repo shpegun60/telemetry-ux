@@ -109,7 +109,8 @@ QVariant ValuesTreeModel::data(const QModelIndex& index, int role) const
 		case PathRole:
 			return at->path;
 		case NumericRole:
-			return at->json == 1 && at->jsonText.isEmpty();
+			// Numbers and true/false: right-aligned, so a struct's members line up.
+			return (at->json == 1 && at->jsonText.isEmpty()) || at->json == 2;
 		default:
 			return {};
 	}
@@ -406,6 +407,11 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 	Q_EMIT shownChanged();
 	Q_EMIT snapshotsChanged();
 	return {};
+}
+
+void ValuesContent::setConnectedFingerprint(quint64 fingerprint)
+{
+	connectedGroups_ = groupsOf(fingerprint);
 }
 
 QString ValuesContent::useDescriptor(const QUrl& file)

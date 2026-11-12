@@ -27,7 +27,9 @@ TreeViewDelegate {
     property bool typeShown: true
 
     readonly property bool group: kind === "group"
-    readonly property string valueText: group ? (count === 1 ? qsTr("1 Field") : qsTr("%1 Fields").arg(count)) : value
+    // A struct's or array's one-line summary while folded; open, its members say it.
+    readonly property string valueText: group ? (count === 1 ? qsTr("1 Field") : qsTr("%1 Fields").arg(count))
+                                      : hasChildren && expanded ? "" : value
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
     readonly property color valueColor: highlighted ? Theme.selectedForeground
@@ -58,26 +60,42 @@ TreeViewDelegate {
             color: row.textColor
             font.weight: row.group ? Type.headingWeight : Font.Normal
         }
-        // The changed mark: always laid out, so a value never moves.
-        Rectangle {
-            Layout.preferredWidth: 6
-            Layout.preferredHeight: 6
-            radius: 3
-            color: row.changed && !row.group && !row.highlighted ? Theme.accent : "transparent"
-            Accessible.ignored: true
+        // The value, with the changed mark 4 px before its first character.
+        Item {
+            Layout.preferredWidth: 10 + row.valueWidth
+            Layout.fillHeight: true
+            Rectangle {
+                width: 6
+                height: 6
+                radius: 3
+                anchors.verticalCenter: parent.verticalCenter
+                x: valueLabel.x + Math.max(0, valueLabel.width - valueLabel.contentWidth) *
+                   (valueLabel.horizontalAlignment === Text.AlignRight ? 1 : 0) - width - 4
+                visible: row.changed && !row.group && !row.highlighted
+                color: Theme.accent
+                Accessible.ignored: true
+            }
+            Label {
+                id: valueLabel
+                objectName: "valuesRowValue"
+                x: 10
+                width: row.valueWidth
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                font.family: row.group ? Qt.application.font.family : Type.fixedFamily
+                font.pointSize: row.group ? Type.caption : Type.body
+                font.italic: row.unavailable
+                horizontalAlignment: row.group || row.numeric ? Text.AlignRight : Text.AlignLeft
+                color: row.valueColor
+                text: row.valueText
+                HoverHandler { id: valueHover }
+                ToolTip.visible: valueHover.hovered && truncated
+                ToolTip.text: row.valueText
+            }
         }
-        Label {
-            objectName: "valuesRowValue"
-            Layout.preferredWidth: row.valueWidth
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            font.family: row.group ? Qt.application.font.family : Type.fixedFamily
-            font.pointSize: row.group ? Type.caption : Type.body
-            font.italic: row.unavailable
-            horizontalAlignment: row.group || row.numeric ? Text.AlignRight : Text.AlignLeft
-            color: row.valueColor
-            text: row.valueText
-        }
+        // A wider gap: "230 f32" must not read as one word.
+        Item { Layout.preferredWidth: 8 }
         Label {
             objectName: "valuesRowType"
             visible: row.typeShown
@@ -88,6 +106,9 @@ TreeViewDelegate {
             font.pointSize: Type.caption
             color: row.detailColor
             text: row.typeText
+            HoverHandler { id: typeHover }
+            ToolTip.visible: typeHover.hovered && truncated
+            ToolTip.text: row.typeText
         }
     }
 

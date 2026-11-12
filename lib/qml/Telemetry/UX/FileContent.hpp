@@ -87,6 +87,9 @@ struct FileCodecContext {
 	// The bytes of a descriptor with this fingerprint - the connected
 	// device's, or one in a device's folder - or empty: values.bin needs it.
 	std::function<QByteArray(quint64 fingerprint)> descriptor;
+	// The connected device's descriptor fingerprint; false when no device
+	// with a descriptor is connected. For a view that asks for a descriptor.
+	std::function<bool(quint64& fingerprint)> connectedFingerprint;
 	// The file being read: its local copy and the device's path (empty for a
 	// file from disk). Filled for each read; a host sets only the above.
 	QString localFile, devicePath;

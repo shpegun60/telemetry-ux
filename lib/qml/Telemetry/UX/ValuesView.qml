@@ -222,13 +222,17 @@ FocusScope {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Theme.textPrimary
-                text: qsTr("These values can be read only with the descriptor they were written with, and it is not at hand.")
+                text: qsTr("No descriptor with this fingerprint was found, so these values cannot be read.")
             }
             Label {
+                objectName: "valuesNeedsHint"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Theme.textSecondary
-                text: qsTr("Connect to the device, or choose its descriptor.bin - one downloaded with this file has the same fingerprint.")
+                text: view.decoded.connectedFingerprintGroups.length > 0
+                      ? qsTr("The connected device uses descriptor %1, not this one. Choose the descriptor.bin downloaded with this file.")
+                            .arg(view.decoded.connectedFingerprintGroups)
+                      : qsTr("Connect to the device that wrote this file, or choose its descriptor.bin. One downloaded together with this file will match.")
             }
             Button {
                 objectName: "valuesChooseDescriptor"
@@ -282,6 +286,8 @@ FocusScope {
                 id: period
                 objectName: "valuesPeriod"
                 Accessible.name: qsTr("How often to read")
+                // As wide as its widest choice: the bar never moves.
+                implicitContentWidthPolicy: ComboBox.WidestText
                 textRole: "text"
                 valueRole: "ms"
                 // The fastest reads as soon as the last read ended (200 ms at
@@ -308,9 +314,20 @@ FocusScope {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Keep these values on screen while reading goes on (H)")
             }
+            Item { Layout.fillWidth: true }
+        }
+        // What Live is doing, on a line of its own: a failed read leaves the
+        // old values shown, and this says so.
+        RowLayout {
+            visible: view.decoded.valid && !!view.live
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
             Label {
                 objectName: "valuesLiveState"
                 Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
                 color: view.stoppedBecause.length > 0 || (view.live && view.live.problem.length > 0) ? Theme.warning
@@ -324,12 +341,12 @@ FocusScope {
                     if (view.live.problem.length > 0)
                         return view.live.problem
                     if (view.decoded.held)
-                        return view.decoded.waiting === 0 ? qsTr("Held at %1").arg(shown)
-                             : view.decoded.waiting === 1 ? qsTr("Held at %1 · 1 newer read").arg(shown)
-                             : qsTr("Held at %1 · %2 newer reads").arg(shown).arg(view.decoded.waiting)
+                        return view.decoded.waiting === 0 ? qsTr("Held at %1 · H to release").arg(shown)
+                             : view.decoded.waiting === 1 ? qsTr("Held at %1 · 1 newer read · H to release").arg(shown)
+                             : qsTr("Held at %1 · %2 newer reads · H to release").arg(shown).arg(view.decoded.waiting)
                     const changed = view.decoded.changedCount === 1 ? qsTr("1 value changed")
                                   : qsTr("%1 values changed").arg(view.decoded.changedCount)
-                    return view.running ? qsTr("Read at %1 · %2 · the read took %3 ms").arg(shown).arg(changed).arg(view.live.lastReadMs)
+                    return view.running ? qsTr("Read at %1 · %2 · took %3 ms").arg(shown).arg(changed).arg(view.live.lastReadMs)
                                         : qsTr("Read at %1").arg(shown)
                 }
             }
@@ -373,8 +390,15 @@ FocusScope {
             Layout.rightMargin: 8
             spacing: 8
             Label { Layout.fillWidth: true; text: qsTr("Name"); font.pointSize: Type.caption; color: Theme.textSecondary }
-            Item { Layout.preferredWidth: 6 }
-            Label { Layout.preferredWidth: view.valueWidth; text: qsTr("Value"); font.pointSize: Type.caption; color: Theme.textSecondary }
+            Label {
+                objectName: "valuesValueHeading"
+                Layout.preferredWidth: 10 + view.valueWidth
+                leftPadding: 10
+                text: view.decoded.held ? qsTr("Value · held") : qsTr("Value")
+                font.pointSize: Type.caption
+                color: view.decoded.held ? Theme.info : Theme.textSecondary
+            }
+            Item { Layout.preferredWidth: 8 }
             Label {
                 visible: view.typeShown
                 Layout.preferredWidth: view.typeWidth
