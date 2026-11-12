@@ -54,14 +54,14 @@ template<class F>
 Value floating(F value)
 {
 	if (std::isnan(value))
-		return {QStringLiteral("NaN"), Json::Text};
+		return {QStringLiteral("NaN"), Json::Text, {}};
 	if (std::isinf(value))
-		return {value > 0 ? QStringLiteral("Infinity") : QStringLiteral("-Infinity"), Json::Text};
+		return {value > 0 ? QStringLiteral("Infinity") : QStringLiteral("-Infinity"), Json::Text, {}};
 	char buffer[64];
 	const auto written = std::to_chars(buffer, buffer + sizeof(buffer), value);
 	if (written.ec != std::errc{})
-		return {QStringLiteral("?"), Json::Text};
-	return {QString::fromLatin1(buffer, static_cast<qsizetype>(written.ptr - buffer)), Json::Number};
+		return {QStringLiteral("?"), Json::Text, {}};
+	return {QString::fromLatin1(buffer, static_cast<qsizetype>(written.ptr - buffer)), Json::Number, {}};
 }
 
 template<class T>
@@ -69,11 +69,11 @@ Value integer(const rt::DynamicValueView& view, bool underlying)
 {
 	const auto read = underlying ? view.enumUnderlying<T>() : view.get<T>();
 	if (!read)
-		return {QStringLiteral("?"), Json::Text};
+		return {QStringLiteral("?"), Json::Text, {}};
 	if constexpr (std::is_signed_v<T>)
-		return {QString::number(static_cast<qlonglong>(read.value)), Json::Number};
+		return {QString::number(static_cast<qlonglong>(read.value)), Json::Number, {}};
 	else
-		return {QString::number(static_cast<qulonglong>(read.value)), Json::Number};
+		return {QString::number(static_cast<qulonglong>(read.value)), Json::Number, {}};
 }
 
 Value number(const rt::DynamicValueView& view, ScalarCode code, bool underlying)
@@ -81,8 +81,8 @@ Value number(const rt::DynamicValueView& view, ScalarCode code, bool underlying)
 	switch (code) {
 		case ScalarCode::Bool: {
 			const auto read = view.get<bool>();
-			return read ? Value{read.value ? QStringLiteral("true") : QStringLiteral("false"), Json::Boolean}
-			            : Value{QStringLiteral("?"), Json::Text};
+			return read ? Value{read.value ? QStringLiteral("true") : QStringLiteral("false"), Json::Boolean, {}}
+			            : Value{QStringLiteral("?"), Json::Text, {}};
 		}
 		case ScalarCode::U8:
 			return integer<std::uint8_t>(view, underlying);
@@ -102,14 +102,14 @@ Value number(const rt::DynamicValueView& view, ScalarCode code, bool underlying)
 			return integer<std::int64_t>(view, underlying);
 		case ScalarCode::F32: {
 			const auto read = view.get<float>();
-			return read ? floating(read.value) : Value{QStringLiteral("?"), Json::Text};
+			return read ? floating(read.value) : Value{QStringLiteral("?"), Json::Text, {}};
 		}
 		case ScalarCode::F64: {
 			const auto read = view.get<double>();
-			return read ? floating(read.value) : Value{QStringLiteral("?"), Json::Text};
+			return read ? floating(read.value) : Value{QStringLiteral("?"), Json::Text, {}};
 		}
 	}
-	return {QStringLiteral("?"), Json::Text};
+	return {QStringLiteral("?"), Json::Text, {}};
 }
 } // namespace
 
@@ -147,7 +147,7 @@ Value valueText(const rt::RuntimeSchema& schema, const rt::DynamicValueView& vie
 {
 	const auto* type = schema.type(view.typeId());
 	if (!type)
-		return {QStringLiteral("?"), Json::Text};
+		return {QStringLiteral("?"), Json::Text, {}};
 	switch (type->kind) {
 		case TypeKind::Scalar:
 			return number(view, type->scalarCode, false);
@@ -162,7 +162,7 @@ Value valueText(const rt::RuntimeSchema& schema, const rt::DynamicValueView& vie
 			return {shown, code.json, code.text};
 		}
 		default:
-			return {QStringLiteral("?"), Json::Text};
+			return {QStringLiteral("?"), Json::Text, {}};
 	}
 }
 } // namespace telemetry::ux::schema_text
