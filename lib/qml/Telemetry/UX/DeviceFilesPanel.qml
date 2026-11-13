@@ -12,10 +12,13 @@
 // showInFolderRequested(localPath).
 //
 // As in a file explorer, the actions are in a context menu (right click, the
-// Menu key, Shift+F10) rather than buttons. Keys on the tree: Enter opens,
-// Space marks, Ctrl+S downloads, Alt+Shift+C copies the path, Alt+Enter shows
-// the properties, Ctrl+A marks all, Ctrl+Shift+A clears the marks, Ctrl+R
-// refreshes. The host calls registerQmlTypes() first (Clipboard).
+// Menu key, Shift+F10) rather than buttons, and they act on the selection,
+// which the model keeps. Click, Ctrl+click and Shift+click select; the arrows,
+// Home, End, Page Up and Page Down move it (Shift extends, Ctrl moves alone);
+// Space adds or removes the current row; Enter opens the selection, or folds
+// a folder; Ctrl+S downloads, Alt+Shift+C copies the path, Alt+Enter shows the
+// properties, Ctrl+A selects every readable file, Esc and Ctrl+Shift+A select
+// none, Ctrl+R refreshes. The host calls registerQmlTypes() first (Clipboard).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -68,7 +71,7 @@ Pane {
     TextMetrics { id: countMetrics; font.pointSize: Type.caption; text: qsTr("%n files", "", 4096) }
 
     function chosen() {
-        return files.selection(currentIndex)
+        return files.selectedFiles(currentIndex)
     }
     function download() {
         const selection = chosen()
@@ -83,66 +86,87 @@ Pane {
     function openCurrent() {
         openIndex(currentIndex)
     }
-    // Enter: a file opens, a folder folds or unfolds.
+    // At most this many files open from one Enter; with more selected,
+    // Enter opens the current file alone.
+    readonly property int openAtOnce: 16
+    // Enter: on a selected file, every selected file the device lets us read;
+    // on any other file, that file; a folder folds or unfolds.
     function activateCurrent() {
-        if (currentIsFile)
-            openCurrent()
-        else if (fileTree.currentRow >= 0)
+        if (currentIsFile) {
+            const selected = files.isSelected(currentIndex) ? files.selectedFiles(currentIndex) : []
+            if (selected.length > 1 && selected.length <= openAtOnce)
+                selected.forEach(function(file) { panel.openRequested(file) })
+            else
+                openCurrent()
+        } else if (fileTree.currentRow >= 0) {
             fileTree.toggleExpanded(fileTree.currentRow)
+        }
     }
     function rowOf(index) {
         return fileTree.rowAtIndex(index)
     }
-    // The selection, as a file explorer's. The model keeps it - the files
-    // selected, by path, across Refresh; a folder row stands for its files.
-    // The anchor is where a Shift range starts.
-    property int anchorRow: -1
-    function selectOnly(index) {
-        files.markAll(false)
-        if (index && index.valid)
-            files.setMarked(index, true)
+    // The selection, as a file explorer's: the model keeps it, files only,
+    // by path across Refresh; a folder row stands for its files. The anchor,
+    // where a Shift range starts, is kept as a path: rows move when folders
+    // fold and when the list is read again.
+    property string anchorPath: ""
+    function setAnchor(index) {
+        anchorPath = index && index.valid ? files.pathAt(index) : ""
     }
-    function toggleSelected(index) {
-        if (index && index.valid)
-            files.setMarked(index, !files.isMarked(index))
+    // The anchor's row now; where it is hidden or gone, `fallback`.
+    function anchorRow(fallback) {
+        const row = anchorPath.length > 0 ? rowOf(files.indexOfPath(anchorPath)) : -1
+        return row >= 0 ? row : fallback
     }
-    // Every row from the anchor to `row`, in the order they are shown; with
-    // `add` the rest stays selected.
-    function selectRange(from, to, add) {
-        if (!add)
-            files.markAll(false)
+    // The rows shown from one row to another: a file as it is, a folded
+    // folder for its readable files; an unfolded folder adds nothing, its
+    // rows below speak for it. With `add` the rest stays selected.
+    function selectRows(from, to, add) {
         const first = Math.max(0, Math.min(from, to)), last = Math.min(fileTree.rows - 1, Math.max(from, to))
-        for (let row = first; row <= last; ++row)
-            files.setMarked(fileTree.index(row, 0), true)
+        const indexes = []
+        for (let row = first; row <= last; ++row) {
+            const index = fileTree.index(row, 0)
+            if (files.isFile(index) || !fileTree.isExpanded(row))
+                indexes.push(index)
+        }
+        files.selectIndexes(indexes, add)
     }
     function rowClicked(index, row, modifiers) {
         fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
-        if ((modifiers & Qt.ShiftModifier) && anchorRow >= 0) {
-            selectRange(anchorRow, row, modifiers & Qt.ControlModifier)
+        if (modifiers & Qt.ShiftModifier) {
+            selectRows(anchorRow(row), row, modifiers & Qt.ControlModifier)
             return
         }
         if (modifiers & Qt.ControlModifier)
-            toggleSelected(index)
+            files.toggleSelected(index)
         else
-            selectOnly(index)
-        anchorRow = row
+            files.selectOnly(index)
+        setAnchor(index)
     }
-    // The arrows move the current row and the selection with it; Shift
+    // A key moves the current row to `row` and the selection with it; Shift
     // extends from the anchor; Ctrl moves alone.
-    function moveCurrent(step, modifiers) {
+    function moveTo(row, modifiers) {
         if (fileTree.rows === 0)
             return
-        const row = Math.max(0, Math.min(fileTree.rows - 1, (fileTree.currentRow < 0 ? -1 : fileTree.currentRow) + step))
+        row = Math.max(0, Math.min(fileTree.rows - 1, row))
         const index = fileTree.index(row, 0)
+        const from = anchorRow(fileTree.currentRow >= 0 ? fileTree.currentRow : row)
         fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
         fileTree.positionViewAtRow(row, TableView.Contain)
         if (modifiers & Qt.ShiftModifier) {
-            selectRange(anchorRow >= 0 ? anchorRow : row, row, false)
+            if (anchorPath.length === 0)
+                setAnchor(fileTree.index(from, 0))
+            selectRows(from, row, false)
         } else if (!(modifiers & Qt.ControlModifier)) {
-            selectOnly(index)
-            anchorRow = row
+            files.selectOnly(index)
+            setAnchor(index)
         }
     }
+    function moveCurrent(step, modifiers) {
+        moveTo((fileTree.currentRow < 0 ? (step > 0 ? -1 : fileTree.rows) : fileTree.currentRow) + step, modifiers)
+    }
+    // Page Up and Page Down: the rows that fit, less one kept in view.
+    readonly property int pageRows: Math.max(1, Math.floor(fileTree.height / Type.rowHeight) - 1)
     function isExpanded(index) {
         const row = index ? rowOf(index) : -1
         return row >= 0 && fileTree.isExpanded(row)
@@ -155,11 +179,10 @@ Pane {
     function allReadable() {
         return files.filesUnder()
     }
-    // Copy path on a file or folder; on a marked set, every marked path, one a line.
+    // Copy path on a file or folder; on a selection, every selected path, one a line.
     function copyPaths(kind, file) {
-        if (kind === "marked") {
-            const marked = files.selection(currentIndex)
-            Clipboard.setText(marked.map(function(entry) { return entry.path }).join("\n"))
+        if (kind === "selection") {
+            Clipboard.setText(files.selectedPaths().join("\n"))
         } else {
             Clipboard.setText(kind === "file" ? file.path : files.pathAt(fileMenu.index))
         }
@@ -170,10 +193,15 @@ Pane {
             return
         propertiesPopup.file = file
         const row = rowOf(index)
-        // A row scrolled away has no item to stand beside: bring it in first.
+        // The popup stands beside its row: a row not wholly in view - scrolled
+        // away or cut by an edge - is brought to the middle first.
         if (row >= 0) {
-            fileTree.positionViewAtRow(row, TableView.Contain)
-            fileTree.forceLayout()
+            const shown = fileTree.itemAtCell(Qt.point(0, row))
+            const top = shown ? shown.y - fileTree.contentY : -1
+            if (!shown || top < 0 || top + shown.height > fileTree.height) {
+                fileTree.positionViewAtRow(row, TableView.AlignVCenter)
+                fileTree.forceLayout()
+            }
         }
         const item = row >= 0 ? fileTree.itemAtCell(Qt.point(0, row)) : null
         const below = item ? item.mapToItem(panel, 24, item.height) : Qt.point(24, 48)
@@ -190,22 +218,24 @@ Pane {
     }
     // The menu for the row at index, or for empty space with an invalid index;
     // at x, y in `from`'s coordinates. Right-clicking makes that row current,
-    // as in a file explorer; a marked row among two or more marked acts on the set.
+    // as in a file explorer; a selected file among two or more selected acts
+    // on the selection.
     function openMenu(index, from, x, y) {
         let kind = "empty"
         if (index && index.valid) {
             fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
-            // As in a file explorer: a click outside the selection selects that row.
-            if (!files.isMarked(index)) {
-                selectOnly(index)
-                anchorRow = rowOf(index)
+            // As in a file explorer: a right click on a file outside the
+            // selection selects that file. A folder has its own menu.
+            if (files.isFile(index) && !files.isSelected(index)) {
+                files.selectOnly(index)
+                setAnchor(index)
             }
             kind = !files.isFile(index) ? "folder"
-                 : files.isMarked(index) && files.markedCount > 1 ? "marked" : "file"
+                 : files.isSelected(index) && files.selectedCount > 1 ? "selection" : "file"
         }
         fileMenu.kind = kind
         fileMenu.index = index
-        fileMenu.file = kind === "file" || kind === "marked" ? files.fileAt(index) : ({})
+        fileMenu.file = kind === "file" || kind === "selection" ? files.fileAt(index) : ({})
         fileMenu.popup(from, x, y)
     }
     // The Menu key and Shift+F10: the menu under the current row.
@@ -232,7 +262,7 @@ Pane {
         anchors.fill: parent
         spacing: 0
 
-        // One row: what is listed or marked, then Download and Refresh as
+        // One row: what is listed or selected, then Download and Refresh as
         // pictograms, as an IDE's explorer carries its actions in its header.
         RowLayout {
             objectName: "deviceFilesHeader"
@@ -252,22 +282,30 @@ Pane {
                 text: !panel.files.available ? ""
                     : panel.files.loading ? (panel.files.fileCount > 0 ? qsTr("Refreshing…")
                                                                        : qsTr("Reading the file list…"))
-                    : panel.files.markedCount > 0
-                    ? qsTr("%n selected · %1", "", panel.files.markedCount).arg(panel.files.formatSize(panel.files.markedBytes))
+                    : panel.files.selectedCount === 1
+                    ? qsTr("1 file selected · %1").arg(panel.files.formatSize(panel.files.selectedBytes))
+                    : panel.files.selectedCount > 1
+                    ? qsTr("%n files selected · %1", "", panel.files.selectedCount).arg(panel.files.formatSize(panel.files.selectedBytes))
                     : panel.files.fileCount === 1 ? qsTr("1 file") : qsTr("%n files", "", panel.files.fileCount)
             }
             IconToolButton {
                 objectName: "deviceFilesDownload"
                 iconName: "download"
                 visible: panel.files.available && panel.files.fileCount > 0
-                // Marked files first; with none marked, the current file.
-                text: panel.files.markedCount > 1
-                    ? qsTr("Download %n files…", "", panel.files.markedCount)
-                    : panel.files.markedCount === 1 ? qsTr("Download 1 file…")
+                // The selected files the device lets us read; with none
+                // selected, the current file. What is left out says so.
+                readonly property int readable: panel.files.selectedReadable
+                readonly property int skipped: panel.files.selectedCount - readable
+                text: panel.files.selectedCount > 0 && readable === 0
+                    ? qsTr("Download… (the selected files can't be read)")
+                    : skipped > 0
+                    ? qsTr("Download %n files… (%1 can't be read)", "", readable).arg(skipped)
+                    : readable > 1 ? qsTr("Download %n files…", "", readable)
+                    : readable === 1 ? qsTr("Download 1 file…")
                     : panel.currentIsFile ? qsTr("Download %1…").arg(panel.currentName)
                     : qsTr("Download…")
                 shortcutText: qsTr("Ctrl+S")
-                enabled: panel.files.markedCount > 0 || panel.currentIsFile
+                enabled: readable > 0 || (panel.files.selectedCount === 0 && panel.currentIsFile)
                 onClicked: panel.download()
             }
             IconToolButton {
@@ -415,19 +453,19 @@ Pane {
             columnWidthProvider: function() { return Math.max(1, fileTree.width) }
             onWidthChanged: Qt.callLater(function() { if (fileTree) fileTree.forceLayout() })
 
+            // Space and Ctrl+Space: the current row in or out of the selection.
             Keys.onSpacePressed: function(event) {
                 const index = fileTree.selectionModel.currentIndex
                 if (index.valid) {
-                    // The model leaves a file it cannot read unselected.
-                    panel.toggleSelected(index)
-                    panel.anchorRow = fileTree.currentRow
+                    panel.files.toggleSelected(index)
+                    panel.setAnchor(index)
                     event.accepted = true
                 }
             }
             Keys.onEscapePressed: function(event) {
-                event.accepted = panel.files.markedCount > 0
+                event.accepted = panel.files.selectedCount > 0
                 if (event.accepted)
-                    panel.files.markAll(false)
+                    panel.files.clearSelection()
             }
             Keys.onUpPressed: function(event) { panel.moveCurrent(-1, event.modifiers) }
             Keys.onDownPressed: function(event) { panel.moveCurrent(1, event.modifiers) }
@@ -453,12 +491,21 @@ Pane {
                 } else if (control && event.key === Qt.Key_S) {
                     panel.download()
                 } else if (alt && shift && event.key === Qt.Key_C) {
-                    panel.copyPaths(panel.files.isMarked(panel.currentIndex) && panel.files.markedCount > 1 ? "marked"
+                    panel.copyPaths(panel.currentIsFile && panel.files.isSelected(panel.currentIndex)
+                                    && panel.files.selectedCount > 1 ? "selection"
                                     : panel.currentIsFile ? "file" : "folder", panel.files.fileAt(panel.currentIndex))
                 } else if (control && shift && event.key === Qt.Key_A) {
-                    panel.files.markAll(false)
+                    panel.files.clearSelection()
                 } else if (control && event.key === Qt.Key_A) {
-                    panel.files.markAll(true)
+                    panel.files.selectAll()
+                } else if (event.key === Qt.Key_Home) {
+                    panel.moveTo(0, event.modifiers)
+                } else if (event.key === Qt.Key_End) {
+                    panel.moveTo(fileTree.rows - 1, event.modifiers)
+                } else if (event.key === Qt.Key_PageUp) {
+                    panel.moveTo(fileTree.currentRow - panel.pageRows, event.modifiers)
+                } else if (event.key === Qt.Key_PageDown) {
+                    panel.moveTo(fileTree.currentRow + panel.pageRows, event.modifiers)
                 } else if (control && event.key === Qt.Key_R) {
                     if (panel.files.available && !panel.files.loading)
                         panel.files.refresh()

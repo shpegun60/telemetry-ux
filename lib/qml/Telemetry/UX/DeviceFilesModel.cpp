@@ -21,7 +21,7 @@ struct DeviceFilesModel::Node {
 	bool folder = false;
 	int fileIndex = -1;
 	quint64 size = 0;
-	bool sizeKnown = false, readable = false, writable = false, marked = false;
+	bool sizeKnown = false, readable = false, writable = false, selected = false;
 	QString statError;
 
 	int row() const noexcept
@@ -34,33 +34,38 @@ struct DeviceFilesModel::Node {
 		return 0;
 	}
 
-	// A file can be marked for download unless the device said it cannot be
-	// read; one not examined yet still can.
-	bool markable() const noexcept
+	// A file Download takes, unless the device said it cannot be read; one not
+	// examined yet still counts. What selecting a folder selects.
+	bool downloadable() const noexcept
 	{
 		return !folder && (!sizeKnown || readable);
 	}
 
-	// Files below a folder, their total known size, how many are marked and
-	// how many could be.
-	void tally(int& files, quint64& bytes, int& marks, int& markables) const noexcept
+	// Files below a folder, their total known size, how many are selected and
+	// how many can be downloaded.
+	void tally(int& files, quint64& bytes, int& chosen, int& downloadables) const noexcept
 	{
 		if (!folder) {
 			++files;
 			bytes += size;
-			marks += marked ? 1 : 0;
-			markables += markable() ? 1 : 0;
+			chosen += selected ? 1 : 0;
+			downloadables += downloadable() ? 1 : 0;
 			return;
 		}
 		for (const auto& child : children)
-			child->tally(files, bytes, marks, markables);
+			child->tally(files, bytes, chosen, downloadables);
 	}
 
-	void mark(bool value) noexcept
+	// A folder (or the tree, from the root) with this path, below this node.
+	const Node* folderAt(const QString& wanted) const noexcept
 	{
-		marked = value && markable();
+		if (folder && path == wanted)
+			return this;
 		for (const auto& child : children)
-			child->mark(value);
+			if (child->folder)
+				if (const auto* found = child->folderAt(wanted))
+					return found;
+		return nullptr;
 	}
 };
 
@@ -174,21 +179,26 @@ bool DeviceFilesModel::systemOnly() const
 	});
 }
 
-int DeviceFilesModel::markedCount() const noexcept
+int DeviceFilesModel::selectedCount() const noexcept
 {
-	int files = 0, marks = 0, markables = 0;
-	quint64 bytes = 0;
-	root_->tally(files, bytes, marks, markables);
-	return marks;
+	return static_cast<int>(
+	    std::count_if(files_.begin(), files_.end(), [](const Node* file) { return file->selected; }));
 }
 
-qulonglong DeviceFilesModel::markedBytes() const noexcept
+qulonglong DeviceFilesModel::selectedBytes() const noexcept
 {
 	quint64 bytes = 0;
 	for (const auto* file : files_)
-		if (file->marked)
+		if (file->selected)
 			bytes += file->size;
 	return bytes;
+}
+
+int DeviceFilesModel::selectedReadable() const noexcept
+{
+	return static_cast<int>(std::count_if(files_.begin(), files_.end(), [](const Node* file) {
+		return file->selected && file->downloadable();
+	}));
 }
 
 // A size never breaks across lines: a no-break space joins the number and
@@ -251,7 +261,7 @@ void DeviceFilesModel::reset()
 	error_.clear();
 	nextStat_ = 0;
 	Q_EMIT stateChanged();
-	Q_EMIT marksChanged();
+	Q_EMIT selectionChanged();
 }
 
 void DeviceFilesModel::refresh()
@@ -333,11 +343,12 @@ void DeviceFilesModel::listFrom(quint64 cursor)
 
 void DeviceFilesModel::build()
 {
-	// Marks survive a refresh by path; a file not listed any more drops its own.
-	QSet<QString> markedPaths;
+	// The selection survives a refresh by path; a file not listed any more
+	// leaves it, so the counts are only ever of files there now.
+	QSet<QString> selectedPaths;
 	for (const auto* file : files_)
-		if (file->marked)
-			markedPaths.insert(file->path);
+		if (file->selected)
+			selectedPaths.insert(file->path);
 	beginResetModel();
 	root_ = std::make_unique<Node>();
 	root_->folder = true;
@@ -374,13 +385,13 @@ void DeviceFilesModel::build()
 			}
 			at = next;
 		}
-		at->marked = markedPaths.contains(at->path);
+		at->selected = selectedPaths.contains(at->path);
 		files_.push_back(at);
 	}
 	endResetModel();
 	nextStat_ = 0;
 	Q_EMIT stateChanged();
-	Q_EMIT marksChanged();
+	Q_EMIT selectionChanged();
 }
 
 void DeviceFilesModel::statNext()
@@ -401,26 +412,25 @@ void DeviceFilesModel::statNext()
 	    [this, guard = std::weak_ptr<int>(alive_), epoch, file](const files::StatResult& result) noexcept {
 		    if (guard.expired() || epoch != generation_)
 			    return;
-		    const bool wasMarked = file->marked;
 		    if (result.succeeded()) {
 			    file->size = result.reply.size;
 			    file->sizeKnown = true;
 			    file->readable = resource::has(result.reply.flags, resource::FileFlag::Readable);
 			    file->writable = resource::has(result.reply.flags, resource::FileFlag::Writable);
-			    // Marked before the device said it cannot be read: not any more.
-			    file->marked = file->marked && file->readable;
 		    } else
 			    file->statError = failure(result);
-		    const bool marksMoved = wasMarked != file->marked;
-		    QTimer::singleShot(0, this, [this, epoch, file, marksMoved] {
+		    // A selected file stays selected; its size and whether Download
+		    // takes it are news to the selection's figures.
+		    const bool selected = file->selected;
+		    QTimer::singleShot(0, this, [this, epoch, file, selected] {
 			    if (epoch != generation_)
 				    return;
 			    for (const Node* at = file; at && at != root_.get(); at = at->parent) {
 				    const auto changed = indexOf(at);
 				    Q_EMIT dataChanged(changed, changed);
 			    }
-			    if (marksMoved)
-				    Q_EMIT marksChanged();
+			    if (selected)
+				    Q_EMIT selectionChanged();
 			    ++nextStat_;
 			    statNext();
 		    });
@@ -441,39 +451,166 @@ void DeviceFilesModel::finish(QString failureText)
 	loading_ = false;
 	error_ = std::move(failureText);
 	Q_EMIT stateChanged();
-	Q_EMIT marksChanged();
 }
 
-void DeviceFilesModel::setMarked(const QModelIndex& index, bool marked)
+void DeviceFilesModel::setSelected(Node* file, bool selected, Touched& touched)
 {
-	auto* at = node(index);
-	if (!at || at == root_.get())
+	if (!file || file->folder || file->selected == selected)
 		return;
-	at->mark(marked);
-	const auto first = indexOf(at);
-	Q_EMIT dataChanged(first, first, {MarkedRole});
-	refreshFolder(at);
-	for (const Node* up = at->parent; up && up != root_.get(); up = up->parent) {
-		const auto changed = indexOf(up);
-		Q_EMIT dataChanged(changed, changed, {MarkedRole});
-	}
-	Q_EMIT marksChanged();
+	file->selected = selected;
+	for (const Node* at = file; at && at != root_.get(); at = at->parent)
+		touched.insert(at);
 }
 
-void DeviceFilesModel::refreshFolder(Node* folder)
+void DeviceFilesModel::targetsOf(const Node* at, QSet<const Node*>& into) const
 {
-	for (const auto& child : folder->children) {
-		const auto changed = indexOf(child.get());
-		Q_EMIT dataChanged(changed, changed, {MarkedRole});
-		refreshFolder(child.get());
+	if (!at->folder) {
+		into.insert(at);
+		return;
 	}
+	for (const auto& child : at->children) {
+		if (child->folder)
+			targetsOf(child.get(), into);
+		else if (child->downloadable())
+			into.insert(child.get());
+	}
+}
+
+void DeviceFilesModel::publishSelection(const Touched& touched)
+{
+	if (touched.isEmpty())
+		return;
+	for (const Node* at : touched) {
+		const auto changed = indexOf(at);
+		Q_EMIT dataChanged(changed, changed, {IsSelectedRole, SelectedInsideRole});
+	}
+	Q_EMIT selectionChanged();
+}
+
+void DeviceFilesModel::select(const QModelIndex& index, bool selected)
+{
+	const auto* at = index.isValid() ? node(index) : nullptr;
+	if (!at)
+		return;
+	Touched touched;
+	if (at->folder && !selected) {
+		// Off: every file below, the unreadable ones too.
+		for (auto* file : files_)
+			for (const Node* up = file->parent; up; up = up->parent)
+				if (up == at) {
+					setSelected(file, false, touched);
+					break;
+				}
+	} else {
+		QSet<const Node*> targets;
+		targetsOf(at, targets);
+		for (const auto* file : targets)
+			setSelected(const_cast<Node*>(file), selected, touched);
+	}
+	publishSelection(touched);
+}
+
+void DeviceFilesModel::selectOnly(const QModelIndex& index)
+{
+	QSet<const Node*> wanted;
+	if (const auto* at = index.isValid() ? node(index) : nullptr)
+		targetsOf(at, wanted);
+	Touched touched;
+	for (auto* file : files_)
+		setSelected(file, wanted.contains(file), touched);
+	publishSelection(touched);
+}
+
+void DeviceFilesModel::toggleSelected(const QModelIndex& index)
+{
+	const auto* at = index.isValid() ? node(index) : nullptr;
+	if (!at)
+		return;
+	select(index, !isSelected(index));
+}
+
+void DeviceFilesModel::selectIndexes(const QVariantList& indexes, bool add)
+{
+	QSet<const Node*> wanted;
+	for (const auto& value : indexes) {
+		const auto index = value.value<QModelIndex>();
+		if (const auto* at = index.isValid() && index.model() == this ? node(index) : nullptr)
+			targetsOf(at, wanted);
+	}
+	Touched touched;
+	for (auto* file : files_)
+		if (wanted.contains(file))
+			setSelected(file, true, touched);
+		else if (!add)
+			setSelected(file, false, touched);
+	publishSelection(touched);
+}
+
+void DeviceFilesModel::selectAll()
+{
+	Touched touched;
+	for (auto* file : files_)
+		if (file->downloadable())
+			setSelected(file, true, touched);
+	publishSelection(touched);
+}
+
+void DeviceFilesModel::clearSelection()
+{
+	Touched touched;
+	for (auto* file : files_)
+		setSelected(file, false, touched);
+	publishSelection(touched);
+}
+
+bool DeviceFilesModel::isSelected(const QModelIndex& index) const
+{
+	const auto* at = index.isValid() ? node(index) : nullptr;
+	if (!at)
+		return false;
+	if (!at->folder)
+		return at->selected;
+	QSet<const Node*> targets;
+	targetsOf(at, targets);
+	return !targets.isEmpty() &&
+	       std::all_of(targets.begin(), targets.end(), [](const Node* file) { return file->selected; });
+}
+
+QStringList DeviceFilesModel::selectedPaths() const
+{
+	QStringList paths;
+	for (const auto* file : files_)
+		if (file->selected)
+			paths << file->path;
+	return paths;
+}
+
+QVariantList DeviceFilesModel::selectedFiles(const QModelIndex& current) const
+{
+	QVariantList chosen;
+	bool any = false;
+	for (const auto* file : files_) {
+		any = any || file->selected;
+		if (file->selected && file->downloadable())
+			collect(file, chosen);
+	}
+	if (!any)
+		if (const auto* at = node(current); current.isValid() && at && !at->folder)
+			collect(at, chosen);
+	return chosen;
 }
 
 void DeviceFilesModel::markAll(bool marked)
 {
-	root_->mark(marked);
-	refreshFolder(root_.get());
-	Q_EMIT marksChanged();
+	if (marked)
+		selectAll();
+	else
+		clearSelection();
+}
+
+QVariantList DeviceFilesModel::selection(const QModelIndex& current) const
+{
+	return selectedFiles(current);
 }
 
 void DeviceFilesModel::collect(const Node* from, QVariantList& into) const
@@ -493,27 +630,10 @@ void DeviceFilesModel::collect(const Node* from, QVariantList& into) const
 		collect(child.get(), into);
 }
 
-QVariantList DeviceFilesModel::selection(const QModelIndex& current) const
-{
-	QVariantList chosen;
-	for (const auto* file : files_)
-		if (file->marked)
-			collect(file, chosen);
-	if (chosen.isEmpty())
-		if (const auto* at = node(current); at && at != root_.get() && !at->folder)
-			collect(at, chosen);
-	return chosen;
-}
-
 bool DeviceFilesModel::isFile(const QModelIndex& index) const
 {
 	const auto* at = node(index);
 	return index.isValid() && at && !at->folder;
-}
-
-bool DeviceFilesModel::isMarked(const QModelIndex& index) const
-{
-	return index.isValid() && data(index, MarkedRole).toInt() == Qt::Checked;
 }
 
 QVariantMap DeviceFilesModel::fileAt(const QModelIndex& index) const
@@ -563,7 +683,8 @@ QModelIndex DeviceFilesModel::indexOfPath(const QString& path) const
 	for (const auto* file : files_)
 		if (file->path == path)
 			return indexOf(file);
-	return {};
+	// A folder's path is its prefix: "/logs".
+	return path.isEmpty() ? QModelIndex{} : indexOf(root_->folderAt(path));
 }
 
 DeviceFilesModel::Node* DeviceFilesModel::node(const QModelIndex& index) const noexcept
@@ -610,10 +731,10 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 	const auto* at = node(index);
 	if (!index.isValid() || !at)
 		return {};
-	int files = 0, marks = 0, markables = 0;
+	int files = 0, chosen = 0, downloadables = 0;
 	quint64 bytes = 0;
 	if (at->folder)
-		at->tally(files, bytes, marks, markables);
+		at->tally(files, bytes, chosen, downloadables);
 	switch (role) {
 		case Qt::DisplayRole:
 		case NameRole:
@@ -649,13 +770,14 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 			if (at->readable)
 				return tr("read");
 			return at->writable ? tr("write only") : tr("no access");
-		case MarkedRole:
-			if (!at->folder)
-				return at->marked ? Qt::Checked : Qt::Unchecked;
-			// Of the files that can be marked, so a folder never sticks halfway.
-			return marks == 0 ? Qt::Unchecked : marks == markables ? Qt::Checked : Qt::PartiallyChecked;
-		case MarkableRole:
-			return at->folder ? markables > 0 : at->markable();
+		case IsSelectedRole:
+			return !at->folder && at->selected;
+		case SelectedInsideRole:
+			return at->folder ? chosen : 0;
+		case ReadableInsideRole:
+			return at->folder ? downloadables : at->downloadable() ? 1 : 0;
+		case DownloadableRole:
+			return at->folder ? downloadables > 0 : at->downloadable();
 		case FileCountRole:
 			return files;
 		case StatErrorRole:
@@ -683,10 +805,12 @@ QHash<int, QByteArray> DeviceFilesModel::roleNames() const
 	        {ReadableRole, "readable"},
 	        {WritableRole, "writable"},
 	        {AccessTextRole, "accessText"},
-	        {MarkedRole, "marked"},
+	        {IsSelectedRole, "isSelected"},
 	        {FileCountRole, "fileCount"},
 	        {StatErrorRole, "statError"},
 	        {SpokenSizeRole, "spokenSize"},
-	        {MarkableRole, "markable"}};
+	        {DownloadableRole, "downloadable"},
+	        {SelectedInsideRole, "selectedInside"},
+	        {ReadableInsideRole, "readableInside"}};
 }
 } // namespace telemetry::ux

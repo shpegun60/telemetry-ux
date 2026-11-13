@@ -54,10 +54,15 @@ struct DeviceFileTransfers::Job {
 	QString deviceFolder;
 	int fileIndex = -1;
 	quint64 size = 0, lastReceived = 0;
+	// Never reused, unlike the job's address or its row.
+	quint64 id = 0;
 	State state = State::Waiting;
 	// Read to be shown: the viewer's tab follows this job (openIn).
 	QPointer<OpenFiles> viewer;
 	bool opening = false, viewerTold = false;
+	// Read for the viewer and shown, with nothing to add: its tab says it all,
+	// so the row leaves once it has ended.
+	bool leaves = false;
 	QSaveFile file;
 	std::unique_ptr<Reader> reader;
 	// An upload: the copy's bytes, the device's as read, the writer. A
@@ -444,6 +449,7 @@ int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QStrin
 	    !DeviceBytes::inside(deviceFolder, localFile) || session_->protocolFile(path))
 		return -1;
 	auto job = std::make_unique<Job>();
+	job->id = ++lastJobId_;
 	job->path = path;
 	job->name = path.section(QLatin1Char('/'), -1);
 	job->fileIndex = fileIndex;
@@ -486,6 +492,7 @@ int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong si
 	if (!session_ || !session_->filesSupported() || fileIndex < 0 || localFile.isEmpty())
 		return -1;
 	auto job = std::make_unique<Job>();
+	job->id = ++lastJobId_;
 	job->path = path;
 	job->name = path.section(QLatin1Char('/'), -1);
 	job->fileIndex = fileIndex;
@@ -908,11 +915,13 @@ void DeviceFileTransfers::poll()
 					    tr("Saved %1. The device listed %2; the file grew while it was read.")
 					        .arg(DeviceFilesModel::sizeText(received),
 					             DeviceFilesModel::sizeText(job.size)));
-				else
+				else {
+					job.leaves = job.opening && notKept.isEmpty();
 					end(job, State::Saved,
 					    !notKept.isEmpty() ? tr("Opened in the Viewer · the device's bytes were not kept: %1").arg(notKept)
 					    : job.opening      ? tr("Opened in the Viewer")
 					                       : tr("Saved"));
+				}
 			} else {
 				const auto writeError = job.file.errorString();
 				job.file.cancelWriting();
@@ -947,7 +956,11 @@ void DeviceFileTransfers::poll()
 			}
 			job.reader.reset();
 			publish(static_cast<int>(row));
+			// A handler of finished() may clear rows and start others: the job
+			// is found again by its id, never through the reference.
+			const auto ended = job.id;
 			Q_EMIT finished(static_cast<int>(row), job.state, job.result);
+			leave(ended);
 			startNext();
 			Q_EMIT summaryChanged();
 			return;
@@ -961,6 +974,18 @@ void DeviceFileTransfers::end(Job& job, State state, QString result)
 {
 	job.state = state;
 	job.result = std::move(result);
+}
+
+void DeviceFileTransfers::leave(quint64 ended)
+{
+	const auto at = std::find_if(jobs_.begin(), jobs_.end(),
+	                             [ended](const auto& job) { return job->id == ended; });
+	if (at == jobs_.end() || !(*at)->leaves || (*at)->active())
+		return;
+	const auto row = static_cast<int>(at - jobs_.begin());
+	beginRemoveRows({}, row, row);
+	jobs_.erase(at);
+	endRemoveRows();
 }
 
 void DeviceFileTransfers::publish(int row)

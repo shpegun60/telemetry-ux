@@ -486,19 +486,66 @@ void tree(qt::ConnectionSession& session, DeviceFilesModel& files)
 	// The device's names are kept exactly, the descriptor included.
 	CHECK(child(files, telemetryFolder, QStringLiteral("descriptor.bin")).isValid());
 
-	files.setMarked(logs, true);
-	CHECK(files.markedCount() == 2 && files.markedBytes() == eventsBytes.size() + largeBytes.size());
-	CHECK(files.data(logs, DeviceFilesModel::MarkedRole).toInt() == Qt::Checked);
-	files.setMarked(child(files, logs, QStringLiteral("large.bin")), false);
-	CHECK(files.data(logs, DeviceFilesModel::MarkedRole).toInt() == Qt::PartiallyChecked);
-	const auto marked = files.selection();
-	CHECK(marked.size() == 1 &&
-	      marked[0].toMap().value(QStringLiteral("path")).toString() == QStringLiteral("/logs/events.csv"));
+	// The selection holds files; a folder stands for its files and is never
+	// selected itself. Each call says what moved once.
+	int changes = 0;
+	QList<QModelIndex> moved;
+	const auto counter = QObject::connect(&files, &DeviceFilesModel::selectionChanged, [&] { ++changes; });
+	const auto mover = QObject::connect(&files, &QAbstractItemModel::dataChanged,
+	                                    [&](const QModelIndex& from, const QModelIndex&) { moved << from; });
+	files.select(logs, true);
+	CHECK(changes == 1 && files.selectedCount() == 2 &&
+	      files.selectedBytes() == static_cast<qulonglong>(eventsBytes.size() + largeBytes.size()));
+	// Both files and their folder, each once; nothing else.
+	CHECK(moved.size() == 3 && moved.contains(logs) && moved.contains(events));
+	CHECK(!files.data(logs, DeviceFilesModel::IsSelectedRole).toBool() &&
+	      files.data(logs, DeviceFilesModel::SelectedInsideRole).toInt() == 2 &&
+	      files.data(logs, DeviceFilesModel::ReadableInsideRole).toInt() == 2);
+	CHECK(files.isSelected(logs) && files.data(events, DeviceFilesModel::IsSelectedRole).toBool());
+	const auto large = child(files, logs, QStringLiteral("large.bin"));
+	files.toggleSelected(large);
+	CHECK(changes == 2 && !files.isSelected(logs) &&
+	      files.data(logs, DeviceFilesModel::SelectedInsideRole).toInt() == 1);
+	CHECK(files.selectedPaths() == QStringList{QStringLiteral("/logs/events.csv")});
+	const auto selected = files.selectedFiles();
+	CHECK(selected.size() == 1 &&
+	      selected[0].toMap().value(QStringLiteral("path")).toString() == QStringLiteral("/logs/events.csv"));
+	// A folder with some of its files selected selects them all; with all of
+	// them selected it clears them.
+	files.toggleSelected(logs);
+	CHECK(files.selectedCount() == 2);
+	files.toggleSelected(logs);
+	CHECK(files.selectedCount() == 0);
+	// That row alone, then several rows at once, added or not.
+	const auto settings = files.indexOfPath(QStringLiteral("/cfg/settings.csv"));
+	files.selectOnly(events);
+	files.selectOnly(settings);
+	CHECK(files.selectedPaths() == QStringList{QStringLiteral("/cfg/settings.csv")});
+	moved.clear();
+	const int before = changes;
+	files.selectOnly(settings);
+	CHECK(changes == before && moved.isEmpty());
+	files.selectIndexes(QVariantList{QVariant::fromValue(events), QVariant::fromValue(large)}, true);
+	CHECK(files.selectedCount() == 3);
+	files.selectIndexes(QVariantList{QVariant::fromValue(files.index(2, 0))});
+	CHECK(files.selectedPaths() == QStringList{QStringLiteral("/cfg/settings.csv")});
+	files.selectAll();
+	CHECK(files.selectedCount() == files.fileCount() && files.selectedReadable() == files.fileCount());
+	files.clearSelection();
+	CHECK(files.selectedCount() == 0);
+	// The wrappers kept for hosts written against the marks.
+	files.markAll(true);
+	CHECK(files.selectedCount() == files.fileCount() && files.selection().size() == files.fileCount());
 	files.markAll(false);
-	CHECK(files.markedCount() == 0);
-	const auto current = files.selection(events);
+	CHECK(files.selectedCount() == 0);
+	QObject::disconnect(counter);
+	QObject::disconnect(mover);
+	// None selected: the current file.
+	const auto current = files.selectedFiles(events);
 	CHECK(current.size() == 1 && current[0].toMap().value(QStringLiteral("fileIndex")).toInt() == 1);
-	CHECK(files.indexOfPath(QStringLiteral("/cfg/settings.csv")).isValid());
+	CHECK(settings.isValid());
+	// A folder is found by its path too: a Shift range's anchor may be one.
+	CHECK(files.indexOfPath(QStringLiteral("/logs")) == logs && !files.indexOfPath(QStringLiteral("/nope")).isValid());
 	(void)session;
 }
 
@@ -851,9 +898,34 @@ void openInViewer(qt::ConnectionSession& session, DeviceFilesModel& files, const
 	// Progress is published at most every 500 ms; a quicker read shows none between.
 	CHECK((sawProgress || reading.elapsed() < 500) && content->loaded() && content->size() == largeBytes.size() &&
 	      content->error().isEmpty());
-	CHECK(transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString() ==
-	      QStringLiteral("Opened in the Viewer"));
+	// Shown, with nothing to add: the tab says it all, and the row has left.
+	CHECK(transfers.rowCount() == 0);
 	CHECK(!open.data(open.index(0), OpenFiles::LoadingRole).toBool());
+	// A finished() handler that clears the list and starts another Open: the
+	// row that leaves is the one that ended, never the new one in its place.
+	{
+		DeviceFileTransfers again(&session);
+		OpenFiles shown;
+		const auto first = folder + QStringLiteral("/open/first.bin");
+		const auto second = folder + QStringLiteral("/open/second.bin");
+		const int largeIndex = files.data(large, DeviceFilesModel::FileIndexRole).toInt();
+		bool restarted = false;
+		QObject::connect(&again, &DeviceFileTransfers::finished, &again,
+		                 [&](int, DeviceFileTransfers::State, const QString&) {
+			                 if (restarted)
+				                 return;
+			                 restarted = true;
+			                 again.clearFinished();
+			                 CHECK(again.openIn(&shown, QStringLiteral("/logs/large.bin"), largeIndex,
+			                                    largeBytes.size(), second) >= 0);
+		                 });
+		CHECK(again.openIn(&shown, QStringLiteral("/logs/large.bin"), largeIndex, largeBytes.size(), first) >= 0);
+		CHECK(await([&] { return restarted; }));
+		CHECK(again.rowCount() == 1 && again.localFileAt(0) == second);
+		auto* secondContent = shown.contentFor(second);
+		CHECK(secondContent && await([&] { return !secondContent->loading(); }));
+		CHECK(secondContent->loaded() && again.rowCount() == 0);
+	}
 	// Not in a device's folder (open/ is not logs/): no device's layer.
 	CHECK(!content->hasReference());
 

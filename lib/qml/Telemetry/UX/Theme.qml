@@ -22,6 +22,9 @@ QtObject {
     property color stateHover: "#1f2b3a"
     property color statePressed: "#233349"
     property color stateSelected: "#215a68"
+    // A selection in a list that does not have the keyboard: the same hue,
+    // quieter, still apart from hover; textPrimary on it.
+    property color stateSelectedInactive: "#1d404b"
     property color selectedForeground: "#ffffff"
     // A selection whose fill is its only cue (the hex view): 3:1 on its own,
     // where stateSelected is a row's quiet state.

@@ -16,6 +16,7 @@
 #include <integration/qt/ConnectionSession.hpp>
 #include <QtCore/QAbstractItemModel>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <memory>
 #include <vector>
 
@@ -32,8 +33,11 @@ class DeviceFilesModel final : public QAbstractItemModel {
 	// Every file is the protocol's own, under /telemetry/: the firmware has not
 	// registered a log or a settings table yet.
 	Q_PROPERTY(bool systemOnly READ systemOnly NOTIFY stateChanged)
-	Q_PROPERTY(int markedCount READ markedCount NOTIFY marksChanged)
-	Q_PROPERTY(qulonglong markedBytes READ markedBytes NOTIFY marksChanged)
+	// The selection, as a file explorer's: the files selected, their total
+	// size, and how many of them the device lets us read (what Download takes).
+	Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
+	Q_PROPERTY(qulonglong selectedBytes READ selectedBytes NOTIFY selectionChanged)
+	Q_PROPERTY(int selectedReadable READ selectedReadable NOTIFY selectionChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -46,11 +50,13 @@ public:
 		ReadableRole,
 		WritableRole,
 		AccessTextRole,
-		MarkedRole, // Qt::CheckState; a folder's is derived from its files
+		IsSelectedRole, // a selected file; a folder is never selected itself
 		FileCountRole,
 		StatErrorRole,
-		SpokenSizeRole, // the size as a screen reader should say it
-		MarkableRole    // a file the device lets us read, or a folder with one
+		SpokenSizeRole,     // the size as a screen reader should say it
+		DownloadableRole,   // a file the device lets us read, or a folder with one
+		SelectedInsideRole, // a folder: how many files below it are selected
+		ReadableInsideRole  // a folder: how many files below it can be read
 	};
 	Q_ENUM(Role)
 
@@ -67,28 +73,54 @@ public:
 	static constexpr int maxFileCount() noexcept { return maxFiles; }
 	int fileCount() const noexcept;
 	bool systemOnly() const;
-	int markedCount() const noexcept;
-	qulonglong markedBytes() const noexcept;
+	int selectedCount() const noexcept;
+	qulonglong selectedBytes() const noexcept;
+	int selectedReadable() const noexcept;
 
 	// Reads the list again, then the size and access of every file.
 	Q_INVOKABLE void refresh();
-	// Marks or unmarks a file, or every file of a folder.
-	Q_INVOKABLE void setMarked(const QModelIndex& index, bool marked);
+
+	// The selection holds files only, kept by path across Refresh; a folder
+	// stands for its files. A file is selected as it is, readable or not -
+	// Download skips what cannot be read; a folder selects the files below it
+	// the device lets us read. Each call emits dataChanged for the rows whose
+	// state moved, their folders included, and one selectionChanged.
+	Q_INVOKABLE void select(const QModelIndex& index, bool selected = true);
+	// That row alone: the file, or a folder's readable files.
+	Q_INVOKABLE void selectOnly(const QModelIndex& index);
+	// A file flips. A folder whose readable files are all selected clears every
+	// file below it; any other folder selects its readable files.
+	Q_INVOKABLE void toggleSelected(const QModelIndex& index);
+	// Several rows at once - the rows of a Shift range, as the view gives them:
+	// files as they are, a folder's readable files. With add the rest stays.
+	Q_INVOKABLE void selectIndexes(const QVariantList& indexes, bool add = false);
+	// Every file the device lets us read; any other selected file stays.
+	Q_INVOKABLE void selectAll();
+	Q_INVOKABLE void clearSelection();
+	// A file: whether it is selected. A folder: whether every readable file
+	// below it is, and there is one.
+	Q_INVOKABLE bool isSelected(const QModelIndex& index) const;
+	// The selected files' paths, in the device's order.
+	Q_INVOKABLE QStringList selectedPaths() const;
+	// The selected files the device lets us read, or the file at current when
+	// none is selected, as maps of path, fileIndex, size and readable - what a
+	// download needs.
+	Q_INVOKABLE QVariantList selectedFiles(const QModelIndex& current = {}) const;
+	// For hosts written against the marks; kept one release.
 	Q_INVOKABLE void markAll(bool marked);
-	// The marked files, or the file at current when none is marked, as maps of
-	// path, fileIndex, size and readable - what a download needs.
 	Q_INVOKABLE QVariantList selection(const QModelIndex& current = {}) const;
+
+	// A file's or a folder's index by its device path ("/logs" for a folder).
 	Q_INVOKABLE QModelIndex indexOfPath(const QString& path) const;
-	// Whether index is a file, and whether it is marked (a folder: all its files).
 	Q_INVOKABLE bool isFile(const QModelIndex& index) const;
-	Q_INVOKABLE bool isMarked(const QModelIndex& index) const;
-	// The file at index, as one map of selection(), whatever is marked; empty
-	// for a folder. What Open and a double-click act on.
+	// The file at index, as one map of selectedFiles(), whatever is selected;
+	// empty for a folder. What Open and a double-click act on.
 	Q_INVOKABLE QVariantMap fileAt(const QModelIndex& index) const;
 	// The device path of a file or folder ("/logs" for a folder), for Copy path.
 	Q_INVOKABLE QString pathAt(const QModelIndex& index) const;
 	// Every readable file below index - the whole tree for an invalid index -
-	// as maps of selection(), whatever is marked: Download folder, Download all.
+	// as maps of selectedFiles(), whatever is selected: Download folder,
+	// Download all.
 	Q_INVOKABLE QVariantList filesUnder(const QModelIndex& index = {}) const;
 	// A size in the panel's words, for figures the panel composes itself.
 	Q_INVOKABLE QString formatSize(qulonglong bytes) const;
@@ -109,19 +141,24 @@ public:
 
 Q_SIGNALS:
 	void stateChanged();
-	void marksChanged();
+	void selectionChanged();
 
 private:
 	struct Node;
+	// The rows a selection call moved, each once, with their folders.
+	using Touched = QSet<const Node*>;
 	Node* node(const QModelIndex& index) const noexcept;
 	QModelIndex indexOf(const Node* node) const;
+	void setSelected(Node* file, bool selected, Touched& touched);
+	// What a row stands for: a file itself, a folder its readable files.
+	void targetsOf(const Node* at, QSet<const Node*>& into) const;
+	void publishSelection(const Touched& touched);
 	void reset();
 	void connectionChanged();
 	void listFrom(quint64 cursor);
 	void statNext();
 	void build();
 	void finish(QString failure = {});
-	void refreshFolder(Node* folder);
 	void collect(const Node* from, QVariantList& into) const;
 
 	QPointer<integration::qt::ConnectionSession> session_;

@@ -1,10 +1,11 @@
 // The Device files tree's context menu, as in a file explorer: on a file,
 // Open first (in bold, the double-click), Open with, Download, Copy path and
-// name, Mark, Properties; on a folder, on a marked set, and on empty space its
-// own items. A disabled item keeps its text and says why in brackets. MIT.
+// name, Add to or Remove from the selection, Properties; on a folder, on a
+// selection, and on empty space its own items. A disabled item keeps its text
+// and says why in brackets. MIT.
 //
-// The panel sets `kind` ("file", "folder", "marked", "empty") and `file` (the
-// model's fileAt(index), or the folder's path) before popup().
+// The panel sets `kind` ("file", "folder", "selection", "empty") and `file`
+// (the model's fileAt(index), or the folder's path) before popup().
 import QtQuick
 import QtQuick.Controls
 
@@ -90,29 +91,32 @@ Menu {
         onTriggered: menu.panel.downloadRequested(inside)
     }
     MenuItem {
-        objectName: "deviceFileMenuMarkFolder"
+        objectName: "deviceFileMenuSelectFolder"
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Select all files in folder\tSpace")
-        onTriggered: menu.files.setMarked(menu.index, true)
+        text: qsTr("&Select the files in %1\tSpace").arg(menu.kind === "folder" ? menu.files.data(menu.index, Qt.DisplayRole) : "")
+        onTriggered: menu.files.select(menu.index, true)
     }
 
-    // On a marked set.
+    // On a selection of two or more.
     MenuItem {
-        objectName: "deviceFileMenuDownloadMarked"
-        visible: menu.kind === "marked"
+        objectName: "deviceFileMenuDownloadSelected"
+        visible: menu.kind === "selection"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Download %n selected files…\tCtrl+S", "", menu.files.markedCount)
-        enabled: menu.connected
+        readonly property int readable: menu.files.selectedReadable
+        readonly property int skipped: menu.files.selectedCount - readable
+        text: (skipped > 0 ? qsTr("&Download %n selected files… (%1 can't be read)\tCtrl+S", "", readable).arg(skipped)
+                           : qsTr("&Download %n selected files…\tCtrl+S", "", readable))
+        enabled: menu.connected && readable > 0
         onTriggered: menu.panel.download()
     }
     MenuItem {
-        objectName: "deviceFileMenuClearMarks"
-        visible: menu.kind === "marked" || menu.kind === "empty"
+        objectName: "deviceFileMenuSelectNone"
+        visible: menu.kind === "selection" || menu.kind === "empty"
         height: visible ? implicitHeight : 0
         text: qsTr("Select &none\tEsc")
-        enabled: menu.files.markedCount > 0
-        onTriggered: menu.files.markAll(false)
+        enabled: menu.files.selectedCount > 0
+        onTriggered: menu.files.clearSelection()
     }
 
     // On empty space below the rows.
@@ -134,20 +138,20 @@ Menu {
         onTriggered: menu.panel.downloadRequested(everything)
     }
     MenuItem {
-        objectName: "deviceFileMenuMarkAll"
+        objectName: "deviceFileMenuSelectAll"
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
-        text: qsTr("Select &all\tCtrl+A")
-        onTriggered: menu.files.markAll(true)
+        text: qsTr("Select &all files\tCtrl+A")
+        onTriggered: menu.files.selectAll()
     }
 
-    // Copy, on a file, a folder or a marked set.
+    // Copy, on a file, a folder or a selection.
     MenuSeparator { visible: menu.kind !== "empty"; height: visible ? implicitHeight : 0 }
     MenuItem {
         objectName: "deviceFileMenuCopyPath"
         visible: menu.kind !== "empty"
         height: visible ? implicitHeight : 0
-        text: menu.kind === "marked" ? qsTr("Copy &paths\tAlt+Shift+C") : qsTr("Copy &path\tAlt+Shift+C")
+        text: menu.kind === "selection" ? qsTr("Copy &paths\tAlt+Shift+C") : qsTr("Copy &path\tAlt+Shift+C")
         onTriggered: menu.panel.copyPaths(menu.kind, menu.file)
     }
     MenuItem {
@@ -158,17 +162,16 @@ Menu {
         onTriggered: Clipboard.setText(menu.file.name)
     }
 
-    // Mark and Properties, on a file.
+    // In or out of the selection, and Properties, on a file.
     MenuSeparator { visible: menu.kind === "file"; height: visible ? implicitHeight : 0 }
     MenuItem {
-        objectName: "deviceFileMenuMark"
+        objectName: "deviceFileMenuSelect"
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Add to the selection%1\tCtrl+Space").arg(menu.readable ? "" : qsTr(" (not readable)"))
-        checkable: true
-        checked: menu.kind === "file" && menu.index !== undefined && menu.files.isMarked(menu.index)
-        enabled: menu.readable
-        onTriggered: menu.files.setMarked(menu.index, checked)
+        readonly property bool selected: menu.kind === "file" && menu.index !== undefined
+                                         && menu.files.selectedCount >= 0 && menu.files.isSelected(menu.index)
+        text: selected ? qsTr("&Remove from the selection\tCtrl+Space") : qsTr("&Add to the selection\tCtrl+Space")
+        onTriggered: menu.files.toggleSelected(menu.index)
     }
     MenuItem {
         objectName: "deviceFileMenuProperties"
