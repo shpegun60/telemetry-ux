@@ -182,6 +182,72 @@ def main():
               'Linked installed input is refused before destination creation')
         report['path_control'] = 'Windows junction' if os.name == 'nt' else 'Linux symlink'
 
+        # These fixtures validate creator discovery, not a linked package. The
+        # installed integration below separately builds real downstreams.
+        fake_qt = output / 'layout-qt'
+        qt_config = fake_qt / 'lib/cmake/Qt6/Qt6Config.cmake'
+        qt_config.parent.mkdir(parents=True)
+        qt_config.write_text('# Qt discovery fixture only\n', encoding='utf8')
+        layout_prefixes = {}
+        for label, directory in (('lib', 'lib'), ('lib64', 'lib64'),
+                                 ('multiarch', 'lib/x86_64-linux-gnu')):
+            prefixes = []
+            for package_name in ('Telemetry', 'TelemetryUX'):
+                prefix = output / (label + '-' + package_name)
+                config = prefix / directory / 'cmake' / package_name / (package_name + 'Config.cmake')
+                config.parent.mkdir(parents=True)
+                config.write_text('# Package discovery fixture only\n', encoding='utf8')
+                prefixes.append(prefix)
+            layout_prefixes[label] = prefixes
+            destination = output / ('layout-project-' + label)
+            creator('create-layout-' + label, destination, '--sdk-prefix', prefixes[0],
+                    '--ux-prefix', prefixes[1], '--qt-prefix', fake_qt, target='qt-connection')
+            preset = json.loads((destination / 'CMakePresets.json').read_text(encoding='utf8'))
+            check(preset['configurePresets'][0]['cacheVariables']['CMAKE_PREFIX_PATH'] ==
+                  ';'.join(str(path.absolute()) for path in (*prefixes, fake_qt)),
+                  'Supported ' + label + ' layout retains the public installed prefixes')
+        for package_index, package_name in enumerate(('Telemetry', 'TelemetryUX')):
+            prefixes = list(layout_prefixes['lib'])
+            missing = output / ('missing-' + package_name)
+            missing.mkdir()
+            prefixes[package_index] = missing
+            destination = output / ('missing-project-' + package_name)
+            answer = creator('refuse-missing-' + package_name, destination,
+                '--sdk-prefix', prefixes[0], '--ux-prefix', prefixes[1], '--qt-prefix', fake_qt,
+                refused=True, target='qt-connection')
+            check('exactly one supported ' + package_name + 'Config.cmake' in answer and
+                  not destination.exists(), 'Missing package config fails before project creation')
+
+            ambiguous = output / ('ambiguous-' + package_name)
+            for directory in ('lib', 'lib64'):
+                config = ambiguous / directory / 'cmake' / package_name / (package_name + 'Config.cmake')
+                config.parent.mkdir(parents=True)
+                config.write_text('# Ambiguous discovery fixture\n', encoding='utf8')
+            prefixes[package_index] = ambiguous
+            destination = output / ('ambiguous-project-' + package_name)
+            answer = creator('refuse-ambiguous-' + package_name, destination,
+                '--sdk-prefix', prefixes[0], '--ux-prefix', prefixes[1], '--qt-prefix', fake_qt,
+                refused=True, target='qt-connection')
+            check('exactly one supported ' + package_name + 'Config.cmake' in answer and
+                  not destination.exists(), 'Ambiguous package configs fail before project creation')
+
+            linked_prefix = output / ('linked-config-' + package_name)
+            linked_prefix.mkdir()
+            linked_lib = linked_prefix / 'lib'
+            linked_target = layout_prefixes['lib'][package_index] / 'lib'
+            if os.name == 'nt':
+                run('create-config-junction-' + package_name,
+                    ['cmd.exe', '/d', '/c', 'mklink', '/J', linked_lib, linked_target])
+            else:
+                linked_lib.symlink_to(linked_target, target_is_directory=True)
+            prefixes[package_index] = linked_prefix
+            destination = output / ('linked-config-project-' + package_name)
+            answer = creator('refuse-linked-config-' + package_name, destination,
+                '--sdk-prefix', prefixes[0], '--ux-prefix', prefixes[1], '--qt-prefix', fake_qt,
+                refused=True, target='qt-connection')
+            check('Symlink or reparse path' in answer and not destination.exists(),
+                  'Package discovery cannot escape through a linked library directory')
+
         fake_sdk = output / 'fake-sdk'
         config = fake_sdk / 'lib/cmake/Telemetry/TelemetryConfig.cmake'
         config.parent.mkdir(parents=True)

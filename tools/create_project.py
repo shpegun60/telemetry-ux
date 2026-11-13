@@ -83,12 +83,19 @@ def package(path, expected):
     return sha(path.read_bytes())
 
 
-def installed(path, relative):
+def installed(path, package):
     if not path.is_dir():
         raise ValueError('Installed prefix must be a directory: ' + str(path))
-    config = checked_path(path / relative, exists=True)
-    if not config.is_file():
-        raise ValueError('Installed CMake package missing: ' + str(config))
+    # GNUInstallDirs uses lib, lib64 or lib/<architecture> on supported hosts.
+    # Inspect only those package locations, never an arbitrary recursive match.
+    suffix = 'cmake/' + package + '/' + package + 'Config.cmake'
+    candidates = [path / 'lib' / suffix, path / 'lib64' / suffix]
+    candidates += sorted(path.glob('lib/*/' + suffix))
+    candidates = [candidate for candidate in candidates if candidate.is_file()]
+    if len(candidates) != 1:
+        raise ValueError('Installed prefix must contain exactly one supported ' + package +
+                         'Config.cmake: ' + str(path))
+    checked_path(candidates[0], exists=True)
 
 
 def installed_qt(path):
@@ -336,9 +343,9 @@ def main(argv=None):
         if options and set(options) != set(allowed):
             raise ValueError('Supply all matching target paths together, or omit them all')
         if 'sdk_prefix' in options:
-            installed(Path(options['sdk_prefix']), 'lib/cmake/Telemetry/TelemetryConfig.cmake')
+            installed(Path(options['sdk_prefix']), 'Telemetry')
         if 'ux_prefix' in options:
-            installed(Path(options['ux_prefix']), 'lib/cmake/TelemetryUX/TelemetryUXConfig.cmake')
+            installed(Path(options['ux_prefix']), 'TelemetryUX')
             installed_qt(Path(options['qt_prefix']))
         if 'sdk_package' in options:
             package(Path(options['sdk_package']), 'telemetry-sdk')
