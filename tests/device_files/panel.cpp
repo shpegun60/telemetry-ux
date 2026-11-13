@@ -271,6 +271,34 @@ void hexView()
 		CHECK(probe.find(QStringLiteral("1000"), QStringLiteral("integer"), 2) == QStringLiteral("Not found"));
 		CHECK(probe.pattern(QStringLiteral("1000"), QStringLiteral("integer"), 4, nullptr) == QByteArray::fromHex("000003e8"));
 		CHECK(probe.pattern(QStringLiteral("-1"), QStringLiteral("integer"), 1, nullptr) == QByteArray::fromHex("ff"));
+		for (const bool bigEndian : {false, true}) {
+			probe.setBigEndian(bigEndian);
+			for (const int width : {1, 2, 4}) {
+				const auto limit = quint64{1} << (8 * width);
+				QString error;
+				CHECK(probe.pattern(QString::number(limit - 1), QStringLiteral("integer"), width, &error) ==
+				          QByteArray(width, static_cast<char>(0xff)) && error.isEmpty());
+				CHECK(probe.pattern(QString::number(-static_cast<qint64>(limit / 2)), QStringLiteral("integer"),
+				                    width, &error).size() == width && error.isEmpty());
+				for (const auto& overflow : {QStringLiteral("18446744073709551615"),
+				                             QStringLiteral("0xFFFFFFFFFFFFFFFF"), QString::number(limit),
+				                             QString::number(-static_cast<qint64>(limit / 2) - 1)}) {
+					error.clear();
+					CHECK(probe.pattern(overflow, QStringLiteral("integer"), width, &error).isEmpty() &&
+					      error.contains(QStringLiteral("does not fit")));
+					CHECK(probe.patternBytes(overflow, QStringLiteral("integer"), width) == -1);
+					const auto selected = probe.selectionStart();
+					const auto length = probe.selectionLength();
+					CHECK(probe.find(overflow, QStringLiteral("integer"), width).contains(QStringLiteral("does not fit")) &&
+					      probe.selectionStart() == selected && probe.selectionLength() == length);
+				}
+			}
+			QString error;
+			CHECK(probe.pattern(QStringLiteral("18446744073709551615"), QStringLiteral("integer"), 8, &error) ==
+			          QByteArray(8, static_cast<char>(0xff)) && error.isEmpty());
+			CHECK(probe.pattern(QStringLiteral("-9223372036854775808"), QStringLiteral("integer"), 8, &error) ==
+			          QByteArray::fromHex(bigEndian ? "8000000000000000" : "0000000000000080") && error.isEmpty());
+		}
 	}
 
 	// Keys move the cursor; Shift extends the selection.
@@ -390,6 +418,28 @@ void hexView()
 	view.setBytes({});
 	press(&view, Qt::Key_Right);
 	CHECK(view.cursor() == 0 && view.rowCount() == 0 && view.status() == QStringLiteral("This file is empty."));
+}
+
+void asyncMatchLifetime()
+{
+	using telemetry::ux::HexView;
+	auto* view = new HexView;
+	view->setBytes(QByteArray(HexView::countInlineBytes + 1, 'x'));
+	QPointer<HexView> alive(view);
+	unsigned completed = 0;
+	// The queued worker publication is independent of find()'s stack: a
+	// receiver may close the viewer when its count has finished.
+	QObject::connect(view, &HexView::matchesChanged, QCoreApplication::instance(), [&] {
+		if (view->counting())
+			return;
+		++completed;
+		delete view;
+		view = nullptr;
+	});
+	CHECK(view->find(QStringLiteral("not-present"), QStringLiteral("text")) == QStringLiteral("Not found"));
+	CHECK(alive && alive->counting());
+	CHECK(await([&] { return alive.isNull(); }));
+	CHECK(completed == 1);
 }
 
 // Types text as keys with that text, as a keyboard does.
@@ -521,6 +571,19 @@ void hexReplacing(const QString& folder)
 	const auto xy = QStringLiteral("XY");
 	CHECK(view.replace(ab, text, 4, xy, false) == QStringLiteral("Turn on Edit to replace."));
 	content.setEditing(true);
+	// A value outside the selected width must never become truncated replacement bytes.
+	for (const int width : {1, 2, 4}) {
+		const auto original = content.bytes();
+		const auto cursor = view.cursor();
+		const auto selection = view.selectionLength();
+		for (const bool all : {false, true}) {
+			CHECK(view.replace(QStringLiteral("97"), QStringLiteral("integer"), width,
+			                   QStringLiteral("18446744073709551615"), all).contains(QStringLiteral("does not fit")));
+			CHECK(view.outcome() == QStringLiteral("refused") && content.bytes() == original &&
+			      !content.modified() && !content.canUndo() && view.cursor() == cursor &&
+			      view.selectionLength() == selection);
+		}
+	}
 	CHECK(view.replace(ab, text, 4, QStringLiteral("XYZ"), false).startsWith(QStringLiteral("The replacement is 3 bytes")) &&
 	      view.outcome() == QStringLiteral("refused"));
 	CHECK(view.patternBytes(QStringLiteral("XYZ"), text, 4) == 3 && view.patternBytes(QStringLiteral("4G"), QStringLiteral("hex"), 4) == -1 &&
@@ -586,7 +649,7 @@ void toolIcons()
 				count += ink(image, x, y) ? 1 : 0;
 		return count;
 	};
-	for (const char* name : {"edit", "save", "undo", "redo", "lock", "folder", "file", "fileCodec", "fileText", "fileTable",
+	for (const char* name : {"edit", "save", "undo", "redo", "lock", "error", "info", "copy", "clear", "folder", "file", "fileCodec", "fileText", "fileTable",
 	                         "fileJson", "fileDescriptor", "fileValues", "fileIdentity", "fileSession", "fileCapability"})
 		CHECK(inked(drawn(QString::fromLatin1(name))) > 20);
 	CHECK(inked(drawn(QStringLiteral("nothing"))) == 0);
@@ -612,6 +675,7 @@ int main(int argc, char** argv)
 	CHECK(folder.isValid());
 	telemetry::ux::registerQmlTypes();
 	hexView();
+	asyncMatchLifetime();
 	hexEditing(folder.path());
 	hexReplacing(folder.path());
 	toolIcons();
@@ -849,6 +913,11 @@ int main(int argc, char** argv)
 	}));
 	CHECK(currentRow->property("name").toString() == QStringLiteral("logs"));
 	CHECK(!currentRow->property("highlighted").toBool());
+	// Keyboard Copy path follows the current folder, even after a menu on a
+	// different file; it must not reuse that menu's retained index.
+	QGuiApplication::clipboard()->setText(QStringLiteral("unchanged"));
+	QTest::keyClick(qobject_cast<QWindow*>(root), Qt::Key_C, Qt::AltModifier | Qt::ShiftModifier);
+	CHECK(await([&] { return QGuiApplication::clipboard()->text() == QStringLiteral("/logs"); }));
 	if (tree->hasActiveFocus())
 		CHECK(visualChild(currentRow, QStringLiteral("deviceFileFocusFrame"))->isVisible());
 	// A folder is never highlighted: it says how many of its files are

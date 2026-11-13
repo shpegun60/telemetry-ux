@@ -254,10 +254,30 @@ controls take their font from `qtquickcontrols2.conf`, rather than from
 **Status:** the panels in this module adopt the singletons in a following change; until
 then they keep their own colours.
 
+## Event history and current problems
+
+Hosts can own a `LogModel`, a `LogFilterModel` over it, and a `ProblemsModel`
+that writes new problems and their resolution to that log. These Qt models run
+on the GUI thread and own no transport. `LogModel` retains at most 2000 events;
+`ProblemsModel` holds current problems by stable key, with errors before warnings.
+Repeated `raise()` updates a problem without adding a duplicate log entry.
+Clearing the log does not resolve problems.
+
+`SessionProblems` in the optional `qt_connection` component adapts a session's
+connection failures, files-only limitation and identity problem. Applications
+should not log the same session failure independently. Transfer and application
+problems are separate adapters owned by the host.
+
+For a Save dialog, capture `log.text(filter.sourceRows())` before opening the
+dialog, then pass that string to `saveText(path, capturedText)` after acceptance.
+Keeping numeric row indices while the dialog is open is unsafe because new
+events enter at row zero. `saveTo()` is for an immediate export of the current
+rows. The host owns the file dialog and decides which models its panels show.
+
 ## Device files
 
 `DeviceFilesPanel` shows the device's files as a tree of their own paths - the
-device's names, never renamed - with marks, Open, Download and the running
+device's names, never renamed - with path-based selection, Open, Download and the running
 transfers, each with a `ProgressLine`. The host owns the models, the dialogs and
 every write to disk:
 
@@ -309,8 +329,11 @@ every write to disk:
   itself is in the configurator module.
 
 The tree's rows are `DeviceFileRow` (the Basic style is imported there only):
-a mark that never stops halfway and is off for a file the device cannot read,
-the device's name, then size and access in columns shared with the headings.
+a format icon, the device's name, size and `rws` access letters in columns shared
+with the headings. Selection belongs to `DeviceFilesModel` and survives a refresh
+by path. A folder represents its readable files and shows a count of those
+selected. A known unreadable file can be selected, but Open and Download do not
+send a read for it.
 The current row is highlighted and framed while the tree has the keyboard;
 Space marks, Enter opens a file or folds a folder, Left and Right fold and
 unfold. A failed transfer is drawn in the error colour with Retry; a saved one

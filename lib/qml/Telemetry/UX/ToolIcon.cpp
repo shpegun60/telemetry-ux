@@ -313,8 +313,73 @@ QPainterPath toggle()
 	path.arcTo(14.5, 10.5, 3, 3, 0, 360);
 	return path;
 }
+// The bottom panel's glyphs (the designer's, 13 November 2026).
+// Error: a circle with a cross in it.
+QPainterPath errorMark()
+{
+	QPainterPath path;
+	path.arcMoveTo(3.5, 3.5, 17, 17, 0);
+	path.arcTo(3.5, 3.5, 17, 17, 0, 360);
+	path.moveTo(9, 9);
+	path.lineTo(15, 15);
+	path.moveTo(15, 9);
+	path.lineTo(9, 15);
+	return path;
+}
+// Info: a circle with an "i", its dot a stroke so short its caps make it.
+QPainterPath infoMark()
+{
+	QPainterPath path;
+	path.arcMoveTo(3.5, 3.5, 17, 17, 0);
+	path.arcTo(3.5, 3.5, 17, 17, 0, 360);
+	path.moveTo(12, 11);
+	path.lineTo(12, 16.5);
+	path.moveTo(12, 7.75);
+	path.lineTo(12, 7.85);
+	return path;
+}
+// Copy: a sheet in front of another.
+QPainterPath sheets()
+{
+	QPainterPath path;
+	path.moveTo(8.5, 8.5);
+	path.lineTo(19.5, 8.5);
+	path.lineTo(19.5, 19.5);
+	path.lineTo(8.5, 19.5);
+	path.closeSubpath();
+	path.moveTo(15.5, 8.5);
+	path.lineTo(15.5, 4.5);
+	path.lineTo(4.5, 4.5);
+	path.lineTo(4.5, 15.5);
+	path.lineTo(8.5, 15.5);
+	return path;
+}
+// Clear: lines of text with a cross after the last.
+QPainterPath clearLines()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 7);
+	path.lineTo(19.5, 7);
+	path.moveTo(4.5, 12);
+	path.lineTo(13, 12);
+	path.moveTo(4.5, 17);
+	path.lineTo(11, 17);
+	path.moveTo(15, 13.5);
+	path.lineTo(19.5, 18);
+	path.moveTo(19.5, 13.5);
+	path.lineTo(15, 18);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
+	if (name == QLatin1String("error"))
+		return errorMark();
+	if (name == QLatin1String("info"))
+		return infoMark();
+	if (name == QLatin1String("copy"))
+		return sheets();
+	if (name == QLatin1String("clear"))
+		return clearLines();
 	static const std::array<std::pair<QLatin1String, QPainterPath (*)()>, 11> files{{
 	    {QLatin1String("folder"), folder},
 	    {QLatin1String("file"), page},

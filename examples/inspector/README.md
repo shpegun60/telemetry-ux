@@ -82,13 +82,14 @@ On Windows, use one matching kit and put its compiler before other GCC toolchain
 ```powershell
 $QtPrefix = "C:\Qt\6.12.0\mingw_64"
 $QtTools = "C:\Qt\Tools"
+$QtCompiler = "$QtTools\mingw1510_64\bin"
 $SdkPrefix = "C:\external-sdk\telemetry-sdk"
 $InspectorBuild = "C:\external-build\telemetry-inspector"
 $CMake = "$QtTools\CMake_64\bin\cmake.exe"
-$env:PATH = "$QtTools\mingw1310_64\bin;$QtPrefix\bin;$env:PATH"
+$env:PATH = "$QtCompiler;$QtPrefix\bin;$env:PATH"
 & $CMake -S examples/inspector -B $InspectorBuild -G Ninja `
   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$SdkPrefix;$QtPrefix" `
-  "-DCMAKE_CXX_COMPILER=$QtTools/mingw1310_64/bin/g++.exe" `
+  "-DCMAKE_CXX_COMPILER=$QtCompiler/g++.exe" `
   "-DCMAKE_MAKE_PROGRAM=$QtTools/Ninja/ninja.exe"
 & $CMake --build $InspectorBuild --parallel 2
 $InspectorExe = "$InspectorBuild\telemetry-inspector-qml.exe"
@@ -275,7 +276,7 @@ On Windows, reuse the Qt/tool/SDK variables above and select a fresh build:
 $SerialBuild = "C:\external-build\telemetry-inspector-serial"
 & $CMake -S examples/inspector -B $SerialBuild -G Ninja `
   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$SdkPrefix;$QtPrefix" `
-  "-DCMAKE_CXX_COMPILER=$QtTools/mingw1310_64/bin/g++.exe" `
+  "-DCMAKE_CXX_COMPILER=$QtCompiler/g++.exe" `
   "-DCMAKE_MAKE_PROGRAM=$QtTools/Ninja/ninja.exe" `
   -DINSPECTOR_ENABLE_SERIAL=ON
 & $CMake --build $SerialBuild --parallel 2

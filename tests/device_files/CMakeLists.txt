@@ -21,3 +21,9 @@ target_compile_definitions(telemetry_device_files_panel PRIVATE QT_NO_KEYWORDS Q
 target_link_libraries(telemetry_device_files_panel PRIVATE TelemetryUX::qt_connection
     Telemetry::tcp_server Qt6::Quick Qt6::QuickControls2 Qt6::Test)
 qt_import_qml_plugins(telemetry_device_files_panel)
+
+qt_add_executable(telemetry_event_log_check event_log.cpp)
+target_compile_features(telemetry_event_log_check PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_event_log_check PRIVATE QT_NO_KEYWORDS QT_NO_FOREACH)
+target_link_libraries(telemetry_event_log_check PRIVATE TelemetryUX::qt_connection
+    Telemetry::tcp_server Qt6::Core Qt6::Network Qt6::Test)

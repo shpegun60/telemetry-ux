@@ -55,7 +55,7 @@ struct DeviceFileTransfers::Job {
 	int fileIndex = -1;
 	quint64 size = 0, lastReceived = 0;
 	// Never reused, unlike the job's address or its row.
-	quint64 id = 0;
+	quint64 id = 0, generation = 0;
 	State state = State::Waiting;
 	// Read to be shown: the viewer's tab follows this job (openIn).
 	QPointer<OpenFiles> viewer;
@@ -126,6 +126,26 @@ private:
 	std::unique_ptr<Job> job_;
 };
 
+// A direct Qt receiver may clear completed rows while they are being
+// announced. Defer that clear until the whole outcome (including finished)
+// has been delivered. The guard also survives deletion of the model itself.
+class DeviceFileTransfers::Notification {
+public:
+	explicit Notification(DeviceFileTransfers* owner) : owner_(owner) { ++owner_->notificationDepth_; }
+	~Notification()
+	{
+		if (owner_ && --owner_->notificationDepth_ == 0 && owner_->clearQueued_) {
+			owner_->clearQueued_ = false;
+			QTimer::singleShot(0, owner_, [owner = owner_] {
+				if (owner)
+					owner->clearFinished();
+			});
+		}
+	}
+private:
+	QPointer<DeviceFileTransfers> owner_;
+};
+
 namespace {
 constexpr qint64 publishEveryMs = 500;
 constexpr double rateWindowSeconds = 2.0;
@@ -185,7 +205,11 @@ DeviceFileTransfers::DeviceFileTransfers(Session* session, QObject* parent)
 		// The session signals from inside its own progress pass, when it takes
 		// no new request; poll on the next turn of the event loop instead.
 		connect(session_, &Session::progressed, this, &DeviceFileTransfers::schedulePoll);
-		connect(session_, &Session::stateChanged, this, &DeviceFileTransfers::schedulePoll);
+		connect(session_, &Session::stateChanged, this, [this] {
+			if (!session_->filesSupported())
+				++sessionGeneration_;
+			schedulePoll();
+		});
 	}
 }
 
@@ -418,11 +442,37 @@ QString DeviceFileTransfers::localFileAt(int row) const
 	return jobs_[static_cast<std::size_t>(row)]->localFile;
 }
 
+QString DeviceFileTransfers::idAt(int row) const
+{
+	if (row < 0 || row >= static_cast<int>(jobs_.size()))
+		return {};
+	return QString::number(jobs_[static_cast<std::size_t>(row)]->id);
+}
+
+int DeviceFileTransfers::rowOfId(const QString& id) const
+{
+	bool valid = false;
+	const auto number = id.toULongLong(&valid);
+	if (!valid || number == 0 || QString::number(number) != id)
+		return -1;
+	for (std::size_t row = 0; row < jobs_.size(); ++row)
+		if (jobs_[row]->id == number)
+			return static_cast<int>(row);
+	return -1;
+}
+
 int DeviceFileTransfers::outcomeAt(int row) const
 {
 	if (row < 0 || row >= static_cast<int>(jobs_.size()))
 		return static_cast<int>(Outcome::None);
 	return static_cast<int>(jobs_[static_cast<std::size_t>(row)]->outcome);
+}
+
+int DeviceFileTransfers::stateAt(int row) const
+{
+	if (row < 0 || row >= static_cast<int>(jobs_.size()))
+		return -1;
+	return static_cast<int>(jobs_[static_cast<std::size_t>(row)]->state);
 }
 
 int DeviceFileTransfers::download(const QString& path, int fileIndex, qulonglong size,
@@ -450,6 +500,7 @@ int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QStrin
 		return -1;
 	auto job = std::make_unique<Job>();
 	job->id = ++lastJobId_;
+	job->generation = sessionGeneration_;
 	job->path = path;
 	job->name = path.section(QLatin1Char('/'), -1);
 	job->fileIndex = fileIndex;
@@ -462,11 +513,17 @@ int DeviceFileTransfers::upload(const QString& path, int fileIndex, const QStrin
 		job->local = copy.readAll();
 	job->viewer = qobject_cast<OpenFiles*>(viewer);
 	const auto row = static_cast<int>(jobs_.size());
+	const QPointer<DeviceFileTransfers> alive(this);
 	beginInsertRows({}, row, row);
+	if (!alive)
+		return -1;
 	jobs_.push_back(std::move(job));
 	endInsertRows();
+	if (!alive)
+		return -1;
 	startNext();
-	Q_EMIT summaryChanged();
+	if (alive)
+		Q_EMIT summaryChanged();
 	return row;
 }
 
@@ -479,10 +536,13 @@ bool DeviceFileTransfers::uploading(const QString& localFile) const
 
 void DeviceFileTransfers::cancelFor(const QString& localFile)
 {
+	const QPointer<DeviceFileTransfers> alive(this);
 	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row) {
 		const auto& job = *jobs_[static_cast<std::size_t>(row)];
 		if (job.active() && !job.upload && job.localFile == localFile)
 			cancel(row);
+		if (!alive)
+			return;
 	}
 }
 
@@ -493,6 +553,7 @@ int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong si
 		return -1;
 	auto job = std::make_unique<Job>();
 	job->id = ++lastJobId_;
+	job->generation = sessionGeneration_;
 	job->path = path;
 	job->name = path.section(QLatin1Char('/'), -1);
 	job->fileIndex = fileIndex;
@@ -501,16 +562,26 @@ int DeviceFileTransfers::queue(const QString& path, int fileIndex, qulonglong si
 	job->deviceFolder = deviceFolder;
 	if (viewer) {
 		// The tab is there before the first byte, reading.
+		const QPointer<DeviceFileTransfers> alive(this);
+		const QPointer<OpenFiles> shown(viewer);
 		viewer->reading(localFile, path);
+		if (!alive || !shown)
+			return -1;
 		job->viewer = viewer;
 		job->opening = true;
 	}
 	const auto row = static_cast<int>(jobs_.size());
+	const QPointer<DeviceFileTransfers> alive(this);
 	beginInsertRows({}, row, row);
+	if (!alive)
+		return -1;
 	jobs_.push_back(std::move(job));
 	endInsertRows();
+	if (!alive)
+		return -1;
 	startNext();
-	Q_EMIT summaryChanged();
+	if (alive)
+		Q_EMIT summaryChanged();
 	return row;
 }
 
@@ -521,6 +592,10 @@ void DeviceFileTransfers::startNext()
 	    }))
 		return;
 	for (std::size_t row = 0; row < jobs_.size(); ++row) {
+		if (std::any_of(jobs_.begin(), jobs_.end(), [](const auto& current) {
+			    return current->state == State::Reading || current->state == State::Writing;
+		    }))
+			return;
 		auto& job = *jobs_[row];
 		if (job.state != State::Waiting)
 			continue;
@@ -530,13 +605,21 @@ void DeviceFileTransfers::startNext()
 				job.outcome = Outcome::Failed;
 				end(job, State::Failed, tr("Not written: not connected"));
 			}
-			publish(static_cast<int>(row));
 			if (!started) {
-				Q_EMIT finished(static_cast<int>(row), job.state, job.result);
+				if (!complete(static_cast<int>(row)))
+					return;
 				continue;
 			}
+			if (!publish(static_cast<int>(row)))
+				return;
 			poll();
 			return;
+		}
+		if (const auto why = readProblem(job); !why.isEmpty()) {
+			end(job, State::Failed, why);
+			if (!complete(static_cast<int>(row)))
+				return;
+			continue;
 		}
 		QDir().mkpath(QFileInfo(job.localFile).absolutePath());
 		job.file.setFileName(job.localFile);
@@ -544,20 +627,23 @@ void DeviceFileTransfers::startNext()
 			end(job, State::Failed,
 			    tr("Could not write %1: %2").arg(QDir::toNativeSeparators(job.localFile),
 			                                     job.file.errorString()));
-			publish(static_cast<int>(row));
+			if (!complete(static_cast<int>(row)))
+				return;
 			continue;
 		}
 		if (!session_) {
 			job.file.cancelWriting();
 			end(job, State::Failed, tr("Stopped: not connected"));
-			publish(static_cast<int>(row));
+			if (!complete(static_cast<int>(row)))
+				return;
 			continue;
 		}
 		job.reader = std::make_unique<Job::Reader>(*session_, Job::Sink{&job});
 		job.state = State::Reading;
 		job.startedMs = job.sampleMs = job.dataMs = clock_.elapsed();
 		(void)job.reader->start(static_cast<resource::FileIndex>(job.fileIndex));
-		publish(static_cast<int>(row));
+		if (!publish(static_cast<int>(row)))
+			return;
 		poll();
 		return;
 	}
@@ -569,6 +655,10 @@ bool DeviceFileTransfers::beginUpload(Job& job)
 {
 	job.outcome = Outcome::Failed;
 	job.cancelRequested = false;
+	if (job.generation != sessionGeneration_) {
+		end(job, State::Failed, tr("Not written: the connection changed; start a new upload from the current device"));
+		return false;
+	}
 	// Writes go by index; the index must still name this path.
 	const auto paths = session_->discoveredPaths();
 	if (job.fileIndex >= paths.size() || paths[job.fileIndex] != job.path) {
@@ -842,6 +932,7 @@ void DeviceFileTransfers::schedulePoll()
 
 void DeviceFileTransfers::poll()
 {
+	const QPointer<DeviceFileTransfers> aliveModel(this);
 	for (std::size_t row = 0; row < jobs_.size(); ++row) {
 		auto& job = *jobs_[row];
 		if (job.state == State::Writing) {
@@ -859,19 +950,26 @@ void DeviceFileTransfers::poll()
 				(void)job.writer->poll();
 			// A step may end and start the next at once: go on while it does.
 			const auto stepBefore = job.step;
-			if (!advanceUpload(job)) {
+			const bool ended = advanceUpload(job);
+			if (!aliveModel)
+				return;
+			if (!ended) {
 				if (job.step != stepBefore) {
 					schedulePoll();
-					publish(static_cast<int>(row));
+					if (!publish(static_cast<int>(row)))
+						return;
 				} else if (clock_.elapsed() - job.publishedMs >= publishEveryMs) {
-					publish(static_cast<int>(row));
+					if (!publish(static_cast<int>(row)))
+						return;
 				}
 				continue;
 			}
-			publish(static_cast<int>(row));
-			Q_EMIT finished(static_cast<int>(row), job.state, job.result);
+			if (!complete(static_cast<int>(row)))
+				return;
+			const QPointer<DeviceFileTransfers> alive(this);
 			startNext();
-			Q_EMIT summaryChanged();
+			if (alive)
+				Q_EMIT summaryChanged();
 			return;
 		}
 		if (job.state != State::Reading || !job.reader)
@@ -955,18 +1053,17 @@ void DeviceFileTransfers::poll()
 				}
 			}
 			job.reader.reset();
-			publish(static_cast<int>(row));
-			// A handler of finished() may clear rows and start others: the job
-			// is found again by its id, never through the reference.
-			const auto ended = job.id;
-			Q_EMIT finished(static_cast<int>(row), job.state, job.result);
-			leave(ended);
+			if (!complete(static_cast<int>(row)))
+				return;
+			const QPointer<DeviceFileTransfers> alive(this);
 			startNext();
-			Q_EMIT summaryChanged();
+			if (alive)
+				Q_EMIT summaryChanged();
 			return;
 		}
 		if (now - job.publishedMs >= publishEveryMs)
-			publish(static_cast<int>(row));
+			if (!publish(static_cast<int>(row)))
+				return;
 	}
 }
 
@@ -985,30 +1082,73 @@ void DeviceFileTransfers::leave(quint64 ended)
 	if (at == jobs_.end() || !(*at)->leaves || !(*at)->viewerTold || (*at)->active())
 		return;
 	const auto row = static_cast<int>(at - jobs_.begin());
+	const QPointer<DeviceFileTransfers> alive(this);
 	beginRemoveRows({}, row, row);
+	if (!alive)
+		return;
 	jobs_.erase(at);
 	endRemoveRows();
 }
 
-void DeviceFileTransfers::publish(int row)
+bool DeviceFileTransfers::publish(int row)
 {
+	Notification notifying(this);
+	const QPointer<DeviceFileTransfers> alive(this);
 	auto& job = *jobs_[static_cast<std::size_t>(row)];
 	job.publishedMs = clock_.elapsed();
 	const auto changed = index(row);
 	Q_EMIT dataChanged(changed, changed);
+	if (!alive)
+		return false;
 	Q_EMIT summaryChanged();
+	if (!alive)
+		return false;
 	// A file read to be shown: its tab follows, then shows it or says why not.
 	if (!job.opening || job.viewerTold || !job.viewer)
-		return;
+		return true;
 	auto* content = job.viewer->contentFor(job.localFile);
 	if (!content)
-		return;
+		return true;
 	if (job.active())
 		content->setReading(data(changed, ProgressRole).toReal(), data(changed, FiguresRole).toString());
 	else {
 		job.viewerTold = true;
 		content->finishReading(job.state == State::Saved, job.result);
 	}
+	return !alive.isNull();
+}
+
+bool DeviceFileTransfers::complete(int row)
+{
+	Notification notifying(this);
+	const QPointer<DeviceFileTransfers> alive(this);
+	const auto id = jobs_[static_cast<std::size_t>(row)]->id;
+	const auto state = jobs_[static_cast<std::size_t>(row)]->state;
+	const auto result = jobs_[static_cast<std::size_t>(row)]->result;
+	if (!publish(row))
+		return false;
+	Q_EMIT finished(row, state, result);
+	if (!alive)
+		return false;
+	leave(id);
+	return !alive.isNull();
+}
+
+QString DeviceFileTransfers::readProblem(const Job& job) const
+{
+	if (!session_ || !session_->filesSupported() || job.generation != sessionGeneration_)
+		return tr("Not downloaded: the connection changed; start a new download from the current device");
+	const auto paths = session_->discoveredPaths();
+	if (job.fileIndex < 0 || job.fileIndex >= paths.size() || paths[job.fileIndex] != job.path)
+		return tr("Not downloaded: the device's list of files changed; select the file again");
+	// Windows names are case-insensitive and sanitising a device name may
+	// merge two different paths. Refuse either ambiguous file instead of
+	// silently replacing a different download under the same local name.
+	const auto mapped = localPathFor(QDir::rootPath(), job.path).toCaseFolded();
+	for (const auto& path : paths)
+		if (path != job.path && localPathFor(QDir::rootPath(), path).toCaseFolded() == mapped)
+			return tr("Not downloaded: %1 and %2 would have the same local name").arg(job.path, path);
+	return {};
 }
 
 void DeviceFileTransfers::cancel(int row)
@@ -1018,14 +1158,13 @@ void DeviceFileTransfers::cancel(int row)
 	auto& job = *jobs_[static_cast<std::size_t>(row)];
 	if (job.state == State::Waiting) {
 		end(job, State::Cancelled, tr("Cancelled"));
-		publish(row);
-		Q_EMIT finished(row, job.state, job.result);
+		(void)complete(row);
 	} else if (job.state == State::Reading && job.reader) {
 		job.reader->cancel();
-		poll();
+		schedulePoll();
 	} else if (job.state == State::Writing) {
 		job.cancelRequested = true;
-		poll();
+		schedulePoll();
 	}
 }
 
@@ -1034,6 +1173,13 @@ bool DeviceFileTransfers::retry(int row, bool overwrite)
 	if (row < 0 || row >= static_cast<int>(jobs_.size()))
 		return false;
 	auto& job = *jobs_[static_cast<std::size_t>(row)];
+	if (notificationDepth_ != 0)
+		return false;
+	if (job.generation != sessionGeneration_) {
+		job.result = tr("Not retried: the connection changed; select the file again on the current device");
+		(void)publish(row);
+		return false;
+	}
 	if (job.active() || job.state == State::Saved ||
 	    (job.state == State::Written && job.outcome != Outcome::NotChecked) || !session_ ||
 	    !session_->filesSupported())
@@ -1054,25 +1200,39 @@ bool DeviceFileTransfers::retry(int row, bool overwrite)
 		if (QFile copy(job.localFile); copy.open(QIODevice::ReadOnly))
 			job.local = copy.readAll();
 	}
-	publish(row);
+	if (!publish(row))
+		return false;
 	startNext();
 	return true;
 }
 
 void DeviceFileTransfers::cancelAll()
 {
-	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row)
+	const QPointer<DeviceFileTransfers> alive(this);
+	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row) {
 		cancel(row);
+		if (!alive)
+			return;
+	}
 }
 
 void DeviceFileTransfers::clearFinished()
 {
+	if (notificationDepth_ != 0) {
+		clearQueued_ = true;
+		return;
+	}
+	const QPointer<DeviceFileTransfers> alive(this);
 	for (int row = static_cast<int>(jobs_.size()) - 1; row >= 0; --row) {
 		if (jobs_[static_cast<std::size_t>(row)]->active())
 			continue;
 		beginRemoveRows({}, row, row);
+		if (!alive)
+			return;
 		jobs_.erase(jobs_.begin() + row);
 		endRemoveRows();
+		if (!alive)
+			return;
 	}
 	Q_EMIT summaryChanged();
 }
@@ -1103,6 +1263,8 @@ QVariant DeviceFileTransfers::data(const QModelIndex& index, int role) const
 	auto& job = *jobs_[static_cast<std::size_t>(index.row())];
 	const auto received = job.received();
 	switch (role) {
+		case IdRole:
+			return QString::number(job.id);
 		case Qt::DisplayRole:
 		case NameRole:
 			return job.name;
@@ -1183,6 +1345,6 @@ QHash<int, QByteArray> DeviceFileTransfers::roleNames() const
 	        {StateRole, "state"},       {ReceivedRole, "received"}, {SizeRole, "size"},
 	        {ProgressRole, "progress"}, {FiguresRole, "figures"},   {ResultRole, "result"},
 	        {ActiveRole, "active"},     {OpeningRole, "opening"},   {UploadRole, "upload"},
-	        {OutcomeRole, "outcome"},   {StepRole, "step"}};
+	        {OutcomeRole, "outcome"},   {StepRole, "step"}, {IdRole, "id"}};
 }
 } // namespace telemetry::ux

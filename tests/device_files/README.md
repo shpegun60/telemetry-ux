@@ -3,10 +3,10 @@
 The Device files models and panel against an installed SDK and an installed UX,
 over localhost TCP to the SDK's native server. No board.
 
-- **Models** (`main.cpp`, 791 checks):
+- **Models** (`main.cpp`; the executable reports the current assertion count):
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
-    their file count and size, sizes and access in words, three-state marks and
-    the selection a download takes.
+    their file count and size, format icons and `rws` access, path-based
+    selection and the readable subset a download takes.
   - `DeviceFileTransfers` writes files byte for byte through `QSaveFile`, shows
     progress while a 300 KB file is read, and leaves nothing under the real name
     when cancelled.
@@ -30,6 +30,9 @@ over localhost TCP to the SDK's native server. No board.
   - `localPathFor` keeps hostile device paths inside the chosen folder: `..`,
     backslashes, a drive, a UNC prefix, reserved Windows names, forbidden and
     control characters, trailing dots and spaces, an empty path.
+    Transfers refuse distinct discovered paths that alias the same local name.
+    Retry refuses a job from another connection, rather than using its old
+    numeric file index against a new catalogue.
   - A device listing 4100 files is cut at 4096, in its order, and says so. With
     the SDK session's event pump this takes under a second (0.6 s here); a
     session that only pumps on its 5 ms timer takes about 40 s.
@@ -95,7 +98,7 @@ over localhost TCP to the SDK's native server. No board.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
-- **Panel** (`panel.cpp` with `Panel.qml`, off screen, 225 checks). It calls
+- **Panel** (`panel.cpp` with `Panel.qml`, off screen; reports its assertion count). It calls
   `telemetry::ux::registerQmlTypes()` first, as a host does. It checks the hex grid
   (`HexView`) on its own:
   - **Layout:** 32, 16 or 8 bytes a row by width, the text column dropped first.

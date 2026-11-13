@@ -114,7 +114,7 @@ QString DeviceBytes::keepBytes(const QString& deviceFolder, const QString& local
 		return data.errorString();
 	const QJsonObject record{
 	    {QStringLiteral("devicePath"), devicePath},
-	    {QStringLiteral("size"), static_cast<double>(bytes.size())},
+	    {QStringLiteral("size"), static_cast<qint64>(bytes.size())},
 	    {QStringLiteral("readAt"), readAt.toString(Qt::ISODateWithMs)},
 	    {QStringLiteral("written"), written},
 	    {QStringLiteral("sha256"),
@@ -172,7 +172,7 @@ std::optional<DeviceBytes::Record> DeviceBytes::find(const QString& localFile)
 			Record record;
 			record.bytesFile = bytesFile;
 			record.devicePath = object.value(QStringLiteral("devicePath")).toString();
-			record.size = static_cast<qint64>(object.value(QStringLiteral("size")).toDouble(-1));
+			record.size = object.value(QStringLiteral("size")).toInteger(-1);
 			record.readAt = QDateTime::fromString(object.value(QStringLiteral("readAt")).toString(), Qt::ISODateWithMs);
 			record.sha256 = QByteArray::fromHex(object.value(QStringLiteral("sha256")).toString().toLatin1());
 			record.written = object.value(QStringLiteral("written")).toBool();

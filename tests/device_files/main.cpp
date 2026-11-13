@@ -2,6 +2,8 @@
 // the tree of the device's paths, marks and selection, downloads written
 // exactly, cancel, a model destroyed mid-download, and a files-only device. MIT.
 #include <Telemetry/UX/DeviceBytes.hpp>
+#include <Telemetry/UX/EventLog.hpp>
+#include <Telemetry/UX/SessionProblems.hpp>
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
 #include <Telemetry/UX/DescriptorContent.hpp>
@@ -619,6 +621,186 @@ void downloads(qt::ConnectionSession& session, DeviceFilesModel& files, const QS
 	CHECK(transfers.rowCount() == 0);
 }
 
+// Host paths and operation identity stay unambiguous; publication callbacks
+// may clear rows or destroy the transfer model without retaining a Job&.
+void transferSafety(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
+{
+	using State = DeviceFileTransfers::State;
+	const auto path = QStringLiteral("/logs/events.csv");
+	const auto source = files.data(files.indexOfPath(path), DeviceFilesModel::FileIndexRole).toInt();
+	// Failure before the first READ still has exactly one completion, with its
+	// row and local path available to the Problems adapter.
+	const auto blocker = folder + QStringLiteral("/prestart-blocker");
+	{ QFile file(blocker); CHECK(file.open(QIODevice::WriteOnly)); }
+	{
+		DeviceFileTransfers transfers(&session);
+		int completed = 0;
+		QObject::connect(&transfers, &DeviceFileTransfers::finished, &transfers,
+		                 [&](int row, State state, const QString& result) {
+			                 ++completed;
+			                 CHECK(row == 0 && state == State::Failed && result.startsWith(QStringLiteral("Could not write")));
+			                 CHECK(transfers.localFileAt(row) == blocker + QStringLiteral("/events.csv"));
+		                 });
+		CHECK(transfers.download(path, source, eventsBytes.size(), blocker + QStringLiteral("/events.csv")) == 0);
+		QCoreApplication::processEvents();
+		CHECK(completed == 1 && transfers.stateAt(0) == static_cast<int>(State::Failed));
+	}
+	// clearFinished from either model notification waits through finished;
+	// the completion still sees its row once and the clear eventually occurs.
+	for (const bool throughData : {false, true}) {
+		DeviceFileTransfers transfers(&session);
+		const auto local = folder + (throughData ? QStringLiteral("/clear-data.csv") : QStringLiteral("/clear-summary.csv"));
+		bool cleared = false;
+		int completed = 0;
+		const auto clear = [&] {
+			if (transfers.rowCount() > 0 && transfers.stateAt(0) == static_cast<int>(State::Saved)) {
+				cleared = true;
+				transfers.clearFinished();
+			}
+		};
+		if (throughData)
+			QObject::connect(&transfers, &QAbstractItemModel::dataChanged, &transfers, clear);
+		else
+			QObject::connect(&transfers, &DeviceFileTransfers::summaryChanged, &transfers, clear);
+		QObject::connect(&transfers, &DeviceFileTransfers::finished, &transfers,
+		                 [&](int row, State state, const QString&) {
+			                 ++completed;
+			                 CHECK(state == State::Saved && transfers.localFileAt(row) == local);
+		                 });
+		CHECK(transfers.download(path, source, eventsBytes.size(), local) == 0);
+		CHECK(await([&] { return cleared && completed == 1 && transfers.rowCount() == 0; }));
+		CHECK(sameBytes(local, eventsBytes));
+	}
+	// Deleting the model itself from the terminal publication is legal too.
+	for (const bool throughData : {false, true}) {
+		auto* transfers = new DeviceFileTransfers(&session);
+		QPointer<DeviceFileTransfers> alive(transfers);
+		const auto local = folder + (throughData ? QStringLiteral("/delete-data.csv") : QStringLiteral("/delete-summary.csv"));
+		const auto remove = [transfers] {
+			if (transfers->rowCount() > 0 && transfers->stateAt(0) == static_cast<int>(State::Saved))
+				delete transfers;
+		};
+		if (throughData)
+			QObject::connect(transfers, &QAbstractItemModel::dataChanged, transfers, remove);
+		else
+			QObject::connect(transfers, &DeviceFileTransfers::summaryChanged, transfers, remove);
+		CHECK(transfers->download(path, source, eventsBytes.size(), local) == 0);
+		CHECK(await([&] { return alive.isNull(); }) && sameBytes(local, eventsBytes));
+	}
+
+	// IDs are exact strings, survive row removal, distinguish two jobs for
+	// one local path and are never reused after clearFinished.
+	{
+		DeviceFileTransfers transfers(&session);
+		CHECK(transfers.download(path, source, eventsBytes.size(), blocker + QStringLiteral("/id.csv")) == 0);
+		const auto oldId = transfers.idAt(0);
+		const auto largeIndex = files.data(files.indexOfPath(QStringLiteral("/logs/large.bin")), DeviceFilesModel::FileIndexRole).toInt();
+		const auto local = folder + QStringLiteral("/stable-id.bin");
+		CHECK(transfers.download(QStringLiteral("/logs/large.bin"), largeIndex, largeBytes.size(), local) == 1);
+		const auto currentId = transfers.idAt(1);
+		CHECK(!oldId.isEmpty() && currentId != oldId && transfers.rowOfId(currentId) == 1 &&
+		      transfers.data(transfers.index(1), DeviceFileTransfers::IdRole).toString() == currentId);
+		transfers.clearFinished();
+		CHECK(transfers.rowCount() == 1 && transfers.rowOfId(oldId) == -1 && transfers.rowOfId(currentId) == 0);
+		transfers.cancel(0);
+		CHECK(ended(transfers, 0) == State::Cancelled);
+		transfers.clearFinished();
+		CHECK(transfers.download(path, source, eventsBytes.size(), local) == 0 && transfers.idAt(0) != currentId);
+		CHECK(ended(transfers, 0) == State::Saved && transfers.rowOfId(QStringLiteral("01")) == -1 &&
+		      transfers.rowOfId(QStringLiteral("not-an-id")) == -1 && transfers.idAt(-1).isEmpty());
+	}
+	// Inserting/removing a row can also destroy the model. No work resumes
+	// after those public notifications.
+	{
+		auto* transfers = new DeviceFileTransfers(&session);
+		QPointer<DeviceFileTransfers> alive(transfers);
+		QObject::connect(transfers, &QAbstractItemModel::rowsInserted, transfers, [transfers] { delete transfers; });
+		CHECK(transfers->download(path, source, eventsBytes.size(), folder + QStringLiteral("/gone-insert.csv")) == -1);
+		CHECK(!alive && !QFile::exists(folder + QStringLiteral("/gone-insert.csv")));
+	}
+	{
+		auto* transfers = new DeviceFileTransfers(&session);
+		QPointer<DeviceFileTransfers> alive(transfers);
+		CHECK(transfers->download(path, source, eventsBytes.size(), folder + QStringLiteral("/gone-remove.csv")) == 0);
+		CHECK(ended(*transfers, 0) == State::Saved);
+		QObject::connect(transfers, &QAbstractItemModel::rowsRemoved, transfers, [transfers] { delete transfers; });
+		transfers->clearFinished();
+		CHECK(!alive);
+	}
+
+	// Cancellation of a waiting row may synchronously deliver finished and
+	// destroy the model while cancelAll/cancelFor still have rows to visit.
+	for (const bool all : {false, true}) {
+		auto* transfers = new DeviceFileTransfers(&session);
+		QPointer<DeviceFileTransfers> alive(transfers);
+		const auto largeIndex = files.data(files.indexOfPath(QStringLiteral("/logs/large.bin")), DeviceFilesModel::FileIndexRole).toInt();
+		CHECK(transfers->download(QStringLiteral("/logs/large.bin"), largeIndex, largeBytes.size(), folder + QStringLiteral("/cancel-active.bin")) == 0);
+		const auto waiting = folder + QStringLiteral("/cancel-waiting.csv");
+		CHECK(transfers->download(path, source, eventsBytes.size(), waiting) == 1);
+		QObject::connect(transfers, &DeviceFileTransfers::finished, transfers,
+		                 [transfers](int, State, const QString&) { delete transfers; });
+		if (all)
+			transfers->cancelAll();
+		else
+			transfers->cancelFor(waiting);
+		CHECK(!alive && await([&] { return !session.busy(); }));
+	}
+
+	// Resource accepts all these distinct names; the host's path mapping
+	// would alias them. Either download fails explicitly before a local file
+	// is opened, rather than letting the later one overwrite the first.
+	const auto aliases = resource::filesystem(
+	    resource::file("/telemetry/descriptor.bin", descriptorFile),
+	    resource::file("/logs/a:b", eventsFile), resource::file("/logs/a?b", settingsFile),
+	    resource::file("/logs/Case.bin", eventsFile), resource::file("/logs/case.bin", settingsFile));
+	Peer aliased{aliases.view()};
+	qt::ConnectionSession other;
+	CHECK(other.connectTcpReference(QStringLiteral("127.0.0.1"), aliased.listener.serverPort()));
+	CHECK(await([&] { return other.ready(); }));
+	DeviceFileTransfers ambiguous(&other);
+	int rejected = 0;
+	QObject::connect(&ambiguous, &DeviceFileTransfers::finished, &ambiguous,
+	                 [&](int, State state, const QString& result) {
+		                 ++rejected;
+		                 CHECK(state == State::Failed && result.contains(QStringLiteral("same local name")));
+	                 });
+	for (int index = 1; index < other.discoveredPaths().size(); ++index) {
+		const auto devicePath = other.discoveredPaths()[index];
+		const auto local = DeviceFileTransfers::localPathFor(folder + QStringLiteral("/aliases"), devicePath);
+		CHECK(ambiguous.download(devicePath, index, 0, local) >= 0);
+		CHECK(!QFile::exists(local));
+	}
+	CHECK(rejected == 4 && ambiguous.activeCount() == 0);
+	other.disconnect();
+
+	// A cancelled download cannot reuse its old numeric index after a new
+	// discovery, even if another file happens to occupy it now.
+	const auto reordered = resource::filesystem(
+	    resource::file("/telemetry/descriptor.bin", descriptorFile),
+	    resource::file("/cfg/settings.csv", settingsFile), resource::file("/logs/events.csv", eventsFile));
+	Peer old{withDescriptor.view()}, next{reordered.view()};
+	qt::ConnectionSession changing;
+	CHECK(changing.connectTcpReference(QStringLiteral("127.0.0.1"), old.listener.serverPort()));
+	CHECK(await([&] { return changing.ready(); }));
+	DeviceFileTransfers previous(&changing);
+	const auto cancelledLocal = folder + QStringLiteral("/old-list.csv");
+	CHECK(previous.download(path, 1, eventsBytes.size(), cancelledLocal) == 0);
+	previous.cancel(0);
+	CHECK(ended(previous, 0) == State::Cancelled);
+	changing.disconnect();
+	CHECK(await([&] { return !changing.filesSupported(); }));
+	CHECK(changing.connectTcpReference(QStringLiteral("127.0.0.1"), next.listener.serverPort()));
+	CHECK(await([&] { return changing.ready(); }));
+	CHECK(changing.discoveredPaths()[1] != path && !previous.retry(0));
+	CHECK(previous.data(previous.index(0), DeviceFileTransfers::ResultRole).toString().contains(QStringLiteral("connection changed")) &&
+	      !QFile::exists(cancelledLocal));
+	// A fresh request must also use the current index for its advertised path.
+	DeviceFileTransfers wrongIndex(&changing);
+	CHECK(wrongIndex.download(path, 1, eventsBytes.size(), folder + QStringLiteral("/wrong-index.csv")) == 0);
+	CHECK(ended(wrongIndex, 0) == State::Failed && !QFile::exists(folder + QStringLiteral("/wrong-index.csv")));
+	changing.disconnect();
+}
+
 // Uploads: a saved copy written back to the device's file, checked against
 // its record first, written, saved when the device keeps files, read back;
 // the bytes read back become the record and the viewer's reference. Every
@@ -895,6 +1077,46 @@ void deviceLayer(const QString& folder)
 	FileContent plain;
 	plain.setLocalFile(local);
 	CHECK(plain.loaded() && !plain.hasReference());
+}
+
+// A corrupt local size must never truncate to an apparently valid record or
+// undergo an out-of-range floating-point-to-integer conversion.
+void deviceRecordSizes(const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	const auto device = folder + QStringLiteral("/record-sizes");
+	const auto local = device + QStringLiteral("/empty.bin");
+	const auto bytesFile = device + QStringLiteral("/.device-bytes/empty.bin");
+	const auto metadata = bytesFile + QStringLiteral(".json");
+	CHECK(DeviceBytes::keepBytes(device, local, QStringLiteral("/empty.bin"), {},
+	                            QDateTime::currentDateTime()).isEmpty());
+	QFile meta(metadata);
+	CHECK(meta.open(QIODevice::ReadOnly));
+	const auto saved = meta.readAll();
+	meta.close();
+	const auto object = QJsonDocument::fromJson(saved).object();
+	const auto writeSize = [&](const QByteArray& size) {
+		auto record = object;
+		record.remove(QStringLiteral("size"));
+		auto json = QJsonDocument(record).toJson(QJsonDocument::Compact);
+		json.chop(1);
+		json += ",\"size\":" + size + '}';
+		QFile out(metadata);
+		return out.open(QIODevice::WriteOnly | QIODevice::Truncate) && out.write(json) == json.size();
+	};
+	for (const auto* invalid : {"0.5", "-0.5", "-1", "1e100", "-1e100", "9223372036854775808",
+	                           "-9223372036854775809", "\"0\"", "true", "null", "[]", "{}"}) {
+		CHECK(writeSize(invalid));
+		CHECK(!DeviceBytes::find(local) && !DeviceBytes::reference(local));
+	}
+	for (const auto* valid : {"0", "0.0", "0e0"}) {
+		CHECK(writeSize(valid));
+		const auto record = DeviceBytes::find(local);
+		CHECK(record && record->size == 0 && DeviceBytes::reference(local));
+	}
+	CHECK(meta.open(QIODevice::WriteOnly | QIODevice::Truncate) && meta.write(saved) == saved.size());
+	meta.close();
+	CHECK(DeviceBytes::find(local));
 }
 
 // Open: the viewer's tab is there before the first byte, reading; it then
@@ -1291,12 +1513,22 @@ void filesOnly(const QString& folder)
 	Peer peer{withoutDescriptor.view()};
 	qt::ConnectionSession session;
 	DeviceFilesModel files(&session);
+	// The connection's problems: files only is a warning in the session's
+	// words, while it lasts.
+	telemetry::ux::LogModel log;
+	telemetry::ux::ProblemsModel problems(&log);
+	telemetry::ux::SessionProblems watcher(&session, &problems);
+	CHECK(problems.count() == 0);
 	CHECK(!files.available());
 	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
 	CHECK(await([&] {
 		return files.available() && !files.loading() && files.fileCount() == 2;
 	}));
 	CHECK(session.filesOnly() && !session.ready());
+	CHECK(await([&] { return problems.has(QStringLiteral("session.limitation")); }));
+	CHECK(problems.warningCount() == 1 && problems.errorCount() == 0 &&
+	      problems.data(problems.index(0), telemetry::ux::ProblemsModel::TextRole).toString() == session.limitationText() &&
+	      log.count() == 1 && log.newest() == session.limitationText());
 	DeviceFileTransfers transfers(&session);
 	const auto settings = files.indexOfPath(QStringLiteral("/cfg/settings.csv"));
 	const auto local = DeviceFileTransfers::localPathFor(folder + QStringLiteral("/files-only"),
@@ -1309,6 +1541,95 @@ void filesOnly(const QString& folder)
 	CHECK(await([&] {
 		return !files.available() && files.fileCount() == 0;
 	}));
+	// Disconnected on purpose: nothing about that device is wrong any more,
+	// and the Log says the problem ended.
+	CHECK(problems.count() == 0 && log.newest().startsWith(QStringLiteral("Resolved: ")));
+}
+
+// The Log: newest first, bounded, as text oldest first; the filter by words
+// and by severity. Problems: keyed, errors before warnings, a new one told
+// to the Log once, a repeat silent, resolved by key or by scope.
+void eventLogAndProblems(const QString& folder)
+{
+	using telemetry::ux::LogFilterModel;
+	using telemetry::ux::LogModel;
+	using telemetry::ux::ProblemsModel;
+	using telemetry::ux::Severity;
+	LogModel log;
+	int added = 0;
+	QObject::connect(&log, &LogModel::appended, [&] { ++added; });
+	log.append(Severity::Info, QStringLiteral("Connection"), QStringLiteral("Connected to Bench."));
+	log.append(Severity::Error, QStringLiteral("Write"), QStringLiteral("The device refused the write."));
+	CHECK(log.count() == 2 && log.errorCount() == 1 && added == 2);
+	CHECK(log.data(log.index(0), LogModel::TextRole).toString() == QStringLiteral("The device refused the write.") &&
+	      log.data(log.index(0), LogModel::ProblemRole).toBool() && !log.data(log.index(1), LogModel::ProblemRole).toBool());
+	CHECK(log.newest() == QStringLiteral("The device refused the write."));
+	// As text: oldest first, one a line, its time, severity and source.
+	const auto lines = log.text().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+	CHECK(lines.size() == 2 && lines[0].contains(QStringLiteral("  Info  Connection  Connected to Bench.")) &&
+	      lines[1].contains(QStringLiteral("  Error  Write  The device refused the write.")));
+	const auto saved = folder + QStringLiteral("/log.txt");
+	CHECK(log.saveTo(saved).isEmpty());
+	{
+		QFile file(saved);
+		CHECK(file.open(QIODevice::ReadOnly | QIODevice::Text) && QString::fromUtf8(file.readAll()) == log.text());
+	}
+	CHECK(!log.saveTo(folder + QStringLiteral("/no/such/folder/log.txt")).isEmpty());
+	// Filtered by words and by severity; Copy takes the rows shown.
+	LogFilterModel shown(&log);
+	CHECK(shown.rowCount() == 2);
+	shown.setText(QStringLiteral("bench"));
+	CHECK(shown.rowCount() == 1 && shown.sourceRows() == QVariantList{1});
+	shown.setText(QStringLiteral("write"));
+	CHECK(shown.rowCount() == 1);
+	shown.setText({});
+	shown.setMinimumSeverity(Severity::Warning);
+	CHECK(shown.rowCount() == 1 && log.text(shown.sourceRows()).contains(QStringLiteral("refused")) &&
+	      !log.text(shown.sourceRows()).contains(QStringLiteral("Bench")));
+	// Bounded: the oldest leaves first.
+	for (int i = 0; i < LogModel::maxEntries; ++i)
+		log.append(Severity::Info, QStringLiteral("Test"), QStringLiteral("event %1").arg(i));
+	CHECK(log.count() == LogModel::maxEntries && log.errorCount() == 0 &&
+	      log.newest() == QStringLiteral("event %1").arg(LogModel::maxEntries - 1));
+	log.clear();
+	CHECK(log.count() == 0 && log.newest().isEmpty());
+
+	// Problems.
+	ProblemsModel problems(&log);
+	problems.raise(QStringLiteral("files.capture"), Severity::Warning, QStringLiteral("Transfers"),
+	               QStringLiteral("capture.bin was not downloaded."));
+	problems.raise(QStringLiteral("session.connection"), Severity::Error, QStringLiteral("Connection"),
+	               QStringLiteral("Connection dropped."), QStringLiteral("device"));
+	CHECK(problems.count() == 2 && problems.errorCount() == 1 && problems.warningCount() == 1 && log.count() == 2);
+	// Errors first.
+	CHECK(problems.data(problems.index(0), ProblemsModel::KeyRole).toString() == QStringLiteral("session.connection"));
+	// The same again: new words in place, nothing told.
+	problems.raise(QStringLiteral("session.connection"), Severity::Error, QStringLiteral("Connection"),
+	               QStringLiteral("Connection dropped: timeout."), QStringLiteral("device"));
+	CHECK(problems.count() == 2 && log.count() == 2 &&
+	      problems.data(problems.index(0), ProblemsModel::TextRole).toString() == QStringLiteral("Connection dropped: timeout."));
+	// An Info is not a problem: raised, it is a warning.
+	problems.raise(QStringLiteral("watch.unreadable"), Severity::Info, QStringLiteral("Watchlist"),
+	               QStringLiteral("3 Fields could not be read."), QStringLiteral("device"));
+	CHECK(problems.warningCount() == 2);
+	// A warning that becomes an error moves to the errors, silently.
+	problems.raise(QStringLiteral("files.capture"), Severity::Error, QStringLiteral("Transfers"),
+	               QStringLiteral("capture.bin failed."));
+	CHECK(problems.errorCount() == 2 && log.count() == 3 &&
+	      problems.data(problems.index(1), ProblemsModel::KeyRole).toString() == QStringLiteral("files.capture"));
+	// Resolved by key, then by scope; the Log says each once.
+	// What an adapter checks, and what Copy writes.
+	CHECK(problems.keys(QStringLiteral("files.")) == QStringList{QStringLiteral("files.capture")} &&
+	      problems.keys().size() == 3);
+	CHECK(problems.text(QVariantList{1}).contains(QStringLiteral("  Error  Transfers  capture.bin failed.")) &&
+	      problems.text().count(QLatin1Char('\n')) == 3);
+	problems.resolve(QStringLiteral("files.capture"));
+	CHECK(problems.count() == 2 && !problems.has(QStringLiteral("files.capture")) && log.count() == 4 &&
+	      log.newest() == QStringLiteral("Resolved: capture.bin failed."));
+	problems.resolve(QStringLiteral("files.capture"));
+	CHECK(log.count() == 4);
+	problems.resolveScope(QStringLiteral("device"));
+	CHECK(problems.count() == 0 && log.count() == 6);
 }
 
 // The device's folder from its identity file - a files-only device has one
@@ -1569,6 +1890,31 @@ void textAndTable()
 		CHECK(keys() == QStringLiteral("a|c|b") && !tied.descending());
 		tied.clearSort();
 		CHECK(keys() == QStringLiteral("a|b|c") && tied.sortedColumn() == -1);
+	}
+	// Integers that share a double key keep exact S64/U64 numeric order.
+	// Scientific notation mixed into that tie must not make a comparison cycle.
+	{
+		const QStringList expected{
+		    QStringLiteral("-9223372036854775808"), QStringLiteral("-9223372036854775807"),
+		    QStringLiteral("-9007199254740993"), QStringLiteral("-9007199254740992"),
+		    QStringLiteral("-9.007199254740992e15"), QStringLiteral("0"),
+		    QStringLiteral("9007199254740992"), QStringLiteral("9007199254740993"),
+		    QStringLiteral("9223372036854775807"), QStringLiteral("9223372036854775808"),
+		    QStringLiteral("18446744073709551614"), QStringLiteral("18446744073709551615")};
+		auto input = expected;
+		std::reverse(input.begin(), input.end());
+		FileTableModel integers;
+		TableRowsModel sorted(&integers);
+		for (int permutation = 0; permutation < 3; ++permutation) {
+			CHECK(integers.setText(QStringLiteral("value\n") + input.join(QLatin1Char('\n'))));
+			CHECK(sorted.numeric(0));
+			for (const bool descending : {false, true}) {
+				sorted.sortColumn(0, descending);
+				for (int row = 0; row < expected.size(); ++row)
+					CHECK(sorted.cellText(row, 0) == expected[descending ? expected.size() - row - 1 : row]);
+			}
+			std::rotate(input.begin(), input.begin() + 3, input.end());
+		}
 	}
 	// The file read again keeps its sort and its filter - the filter field
 	// shows what is applied; a sort past the new file's columns goes.
@@ -2768,6 +3114,7 @@ int main(int argc, char** argv)
 	CHECK(session.ready());
 	tree(session, files);
 	downloads(session, files, folder.path());
+	transferSafety(session, files, folder.path());
 	openInViewer(session, files, folder.path());
 	destroyedMidway(session, files, folder.path());
 	session.disconnect();
@@ -2775,6 +3122,7 @@ int main(int argc, char** argv)
 		return !files.available();
 	}));
 	filesOnly(folder.path());
+	eventLogAndProblems(folder.path());
 	identityFolders(folder.path());
 	localPaths(folder.path());
 	fileContent(folder.path());
@@ -2790,6 +3138,7 @@ int main(int argc, char** argv)
 	capabilityCodec(folder.path());
 	fileEditing(folder.path());
 	deviceLayer(folder.path());
+	deviceRecordSizes(folder.path());
 	uploads(folder.path());
 	liveValues(folder.path());
 	truncatedList();

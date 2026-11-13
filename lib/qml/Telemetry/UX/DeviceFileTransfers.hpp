@@ -108,7 +108,8 @@ public:
 		OpeningRole,  // read to be shown in a viewer, not saved for the user
 		UploadRole,   // a copy written to the device
 		OutcomeRole,  // Outcome
-		StepRole      // Step, while an upload runs
+		StepRole,     // Step, while an upload runs
+		IdRole        // stable decimal string, never reused (safe in QML)
 	};
 	Q_ENUM(Role)
 
@@ -155,6 +156,8 @@ public:
 	// folders below it. Each segment becomes a plain local name (no drive, no
 	// "..", no reserved or forbidden characters); empty when the result would
 	// still leave the folder. The device's names never choose where files land.
+	// Downloads refuse different discovered paths that map to the same local
+	// name, including case-only differences, rather than replacing one another.
 	Q_INVOKABLE static QString localPathFor(const QString& folder, const QString& devicePath);
 	// For hosts that pick places with QML file dialogs: a dialog's URL as the
 	// local path download() takes, and a local path as a URL to open.
@@ -182,20 +185,28 @@ public:
 	Q_INVOKABLE QString deviceFolderName() const;
 	Q_INVOKABLE QString deviceFolder(const QString& root, const QString& fallbackLabel,
 	                                 QObject* viewer = nullptr) const;
-	// The local file a row writes, as download() was given it; rows move when
-	// finished ones are cleared, so a host keys its own records by this.
+	// The destination a row writes, as download() was given it. Different
+	// jobs may share it; use idAt() for stable job identity when rows move.
 	Q_INVOKABLE QString localFileAt(int row) const;
+	// Stable identity for host records: rows move and local paths may repeat.
+	// An empty id / -1 means that the job no longer exists.
+	Q_INVOKABLE QString idAt(int row) const;
+	Q_INVOKABLE int rowOfId(const QString& id) const;
 	// How a row's upload ended (Outcome, as a number), for a host's finished().
 	Q_INVOKABLE int outcomeAt(int row) const;
+	// Where a row is (State, as a number): a host's Retry looks for Failed.
+	Q_INVOKABLE int stateAt(int row) const;
 	Q_INVOKABLE void cancel(int row);
-	// Starts a failed or cancelled download or upload again, in its own row,
+	// Starts a failed or cancelled download or upload again on the same
+	// connection, in its own row,
 	// from the first byte; an upload with overwrite as given ("Write anyway") -
 	// kept when it was already - also one written but not read back, whose
 	// record is gone (pass overwrite then). The copy is read again. False when the row is still
 	// running, has ended well, or not connected.
 	Q_INVOKABLE bool retry(int row, bool overwrite = false);
 	Q_INVOKABLE void cancelAll();
-	// Forgets the rows that have ended.
+	// Forgets the rows that have ended. Inside a publication callback, the
+	// clear waits until its whole outcome has been delivered.
 	Q_INVOKABLE void clearFinished();
 	// Whether a file read for the viewer (openIn, given its device's folder),
 	// and a copy written to the device and read back, leave the device's
@@ -221,6 +232,7 @@ private:
 	bool keepDeviceBytes_ = false;
 	quint64 lastJobId_ = 0;
 	struct Job;
+	class Notification;
 	bool inUse(const QString& folder, QObject* viewer) const;
 	int queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
 	          OpenFiles* viewer, const QString& deviceFolder = {});
@@ -234,12 +246,17 @@ private:
 	void end(Job& job, State state, QString result);
 	// Removes an Open's row that ended with nothing to add, if it is still there.
 	void leave(quint64 ended);
-	void publish(int row);
+	bool publish(int row);
+	bool complete(int row);
+	QString readProblem(const Job& job) const;
 
 	QPointer<integration::qt::ConnectionSession> session_;
 	std::vector<std::unique_ptr<Job>> jobs_;
 	QElapsedTimer clock_;
 	bool pollQueued_ = false;
+	quint64 sessionGeneration_ = 0;
+	unsigned notificationDepth_ = 0;
+	bool clearQueued_ = false;
 };
 } // namespace telemetry::ux
 #endif

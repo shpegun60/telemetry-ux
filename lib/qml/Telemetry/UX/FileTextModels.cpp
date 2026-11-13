@@ -9,9 +9,30 @@
 #include <QtCore/QStringList>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace telemetry::ux {
 namespace {
+struct IntegerKey {
+	bool negative;
+	quint64 magnitude;
+};
+
+// Recover exact 64-bit integer order only when the cached double keys tie.
+// Signed magnitude also covers U64 without converting it through S64 or double.
+std::optional<IntegerKey> integerKey(const QString& text)
+{
+	bool ok = false;
+	const auto signedValue = text.toLongLong(&ok);
+	if (ok)
+		return IntegerKey{signedValue < 0, signedValue < 0 ? quint64(-(signedValue + 1)) + 1
+		                                                : quint64(signedValue)};
+	const auto unsignedValue = text.toULongLong(&ok);
+	if (ok)
+		return IntegerKey{false, unsignedValue};
+	return std::nullopt;
+}
+
 // Natural order, the same on every platform and locale: runs of digits
 // compare as numbers by their digits' values ("item 2" before "item 10", in
 // any script's digits), the rest ignoring case.
@@ -371,6 +392,20 @@ bool TableRowsModel::lessThan(const QModelIndex& left, const QModelIndex& right)
 			return descending_ ? !okA : okA;
 		if (okA && x != y)
 			return x < y;
+		if (okA && a != b) {
+			const auto integerA = integerKey(a), integerB = integerKey(b);
+			// Group integer spellings before other equal-double spellings so
+			// mixing integers and scientific notation keeps a strict ordering.
+			if (integerA.has_value() != integerB.has_value())
+				return integerA.has_value();
+			if (integerA && integerB) {
+				if (integerA->negative != integerB->negative)
+					return integerA->negative;
+				if (integerA->magnitude != integerB->magnitude)
+					return integerA->negative ? integerA->magnitude > integerB->magnitude
+					                          : integerA->magnitude < integerB->magnitude;
+			}
+		}
 	} else if (a.isEmpty() != b.isEmpty()) {
 		return descending_ ? a.isEmpty() : b.isEmpty();
 	}

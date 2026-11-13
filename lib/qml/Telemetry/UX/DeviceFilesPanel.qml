@@ -84,7 +84,7 @@ Pane {
     }
     function openIndex(index) {
         const file = files.fileAt(index)
-        if (file.path !== undefined)
+        if (file.path !== undefined && (!file.sizeKnown || file.readable))
             panel.openRequested(file)
     }
     function openCurrent() {
@@ -199,7 +199,7 @@ Pane {
         if (kind === "selection") {
             Clipboard.setText(files.selectedPaths().join("\n"))
         } else {
-            Clipboard.setText(kind === "file" ? file.path : files.pathAt(fileMenu.index))
+            Clipboard.setText(kind === "file" ? file.path : files.pathAt(currentIndex))
         }
     }
     function showProperties(index) {

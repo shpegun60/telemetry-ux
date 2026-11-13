@@ -512,14 +512,19 @@ QByteArray HexView::pattern(const QString& query, const QString& kind, int width
 		bool ok = false;
 		const auto text = query.trimmed();
 		qint64 value = text.toLongLong(&ok, 0);
+		const bool signedInput = ok;
 		quint64 bits = static_cast<quint64>(value);
 		if (!ok) {
 			bits = text.toULongLong(&ok, 0);
 			if (!ok)
 				return fail(tr("Not an integer: %1").arg(text));
-		} else if (width < 8) {
-			const auto limit = qint64{1} << (8 * width);
-			if (value >= limit || value < -(limit / 2))
+		}
+		if (width < 8) {
+			const auto limit = quint64{1} << (8 * width);
+			const bool fits = signedInput && value < 0
+			                      ? value >= -static_cast<qint64>(limit / 2)
+			                      : bits < limit;
+			if (!fits)
 				return fail(tr("%1 does not fit in %n bytes.", nullptr, width).arg(text));
 		}
 		return ordered(bits, width);
@@ -779,7 +784,8 @@ void HexView::countMatches()
 			    self->capped_ = capped;
 			    self->counting_ = false;
 			    Q_EMIT self->matchesChanged();
-			    self->update();
+			    if (self)
+				    self->update();
 		    },
 		    Qt::QueuedConnection);
 	});
