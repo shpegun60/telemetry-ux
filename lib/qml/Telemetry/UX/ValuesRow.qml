@@ -42,7 +42,8 @@ TreeViewDelegate {
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
     readonly property color valueColor: highlighted ? Theme.selectedForeground
-                                      : group || unavailable ? Theme.textMuted
+                                      : group ? (changedFields > 0 ? Theme.info : Theme.textMuted)
+                                      : unavailable ? Theme.textMuted
                                       : changed ? Theme.info : Theme.textPrimary
 
     signal contextMenuRequested(var index, real x, real y)
@@ -71,22 +72,10 @@ TreeViewDelegate {
             color: row.textColor
             font.weight: row.group ? Type.headingWeight : Font.Normal
         }
-        // The value, with the changed mark 4 px before its first character.
+        // The value; a changed one is drawn in the info colour.
         Item {
             Layout.preferredWidth: 10 + row.valueWidth
             Layout.fillHeight: true
-            Rectangle {
-                objectName: "valuesChangeMark"
-                width: 2
-                height: Math.round(row.height * 0.6)
-                radius: 1
-                anchors.verticalCenter: parent.verticalCenter
-                x: valueLabel.x + Math.max(0, valueLabel.width - valueLabel.contentWidth) *
-                   (valueLabel.horizontalAlignment === Text.AlignRight ? 1 : 0) - width - 4
-                visible: (row.group ? row.changedFields > 0 : row.changed) && !row.highlighted
-                color: Theme.info
-                Accessible.ignored: true
-            }
             Label {
                 id: valueLabel
                 objectName: "valuesRowValue"
@@ -122,6 +111,18 @@ TreeViewDelegate {
             ToolTip.visible: typeHover.hovered && truncated
             ToolTip.text: row.typeText
         }
+    }
+
+    // A changed Field's mark: a line the row's height along its left edge,
+    // not before the digits, where it read as a text cursor.
+    Rectangle {
+        objectName: "valuesChangeMark"
+        x: 0
+        width: 2
+        height: row.height
+        color: Theme.info
+        visible: !row.group && row.changed && !row.highlighted
+        Accessible.ignored: true
     }
 
     Rectangle {

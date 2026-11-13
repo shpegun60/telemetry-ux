@@ -223,6 +223,9 @@ FocusScope {
             Label {
                 objectName: "valuesSummary"
                 visible: view.decoded.valid
+                // Its own width, never more; narrow, it gives way (elided)
+                // before Copy does. The fingerprint takes what is left.
+                elide: Text.ElideRight
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
                 text: view.live ? view.decoded.summary
@@ -313,8 +316,9 @@ FocusScope {
                 Layout.preferredWidth: Math.max(startWord.advanceWidth, stopWord.advanceWidth)
                                        + leftPadding + rightPadding
                 text: view.running ? qsTr("Stop") : qsTr("Start")
+                // The spoken name begins with the word shown, so speech finds it.
                 Accessible.name: view.running ? qsTr("Stop reading the device's file")
-                                              : qsTr("Read the device's file again and again")
+                                              : qsTr("Start reading the device's file again and again")
                 onClicked: view.live.running = !view.running
                 ToolTip.visible: hovered
                 ToolTip.delay: 700
@@ -329,8 +333,10 @@ FocusScope {
                 id: period
                 objectName: "valuesPeriod"
                 Accessible.name: qsTr("How often to read")
-                // As wide as its widest choice: the bar never moves.
+                // As wide as its widest choice, whatever the style's minimum -
+                // the Watchlist's rule: the bar never moves.
                 implicitContentWidthPolicy: ComboBox.WidestText
+                Layout.preferredWidth: implicitContentWidth + leftPadding + rightPadding
                 textRole: "text"
                 valueRole: "ms"
                 // The fastest reads as soon as the last read ended (200 ms at

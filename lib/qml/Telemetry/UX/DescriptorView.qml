@@ -145,6 +145,9 @@ FocusScope {
             spacing: Type.spacing
             Label {
                 objectName: "descriptorSummary"
+                // Its own width, never more; narrow, it gives way (elided)
+                // before Copy does. The fingerprint takes what is left.
+                elide: Text.ElideRight
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
                 text: view.decoded.summary

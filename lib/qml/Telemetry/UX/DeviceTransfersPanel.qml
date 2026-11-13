@@ -39,7 +39,10 @@ Pane {
     readonly property bool actionsShown: !fill || transfers.activeCount >= 2 || finishedTransfers > 0
 
     // Under the file list, at most four rows; in a dock, whatever it is given.
-    implicitHeight: fill ? 120 : (actionsShown ? actionRow.implicitHeight : 0)
+    // The bar is a row high in the layout whatever it holds: counting its
+    // content's height (a caption, with nothing but the title) cut the row
+    // under it at the foot, where its progress runs.
+    implicitHeight: fill ? 120 : (actionsShown ? Type.rowHeight : 0)
                                  + Math.min(transferList.contentHeight, 4 * Type.rowHeight)
     background: Item {}
 
