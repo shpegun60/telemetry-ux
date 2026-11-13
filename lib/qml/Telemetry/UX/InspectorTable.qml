@@ -11,6 +11,8 @@ Pane {
     padding: Type.padding
 
     required property var view
+    // Detach pending delegates while the owner and its context are still alive.
+    property bool active: true
 
     ColumnLayout {
         anchors.fill: parent
@@ -52,7 +54,7 @@ Pane {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: inspector.view.inspector
+            model: inspector.active ? inspector.view.inspector : null
             activeFocusOnTab: true
             keyNavigationEnabled: true
             highlightMoveDuration: 0

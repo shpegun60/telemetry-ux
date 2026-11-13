@@ -507,22 +507,51 @@ void FileContent::setLocalFile(const QString& path)
 
 QObject* FileContent::live()
 {
-	if (live_ || devicePath_.isEmpty() || !liveFactory_ || !*liveFactory_)
+	if (live_ || retiring_ || devicePath_.isEmpty() || !liveFactory_ || !*liveFactory_)
 		return live_;
 	live_ = (*liveFactory_)(devicePath_, this);
 	return live_;
+}
+
+bool FileContent::retire()
+{
+	if (retiring_)
+		return retirementReady_;
+	retiring_ = true;
+	QPointer<FileContent> alive(this);
+	Q_EMIT retiringChanged();
+	if (!alive)
+		return false;
+	stopLive();
+	if (!alive)
+		return false;
+	retirementReady_ = true;
+	return true;
+}
+
+void FileContent::stopLive()
+{
+	// The getter is intentionally not used: retirement must not create Live.
+	const auto existing = live_;
+	if (existing && existing->property("running").toBool())
+		existing->setProperty("running", false);
 }
 
 void FileContent::setDevicePath(const QString& path)
 {
 	if (path == devicePath_)
 		return;
+	const auto previousPath = devicePath_;
+	const auto previousLive = live_;
+	QPointer<FileContent> alive(this);
+	stopLive();
+	if (!alive || retiring_ || devicePath_ != previousPath || live_ != previousLive)
+		return;
 	devicePath_ = path;
-	// A live reader reads the path it was made for.
-	if (live_) {
-		live_->deleteLater();
-		live_ = nullptr;
-	}
+	// A live reader reads the path it was made for, never its replacement.
+	live_ = nullptr;
+	if (previousLive)
+		previousLive->deleteLater();
 	// The device's name may say CSV where the local copy's does not.
 	if (textual_ && !tabular_ && devicePath_.toLower().endsWith(QStringLiteral(".csv")))
 		tabular_ = table_.setText(text_);
@@ -531,6 +560,18 @@ void FileContent::setDevicePath(const QString& path)
 
 void FileContent::beginReading(const QString& localFile, const QString& devicePath)
 {
+	const auto previousPath = devicePath_;
+	const auto previousFile = localFile_;
+	const auto previousLive = live_;
+	QPointer<FileContent> alive(this);
+	stopLive();
+	if (!alive || retiring_ || devicePath_ != previousPath || localFile_ != previousFile || live_ != previousLive)
+		return;
+	if (devicePath != devicePath_) {
+		live_ = nullptr;
+		if (previousLive)
+			previousLive->deleteLater();
+	}
 	devicePath_ = devicePath;
 	localFile_ = localFile;
 	loaded_ = textual_ = tabular_ = false;
@@ -831,11 +872,19 @@ int OpenFiles::reading(const QString& localFile, const QString& devicePath)
 		return row;
 	if (row < 0)
 		row = append();
-	auto& file = *files_[static_cast<std::size_t>(row)];
-	file.beginReading(localFile, devicePath);
+	QPointer<OpenFiles> alive(this);
+	QPointer<FileContent> file(files_[static_cast<std::size_t>(row)].get());
+	file->beginReading(localFile, devicePath);
+	// Stopping an existing Live reader may synchronously close this document,
+	// shift its row, or destroy the model. Never retain that reference/index.
+	if (!alive || !file || file->retiring())
+		return -1;
+	row = rowOf(localFile);
+	if (row < 0 || files_[static_cast<std::size_t>(row)].get() != file)
+		return -1;
 	// A row's loading role follows its content.
-	QObject::disconnect(&file, nullptr, this, nullptr);
-	connect(&file, &FileContent::changed, this, [this, content = &file] {
+	QObject::disconnect(file, nullptr, this, nullptr);
+	connect(file, &FileContent::changed, this, [this, content = file.data()] {
 		for (std::size_t i = 0; i < files_.size(); ++i)
 			if (files_[i].get() == content) {
 				const auto changed = index(static_cast<int>(i));
@@ -881,6 +930,13 @@ QString OpenFiles::codecForPath(const QString& devicePath) const
 void OpenFiles::close(int row)
 {
 	if (row < 0 || row >= count())
+		return;
+	QPointer<OpenFiles> alive(this);
+	QPointer<FileContent> content(files_[static_cast<std::size_t>(row)].get());
+	if (!content->retire())
+		return;
+	// Retirement is a public notification; a host may close the row itself.
+	if (!alive || !content || row >= count() || files_[static_cast<std::size_t>(row)].get() != content)
 		return;
 	beginRemoveRows({}, row, row);
 	auto* closing = files_[static_cast<std::size_t>(row)].release();

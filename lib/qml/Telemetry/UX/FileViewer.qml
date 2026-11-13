@@ -29,6 +29,23 @@ Pane {
     padding: 0
 
     required property var content
+    property bool retiring: false
+    // The owner calls this before releasing the viewer. Its decoded child is
+    // prepared while it still has a live context, before Loader clears it.
+    function prepareForUnload() {
+        if (retiring)
+            return
+        retiring = true
+        if (decodedView) {
+            decodedView.prepareItem()
+            decodedView.setSource("")
+        }
+        if (moreMenu)
+            moreMenu.close()
+    }
+    // No external callbacks during context teardown. The owner calls prepare
+    // explicitly, or OpenFiles announces logical retirement before removal.
+    Component.onDestruction: retiring = true
     // The host can read the device's file again (connected, the file listed).
     property bool reloadable: false
     // "decoded", "table", "text" or "hex"; empty for the format's own first choice.
@@ -428,6 +445,7 @@ Pane {
             HexPane {
                 id: hexPane
                 content: viewer.content
+                inspectorActive: !viewer.retiring
                 // A codec's parts of the file, tinted and named in the hex view;
                 // bound to the model's own property, which says when they change.
                 regions: viewer.content && viewer.content.decoded && viewer.content.decoded.regions
@@ -439,22 +457,51 @@ Pane {
             Loader {
                 id: decodedView
                 objectName: "fileViewerDecoded"
-                active: viewer.shownMode === "decoded"
-                // A new model is a new view: the old one may still hold the
-                // model that is about to go.
-                onActiveChanged: load()
+                // Keep active at its default true. setActive(false) clears a
+                // loaded item's context BEFORE activeChanged; cleanup there
+                // would already be too late. Source lifetime is owned below.
+                property bool replacing: false
+                Component.onCompleted: load()
+                Connections {
+                    target: viewer
+                    function onShownModeChanged() { decodedView.load() }
+                    function onContentChanged() {
+                        if (viewer.content && viewer.content.retiring !== true)
+                            viewer.retiring = false
+                        decodedView.load()
+                    }
+                }
                 Connections {
                     target: viewer.content
+                    ignoreUnknownSignals: true
                     function onChanged() { decodedView.load() }
+                    function onRetiringChanged() {
+                        if (viewer.content && viewer.content.retiring === true)
+                            viewer.prepareForUnload()
+                    }
+                }
+                function prepareItem() {
+                    if (item && typeof item.prepareForUnload === "function")
+                        item.prepareForUnload()
                 }
                 function load() {
-                    if (!active || !viewer.content || !viewer.content.decoded) {
-                        setSource("")
+                    if (replacing || viewer.retiring)
                         return
+                    const wanted = viewer.shownMode === "decoded" && !!viewer.content && !!viewer.content.decoded
+                    if (wanted && item && item.decoded === viewer.content.decoded && item.content === viewer.content)
+                        return
+                    replacing = true
+                    try {
+                        prepareItem()
+                        // prepare may notify the owner; re-read the current
+                        // target rather than carrying a borrowed model across it.
+                        if (viewer.retiring || viewer.shownMode !== "decoded" || !viewer.content || !viewer.content.decoded)
+                            setSource("")
+                        else
+                            setSource(viewer.content.codecView, { decoded: viewer.content.decoded, content: viewer.content })
+                    } finally {
+                        replacing = false
                     }
-                    if (item && item.decoded === viewer.content.decoded)
-                        return
-                    setSource(viewer.content.codecView, { decoded: viewer.content.decoded, content: viewer.content })
                 }
             }
         }

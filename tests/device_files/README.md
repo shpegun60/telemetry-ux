@@ -44,6 +44,13 @@ over localhost TCP to the SDK's native server. No board.
     numeric columns, text, binary as hex rows, an open quote that is only text,
     a CSV named by the device only, a missing file; the same copy opened twice is
     one row.
+  - Closing a file publishes logical retirement and stops its existing Live
+    reader before removing the model row. Retirement is idempotent and never
+    creates a lazy reader. Closing during an accepted read drains its reply,
+    submits no following piece and leaves the shared session usable. Direct
+    signal receivers may delete a reader at state/snapshot publication or
+    close, shift or destroy the file model during a new read; continuations
+    check their owners before accessing them again.
   - The Descriptor and Values trees are lazy: a struct's members and an array's
     elements are made when their row is first opened. A long array opens as
     Eclipse shows one: ranges of 256, `[0 … 255]`, `[256 … 511]`, …, ranges of

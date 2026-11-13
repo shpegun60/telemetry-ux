@@ -25,6 +25,27 @@ FocusScope {
 
     required property var decoded
     property var content: null
+    property bool retiring: false
+    function prepareForUnload() {
+        if (retiring)
+            return
+        // First suppress callbacks/focus and hidden-view resume, then stop the
+        // existing reader. One accepted read may still finish in the session.
+        retiring = true
+        pausedWhileHidden = false
+        if (findLater)
+            findLater.stop()
+        if (showLater)
+            showLater.stop()
+        if (content && typeof content.stopLive === "function")
+            content.stopLive()
+        else if (live)
+            live.running = false
+        if (nodeMenu)
+            nodeMenu.close()
+        if (descriptorDialog)
+            descriptorDialog.close()
+    }
     // Null for a file from disk: then there is nothing to read again.
     readonly property var live: content ? content.live : null
     readonly property bool running: !!live && live.running
@@ -37,6 +58,8 @@ FocusScope {
     property alias findText: findField.text
     // Find what the field holds now: the matches counted, the tree shown to them.
     function applyFind() {
+        if (retiring)
+            return
         findLater.stop()
         const text = findField.text
         const found = view.decoded.setFilter(text)
@@ -67,7 +90,7 @@ FocusScope {
     // closed Viewer, reads nothing, and Live comes back with it.
     property bool pausedWhileHidden: false
     onVisibleChanged: {
-        if (!live)
+        if (retiring || (content && content.retiring === true) || !live)
             return
         if (!visible && live.running) {
             pausedWhileHidden = true
@@ -77,9 +100,10 @@ FocusScope {
             live.running = true
         }
     }
-    Component.onDestruction: if (live) live.running = false
+    // External lifetime work belongs before Loader clears this context.
+    Component.onDestruction: retiring = true
 
-    function focusContent() { tree.forceActiveFocus() }
+    function focusContent() { if (!retiring) tree.forceActiveFocus() }
     function current() { return tree.selectionModel.currentIndex }
     function copyAs(format, whole) {
         const text = whole ? view.decoded.textOfAll(format) : view.decoded.textOf(view.current(), format)
@@ -116,7 +140,7 @@ FocusScope {
     // After Find: the matches' parents open, the matches folded. Cleared:
     // folded again, as it opened, with the current row in view.
     function showFound() {
-        if (!tree)
+        if (retiring || !tree)
             return
         if (view.findText.length === 0) {
             tree.collapseRecursively()
@@ -146,14 +170,17 @@ FocusScope {
     // Each whole read of the device's file, shown unless held.
     Connections {
         target: view.live
+        enabled: !view.retiring && !(view.content && view.content.retiring === true)
         function onSnapshot(bytes) {
+            if (view.retiring)
+                return
             const problem = view.decoded.update(bytes)
             if (problem.length > 0) {
                 view.live.running = false
                 view.stoppedBecause = qsTr("Live stopped: the device's file is %1").arg(problem)
             }
         }
-        function onStateChanged() { if (view.live.running) view.stoppedBecause = "" }
+        function onStateChanged() { if (!view.retiring && view.live && view.live.running) view.stoppedBecause = "" }
     }
 
     Menu {
@@ -198,14 +225,14 @@ FocusScope {
             enabled: view.running || view.decoded.held
             onTriggered: view.toggleHold()
         }
-        onClosed: tree.forceActiveFocus()
+        onClosed: if (!view.retiring) tree.forceActiveFocus()
     }
 
     FileDialog {
         id: descriptorDialog
         title: qsTr("Choose the descriptor this file was written with")
         nameFilters: [qsTr("Descriptor (*.bin)"), qsTr("All files (*)")]
-        onAccepted: descriptorProblem.text = view.decoded.useDescriptor(selectedFile)
+        onAccepted: if (!view.retiring) descriptorProblem.text = view.decoded.useDescriptor(selectedFile)
     }
 
     ColumnLayout {

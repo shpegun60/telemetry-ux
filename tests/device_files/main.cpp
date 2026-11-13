@@ -31,6 +31,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDir>
+#include <QDynamicPropertyChangeEvent>
 #include <QLocale>
 #include <QPointer>
 #include <QTcpServer>
@@ -2585,6 +2586,149 @@ void bigValues()
 // lost connection waits and says so, and the reads go on when it is back. The
 // viewer reaches it through connectTelemetryDevice, which also reads values
 // against the connected device's descriptor.
+
+// A third-party-compatible QObject reader: no SDK or QML engine is involved.
+class RetirementReader final : public QObject {
+public:
+	RetirementReader(int& stopped, QObject* parent) : QObject(parent), stopped_(stopped)
+	{
+		setProperty("running", true);
+	}
+	std::function<void()> onStop;
+protected:
+	bool event(QEvent* event) override
+	{
+		if (event->type() == QEvent::DynamicPropertyChange &&
+		    static_cast<QDynamicPropertyChangeEvent*>(event)->propertyName() == "running" &&
+		    !property("running").toBool()) {
+			++stopped_;
+			QPointer<RetirementReader> alive(this);
+			if (onStop)
+				onStop();
+			if (!alive)
+				return true;
+		}
+		return QObject::event(event);
+	}
+private:
+	int& stopped_;
+};
+
+void fileViewRetirement(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	using telemetry::ux::OpenFiles;
+	int created = 0, stopped = 0;
+	QStringList paths;
+	FileContent::LiveFactory factory = [&](const QString& path, QObject* parent) -> QObject* {
+		++created;
+		paths.push_back(path);
+		return new RetirementReader(stopped, parent);
+	};
+	FileContent content;
+	content.setLiveFactory(&factory);
+	content.setDevicePath(QStringLiteral("/old.bin"));
+	content.stopLive();
+	CHECK(created == 0 && stopped == 0); // Retirement does not materialize Live.
+	QPointer<QObject> old(content.live());
+	CHECK(created == 1 && old && old->property("running").toBool());
+	content.stopLive();
+	content.stopLive();
+	CHECK(stopped == 1 && !old->property("running").toBool());
+	old->setProperty("running", true);
+	content.setDevicePath(QStringLiteral("/new.bin"));
+	CHECK(stopped == 2 && old && !old->property("running").toBool() && created == 1);
+	QPointer<QObject> replacement(content.live());
+	CHECK(replacement && replacement != old && paths.back() == QStringLiteral("/new.bin"));
+	content.beginReading(folder + QStringLiteral("/not-yet-downloaded.bin"), QStringLiteral("/third.bin"));
+	CHECK(stopped == 3 && replacement && !replacement->property("running").toBool());
+	CHECK(content.live() != replacement && paths.back() == QStringLiteral("/third.bin"));
+
+	OpenFiles open;
+	open.setLiveFactory(factory);
+	const auto local = folder + QStringLiteral("/retirement.bin");
+	const auto row = open.open(local, QStringLiteral("/retirement.bin"));
+	auto* file = open.contentFor(local);
+	QPointer<QObject> reader(file->live());
+	bool stoppedBeforeRemove = false;
+	unsigned removals = 0, deaths = 0;
+	QObject callbacks;
+	QObject::connect(&open, &QAbstractItemModel::rowsAboutToBeRemoved, &callbacks,
+	                 [&](const QModelIndex&, int, int) { ++removals; });
+	const auto removalCheck = QObject::connect(&open, &QAbstractItemModel::rowsAboutToBeRemoved, &callbacks,
+	                 [&](const QModelIndex&, int, int) { stoppedBeforeRemove = file->retiring() && reader && !reader->property("running").toBool(); });
+	QObject::connect(reader, &QObject::destroyed, &callbacks, [&] { ++deaths; });
+	open.close(row);
+	CHECK(stoppedBeforeRemove && removals == 1 && open.count() == 0 && reader && deaths == 0);
+	QObject::disconnect(removalCheck);
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	CHECK(!reader && deaths == 1);
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	CHECK(deaths == 1);
+	const auto beforeUnused = created;
+	const auto unused = folder + QStringLiteral("/unused.bin");
+	const auto unusedRow = open.open(unused, QStringLiteral("/unused.bin"));
+	auto* unusedContent = open.contentFor(unused);
+	bool noLazyReader = false;
+	QObject::connect(unusedContent, &FileContent::retiringChanged, &callbacks,
+	                 [&] { noLazyReader = unusedContent->retiring() && !unusedContent->live(); });
+	open.close(unusedRow);
+	CHECK(noLazyReader && created == beforeUnused && open.count() == 0);
+
+	const auto reentrant = open.open(local, QStringLiteral("/retirement.bin"));
+	auto* nestedReader = static_cast<RetirementReader*>(open.contentFor(local)->live());
+	nestedReader->onStop = [&] { open.close(reentrant); };
+	const auto beforeReentrant = removals;
+	open.close(reentrant);
+	CHECK(open.count() == 0 && removals == beforeReentrant + 1);
+
+	QPointer<OpenFiles> deletedOwner = new OpenFiles;
+	const auto deletedRow = deletedOwner->open(local, QStringLiteral("/retirement.bin"));
+	QObject::connect(deletedOwner->contentFor(local), &FileContent::retiringChanged, &callbacks,
+	                 [&] { delete deletedOwner.data(); });
+	deletedOwner->close(deletedRow);
+	CHECK(!deletedOwner);
+
+	// beginReading stops an existing reader before changing its models. That
+	// notification may legitimately alter this owner's row list.
+	OpenFiles shifted;
+	shifted.setLiveFactory(factory);
+	const auto earlier = folder + QStringLiteral("/earlier.bin");
+	shifted.open(earlier, QStringLiteral("/earlier.bin"));
+	shifted.open(local, QStringLiteral("/retirement.bin"));
+	auto* shiftingReader = static_cast<RetirementReader*>(shifted.contentFor(local)->live());
+	shiftingReader->onStop = [&] { shifted.close(shifted.rowOf(earlier)); };
+	CHECK(shifted.reading(local, QStringLiteral("/retirement.bin")) == 0 && shifted.count() == 1 &&
+	      shifted.contentFor(local)->loading());
+	shiftingReader->setProperty("running", true);
+	shiftingReader->onStop = [&] { shifted.close(shifted.rowOf(local)); };
+	CHECK(shifted.reading(local, QStringLiteral("/retirement.bin")) == -1 && shifted.count() == 0);
+
+	QPointer<OpenFiles> deletedDuringRead = new OpenFiles;
+	deletedDuringRead->setLiveFactory([](const QString& path, QObject* parent) -> QObject* {
+		return new telemetry::ux::DeviceFileLive(nullptr, nullptr, path, parent);
+	});
+	deletedDuringRead->open(local, QStringLiteral("/retirement.bin"));
+	auto* deletingReader = qobject_cast<telemetry::ux::DeviceFileLive*>(deletedDuringRead->contentFor(local)->live());
+	deletingReader->setRunning(true); // Waiting for a device, no submitted read.
+	QObject::connect(deletingReader, &telemetry::ux::DeviceFileLive::stateChanged, &callbacks,
+	                 [&] { delete deletedDuringRead.data(); });
+	CHECK(deletedDuringRead->reading(local, QStringLiteral("/retirement.bin")) == -1 && !deletedDuringRead);
+
+	QPointer<telemetry::ux::DeviceFileLive> deleted =
+	    new telemetry::ux::DeviceFileLive(nullptr, nullptr, QStringLiteral("/retirement.bin"));
+	QObject::connect(deleted, &telemetry::ux::DeviceFileLive::stateChanged, &callbacks,
+	                 [&] { delete deleted.data(); });
+	deleted->setRunning(true);
+	CHECK(!deleted);
+	QPointer<telemetry::ux::DeviceFileLive> deletedPeriod =
+	    new telemetry::ux::DeviceFileLive(nullptr, nullptr, QStringLiteral("/retirement.bin"));
+	QObject::connect(deletedPeriod, &telemetry::ux::DeviceFileLive::stateChanged, &callbacks,
+	                 [&] { delete deletedPeriod.data(); });
+	deletedPeriod->setPeriodMs(1500);
+	CHECK(!deletedPeriod);
+}
+
 void liveValues(const QString& folder)
 {
 	using telemetry::ux::DeviceFileLive;
@@ -2739,6 +2883,74 @@ void liveValues(const QString& folder)
 	// A file from disk has nothing to read again.
 	open.open(folder + QStringLiteral("/loose/values.bin"));
 	CHECK(open.contentFor(folder + QStringLiteral("/loose/values.bin"))->live() == nullptr);
+	// Close while a real read is in flight: logical Live stops before the row
+	// is removed, and destruction hands the accepted request to its Orphan.
+	QPointer<DeviceFileLive> closingReader(reader);
+	QPointer<telemetry::ux::FileContent> closingContent(content);
+	bool stoppedBeforeRemove = false;
+	const auto closingRemoval = QObject::connect(&open, &QAbstractItemModel::rowsAboutToBeRemoved, &open,
+	                 [&](const QModelIndex&, int, int) { stoppedBeforeRemove = closingReader && !closingReader->running(); });
+	reader->setRunning(true);
+	CHECK(await([&] { return reader->reading(); }));
+	const auto beforeClose = fromViewer;
+	open.close(open.rowOf(local));
+	CHECK(stoppedBeforeRemove && closingReader && !closingReader->running());
+	QObject::disconnect(closingRemoval);
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+	CHECK(!closingReader && !closingContent);
+	CHECK(await([&] { return !session.busy(); }));
+	CHECK(session.ready() && files.available() && !session.recoveryRequired());
+	const auto afterDrain = fromViewer;
+	QElapsedTimer stoppedFor;
+	stoppedFor.start();
+	CHECK(await([&] { return stoppedFor.elapsed() >= 2 * DeviceFileLive::minimumPeriodMs; }));
+	CHECK(fromViewer == afterDrain && afterDrain <= beforeClose + 1 && !session.busy());
+	// Public direct receivers may close a reader at either state or snapshot
+	// publication. No continuation may touch it or schedule another read.
+	QObject lifetimeCallbacks;
+	QPointer<DeviceFileLive> deletedAtBegin =
+	    new DeviceFileLive(&session, &files, QStringLiteral("/telemetry/values.bin"));
+	bool begun = false;
+	QObject::connect(deletedAtBegin, &DeviceFileLive::stateChanged, &lifetimeCallbacks, [&] {
+		if (deletedAtBegin && deletedAtBegin->reading()) {
+			begun = true;
+			delete deletedAtBegin.data();
+		}
+	});
+	deletedAtBegin->setRunning(true);
+	const bool deletedOnBegin = await([&] { return begun && !deletedAtBegin; });
+	const bool idleAfterBegin = await([&] { return !session.busy(); });
+	if (!deletedOnBegin || !idleAfterBegin)
+		std::fprintf(stderr, "retirement begin: begun=%d deleted=%d idle=%d ready=%d files=%d loading=%d count=%d problem=%s\n",
+		             begun, !deletedAtBegin, idleAfterBegin, session.ready(), session.filesSupported(), files.loading(),
+		             files.fileCount(), deletedAtBegin ? qPrintable(deletedAtBegin->problem()) : "<deleted>");
+	CHECK(deletedOnBegin && idleAfterBegin);
+
+	QPointer<DeviceFileLive> deletedAtSnapshot =
+	    new DeviceFileLive(&session, &files, QStringLiteral("/telemetry/values.bin"));
+	unsigned snapshotCallbacks = 0;
+	QObject::connect(deletedAtSnapshot, &DeviceFileLive::snapshot, &lifetimeCallbacks, [&](const QByteArray&) {
+		++snapshotCallbacks;
+		delete deletedAtSnapshot.data();
+	});
+	deletedAtSnapshot->setRunning(true);
+	CHECK(await([&] { return !deletedAtSnapshot; }) && snapshotCallbacks == 1 && !session.busy());
+
+	QPointer<DeviceFileLive> deletedAtComplete =
+	    new DeviceFileLive(&session, &files, QStringLiteral("/telemetry/values.bin"));
+	unsigned completedStates = 0;
+	QObject::connect(deletedAtComplete, &DeviceFileLive::stateChanged, &lifetimeCallbacks, [&] {
+		if (deletedAtComplete && deletedAtComplete->reads() == 1 && !deletedAtComplete->reading()) {
+			++completedStates;
+			delete deletedAtComplete.data();
+		}
+	});
+	deletedAtComplete->setRunning(true);
+	CHECK(await([&] { return !deletedAtComplete; }) && completedStates == 1 && !session.busy());
+	QElapsedTimer noContinuation;
+	noContinuation.start();
+	CHECK(await([&] { return noContinuation.elapsed() >= 2 * DeviceFileLive::minimumPeriodMs; }));
+	CHECK(snapshotCallbacks == 1 && completedStates == 1 && !session.busy());
 	session.disconnect();
 	device.value = 42;
 }
@@ -3140,6 +3352,7 @@ int main(int argc, char** argv)
 	deviceLayer(folder.path());
 	deviceRecordSizes(folder.path());
 	uploads(folder.path());
+	fileViewRetirement(folder.path());
 	liveValues(folder.path());
 	truncatedList();
 	std::printf("Device files UX: %u checks, 0 failures\n", checks);

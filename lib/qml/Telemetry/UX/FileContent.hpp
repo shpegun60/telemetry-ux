@@ -23,6 +23,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtGui/QUndoStack>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
@@ -160,6 +161,8 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QAbstractItemModel* hex READ hex CONSTANT)
 	// Reads the device's file again and again for a live view; see live().
 	Q_PROPERTY(QObject* live READ live NOTIFY changed)
+	// Logical close precedes model removal and QML context retirement.
+	Q_PROPERTY(bool retiring READ retiring NOTIFY retiringChanged)
 	// Editing, in Hex only: bytes overwritten in memory - a device file has a
 	// fixed size, so nothing is inserted or taken out - undone and redone,
 	// and written to localFile by Save. Off until the view turns it on.
@@ -250,6 +253,10 @@ public:
 	// It offers `running`, `periodMs`, `problem` and the signal
 	// `snapshot(bytes)`; a codec view shows its snapshots.
 	QObject* live();
+	bool retiring() const noexcept { return retiring_; }
+	// Stops only the existing reader; never creates one while closing a view.
+	// An already accepted read may finish; none follows it.
+	Q_INVOKABLE void stopLive();
 
 	// Reads localFile again: after a new download, or Reload. Unsaved edits
 	// go with it: a host asks first (modified).
@@ -322,6 +329,7 @@ public:
 
 Q_SIGNALS:
 	void changed();
+	void retiringChanged();
 	void editChanged();
 	// Bytes are about to change in place: a view holding a copy lets it go,
 	// so an edit does not copy the whole file.
@@ -329,6 +337,8 @@ Q_SIGNALS:
 	void bytesEdited(qint64 offset, qint64 length);
 
 private:
+	friend class OpenFiles;
+	bool retire();
 	friend class OverwriteStep;
 	friend class RunsStep;
 	friend class WholeStep;
@@ -369,7 +379,8 @@ private:
 	bool hasReference_ = false, referenceWritten_ = false;
 	qint64 referenceDiffers_ = 0;
 	QObject* decoded_ = nullptr; // a child of this
-	QObject* live_ = nullptr;    // a child of this, for devicePath_
+	QPointer<QObject> live_;    // a child of this, for devicePath_
+	bool retiring_ = false, retirementReady_ = false;
 	QUrl codecView_;
 	QByteArray bytes_;
 	// The bytes as on disk: what an edit is told from, and Discard goes back to.

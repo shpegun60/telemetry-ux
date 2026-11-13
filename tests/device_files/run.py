@@ -3,6 +3,7 @@
 localhost TCP. Builds tests/device_files against the given prefixes and runs
 the model check and the off-screen panel check. No board. MIT."""
 import argparse
+import locale
 import os
 from pathlib import Path
 import re
@@ -42,13 +43,21 @@ def main():
     environment['PATH'] = os.pathsep.join([str(qt / 'bin'), str(Path(tools['cxx']).parent), environment.get('PATH', '')])
 
     def run(label, command, cwd=output, timeout=600):
-        result = subprocess.run(list(map(str, command)), cwd=cwd, env=environment, text=True,
+        result = subprocess.run(list(map(str, command)), cwd=cwd, env=environment,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        (output / (label + '.log')).write_text(result.stdout, encoding='utf-8')
+        # Native qPrintable() uses the Windows system code page even when
+        # Python itself is in UTF-8 mode. Retain the exact bytes as evidence
+        # before decoding; a reader-thread decoding error must not lose them.
+        (output / (label + '.raw.log')).write_bytes(result.stdout)
+        try:
+            text = result.stdout.decode('utf-8')
+        except UnicodeDecodeError:
+            text = result.stdout.decode(locale.getencoding(), errors='replace')
+        (output / (label + '.log')).write_text(text, encoding='utf-8')
         print(label + ': ' + str(result.returncode), flush=True)
         if result.returncode:
-            raise RuntimeError(label + ' failed:\n' + result.stdout[-8000:])
-        return result.stdout
+            raise RuntimeError(label + ' failed:\n' + text[-8000:])
+        return text
 
     flags = '-Wall -Wextra -Werror'
     if args.sanitize:
@@ -74,8 +83,8 @@ def main():
     run('build', [tools['cmake'], '--build', build])
     suffix = '.exe' if os.name == 'nt' else ''
     for name, pattern, floor in (('telemetry_event_log_check', r'Event log: (\d+) checks, 0 failures', 41),
-                                 ('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 70),
-                                 ('telemetry_device_files_panel', r'Device files panel: (\d+) checks, warnings=0', 45)):
+                                 ('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 1056),
+                                 ('telemetry_device_files_panel', r'Device files panel: (\d+) checks, warnings=0', 490)):
         text = run(name, [build / (name + suffix)], cwd=build, timeout=300)
         found = re.findall(pattern, text)
         if len(found) != 1 or int(found[0]) < floor:

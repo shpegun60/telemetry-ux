@@ -349,6 +349,25 @@ context menus and request signals still work. `transfersShown` independently
 controls the embedded transfer list; set it to `false` when the host shows
 `DeviceTransfersPanel` in a separate dock.
 
+### Closing a file view
+
+`OpenFiles.close(row)` announces `FileContent.retiring` before removing its row.
+`FileViewer` then detaches pending Inspector delegates, prepares its codec view
+and stops the existing Live reader. An accepted read can still finish through
+the session's normal drain; closing a view neither cancels the shared session
+nor starts another read. `FileContent.stopLive()` never creates a reader.
+Session-backed Live requires the SDK's `FileReader::stopAfterCurrent()` API.
+The accepted request keeps its normal deadline; a genuinely lost reply can still
+require recovery.
+
+A host that destroys a standalone `FileViewer` without closing its `OpenFiles`
+row calls `viewer.prepareForUnload()` first. The same optional method on a custom
+codec view lets it stop its timers and detach callbacks before its Loader clears
+the context. Both preparation calls are idempotent. A hidden tab pauses and
+resumes its existing view; replacing or closing it is a separate operation.
+Returning from Hex to decoded Values creates a stopped view: Start is explicit.
+The host still keeps the content/model alive until its viewers have released it.
+
 The tree's rows are `DeviceFileRow` (the Basic style is imported there only):
 a format icon, the device's name, size and `rws` access letters in columns shared
 with the headings. Selection belongs to `DeviceFilesModel` and survives a refresh

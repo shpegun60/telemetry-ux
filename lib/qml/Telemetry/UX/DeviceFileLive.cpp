@@ -41,7 +41,9 @@ class DeviceFileLive::Orphan final : public QObject {
 public:
 	Orphan(std::unique_ptr<Job> job, Session* session) : QObject(session), job_(std::move(job))
 	{
-		job_->reader->cancel();
+		// Retain the accepted request's reply correlation on the shared session.
+		// Cancelling after handoff would require recovery for this raw reply.
+		job_->reader->stopAfterCurrent();
 		// Polled on the loop's next turn, never inside the session's completion.
 		connect(session, &Session::progressed, this, [this] { QTimer::singleShot(0, this, [this] { check(); }); });
 		connect(session, &Session::stateChanged, this, [this] { QTimer::singleShot(0, this, [this] { check(); }); });
@@ -123,8 +125,9 @@ void DeviceFileLive::setRunning(bool running)
 		problem_.clear();
 		waiting_ = false;
 	}
+	QPointer<DeviceFileLive> alive(this);
 	Q_EMIT stateChanged();
-	if (!running_)
+	if (!alive || !running_)
 		return;
 	// Turned on again soon after a read: still the period's spacing.
 	if (startedMs_ >= 0 && !job_)
@@ -139,7 +142,10 @@ void DeviceFileLive::setPeriodMs(int periodMs)
 	if (periodMs_ == periodMs)
 		return;
 	periodMs_ = periodMs;
+	QPointer<DeviceFileLive> alive(this);
 	Q_EMIT stateChanged();
+	if (!alive)
+		return;
 	if (next_.isActive())
 		schedule();
 }
@@ -216,8 +222,10 @@ void DeviceFileLive::begin()
 	job_ = std::move(job);
 	startedMs_ = clock_.elapsed();
 	(void)job_->reader->start(static_cast<resource::FileIndex>(file.value(QStringLiteral("fileIndex")).toInt()));
+	QPointer<DeviceFileLive> alive(this);
 	Q_EMIT stateChanged();
-	poll();
+	if (alive)
+		poll();
 }
 
 void DeviceFileLive::schedulePoll()
@@ -251,11 +259,15 @@ void DeviceFileLive::poll()
 	endedMs_ = clock_.elapsed();
 	lastReadMs_ = static_cast<int>(endedMs_ - startedMs_);
 	waiting_ = false;
+	QPointer<DeviceFileLive> alive(this);
+
 	switch (state) {
 		case files::ReadState::Complete:
 			++reads_;
 			problem_.clear();
 			Q_EMIT snapshot(bytes);
+			if (!alive)
+				return;
 			break;
 		case files::ReadState::Cancelled:
 			break;
@@ -286,6 +298,8 @@ void DeviceFileLive::poll()
 			break;
 	}
 	Q_EMIT stateChanged();
+	if (!alive)
+		return;
 	if (running_)
 		schedule();
 }

@@ -38,6 +38,8 @@ FocusScope {
     // The inspector beside the grid when there is room, under it otherwise.
     readonly property bool inspectorBeside: width >= 950
     property bool inspectorOpen: true
+    // Logical unload cancels the inspector's pending delegate requests first.
+    property bool inspectorActive: true
     readonly property alias view: grid
 
     function focusContent() { grid.forceActiveFocus() }
@@ -587,6 +589,7 @@ FocusScope {
 
             // The inspector beside the grid, from 950 px.
             InspectorTable {
+                active: pane.inspectorActive && !(pane.content && pane.content.retiring === true)
                 visible: pane.inspectorOpen && pane.inspectorBeside
                 Layout.preferredWidth: 280
                 Layout.fillHeight: true
