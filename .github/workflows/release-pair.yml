@@ -32,6 +32,11 @@ jobs:
           ux = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           if pair['schemaVersion'] != 1 or not all(re.fullmatch('[0-9a-f]{40}', s) for s in (sdk, ux)):
               raise SystemExit('Require immutable full SDK and UX commits')
+          def require_default_pair(workflow, expected):
+              defaults = re.findall(r"SDK_EXPECTED_REVISION:\s*\$\{\{\s*inputs\.sdk_revision\s*\|\|\s*'([0-9a-f]{40})'\s*\}\}", workflow)
+              if len(defaults) != 4 or set(defaults) != {expected}:
+                  raise SystemExit('ci.yml SDK defaults must match .github/release-pair.json; explicit workflow_call overrides remain allowed')
+          require_default_pair(Path('.github/workflows/ci.yml').read_text(), sdk)
           if pair['uxVersion'] != Path('VERSION').read_text().strip() or pair['sdkVersion'] != '0.1.0':
               raise SystemExit('The release pair versions do not match this consumer contract')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:

@@ -1,8 +1,14 @@
 # Compatibility qualification
 
-`workflows/ci.yml` keeps the immutable older SDK revisions used by the supported
-consumer profiles. It also accepts full SDK/UX revisions through `workflow_call`.
-There is one implementation of each consumer suite.
+`workflows/ci.yml` runs the current UX consumers against the same immutable SDK
+commit recorded in `release-pair.json`. The four SDK defaults must match that
+canonical pair; the identity check rejects drift between them. These are current
+consumer checks, not a claim that new UX APIs work with an older SDK. There is
+one implementation of each consumer suite.
+
+An explicit full SDK/UX pair supplied through `workflow_call` overrides the
+normal SDK default for that run. The separately pinned `setup-apt` action is a
+CI helper, not the SDK library installed by the consumers.
 
 `workflows/release-pair.yml` calls those same six jobs with the SDK commit in
 `release-pair.json` and the exact UX PR head (or pushed main commit). This covers
@@ -14,8 +20,9 @@ The `exact-release-pair` artifact records the selected inputs, not a success
 claim. The aggregate check supplies the result; each consumer retains its own
 actual command logs, installed package identities and qualification receipts.
 
-Update `sdkRevision` after reviewing and testing a new joint delivery. A moving
-SDK `main` is never silently substituted for a recorded commit. A successful old
+Update `sdkRevision` and all four `ci.yml` SDK defaults together after reviewing
+and testing a new joint delivery. A moving SDK `main` is never silently
+substituted for a recorded commit. A successful old
 compatibility profile alone does not qualify the selected release pair. Add the
 aggregate check to the required checks after its first successful qualification.
 
