@@ -1,6 +1,8 @@
-// One row of the Device files tree: its mark, the device's own name, the size
-// and the access in fixed columns. The current row is highlighted, and framed
-// while the tree has the keyboard. MIT.
+// One row of the Device files tree: the device's own name, the size and the
+// access in fixed columns. A selected row is highlighted - a folder stands for
+// its files, and one with some of them selected carries a line along its
+// edge; the current row is framed while the tree has the keyboard. A click is
+// the panel's to read with its keys (Ctrl, Shift). MIT.
 //
 // The Basic style is imported here only, where the row customises its
 // controls; the panel keeps the style the host chose.
@@ -35,7 +37,8 @@ TreeViewDelegate {
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
 
-    signal markRequested(var index, bool value)
+    // A left click, with the keys held: the panel selects from it.
+    signal rowClicked(var index, int row, int modifiers)
     signal openRequested(var index)
     // A right click on the row: the panel opens its menu there.
     signal contextMenuRequested(var index, real x, real y)
@@ -44,32 +47,18 @@ TreeViewDelegate {
     implicitHeight: Type.rowHeight
     rightPadding: Type.padding
     text: name
-    highlighted: current
+    highlighted: marked === Qt.Checked
 
     // The device's name goes in last, under the highest number, so nothing in
     // it is ever read as a placeholder.
     Accessible.name: isFolder ? qsTr("%2, folder, %1").arg(spokenSize).arg(name)
                               : qsTr("%3, %1, %2").arg(spokenSize).arg(accessText).arg(name)
-    Accessible.checkable: markable
-    Accessible.checked: marked === Qt.Checked
+    Accessible.selectable: markable
+    Accessible.selected: marked === Qt.Checked
 
     contentItem: RowLayout {
         spacing: Type.padding
 
-        RowCheckBox {
-            objectName: "deviceFileMark"
-            enabled: fileRow.markable
-            tristate: fileRow.isFolder
-            checkState: fileRow.marked
-            // A click marks or unmarks; it never stops on "partly marked".
-            nextCheckState: function() { return fileRow.marked === Qt.Checked ? Qt.Unchecked : Qt.Checked }
-            Accessible.name: qsTr("Mark %1 for download").arg(fileRow.name)
-            onClicked: {
-                fileRow.markRequested(fileRow.sourceIndex, checkState === Qt.Checked)
-                // The model decides; the box shows what it decided.
-                checkState = Qt.binding(function() { return fileRow.marked })
-            }
-        }
         // The device's own name, never replaced.
         Label {
             Layout.fillWidth: true
@@ -98,6 +87,17 @@ TreeViewDelegate {
         }
     }
 
+    // Some of a folder's files selected, not all: a line along its edge.
+    Rectangle {
+        objectName: "deviceFilePartlySelected"
+        x: 0
+        width: 2
+        height: fileRow.height
+        color: Theme.selectionFill
+        visible: fileRow.isFolder && fileRow.marked === Qt.PartiallyChecked
+        Accessible.ignored: true
+    }
+
     Rectangle {
         objectName: "deviceFileFocusFrame"
         anchors.fill: parent
@@ -109,6 +109,27 @@ TreeViewDelegate {
     }
 
     onDoubleClicked: if (!isFolder) fileRow.openRequested(sourceIndex)
+    // One handler per set of keys held: the tap's own point carries no keys.
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        acceptedModifiers: Qt.NoModifier
+        onTapped: fileRow.rowClicked(fileRow.sourceIndex, fileRow.row, Qt.NoModifier)
+    }
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        acceptedModifiers: Qt.ControlModifier
+        onTapped: fileRow.rowClicked(fileRow.sourceIndex, fileRow.row, Qt.ControlModifier)
+    }
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        acceptedModifiers: Qt.ShiftModifier
+        onTapped: fileRow.rowClicked(fileRow.sourceIndex, fileRow.row, Qt.ShiftModifier)
+    }
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        acceptedModifiers: Qt.ShiftModifier | Qt.ControlModifier
+        onTapped: fileRow.rowClicked(fileRow.sourceIndex, fileRow.row, Qt.ShiftModifier | Qt.ControlModifier)
+    }
     TapHandler {
         acceptedButtons: Qt.RightButton
         onTapped: function(point) {

@@ -93,6 +93,56 @@ Pane {
     function rowOf(index) {
         return fileTree.rowAtIndex(index)
     }
+    // The selection, as a file explorer's. The model keeps it - the files
+    // selected, by path, across Refresh; a folder row stands for its files.
+    // The anchor is where a Shift range starts.
+    property int anchorRow: -1
+    function selectOnly(index) {
+        files.markAll(false)
+        if (index && index.valid)
+            files.setMarked(index, true)
+    }
+    function toggleSelected(index) {
+        if (index && index.valid)
+            files.setMarked(index, !files.isMarked(index))
+    }
+    // Every row from the anchor to `row`, in the order they are shown; with
+    // `add` the rest stays selected.
+    function selectRange(from, to, add) {
+        if (!add)
+            files.markAll(false)
+        const first = Math.max(0, Math.min(from, to)), last = Math.min(fileTree.rows - 1, Math.max(from, to))
+        for (let row = first; row <= last; ++row)
+            files.setMarked(fileTree.index(row, 0), true)
+    }
+    function rowClicked(index, row, modifiers) {
+        fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
+        if ((modifiers & Qt.ShiftModifier) && anchorRow >= 0) {
+            selectRange(anchorRow, row, modifiers & Qt.ControlModifier)
+            return
+        }
+        if (modifiers & Qt.ControlModifier)
+            toggleSelected(index)
+        else
+            selectOnly(index)
+        anchorRow = row
+    }
+    // The arrows move the current row and the selection with it; Shift
+    // extends from the anchor; Ctrl moves alone.
+    function moveCurrent(step, modifiers) {
+        if (fileTree.rows === 0)
+            return
+        const row = Math.max(0, Math.min(fileTree.rows - 1, (fileTree.currentRow < 0 ? -1 : fileTree.currentRow) + step))
+        const index = fileTree.index(row, 0)
+        fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
+        fileTree.positionViewAtRow(row, TableView.Contain)
+        if (modifiers & Qt.ShiftModifier) {
+            selectRange(anchorRow >= 0 ? anchorRow : row, row, false)
+        } else if (!(modifiers & Qt.ControlModifier)) {
+            selectOnly(index)
+            anchorRow = row
+        }
+    }
     function isExpanded(index) {
         const row = index ? rowOf(index) : -1
         return row >= 0 && fileTree.isExpanded(row)
@@ -145,6 +195,11 @@ Pane {
         let kind = "empty"
         if (index && index.valid) {
             fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
+            // As in a file explorer: a click outside the selection selects that row.
+            if (!files.isMarked(index)) {
+                selectOnly(index)
+                anchorRow = rowOf(index)
+            }
             kind = !files.isFile(index) ? "folder"
                  : files.isMarked(index) && files.markedCount > 1 ? "marked" : "file"
         }
@@ -198,7 +253,7 @@ Pane {
                     : panel.files.loading ? (panel.files.fileCount > 0 ? qsTr("Refreshing…")
                                                                        : qsTr("Reading the file list…"))
                     : panel.files.markedCount > 0
-                    ? qsTr("%n marked · %1", "", panel.files.markedCount).arg(panel.files.formatSize(panel.files.markedBytes))
+                    ? qsTr("%n selected · %1", "", panel.files.markedCount).arg(panel.files.formatSize(panel.files.markedBytes))
                     : panel.files.fileCount === 1 ? qsTr("1 file") : qsTr("%n files", "", panel.files.fileCount)
             }
             IconToolButton {
@@ -354,17 +409,28 @@ Pane {
             model: panel.files
             activeFocusOnTab: true
             selectionModel: ItemSelectionModel { model: fileTree.model }
+            // The selection is the model's (the panel's gestures): the view's
+            // own would take Ctrl+click for itself. It keeps only the current row.
+            selectionBehavior: TableView.SelectionDisabled
             columnWidthProvider: function() { return Math.max(1, fileTree.width) }
             onWidthChanged: Qt.callLater(function() { if (fileTree) fileTree.forceLayout() })
 
             Keys.onSpacePressed: function(event) {
                 const index = fileTree.selectionModel.currentIndex
                 if (index.valid) {
-                    // The model leaves a file it cannot read unmarked.
-                    panel.files.setMarked(index, !panel.files.isMarked(index))
+                    // The model leaves a file it cannot read unselected.
+                    panel.toggleSelected(index)
+                    panel.anchorRow = fileTree.currentRow
                     event.accepted = true
                 }
             }
+            Keys.onEscapePressed: function(event) {
+                event.accepted = panel.files.markedCount > 0
+                if (event.accepted)
+                    panel.files.markAll(false)
+            }
+            Keys.onUpPressed: function(event) { panel.moveCurrent(-1, event.modifiers) }
+            Keys.onDownPressed: function(event) { panel.moveCurrent(1, event.modifiers) }
             Keys.onReturnPressed: function(event) {
                 if (event.modifiers & Qt.AltModifier)
                     panel.showProperties(panel.currentIndex)
@@ -419,7 +485,7 @@ Pane {
                 sizeWidth: panel.sizeWidth
                 accessWidth: panel.accessWidth
                 accessShown: panel.accessShown
-                onMarkRequested: function(index, value) { panel.files.setMarked(index, value) }
+                onRowClicked: function(index, row, modifiers) { panel.rowClicked(index, row, modifiers) }
                 onOpenRequested: function(index) { panel.openIndex(index) }
                 onContextMenuRequested: function(index, x, y) { panel.openMenu(index, this, x, y) }
             }

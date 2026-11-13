@@ -93,7 +93,7 @@ Menu {
         objectName: "deviceFileMenuMarkFolder"
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark all files in folder\tSpace")
+        text: qsTr("&Select all files in folder\tSpace")
         onTriggered: menu.files.setMarked(menu.index, true)
     }
 
@@ -102,7 +102,7 @@ Menu {
         objectName: "deviceFileMenuDownloadMarked"
         visible: menu.kind === "marked"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Download %n marked files…\tCtrl+S", "", menu.files.markedCount)
+        text: qsTr("&Download %n selected files…\tCtrl+S", "", menu.files.markedCount)
         enabled: menu.connected
         onTriggered: menu.panel.download()
     }
@@ -110,7 +110,7 @@ Menu {
         objectName: "deviceFileMenuClearMarks"
         visible: menu.kind === "marked" || menu.kind === "empty"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Clear marks\tCtrl+Shift+A")
+        text: qsTr("Select &none\tEsc")
         enabled: menu.files.markedCount > 0
         onTriggered: menu.files.markAll(false)
     }
@@ -137,7 +137,7 @@ Menu {
         objectName: "deviceFileMenuMarkAll"
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark all\tCtrl+A")
+        text: qsTr("Select &all\tCtrl+A")
         onTriggered: menu.files.markAll(true)
     }
 
@@ -164,7 +164,7 @@ Menu {
         objectName: "deviceFileMenuMark"
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark for download%1\tSpace").arg(menu.readable ? "" : qsTr(" (not readable)"))
+        text: qsTr("&Add to the selection%1\tCtrl+Space").arg(menu.readable ? "" : qsTr(" (not readable)"))
         checkable: true
         checked: menu.kind === "file" && menu.index !== undefined && menu.files.isMarked(menu.index)
         enabled: menu.readable

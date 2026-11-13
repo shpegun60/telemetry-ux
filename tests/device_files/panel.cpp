@@ -649,7 +649,7 @@ int main(int argc, char** argv)
 		return download->property("text").toString() == QStringLiteral("Download 2 files…");
 	}));
 	CHECK(download->property("enabled").toBool());
-	CHECK(child(root, "deviceFilesSummary")->property("text").toString().startsWith(QStringLiteral("2 marked")));
+	CHECK(child(root, "deviceFilesSummary")->property("text").toString().startsWith(QStringLiteral("2 selected")));
 	CHECK(QMetaObject::invokeMethod(download, "clicked"));
 	CHECK(await([&] {
 		return root->property("lastSelection").toList().size() == 2;
@@ -809,8 +809,9 @@ int main(int argc, char** argv)
 	CHECK(root->property("windowSaves").toInt() == 0);
 	files.markAll(false);
 
-	// The current row is highlighted and framed while the tree has the
-	// keyboard; Enter on a folder folds and unfolds it.
+	// The current row is framed while the tree has the keyboard; a row is
+	// highlighted because it is selected, not because it is current. Enter on
+	// a folder folds and unfolds it.
 	auto* tree = qobject_cast<QQuickItem*>(child(root, "deviceFilesTree"));
 	auto* selection = qvariant_cast<QItemSelectionModel*>(tree->property("selectionModel"));
 	CHECK(selection);
@@ -820,11 +821,56 @@ int main(int argc, char** argv)
 	QQuickItem* currentRow = nullptr;
 	CHECK(await([&] {
 		currentRow = delegateWhere(root, "deviceFileRow", "current", true);
-		return currentRow && currentRow->property("highlighted").toBool();
+		return currentRow != nullptr;
 	}));
 	CHECK(currentRow->property("name").toString() == QStringLiteral("logs"));
+	CHECK(!currentRow->property("highlighted").toBool());
 	if (tree->hasActiveFocus())
 		CHECK(visualChild(currentRow, QStringLiteral("deviceFileFocusFrame"))->isVisible());
+	files.setMarked(logs2, true);
+	CHECK(await([&] { return currentRow->property("highlighted").toBool(); }));
+	files.markAll(false);
+
+	// Selection as in a file explorer: a click selects that row alone, Ctrl+
+	// click adds and removes, Shift+click takes the rows from the anchor, the
+	// arrows move it, Shift+arrows extend it, Esc selects nothing. A folder
+	// row stands for its files.
+	{
+		auto* window = qobject_cast<QQuickWindow*>(root);
+		const auto clickRow = [&](const QString& name, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+			auto* row = delegateWhere(root, "deviceFileRow", "name", name);
+			CHECK(row != nullptr);
+			const auto at = row->mapToScene(QPointF(row->width() / 2, row->height() / 2)).toPoint();
+			QTest::mouseClick(window, Qt::LeftButton, modifiers, at);
+			QCoreApplication::processEvents();
+		};
+		const auto selected = [&](const QString& path) {
+			return files.isMarked(files.indexOfPath(path));
+		};
+		clickRow(QStringLiteral("events.csv"));
+		CHECK(files.markedCount() == 1 && selected(QStringLiteral("/logs/events.csv")));
+		clickRow(QStringLiteral("large.bin"));
+		CHECK(files.markedCount() == 1 && selected(QStringLiteral("/logs/large.bin")));
+		clickRow(QStringLiteral("events.csv"), Qt::ControlModifier);
+		CHECK(files.markedCount() == 2 && selected(QStringLiteral("/logs/events.csv")));
+		clickRow(QStringLiteral("events.csv"), Qt::ControlModifier);
+		CHECK(files.markedCount() == 1 && !selected(QStringLiteral("/logs/events.csv")));
+		press(tree, Qt::Key_Escape);
+		CHECK(files.markedCount() == 0);
+		// The folder row: all its readable files.
+		clickRow(QStringLiteral("logs"));
+		CHECK(files.markedCount() >= 2 && selected(QStringLiteral("/logs/events.csv")) &&
+		      selected(QStringLiteral("/logs/large.bin")));
+		// Down moves the selection to the next row alone; Shift+Down extends it.
+		const int logsAt = tree->property("currentRow").toInt();
+		press(tree, Qt::Key_Down);
+		CHECK(tree->property("currentRow").toInt() == logsAt + 1 && files.markedCount() == 1);
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(tree->property("currentRow").toInt() == logsAt + 2 && files.markedCount() == 2);
+		press(tree, Qt::Key_Escape);
+		CHECK(files.markedCount() == 0);
+		selection->setCurrentIndex(logs2, QItemSelectionModel::NoUpdate);
+	}
 	const int logsRow = tree->property("currentRow").toInt();
 	bool expanded = false;
 	CHECK(QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, expanded), Q_ARG(int, logsRow)));
