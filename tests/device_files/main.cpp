@@ -546,6 +546,33 @@ void tree(qt::ConnectionSession& session, DeviceFilesModel& files)
 	CHECK(settings.isValid());
 	// A folder is found by its path too: a Shift range's anchor may be one.
 	CHECK(files.indexOfPath(QStringLiteral("/logs")) == logs && !files.indexOfPath(QStringLiteral("/nope")).isValid());
+
+	// What each file is, for its icon, and its access in three letters.
+	const auto kindOf = [&](const QModelIndex& index) { return files.data(index, DeviceFilesModel::KindRole).toString(); };
+	const auto wordsOf = [&](const QModelIndex& index) {
+		return files.data(index, DeviceFilesModel::KindTextRole).toString();
+	};
+	const auto descriptorFile = child(files, telemetryFolder, QStringLiteral("descriptor.bin"));
+	CHECK(kindOf(descriptorFile) == QStringLiteral("descriptor") && wordsOf(descriptorFile) == QStringLiteral("Descriptor") &&
+	      files.data(descriptorFile, DeviceFilesModel::ProgramFileRole).toBool());
+	CHECK(kindOf(events) == QStringLiteral("table") && wordsOf(events) == QStringLiteral("CSV") &&
+	      !files.data(events, DeviceFilesModel::ProgramFileRole).toBool());
+	CHECK(kindOf(large) == QStringLiteral("binary") && wordsOf(large) == QStringLiteral("Binary"));
+	CHECK(kindOf(logs) == QStringLiteral("folder") && wordsOf(logs) == QStringLiteral("2 files") &&
+	      files.data(logs, DeviceFilesModel::AccessMarkRole).toString().isEmpty());
+	// The device's own words, as three letters: events.csv can be read only.
+	CHECK(files.data(events, DeviceFilesModel::AccessTextRole).toString() == QStringLiteral("read") &&
+	      files.data(events, DeviceFilesModel::AccessMarkRole).toString() == QStringLiteral("r--"));
+	// A host's codec names the files it takes by their path.
+	files.setCodecLookup([](const QString& path) {
+		return path.endsWith(QStringLiteral("large.bin")) ? QStringLiteral("Waveform")
+		     : path.endsWith(QStringLiteral(".csv"))      ? QStringLiteral("JSON")
+		                                                   : QString{};
+	});
+	CHECK(kindOf(large) == QStringLiteral("codec") && wordsOf(large) == QStringLiteral("Waveform"));
+	CHECK(kindOf(events) == QStringLiteral("json") && kindOf(descriptorFile) == QStringLiteral("descriptor"));
+	files.setCodecLookup({});
+	CHECK(kindOf(large) == QStringLiteral("binary"));
 	(void)session;
 }
 
@@ -1617,6 +1644,12 @@ void descriptorCodec(const QString& folder)
 	const QByteArray bytes(reinterpret_cast<const char*>(packed.data()), static_cast<qsizetype>(packed.size()));
 	telemetry::ux::OpenFiles open;
 	telemetry::ux::installTelemetryCodecs(open);
+	// Before any byte: the codec that takes a device path by its place and
+	// name, the one the file list names its files by.
+	CHECK(open.codecForPath(QStringLiteral("/telemetry/descriptor.bin")) == QStringLiteral("Descriptor") &&
+	      open.codecForPath(QStringLiteral("/telemetry/values.bin")) == QStringLiteral("Values") &&
+	      open.codecForPath(QStringLiteral("/cfg/limits.json")) == QStringLiteral("JSON") &&
+	      open.codecForPath(QStringLiteral("/logs/large.bin")).isEmpty());
 	const auto local = write("descriptor.bin", bytes);
 	open.open(local, QStringLiteral("/telemetry/descriptor.bin"));
 	auto* content = open.contentFor(local);

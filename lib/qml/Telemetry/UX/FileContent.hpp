@@ -420,6 +420,10 @@ public:
 	Q_INVOKABLE void close(int row);
 	// The row showing localFile, or -1.
 	Q_INVOKABLE int rowOf(const QString& localFile) const;
+	// The name of the codec that takes a device path by its place and name
+	// alone - before any byte is read - the surest first; empty when none
+	// does. For a file list's icons (DeviceFilesModel::setCodecLookup).
+	Q_INVOKABLE QString codecForPath(const QString& devicePath) const;
 	// The files with edits not saved, by name: a host asks before it quits.
 	Q_INVOKABLE QStringList modifiedNames() const;
 	// Saves every file with edits; empty when all were written, else the first reason.

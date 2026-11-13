@@ -5,11 +5,16 @@
  * SPDX-License-Identifier: MIT
  */
 #include "DeviceFilesModel.hpp"
+#include "CapabilityContent.hpp"
+#include "DescriptorContent.hpp"
+#include "ValuesContent.hpp"
 #include <integration/files/Client.hpp>
 #include <QtCore/QLocale>
 #include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <algorithm>
+#include <array>
+#include <utility>
 
 namespace telemetry::ux {
 namespace files = integration::files;
@@ -22,6 +27,13 @@ struct DeviceFilesModel::Node {
 	int fileIndex = -1;
 	quint64 size = 0;
 	bool sizeKnown = false, readable = false, writable = false, selected = false;
+	// What is written persists across a restart (SAVE); otherwise it is kept
+	// only until the device restarts.
+	bool savable = false;
+	// What the file is, worked out the first time a row asks: a host's
+	// codec may be slow to say.
+	mutable bool kindKnown = false;
+	mutable DeviceFilesModel::Kind kind;
 	QString statError;
 
 	int row() const noexcept
@@ -114,6 +126,38 @@ QString deviceWords(resource::Status status)
 		default:
 			return DeviceFilesModel::tr("the device refused it");
 	}
+}
+
+// The access as ls writes it - read, write, and "s" when the device keeps
+// what is written across a restart, on a file that can be written only -
+// "?" when Stat failed, three middle dots before it answers. "-" in ASCII,
+// never a dash a fallback font would draw taller.
+QString accessMark(bool sizeKnown, bool statFailed, bool readable, bool writable, bool savable)
+{
+	if (statFailed)
+		return QStringLiteral("?");
+	if (!sizeKnown)
+		return QStringLiteral("\u00b7\u00b7\u00b7");
+	return QString(readable ? QLatin1Char('r') : QLatin1Char('-')) + (writable ? QLatin1Char('w') : QLatin1Char('-')) +
+	       (writable && savable ? QLatin1Char('s') : QLatin1Char('-'));
+}
+
+// The same in words, for Properties and a screen reader.
+QString accessWords(const QString& mark)
+{
+	if (mark == QLatin1String("rws"))
+		return DeviceFilesModel::tr("read and write, kept across a restart");
+	if (mark == QLatin1String("rw-"))
+		return DeviceFilesModel::tr("read and write, kept until the device restarts");
+	if (mark == QLatin1String("-ws"))
+		return DeviceFilesModel::tr("write only, kept across a restart");
+	if (mark == QLatin1String("-w-"))
+		return DeviceFilesModel::tr("write only, kept until the device restarts");
+	if (mark == QLatin1String("r--"))
+		return DeviceFilesModel::tr("read only");
+	if (mark == QLatin1String("---"))
+		return DeviceFilesModel::tr("no access");
+	return DeviceFilesModel::tr("access not known");
 }
 
 // What a failed file request means, in words.
@@ -417,6 +461,7 @@ void DeviceFilesModel::statNext()
 			    file->sizeKnown = true;
 			    file->readable = resource::has(result.reply.flags, resource::FileFlag::Readable);
 			    file->writable = resource::has(result.reply.flags, resource::FileFlag::Writable);
+			    file->savable = resource::has(result.reply.flags, resource::FileFlag::Savable);
 		    } else
 			    file->statError = failure(result);
 		    // A selected file stays selected; its size and whether Download
@@ -623,7 +668,9 @@ void DeviceFilesModel::collect(const Node* from, QVariantList& into) const
 		                           {QStringLiteral("sizeKnown"), from->sizeKnown},
 		                           {QStringLiteral("readable"), from->readable},
 		                           {QStringLiteral("writable"), from->writable},
-		                           {QStringLiteral("access"), !from->sizeKnown ? QString{} : from->readable && from->writable ? tr("read, write") : from->readable ? tr("read") : from->writable ? tr("write only") : tr("no access")}});
+		                           {QStringLiteral("access"), !from->sizeKnown ? QString{} : from->readable && from->writable ? tr("read, write") : from->readable ? tr("read") : from->writable ? tr("write only") : tr("no access")},
+		                           {QStringLiteral("accessMark"), markOf(from)},
+		                           {QStringLiteral("accessWords"), accessWords(markOf(from))}});
 		return;
 	}
 	for (const auto& child : from->children)
@@ -666,6 +713,107 @@ QVariantList DeviceFilesModel::filesUnder(const QModelIndex& index) const
 		    !entry.toMap().value(QStringLiteral("sizeKnown")).toBool())
 			readable.push_back(entry);
 	return readable;
+}
+
+// Every file asks again; the rows shown say so, one announcement per
+// folder over its rows. A codec added to the viewer later shows from the
+// next Refresh or the next lookup set.
+void DeviceFilesModel::setCodecLookup(CodecLookup lookup)
+{
+	codecLookup_ = std::move(lookup);
+	const std::function<void(Node*)> forget = [&](Node* folder) {
+		for (const auto& child : folder->children)
+			if (child->folder)
+				forget(child.get());
+			else
+				child->kindKnown = false;
+		if (!folder->children.empty()) {
+			const auto parent = indexOf(folder);
+			Q_EMIT dataChanged(index(0, 0, parent), index(static_cast<int>(folder->children.size()) - 1, 0, parent),
+			                   {KindRole, KindTextRole, ProgramFileRole});
+		}
+	};
+	forget(root_.get());
+}
+
+QString DeviceFilesModel::markOf(const Node* at) const
+{
+	return accessMark(at->sizeKnown, !at->statError.isEmpty(), at->readable, at->writable, at->savable);
+}
+
+const DeviceFilesModel::Kind& DeviceFilesModel::kindOf(const Node* at) const
+{
+	if (!at->kindKnown) {
+		at->kind = findKind(at);
+		at->kindKnown = true;
+	}
+	return at->kind;
+}
+
+DeviceFilesModel::Kind DeviceFilesModel::findKind(const Node* at) const
+{
+	if (at->folder)
+		return {QStringLiteral("folder"), {}, false};
+	const auto words = [](const QString& kind) {
+		if (kind == QLatin1String("descriptor"))
+			return tr("Descriptor");
+		if (kind == QLatin1String("values"))
+			return tr("Values");
+		if (kind == QLatin1String("identity"))
+			return tr("Identity");
+		if (kind == QLatin1String("session"))
+			return tr("Session");
+		if (kind == QLatin1String("capability"))
+			return tr("Capability");
+		if (kind == QLatin1String("json"))
+			return tr("JSON");
+		if (kind == QLatin1String("table"))
+			return tr("CSV");
+		if (kind == QLatin1String("text"))
+			return tr("Text");
+		return tr("Binary");
+	};
+	// The program's own files, by the names their codecs know them by - so
+	// an icon never drifts from what opens the file - and by their place.
+	QString program;
+	if (DescriptorContent::names(at->path))
+		program = QStringLiteral("descriptor");
+	else if (ValuesContent::names(at->path))
+		program = QStringLiteral("values");
+	else if (CapabilityContent::names(at->path))
+		program = QStringLiteral("capability");
+	else if (at->path == QLatin1String("/telemetry/identity.bin"))
+		program = QStringLiteral("identity");
+	else if (at->path == QLatin1String("/telemetry/session.bin"))
+		program = QStringLiteral("session");
+	if (!program.isEmpty())
+		return {program, words(program), true};
+	// A host's codec that takes the file by its place and name.
+	if (codecLookup_) {
+		const auto codec = codecLookup_(at->path);
+		if (codec == QLatin1String("JSON"))
+			return {QStringLiteral("json"), words(QStringLiteral("json")), false};
+		if (!codec.isEmpty() && codec != QLatin1String("Descriptor") && codec != QLatin1String("Values") &&
+		    codec != QLatin1String("Capability"))
+			return {QStringLiteral("codec"), codec, false};
+	}
+	// The formats a view of the program's own opens, by their extension.
+	const auto suffix = at->name.section(QLatin1Char('.'), -1).toLower();
+	const bool hasSuffix = at->name.contains(QLatin1Char('.'));
+	static const QStringList textual{
+	    QStringLiteral("txt"),  QStringLiteral("log"),  QStringLiteral("md"),   QStringLiteral("ini"),
+	    QStringLiteral("cfg"),  QStringLiteral("conf"), QStringLiteral("yaml"), QStringLiteral("yml"),
+	    QStringLiteral("toml"), QStringLiteral("xml"),  QStringLiteral("html"), QStringLiteral("htm"),
+	    QStringLiteral("c"),    QStringLiteral("h"),    QStringLiteral("cpp"),  QStringLiteral("hpp"),
+	    QStringLiteral("py"),   QStringLiteral("sh")};
+	QString kind = QStringLiteral("binary");
+	if (hasSuffix && suffix == QLatin1String("json"))
+		kind = QStringLiteral("json");
+	else if (hasSuffix && (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")))
+		kind = QStringLiteral("table");
+	else if (hasSuffix && textual.contains(suffix))
+		kind = QStringLiteral("text");
+	return {kind, words(kind), false};
 }
 
 QString DeviceFilesModel::formatSize(qulonglong bytes) const
@@ -778,6 +926,18 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 			return at->folder ? downloadables : at->downloadable() ? 1 : 0;
 		case DownloadableRole:
 			return at->folder ? downloadables > 0 : at->downloadable();
+		case KindRole:
+			return kindOf(at).kind;
+		case KindTextRole:
+			if (at->folder)
+				return files == 1 ? tr("1 file") : tr("%n files", nullptr, files);
+			return kindOf(at).text;
+		case ProgramFileRole:
+			return kindOf(at).program;
+		case AccessMarkRole:
+			return at->folder ? QString{} : markOf(at);
+		case AccessWordsRole:
+			return at->folder ? QString{} : accessWords(markOf(at));
 		case FileCountRole:
 			return files;
 		case StatErrorRole:
@@ -811,6 +971,11 @@ QHash<int, QByteArray> DeviceFilesModel::roleNames() const
 	        {SpokenSizeRole, "spokenSize"},
 	        {DownloadableRole, "downloadable"},
 	        {SelectedInsideRole, "selectedInside"},
-	        {ReadableInsideRole, "readableInside"}};
+	        {ReadableInsideRole, "readableInside"},
+	        {KindRole, "kind"},
+	        {KindTextRole, "kindText"},
+	        {ProgramFileRole, "programFile"},
+	        {AccessMarkRole, "accessMark"},
+	        {AccessWordsRole, "accessWords"}};
 }
 } // namespace telemetry::ux

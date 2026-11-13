@@ -29,6 +29,10 @@ QtObject {
     // A selection whose fill is its only cue (the hex view): 3:1 on its own,
     // where stateSelected is a row's quiet state.
     property color selectionFill: "#2f7d91"
+    // The icon of a file the program itself uses (descriptor, values,
+    // identity, session, capability): the one hue Device files spends, apart
+    // from the accent, the states and the selection. A light theme: #5b45b8.
+    property color fileProgram: "#bcaef2"
     // A codec's region in the hex view: decorative, its name says what it is.
     property color regionTint: "#1c2a3a"
 

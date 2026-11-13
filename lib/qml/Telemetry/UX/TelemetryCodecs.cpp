@@ -157,6 +157,14 @@ void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession
 	};
 	files.setContext(std::move(context));
 	const QPointer<DeviceFilesModel> listed(deviceFiles);
+	// The file list names a file a host's codec reads by that codec: its icon
+	// and its Kind.
+	if (deviceFiles) {
+		const QPointer<OpenFiles> viewer(&files);
+		deviceFiles->setCodecLookup([viewer](const QString& devicePath) {
+			return viewer ? viewer->codecForPath(devicePath) : QString{};
+		});
+	}
 	files.setLiveFactory([connected, listed](const QString& devicePath, QObject* parent) -> QObject* {
 		if (!connected || devicePath.isEmpty())
 			return nullptr;

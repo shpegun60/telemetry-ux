@@ -82,11 +82,21 @@ Popup {
                   ((properties.file.size || 0) >= 1024 ? qsTr(" (%1)").arg(properties.files.formatSize(properties.file.size)) : "")
         }
         Label { text: qsTr("Access"); color: Theme.textSecondary; font.pointSize: Type.caption }
-        Label {
-            objectName: "deviceFilePropertiesAccess"
-            color: Theme.textPrimary
-            // The Access column's own words.
-            text: properties.file.access || "" 
+        // The row's three letters and what they mean - whether what is
+        // written outlives a restart is the one thing a write needs to know.
+        Row {
+            spacing: Type.padding
+            Label {
+                objectName: "deviceFilePropertiesAccessMark"
+                font.family: Type.fixedFamily
+                color: Theme.textPrimary
+                text: properties.file.accessMark || ""
+            }
+            Label {
+                objectName: "deviceFilePropertiesAccess"
+                color: Theme.textPrimary
+                text: properties.file.accessWords || ""
+            }
         }
     }
 
