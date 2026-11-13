@@ -24,6 +24,8 @@ PAIRS = [
     ('textMuted', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceAlternate', 'stateHover', 'statePressed',
                    'neutralContainer'], TEXT, 'section labels, times, descriptions, placeholders'),
     ('selectedForeground', ['stateSelected', 'selectionFill'], TEXT, 'text on a selected row, selected bytes'),
+    ('textPrimary', ['stateSelectedInactive'], TEXT,
+     'text on a selected row while its list lacks the keyboard, and on its folder\'s count'),
     ('selectionFill', ['surface', 'surfaceAlternate'], GRAPHIC, 'a hex selection, its fill the only cue'),
     ('info', ['infoContainer', 'surface', 'surfaceAlternate'], GRAPHIC, 'the outline of a Find match in text and tables'),
     ('textPrimary', ['regionTint'], TEXT, 'bytes in a codec region'),
