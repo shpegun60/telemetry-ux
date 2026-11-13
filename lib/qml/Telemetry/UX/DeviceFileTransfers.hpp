@@ -126,7 +126,9 @@ public:
 	                         const QString& localFile);
 	// The same, read to be shown: viewer gets a tab for it at once
 	// (OpenFiles::reading), which follows the read's progress and then shows the
-	// file, or says why it could not be read. The row reads "Opening".
+	// file, or says why it could not be read. The row reads "Opening", and
+	// leaves by itself once the file is shown - right after finished() - unless
+	// it ends with a note (the device's bytes not kept) or not at all.
 	// deviceFolder, the device's folder localFile is in, is where the device's
 	// bytes as read are kept (setKeepDeviceBytes); without it none are.
 	Q_INVOKABLE int openIn(QObject* viewer, const QString& path, int fileIndex, qulonglong size,
@@ -217,6 +219,7 @@ Q_SIGNALS:
 
 private:
 	bool keepDeviceBytes_ = false;
+	quint64 lastJobId_ = 0;
 	struct Job;
 	bool inUse(const QString& folder, QObject* viewer) const;
 	int queue(const QString& path, int fileIndex, qulonglong size, const QString& localFile,
@@ -229,6 +232,8 @@ private:
 	// has ended.
 	bool advanceUpload(Job& job);
 	void end(Job& job, State state, QString result);
+	// Removes an Open's row that ended with nothing to add, if it is still there.
+	void leave(quint64 ended);
 	void publish(int row);
 
 	QPointer<integration::qt::ConnectionSession> session_;

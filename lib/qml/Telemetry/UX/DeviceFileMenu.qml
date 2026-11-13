@@ -1,10 +1,12 @@
 // The Device files tree's context menu, as in a file explorer: on a file,
 // Open first (in bold, the double-click), Open with, Download, Copy path and
-// name, Mark, Properties; on a folder, on a marked set, and on empty space its
-// own items. A disabled item keeps its text and says why in brackets. MIT.
+// name, Add to or Remove from the selection, Properties; on a folder, on a
+// selection, and on empty space its own items. A disabled item keeps its text
+// and says why in brackets. An item hidden for this kind is disabled too: the
+// arrow keys do not skip a hidden item, and Enter would run it. MIT.
 //
-// The panel sets `kind` ("file", "folder", "marked", "empty") and `file` (the
-// model's fileAt(index), or the folder's path) before popup().
+// The panel sets `kind` ("file", "folder", "selection", "empty") and `file`
+// (the model's fileAt(index), or the folder's path) before popup().
 import QtQuick
 import QtQuick.Controls
 
@@ -29,7 +31,7 @@ Menu {
         height: visible ? implicitHeight : 0
         text: qsTr("&Open%1\tEnter").arg(menu.why)
         font.bold: true
-        enabled: menu.connected && menu.readable
+        enabled: menu.kind === "file" && menu.connected && menu.readable
         onTriggered: menu.panel.openRequested(menu.file)
     }
     Menu {
@@ -40,6 +42,7 @@ Menu {
         MenuItem {
             objectName: "deviceFileMenuOpenTable"
             visible: menu.csv
+            enabled: menu.csv
             height: visible ? implicitHeight : 0
             text: qsTr("&Table")
             onTriggered: menu.panel.openWithRequested(menu.file, "table")
@@ -67,7 +70,7 @@ Menu {
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("&Download…%1\tCtrl+S").arg(menu.why)
-        enabled: menu.connected && menu.readable
+        enabled: menu.kind === "file" && menu.connected && menu.readable
         onTriggered: menu.panel.downloadRequested([menu.file])
     }
 
@@ -77,6 +80,7 @@ Menu {
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
         text: menu.panel.isExpanded(menu.index) ? qsTr("&Collapse\t←") : qsTr("&Expand\t→")
+        enabled: menu.kind === "folder"
         onTriggered: menu.panel.toggleFolder(menu.index)
     }
     MenuSeparator { visible: menu.kind === "folder"; height: visible ? implicitHeight : 0 }
@@ -90,29 +94,35 @@ Menu {
         onTriggered: menu.panel.downloadRequested(inside)
     }
     MenuItem {
-        objectName: "deviceFileMenuMarkFolder"
+        objectName: "deviceFileMenuSelectFolder"
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark all files in folder\tSpace")
-        onTriggered: menu.files.setMarked(menu.index, true)
+        // The device's name, its & a letter rather than an access key.
+        text: qsTr("&Select the files in %1\tSpace").arg(
+                  menu.kind === "folder" ? String(menu.files.data(menu.index, Qt.DisplayRole)).replace(/&/g, "&&") : "")
+        enabled: menu.kind === "folder"
+        onTriggered: menu.files.select(menu.index, true)
     }
 
-    // On a marked set.
+    // On a selection of two or more.
     MenuItem {
-        objectName: "deviceFileMenuDownloadMarked"
-        visible: menu.kind === "marked"
+        objectName: "deviceFileMenuDownloadSelected"
+        visible: menu.kind === "selection"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Download %n marked files…\tCtrl+S", "", menu.files.markedCount)
-        enabled: menu.connected
+        readonly property int readable: menu.files.selectedReadable
+        readonly property int skipped: menu.files.selectedCount - readable
+        text: (skipped > 0 ? qsTr("&Download %n selected files… (%1 can't be read)\tCtrl+S", "", readable).arg(skipped)
+                           : qsTr("&Download %n selected files…\tCtrl+S", "", readable))
+        enabled: menu.kind === "selection" && menu.connected && readable > 0
         onTriggered: menu.panel.download()
     }
     MenuItem {
-        objectName: "deviceFileMenuClearMarks"
-        visible: menu.kind === "marked" || menu.kind === "empty"
+        objectName: "deviceFileMenuSelectNone"
+        visible: menu.kind === "selection" || menu.kind === "empty"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Clear marks\tCtrl+Shift+A")
-        enabled: menu.files.markedCount > 0
-        onTriggered: menu.files.markAll(false)
+        text: qsTr("Select &none\tEsc")
+        enabled: (menu.kind === "selection" || menu.kind === "empty") && menu.files.selectedCount > 0
+        onTriggered: menu.files.clearSelection()
     }
 
     // On empty space below the rows.
@@ -121,7 +131,7 @@ Menu {
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
         text: qsTr("&Refresh\tCtrl+R")
-        enabled: menu.connected && !menu.files.loading
+        enabled: menu.kind === "empty" && menu.connected && !menu.files.loading
         onTriggered: menu.files.refresh()
     }
     MenuItem {
@@ -130,24 +140,26 @@ Menu {
         height: visible ? implicitHeight : 0
         readonly property var everything: menu.kind === "empty" ? menu.panel.allReadable() : []
         text: qsTr("Download &all…") + (everything.length === 0 ? qsTr(" (no readable files)") : "")
-        enabled: menu.connected && everything.length > 0
+        enabled: menu.kind === "empty" && menu.connected && everything.length > 0
         onTriggered: menu.panel.downloadRequested(everything)
     }
     MenuItem {
-        objectName: "deviceFileMenuMarkAll"
+        objectName: "deviceFileMenuSelectAll"
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark all\tCtrl+A")
-        onTriggered: menu.files.markAll(true)
+        text: qsTr("Select &all files\tCtrl+A")
+        enabled: menu.kind === "empty"
+        onTriggered: menu.files.selectAll()
     }
 
-    // Copy, on a file, a folder or a marked set.
+    // Copy, on a file, a folder or a selection.
     MenuSeparator { visible: menu.kind !== "empty"; height: visible ? implicitHeight : 0 }
     MenuItem {
         objectName: "deviceFileMenuCopyPath"
         visible: menu.kind !== "empty"
         height: visible ? implicitHeight : 0
-        text: menu.kind === "marked" ? qsTr("Copy &paths\tAlt+Shift+C") : qsTr("Copy &path\tAlt+Shift+C")
+        text: menu.kind === "selection" ? qsTr("Copy &paths\tAlt+Shift+C") : qsTr("Copy &path\tAlt+Shift+C")
+        enabled: menu.kind !== "empty"
         onTriggered: menu.panel.copyPaths(menu.kind, menu.file)
     }
     MenuItem {
@@ -155,26 +167,28 @@ Menu {
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("Copy &name")
+        enabled: menu.kind === "file"
         onTriggered: Clipboard.setText(menu.file.name)
     }
 
-    // Mark and Properties, on a file.
+    // In or out of the selection, and Properties, on a file.
     MenuSeparator { visible: menu.kind === "file"; height: visible ? implicitHeight : 0 }
     MenuItem {
-        objectName: "deviceFileMenuMark"
+        objectName: "deviceFileMenuSelect"
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Mark for download%1\tSpace").arg(menu.readable ? "" : qsTr(" (not readable)"))
-        checkable: true
-        checked: menu.kind === "file" && menu.index !== undefined && menu.files.isMarked(menu.index)
-        enabled: menu.readable
-        onTriggered: menu.files.setMarked(menu.index, checked)
+        readonly property bool selected: menu.kind === "file" && menu.index !== undefined
+                                         && menu.files.selectedCount >= 0 && menu.files.isSelected(menu.index)
+        text: selected ? qsTr("&Remove from the selection\tCtrl+Space") : qsTr("&Add to the selection\tCtrl+Space")
+        enabled: menu.kind === "file"
+        onTriggered: menu.files.toggleSelected(menu.index)
     }
     MenuItem {
         objectName: "deviceFileMenuProperties"
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("P&roperties\tAlt+Enter")
+        enabled: menu.kind === "file"
         onTriggered: menu.panel.showProperties(menu.index)
     }
 

@@ -123,6 +123,24 @@ QPainterPath warning()
 	path.lineTo(12, 16.6);
 	return path;
 }
+// Lock: a padlock - its body, the shackle a half turn above it, the keyhole.
+QPainterPath lock()
+{
+	QPainterPath path;
+	path.moveTo(6, 11);
+	path.lineTo(18, 11);
+	path.lineTo(18, 19.5);
+	path.lineTo(6, 19.5);
+	path.closeSubpath();
+	path.moveTo(8.5, 11);
+	path.lineTo(8.5, 8);
+	// A half turn of radius 3.5 about (12, 8), from the left over the top.
+	path.arcTo(8.5, 4.5, 7, 7, 180, -180);
+	path.lineTo(15.5, 11);
+	path.moveTo(12, 14.5);
+	path.lineTo(12, 16);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("edit"))
@@ -139,6 +157,8 @@ QPainterPath shape(const QString& name)
 		return hookLeft();
 	if (name == QLatin1String("warning"))
 		return warning();
+	if (name == QLatin1String("lock"))
+		return lock();
 	if (name == QLatin1String("redo"))
 		return QTransform(-1, 0, 0, 1, 24, 0).map(hookLeft());
 	return {};

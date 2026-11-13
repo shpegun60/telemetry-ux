@@ -21,6 +21,8 @@
 #include <QPainter>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -584,7 +586,7 @@ void toolIcons()
 				count += ink(image, x, y) ? 1 : 0;
 		return count;
 	};
-	for (const char* name : {"edit", "save", "undo", "redo"})
+	for (const char* name : {"edit", "save", "undo", "redo", "lock"})
 		CHECK(inked(drawn(QString::fromLatin1(name))) > 20);
 	CHECK(inked(drawn(QStringLiteral("nothing"))) == 0);
 	const auto undo = drawn(QStringLiteral("undo"));
@@ -642,19 +644,19 @@ int main(int argc, char** argv)
 	CHECK(download->property("text").toString() == QStringLiteral("Download…") &&
 	      !download->property("enabled").toBool());
 
-	// Marks drive the button and the summary line.
+	// The selection drives the button and the summary line.
 	const auto logs = files.index(1, 0);
-	files.setMarked(logs, true);
+	files.select(logs, true);
 	CHECK(await([&] {
 		return download->property("text").toString() == QStringLiteral("Download 2 files…");
 	}));
 	CHECK(download->property("enabled").toBool());
-	CHECK(child(root, "deviceFilesSummary")->property("text").toString().startsWith(QStringLiteral("2 marked")));
+	CHECK(child(root, "deviceFilesSummary")->property("text").toString().startsWith(QStringLiteral("2 files selected")));
 	CHECK(QMetaObject::invokeMethod(download, "clicked"));
 	CHECK(await([&] {
 		return root->property("lastSelection").toList().size() == 2;
 	}));
-	files.markAll(false);
+	files.clearSelection();
 	CHECK(await([&] {
 		return !download->property("enabled").toBool();
 	}));
@@ -763,6 +765,12 @@ int main(int argc, char** argv)
 	CHECK(openItem->property("text").toString().startsWith(QStringLiteral("&Open\t")) &&
 	      openItem->property("enabled").toBool());
 	CHECK(child(root, "deviceFileMenuDownload")->property("enabled").toBool());
+	// The items for other kinds are hidden and off: the arrow keys reach a
+	// hidden item, and Enter would run it.
+	for (const char* hidden : {"deviceFileMenuDownloadAll", "deviceFileMenuSelectAll", "deviceFileMenuSelectNone",
+	                           "deviceFileMenuRefresh", "deviceFileMenuExpand", "deviceFileMenuSelectFolder",
+	                           "deviceFileMenuDownloadSelected"})
+		CHECK(!child(root, hidden)->property("enabled").toBool());
 	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuCopyPath"), "triggered"));
 	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("/logs/events.csv"));
 	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuOpenHex"), "triggered"));
@@ -775,6 +783,20 @@ int main(int argc, char** argv)
 		return properties && properties->property("visible").toBool();
 	}));
 	CHECK(child(root, "deviceFilePropertiesPath")->property("text").toString() == QStringLiteral("/logs/events.csv"));
+	{
+		// Beside its row, never over it, once it has laid out the file.
+		auto* properties = child(root, "deviceFileProperties");
+		auto* popupParent = properties->property("parent").value<QQuickItem*>();
+		QQuickItem* described = nullptr;
+		CHECK(popupParent && await([&] {
+			described = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("events.csv"));
+			return described && properties->property("height").toReal() > 0;
+		}));
+		const auto rowRect = described->mapRectToItem(popupParent, QRectF(0, 0, described->width(), described->height()));
+		const QRectF popupRect(properties->property("x").toReal(), properties->property("y").toReal(),
+		                       properties->property("width").toReal(), properties->property("height").toReal());
+		CHECK(!popupRect.intersects(rowRect.adjusted(0, 1, 0, -1)));
+	}
 	CHECK(child(root, "deviceFilePropertiesSize")->property("text").toString() ==
 	      QStringLiteral("%1 bytes").arg(eventsBytes.size()));
 	CHECK(child(root, "deviceFilePropertiesAccess")->property("text").toString() == QStringLiteral("read"));
@@ -793,24 +815,25 @@ int main(int argc, char** argv)
 	CHECK(fileMenu->property("kind").toString() == QStringLiteral("empty") &&
 	      child(root, "deviceFileMenuRefresh")->property("enabled").toBool());
 	fileMenu->setProperty("visible", false);
-	// Keys on the tree: Ctrl+A marks everything readable, Ctrl+Shift+A clears.
+	// Keys on the tree: Ctrl+A selects every readable file, Ctrl+Shift+A none.
 	treeItem->forceActiveFocus();
 	press(treeItem, Qt::Key_A, Qt::ControlModifier);
-	CHECK(files.markedCount() == files.fileCount());
+	CHECK(files.selectedCount() == files.fileCount());
 	press(treeItem, Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier);
-	CHECK(files.markedCount() == 0);
+	CHECK(files.selectedCount() == 0);
 	// Ctrl+S on the tree is Download even beside a window's own Ctrl+S (a
 	// host's Save): typed through the window, the list claims it first.
-	files.setMarked(files.index(0, 0), true);
+	files.select(files.index(0, 0), true);
 	root->setProperty("lastSelection", QVariantList{});
 	treeItem->forceActiveFocus();
 	QTest::keyClick(qobject_cast<QWindow*>(root), Qt::Key_S, Qt::ControlModifier);
 	CHECK(await([&] { return !root->property("lastSelection").toList().isEmpty(); }));
 	CHECK(root->property("windowSaves").toInt() == 0);
-	files.markAll(false);
+	files.clearSelection();
 
-	// The current row is highlighted and framed while the tree has the
-	// keyboard; Enter on a folder folds and unfolds it.
+	// The current row is framed while the tree has the keyboard; a row is
+	// highlighted because it is selected, not because it is current. Enter on
+	// a folder folds and unfolds it.
 	auto* tree = qobject_cast<QQuickItem*>(child(root, "deviceFilesTree"));
 	auto* selection = qvariant_cast<QItemSelectionModel*>(tree->property("selectionModel"));
 	CHECK(selection);
@@ -820,11 +843,168 @@ int main(int argc, char** argv)
 	QQuickItem* currentRow = nullptr;
 	CHECK(await([&] {
 		currentRow = delegateWhere(root, "deviceFileRow", "current", true);
-		return currentRow && currentRow->property("highlighted").toBool();
+		return currentRow != nullptr;
 	}));
 	CHECK(currentRow->property("name").toString() == QStringLiteral("logs"));
+	CHECK(!currentRow->property("highlighted").toBool());
 	if (tree->hasActiveFocus())
 		CHECK(visualChild(currentRow, QStringLiteral("deviceFileFocusFrame"))->isVisible());
+	// A folder is never highlighted: it says how many of its files are
+	// selected. A selected file is, current or not.
+	files.select(logs2, true);
+	auto* eventsRow = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("events.csv"));
+	CHECK(eventsRow && await([&] { return eventsRow->property("highlighted").toBool(); }));
+	CHECK(!currentRow->property("highlighted").toBool());
+	auto* pill = visualChild(currentRow, QStringLiteral("deviceFileSelectedInside"));
+	CHECK(pill && pill->isVisible() && pill->property("text").toString() == QStringLiteral("2"));
+	CHECK(currentRow->property("insideText").toString() == QStringLiteral("2 of 2 files selected"));
+	files.clearSelection();
+	CHECK(await([&] { return !pill->isVisible(); }));
+
+	// Selection as in a file explorer: a click selects that row alone, Ctrl+
+	// click adds and removes, Shift+click takes the rows from the anchor, the
+	// arrows move it, Shift+arrows extend it, Esc selects nothing. A folder
+	// row stands for its files.
+	{
+		auto* window = qobject_cast<QQuickWindow*>(root);
+		// The row a path is shown at now, -1 inside a folded folder.
+		const auto rowOf = [&](const QString& path) {
+			int row = -1;
+			CHECK(QMetaObject::invokeMethod(tree, "rowAtIndex", Q_RETURN_ARG(int, row),
+			                                Q_ARG(QModelIndex, files.indexOfPath(path))));
+			return row;
+		};
+		// Clicked where a person would: the row scrolled into view first.
+		const auto clickRow = [&](const QString& path, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+			const int at = rowOf(path);
+			if (at < 0)
+				warnings << QStringLiteral("not shown: %1 (rows %2)").arg(path).arg(tree->property("rows").toInt());
+			CHECK(at >= 0);
+			QQmlExpression bringIn(qmlContext(tree), tree,
+			                       QStringLiteral("positionViewAtRow(%1, TableView.Contain); forceLayout()").arg(at));
+			bringIn.evaluate();
+			CHECK(!bringIn.hasError());
+			const auto name = path.section(QLatin1Char('/'), -1);
+			QQuickItem* row = nullptr;
+			CHECK(await([&] { return (row = delegateWhere(root, "deviceFileRow", "name", name)) != nullptr; }));
+			const auto point = row->mapToScene(QPointF(row->width() / 2, row->height() / 2)).toPoint();
+			QTest::mouseClick(window, Qt::LeftButton, modifiers, point);
+			QCoreApplication::processEvents();
+		};
+		const auto selected = [&](const QString& path) {
+			return files.isSelected(files.indexOfPath(path));
+		};
+		const auto paths = [&] { return files.selectedPaths(); };
+		// Every folder unfolded: the ranges below are counted in rows shown -
+		// telemetry, descriptor.bin, logs, events.csv, large.bin.
+		QQmlExpression unfold(qmlContext(tree), tree, QStringLiteral("expandRecursively()"));
+		unfold.evaluate();
+		CHECK(!unfold.hasError() && await([&] { return tree->property("rows").toInt() == 5; }));
+		const QString events = QStringLiteral("/logs/events.csv"), large = QStringLiteral("/logs/large.bin"),
+		              descriptor = QStringLiteral("/telemetry/descriptor.bin"), logsPath = QStringLiteral("/logs"),
+		              telemetryPath = QStringLiteral("/telemetry");
+		clickRow(events);
+		CHECK(files.selectedCount() == 1 && selected(events));
+		clickRow(large);
+		CHECK(files.selectedCount() == 1 && selected(large));
+		clickRow(events, Qt::ControlModifier);
+		CHECK(files.selectedCount() == 2 && selected(events));
+		clickRow(events, Qt::ControlModifier);
+		CHECK(files.selectedCount() == 1 && !selected(events));
+		press(tree, Qt::Key_Escape);
+		CHECK(files.selectedCount() == 0);
+		// The folder row: all its readable files.
+		clickRow(logsPath);
+		CHECK(files.selectedCount() == 2 && selected(events) && selected(large));
+		// Down moves the selection to the next row alone; Shift+Down extends it.
+		const int logsAt = tree->property("currentRow").toInt();
+		press(tree, Qt::Key_Down);
+		CHECK(tree->property("currentRow").toInt() == logsAt + 1 && files.selectedCount() == 1);
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(tree->property("currentRow").toInt() == logsAt + 2 && files.selectedCount() == 2);
+		press(tree, Qt::Key_Escape);
+		CHECK(files.selectedCount() == 0);
+
+		// Shift+click: the rows shown from the anchor. An unfolded folder in
+		// the range adds nothing - its rows below speak for it, so a range that
+		// ends on logs leaves large.bin out.
+		clickRow(events);
+		clickRow(logsPath, Qt::ShiftModifier);
+		CHECK(paths() == QStringList{events});
+		clickRow(descriptor, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events}));
+		// The anchor stays where the range started.
+		clickRow(large, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{events, large}));
+		// Ctrl+Shift+click adds a range to what is selected.
+		clickRow(descriptor);
+		clickRow(large, Qt::ControlModifier);
+		clickRow(events, Qt::ControlModifier | Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events, large}));
+		clickRow(large);
+		clickRow(events, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{events, large}));
+		// The anchor is the file, not its row: folding a folder above it moves
+		// the rows, and a Shift+click still ranges from that file (a row
+		// number would have reached large.bin too).
+		clickRow(events);
+		const int telemetryRow = rowOf(telemetryPath);
+		CHECK(telemetryRow >= 0 && QMetaObject::invokeMethod(tree, "collapse", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) < 0; }));
+		clickRow(logsPath, Qt::ShiftModifier);
+		CHECK(paths() == QStringList{events});
+		CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) >= 0; }));
+		// An anchor folded away: Shift+arrows grow the range from where they
+		// started, never slide it along with the current row.
+		clickRow(descriptor);
+		CHECK(QMetaObject::invokeMethod(tree, "collapse", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) < 0; }));
+		selection->setCurrentIndex(files.indexOfPath(telemetryPath), QItemSelectionModel::NoUpdate);
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == QStringList{descriptor});
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events}));
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events, large}));
+		CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) >= 0; }));
+		// Ctrl+arrows move the current row alone; Space and Ctrl+Space add it
+		// or take it away.
+		clickRow(events);
+		const int eventsAt = tree->property("currentRow").toInt();
+		press(tree, Qt::Key_Down, Qt::ControlModifier);
+		CHECK(tree->property("currentRow").toInt() == eventsAt + 1 && paths() == QStringList{events});
+		press(tree, Qt::Key_Space);
+		CHECK(paths() == (QStringList{events, large}));
+		press(tree, Qt::Key_Space, Qt::ControlModifier);
+		CHECK(paths() == QStringList{events});
+		// Home and End move it, as the arrows do.
+		press(tree, Qt::Key_End);
+		CHECK(tree->property("currentRow").toInt() == tree->property("rows").toInt() - 1 && paths() == QStringList{large});
+		press(tree, Qt::Key_Home, Qt::ShiftModifier);
+		CHECK(tree->property("currentRow").toInt() == 0 && files.selectedCount() == files.fileCount());
+		press(tree, Qt::Key_Escape);
+		// A right click outside the selection selects that file; inside a
+		// selection of two or more the menu acts on all of them.
+		clickRow(events);
+		const auto openMenuOn = [&](const QString& path) {
+			CHECK(QMetaObject::invokeMethod(pane, "openMenu", Q_ARG(QVariant, QVariant::fromValue(files.indexOfPath(path))),
+			                                Q_ARG(QVariant, QVariant::fromValue<QObject*>(treeItem)), Q_ARG(QVariant, 10),
+			                                Q_ARG(QVariant, 10)));
+			const auto kind = fileMenu->property("kind").toString();
+			fileMenu->setProperty("visible", false);
+			return kind;
+		};
+		CHECK(openMenuOn(large) == QStringLiteral("file") && paths() == QStringList{large});
+		clickRow(events, Qt::ControlModifier);
+		CHECK(openMenuOn(events) == QStringLiteral("selection") && paths() == (QStringList{events, large}));
+		// A folder has its own menu and leaves the selection as it is.
+		CHECK(openMenuOn(telemetryPath) == QStringLiteral("folder") && paths() == (QStringList{events, large}));
+		press(tree, Qt::Key_Escape);
+		CHECK(files.selectedCount() == 0);
+		selection->setCurrentIndex(logs2, QItemSelectionModel::NoUpdate);
+	}
 	const int logsRow = tree->property("currentRow").toInt();
 	bool expanded = false;
 	CHECK(QMetaObject::invokeMethod(tree, "isExpanded", Q_RETURN_ARG(bool, expanded), Q_ARG(int, logsRow)));
