@@ -11,6 +11,8 @@
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -190,11 +192,12 @@ void watchLayout(QQuickWindow& window, ui::InspectorController& controller)
 	CHECK(controller.connectDemo());
 	auto& endpoints = *qobject_cast<ui::EndpointModel*>(controller.endpoints());
 	CHECK(controller.selectEndpoint(endpoint(endpoints, QStringLiteral("Counter"))));
-	click(window, *control(window, QStringLiteral("addWatchButton")));
+	click(window, *control(window, QStringLiteral("watchMoreButton")));
+	click(window, *control(window, QStringLiteral("addWatchItem")));
 	CHECK(controller.watchCount() == 1);
 	click(window, *control(window, QStringLiteral("refreshWatchButton")));
 	const auto message = QStringLiteral(
-	    "ReadMany unavailable. Explicitly select Individual FieldRead, or reconnect with TRM1 discovery.");
+	    "This device can't read several Fields at once: choose Read each Field with FieldRead in the Watchlist's menu, or reconnect with TRM1 discovery.");
 	CHECK(controller.watchStatus() == message && !controller.watchPending());
 	QQuickItem* status = nullptr;
 	CHECK(await([&] {
@@ -209,17 +212,38 @@ void watchLayout(QQuickWindow& window, ui::InspectorController& controller)
 	             status->property("contentWidth").toDouble(),
 	             status->property("contentHeight").toDouble(),
 	             int(status->property("truncated").toBool()));
-	CHECK(!status->property("truncated").toBool());
-	CHECK(status->property("contentWidth").toDouble() <= status->width() + 0.5);
-	CHECK(status->property("contentHeight").toDouble() <= status->height() + 0.5);
-	CHECK(inside(*status, *pane) && inside(*status, *window.contentItem()));
+	// The line appears first and the panels around it make room after: wait
+	// for the layout to settle, then the advice must be whole.
+	CHECK(await([&] {
+		return !status->property("truncated").toBool() &&
+		       status->property("contentWidth").toDouble() <= status->width() + 0.5 &&
+		       status->property("contentHeight").toDouble() <= status->height() + 0.5 &&
+		       inside(*status, *pane) && inside(*status, *window.contentItem());
+	}));
 	// A larger host font at the supported minimum width must add readable
 	// lines and reserve their height, rather than clipping the recovery advice.
 	window.resize(window.minimumWidth(), window.height());
 	auto font = qvariant_cast<QFont>(status->property("font"));
 	font.setPixelSize(28);
 	CHECK(status->setProperty("font", font));
+	// The Configurator scrolls when its panels outgrow the window: a person
+	// scrolls to the advice, which must then be whole and on screen.
+	auto* scroll = control(window, QStringLiteral("configuratorScroll"));
+	auto* flick = scroll ? qobject_cast<QQuickItem*>(scroll->property("contentItem").value<QObject*>()) : nullptr;
+	CHECK(flick != nullptr);
+	const auto reveal = [&] {
+		auto* content = flick->property("contentItem").value<QQuickItem*>();
+		if (!content)
+			return;
+		const auto at = status->mapRectToItem(content, QRectF{0, 0, status->width(), status->height()});
+		const double top = flick->property("originY").toDouble();
+		const double most = top + std::max(0.0, flick->property("contentHeight").toDouble() - flick->height());
+		const double wanted = std::clamp(at.bottom() - flick->height() + 8.0, top, most);
+		if (std::abs(flick->property("contentY").toDouble() - wanted) > 0.5)
+			flick->setProperty("contentY", wanted);
+	};
 	CHECK(await([&] {
+		reveal();
 		return status->property("lineCount").toInt() >= 2 &&
 		       status->property("contentHeight").toDouble() <= status->height() + 0.5 &&
 		       inside(*status, *pane) && inside(*status, *window.contentItem());

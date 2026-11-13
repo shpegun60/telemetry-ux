@@ -4,12 +4,12 @@
 set_source_files_properties(Theme.qml Type.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
     URI Telemetry.UX VERSION 1.0
-    DEPENDENCIES QtQuick
+    DEPENDENCIES QtQuick QtQuick.Shapes
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     QML_FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
               EndpointPanel.qml EndpointTreePanel.qml EndpointTreeRow.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
               Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
-              HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
+              HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
               ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
               JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
@@ -51,7 +51,7 @@ install(TARGETS telemetry_ux_configurator telemetry_ux_static_configurator ${_te
 install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     EndpointPanel.qml EndpointTreePanel.qml EndpointTreeRow.qml WatchlistPanel.qml BatchPanel.qml TrendPanel.qml PlainToolTip.qml
     Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFilesPanel.qml FileViewer.qml
-    HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
+    HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
     ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
     JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"

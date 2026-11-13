@@ -13,6 +13,8 @@ import QtQuick.Layouts
 
 TreeViewDelegate {
     id: row
+    indentation: Type.indent
+    indicator: TreeChevron { row: row }
     objectName: "valuesRow"
 
     required property string name

@@ -286,7 +286,19 @@ void qmlPollingGap()
 	controller.pump();
 	CHECK(controller.watchRunning() && !controller.watchPending());
 	CHECK(watchText(controller, 0) == "18446744073709551615");
-	for (const auto* name : {"refreshWatchButton", "clearWatchButton", "removeWatchButton"}) {
+	const auto clickAt = [&](QQuickItem* target) {
+		const auto point = target->mapToScene({target->width() / 2, target->height() / 2}).toPoint();
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point);
+	};
+	// The menu's actions first, then the row's: ⋯ open, then a click on the
+	// row, which closes it and makes the row current, so × shows.
+	if (auto* more = control(*window, "watchMoreButton"))
+		clickAt(more);
+	for (const auto* name : {"clearWatchItem", "addWatchItem", "refreshWatchButton", "removeWatchButton"}) {
+		if (QByteArray(name) == "refreshWatchButton") {
+			if (auto* row = control(*window, "watchlistRow"))
+				clickAt(row);
+		}
 		auto* item = control(*window, QString::fromLatin1(name));
 		if (!item)
 			continue;

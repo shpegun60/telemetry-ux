@@ -31,6 +31,8 @@ Q_SIGNALS:
 private:
     void inspect();
     void detachSelection();
+    // With nothing chosen: what to do next, by whether anything is watched.
+    QString idleText() const;
     bool setState(const QString& state);
     void publish(unsigned flags);
     int role(const QByteArray& name) const;
@@ -38,7 +40,7 @@ private:
     QPersistentModelIndex selected_;
     QElapsedTimer clock_;
     QVariantList points_;
-    QString revision_, epoch_, state_ = QStringLiteral("Select a watched Field");
+    QString revision_, epoch_, state_ = QStringLiteral("Watch a Field to plot it.");
     bool gap_ = true;
     unsigned pendingSignals_ = 0;
     bool publishing_ = false;

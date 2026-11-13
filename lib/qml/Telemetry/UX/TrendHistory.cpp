@@ -59,9 +59,23 @@ void TrendHistory::setSource(QAbstractItemModel* source)
                 if (selected_.isValid() && !first.parent().isValid() && !last.parent().isValid() &&
                     selected_.row() >= first.row() && selected_.row() <= last.row()) inspect();
             });
-        connect(source_, &QAbstractItemModel::modelAboutToBeReset, this, &TrendHistory::detachSelection);
-        connect(source_, &QAbstractItemModel::rowsInserted, this, [this] { publish(RowChanged); });
-        connect(source_, &QAbstractItemModel::rowsRemoved, this, [this] { publish(RowChanged); });
+        // A reset (a disconnect, a new list) is not a lost Field: the plot
+        // says what to do next once the list is back.
+        connect(source_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
+            selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
+            publish(RowChanged);
+        });
+        connect(source_, &QAbstractItemModel::modelReset, this, [this] {
+            if (!selected_.isValid() && setState(idleText())) publish(StateChanged);
+        });
+        // With nothing chosen, the line follows whether anything is watched.
+        const auto rowsChanged = [this] {
+            unsigned flags = RowChanged;
+            if (!selected_.isValid() && points_.isEmpty() && setState(idleText())) flags |= StateChanged;
+            publish(flags);
+        };
+        connect(source_, &QAbstractItemModel::rowsInserted, this, rowsChanged);
+        connect(source_, &QAbstractItemModel::rowsRemoved, this, rowsChanged);
         connect(source_, &QAbstractItemModel::rowsMoved, this, [this] { publish(RowChanged); });
         connect(source_, &QAbstractItemModel::rowsAboutToBeRemoved, this,
             [this](const QModelIndex& parent, int first, int last) {
@@ -72,20 +86,25 @@ void TrendHistory::setSource(QAbstractItemModel* source)
             source_ = nullptr;
             selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
             unsigned flags = RowChanged | SourceChanged;
-            if (setState(QStringLiteral("Field unavailable; select a Field again"))) flags |= StateChanged;
+            if (setState(idleText())) flags |= StateChanged;
             publish(flags);
         });
     }
     unsigned flags = PointsChanged | RowChanged | SourceChanged;
     if (setState(wrongThread ? QStringLiteral("Watchlist must share the Trend owner thread")
-                             : QStringLiteral("Select a watched Field"))) flags |= StateChanged;
+                             : idleText())) flags |= StateChanged;
     publish(flags);
+}
+QString TrendHistory::idleText() const
+{
+    return source_ && source_->rowCount() > 0 ? QStringLiteral("Choose a Field above.")
+                                              : QStringLiteral("Watch a Field to plot it.");
 }
 void TrendHistory::detachSelection()
 {
     selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
     unsigned flags = RowChanged;
-    if (setState(QStringLiteral("Field unavailable; select a Field again"))) flags |= StateChanged;
+    if (setState(QStringLiteral("This Field is no longer watched."))) flags |= StateChanged;
     publish(flags);
 }
 void TrendHistory::setRow(int row)
@@ -98,8 +117,8 @@ void TrendHistory::setRow(int row)
     if (selected_.isValid() && role("sampleRevision") >= 0) {
         revision_ = source_->data(selected_, role("sampleRevision")).toString();
         epoch_ = source_->data(selected_, role("sampleEpoch")).toString();
-        changed = setState(QStringLiteral("Waiting for a new reading"));
-    } else changed = setState(QStringLiteral("Select a watched Field"));
+        changed = setState(QStringLiteral("No readings yet. Read once or Start."));
+    } else changed = setState(idleText());
     publish(PointsChanged | RowChanged | (changed ? StateChanged : 0u));
 }
 void TrendHistory::clear()

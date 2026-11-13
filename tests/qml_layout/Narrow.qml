@@ -22,6 +22,7 @@ Window {
         property bool watchReadManySupported: true
         property bool watchRequiresExplicitIndividual: false
         property int watchIntervalMs: 100
+        property int watchIntervalMinimumMs: 1
         property string watchStatus: "Ready"
         property int starts: 0
         property int stops: 0

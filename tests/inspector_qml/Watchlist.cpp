@@ -481,19 +481,19 @@ void qmlChecks(const QString& screenshot)
 	click(*window, *control(*window, "readManyDemoButton"));
 	CHECK(controller.connected());
 	click(*window, *control(*window, "watchlistExpanded"));
-	auto* interval = control(*window, "watchFrequency");
-	CHECK(interval->property("from") == 1 && interval->property("to") == 60000 &&
-	      interval->property("stepSize") == 1);
-	auto* editor = qobject_cast<QQuickItem*>(interval->property("contentItem").value<QObject*>());
-	CHECK(editor);
-	click(*window, *editor);
+	// Other…, the list's last entry, takes any interval in ms from the keyboard.
+	auto* interval = control(*window, "watchInterval");
+	CHECK(QMetaObject::invokeMethod(interval, "activated", Q_ARG(int, interval->property("count").toInt() - 1)));
+	auto* input = control(*window, "watchIntervalInput");
+	CHECK(input->hasActiveFocus());
 	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 	QTest::keyClick(window, Qt::Key_1);
 	QTest::keyClick(window, Qt::Key_Return);
 	CHECK(controller.watchIntervalMs() == 1);
 	controller.setWatchIntervalMs(1000);
 	select(controller, "U64_0");
-	click(*window, *control(*window, "addWatchButton"));
+	click(*window, *control(*window, "watchMoreButton"));
+	click(*window, *control(*window, "addWatchItem"));
 	CHECK(controller.watchCount() == 1);
 	click(*window, *control(*window, "refreshWatchButton"));
 	CHECK(await([&] {
@@ -506,9 +506,8 @@ void qmlChecks(const QString& screenshot)
 		return !controller.busy() && controller.values()->rowCount() > 0;
 	}));
 	CHECK(watchText(controller, 0) == "18446744073709551615");
-	click(*window, *control(*window, "watchMode"));
-	QTest::keyClick(window, Qt::Key_Down);
-	QTest::keyClick(window, Qt::Key_Return);
+	click(*window, *control(*window, "watchMoreButton"));
+	click(*window, *control(*window, "watchModeFieldRead"));
 	CHECK(controller.watchIndividual());
 	click(*window, *control(*window, "startWatchButton"));
 	CHECK(controller.watchRunning());
@@ -519,6 +518,8 @@ void qmlChecks(const QString& screenshot)
 	}));
 	if (!screenshot.isEmpty())
 		CHECK(window->grabWindow().save(screenshot));
+	// × shows on the current row: a click on the row makes it current.
+	click(*window, *control(*window, "watchlistRow"));
 	click(*window, *control(*window, "removeWatchButton"));
 	CHECK(controller.watchCount() == 0 && !warnings);
 	controller.disconnectDevice();

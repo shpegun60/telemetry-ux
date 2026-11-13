@@ -253,7 +253,7 @@ void twoPanels()
 	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 	QCoreApplication::processEvents();
 	CHECK(peer.requests() == requestsBeforeBulk && !first->watchPending());
-	CHECK(first->watchStatus().startsWith(QStringLiteral("ReadMany unavailable")));
+	CHECK(first->watchStatus().startsWith(QStringLiteral("This device can't read several Fields at once:")));
 	CHECK(first->editing() && first->values()->data(gain, ux::ValueModel::EditorTextRole) == draftText);
 	QSignalSpy applied(first, &ux::DynamicConfiguratorProvider::applyFinished);
 	CHECK(first->apply());

@@ -10,6 +10,11 @@ import QtQuick.Layouts
 
 TreeViewDelegate {
     id: fileRow
+    indentation: Type.indent
+    // The panel has no padding: the margin lines the chevrons up with the
+    // Device tree's.
+    leftMargin: Type.padding
+    indicator: TreeChevron { row: fileRow }
     objectName: "deviceFileRow"
 
     required property string name

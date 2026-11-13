@@ -31,6 +31,7 @@ Pane {
                 textRole: "name"
                 currentIndex: -1
                 displayText: currentIndex < 0 ? qsTr("Choose a watched Field") : currentText
+                enabled: count > 0
                 onActivated: panel.history.row = currentIndex
                 Connections {
                     target: panel.history

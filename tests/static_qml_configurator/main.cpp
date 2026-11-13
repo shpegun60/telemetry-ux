@@ -491,18 +491,21 @@ static void qmlInput(const QString& image, bool standalone = false)
 	check(standalone ? pane == nullptr : pane && !pane->isVisible(),
 	      "standalone has no navigation or Watchlist pane");
 	if (!standalone) {
-		auto* watchMode = root->findChild<QObject*>(QStringLiteral("watchMode"));
-		check(watchMode && watchMode->property("count").toInt() == 1 &&
-		          watchMode->property("currentIndex").toInt() == 0,
+		auto* readMany = root->findChild<QQuickItem*>(QStringLiteral("watchModeReadMany"));
+		auto* fieldRead = root->findChild<QQuickItem*>(QStringLiteral("watchModeFieldRead"));
+		check(readMany && fieldRead && readMany->height() == 0 &&
+		          fieldRead->property("checked").toBool() && !fieldRead->isEnabled(),
 		      "Static QML never advertises unsupported ReadMany mode");
-		auto* frequency = root->findChild<QQuickItem*>(QStringLiteral("watchFrequency"));
-		// The interval box starts at the provider's watchIntervalMinimumMs: 0 for
+		auto* frequency = root->findChild<QQuickItem*>(QStringLiteral("watchInterval"));
+		// The interval list starts at the provider's watchIntervalMinimumMs: 0 for
 		// this one, which reads continuously at low priority there (#55).
-		check(frequency && frequency->property("from").toInt() == 0 &&
-		          frequency->property("to").toInt() == 60000 &&
-		          frequency->property("stepSize").toInt() == 1 &&
-		          frequency->property("editable").toBool(),
-		      "Watch interval uses editable integer milliseconds from the provider's minimum");
+		QString firstStep, lastStep;
+		check(frequency &&
+		          QMetaObject::invokeMethod(frequency, "textAt", Q_RETURN_ARG(QString, firstStep), Q_ARG(int, 0)) &&
+		          QMetaObject::invokeMethod(frequency, "textAt", Q_RETURN_ARG(QString, lastStep),
+		                                    Q_ARG(int, frequency->property("count").toInt() - 1)) &&
+		          firstStep == QStringLiteral("Continuous") && lastStep == QStringLiteral("Other…"),
+		      "Watch interval offers Continuous from the provider's minimum, and Other… for any interval");
 		auto* view = root->findChild<QObject*>(QStringLiteral("staticTestView"));
 		auto* expanded = root->findChild<QObject*>(QStringLiteral("watchlistExpanded"));
 		check(view && expanded, "watch controls retain stable object identities");
@@ -510,20 +513,17 @@ static void qmlInput(const QString& image, bool standalone = false)
 		expanded->setProperty("checked", true);
 		events();
 		QTest::qWait(20);
-		auto* intervalInput = frequency->property("contentItem").value<QQuickItem*>();
-		check(intervalInput && intervalInput->isVisible(),
-		      "millisecond interval has a visible text editor");
 		const auto packetsBeforeInterval = h.packets;
-		QTest::mouseClick(
-		    window, Qt::LeftButton, Qt::NoModifier,
-		    intervalInput
-		        ->mapToScene(QPointF(intervalInput->width() / 2, intervalInput->height() / 2))
-		        .toPoint());
+		QMetaObject::invokeMethod(frequency, "activated", Q_ARG(int, frequency->property("count").toInt() - 1));
+		events();
+		auto* intervalInput = root->findChild<QQuickItem*>(QStringLiteral("watchIntervalInput"));
+		check(intervalInput && intervalInput->isVisible() && intervalInput->hasActiveFocus(),
+		      "Other… puts a millisecond field in the list's place, with the keyboard in it");
 		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 		QTest::keyClick(window, Qt::Key_1);
 		QTest::keyClick(window, Qt::Key_Return);
 		events();
-		check(p.watchIntervalMs() == 1 && frequency->property("value").toInt() == 1,
+		check(p.watchIntervalMs() == 1 && frequency->property("currentText").toString() == QStringLiteral("1 ms"),
 		      "real keyboard interval input reaches the provider as one millisecond");
 		check(h.packets == packetsBeforeInterval,
 		      "editing the polling interval submits no endpoint work");

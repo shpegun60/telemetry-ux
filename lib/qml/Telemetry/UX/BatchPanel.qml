@@ -16,10 +16,11 @@ Pane {
         spacing: Type.spacing
         RowLayout {
             Layout.fillWidth: true
-            CheckBox {
+            FoldTitle {
                 id: expanded
                 objectName: "batchToggle"
-                text: "Batch " + panel.provider.batchCount + "/32"
+                text: qsTr("Batch")
+                countText: qsTr("%L1/32").arg(panel.provider.batchCount)
                 checked: false
             }
             ComboBox {
@@ -150,6 +151,8 @@ Pane {
                         onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
                         delegate: TreeViewDelegate {
                             id: response
+                            indentation: Type.indent
+                            indicator: TreeChevron { row: response }
                             objectName: "batchResponseRow"
                             required property string name
                             required property string detail

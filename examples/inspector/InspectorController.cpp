@@ -1478,7 +1478,7 @@ bool InspectorController::submitWatch()
 	if (!watchIndividual_) {
 		if (!state.capability || !rm::wire::valid(*state.capability)) {
 			watchStatus_ = QStringLiteral(
-			    "ReadMany unavailable. Explicitly select Individual FieldRead, or reconnect with TRM1 discovery.");
+			    "This device can't read several Fields at once: choose Read each Field with FieldRead in the Watchlist's menu, or reconnect with TRM1 discovery.");
 			return false;
 		}
 		std::array<std::uint32_t, 32> ids{};
