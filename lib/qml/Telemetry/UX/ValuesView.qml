@@ -212,19 +212,24 @@ FocusScope {
         anchors.fill: parent
         spacing: Type.tight
 
-        // Which descriptor the file was written with: its fingerprint, with Copy.
+        // One caption line: how many Fields, then the descriptor the file was
+        // written with - its fingerprint, with Copy. The mode's segment above
+        // already says Values.
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.padding
-            spacing: Type.padding
+            spacing: Type.spacing
             Label {
-                text: qsTr("Values")
-                color: Theme.textPrimary
-                font.weight: Type.headingWeight
+                objectName: "valuesSummary"
+                visible: view.decoded.valid
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: view.live ? view.decoded.summary
+                                : qsTr("%1 · read %2").arg(view.decoded.summary).arg(view.timeText(view.decoded.shownAt))
             }
             Label {
-                text: qsTr("descriptor")
+                text: view.decoded.valid ? qsTr("· descriptor") : qsTr("Descriptor")
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
             }
@@ -233,6 +238,7 @@ FocusScope {
                 Layout.fillWidth: true
                 elide: Text.ElideRight
                 font.family: Type.fixedFamily
+                font.pointSize: Type.caption
                 color: Theme.textSecondary
                 text: view.decoded.fingerprintGroups
                 HoverHandler { id: fingerprintHover }
@@ -288,20 +294,8 @@ FocusScope {
             Item { Layout.fillHeight: true }
         }
 
-        Label {
-            objectName: "valuesSummary"
-            visible: view.decoded.valid
-            Layout.fillWidth: true
-            Layout.leftMargin: Type.padding
-            Layout.rightMargin: Type.padding
-            elide: Text.ElideRight
-            font.pointSize: Type.caption
-            color: Theme.textSecondary
-            text: view.live ? view.decoded.summary
-                            : qsTr("%1 · read %2").arg(view.decoded.summary).arg(view.timeText(view.decoded.shownAt))
-        }
-
-        // Live: read again and again; Hold: keep what is shown.
+        // Read again and again, in the Watchlist's words: Start / Stop and
+        // Every; Hold keeps what is shown while reading goes on.
         RowLayout {
             objectName: "valuesLiveBar"
             visible: view.decoded.valid && !!view.live
@@ -309,16 +303,27 @@ FocusScope {
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.padding
             spacing: Type.padding
-            // Shown pressed while on; the state is the reader's, never the button's own.
+            // Start or Stop, as wide as the longer word so the bar never moves;
+            // the state is the reader's, never the button's own.
             Button {
+                id: liveButton
                 objectName: "valuesLive"
-                text: qsTr("Live")
-                checked: view.running
-                Accessible.checkable: true
-                Accessible.checked: view.running
+                TextMetrics { id: startWord; font: liveButton.font; text: qsTr("Start") }
+                TextMetrics { id: stopWord; font: liveButton.font; text: qsTr("Stop") }
+                Layout.preferredWidth: Math.max(startWord.advanceWidth, stopWord.advanceWidth)
+                                       + leftPadding + rightPadding
+                text: view.running ? qsTr("Stop") : qsTr("Start")
+                Accessible.name: view.running ? qsTr("Stop reading the device's file")
+                                              : qsTr("Read the device's file again and again")
                 onClicked: view.live.running = !view.running
                 ToolTip.visible: hovered
+                ToolTip.delay: 700
                 ToolTip.text: qsTr("Read the device's file again and again")
+            }
+            Label {
+                text: qsTr("Every")
+                color: Theme.textMuted
+                font.pointSize: Type.caption
             }
             ComboBox {
                 id: period
@@ -331,12 +336,12 @@ FocusScope {
                 // The fastest reads as soon as the last read ended (200 ms at
                 // least between starts); the others wait that long after it.
                 model: [
-                    { text: qsTr("As fast as it reads"), ms: 200 },
-                    { text: qsTr("Every 0.5 s"), ms: 500 },
-                    { text: qsTr("Every 1 s"), ms: 1000 },
-                    { text: qsTr("Every 2 s"), ms: 2000 },
-                    { text: qsTr("Every 5 s"), ms: 5000 },
-                    { text: qsTr("Every 10 s"), ms: 10000 }
+                    { text: qsTr("Continuous"), ms: 200 },
+                    { text: qsTr("0.5 s"), ms: 500 },
+                    { text: qsTr("1 s"), ms: 1000 },
+                    { text: qsTr("2 s"), ms: 2000 },
+                    { text: qsTr("5 s"), ms: 5000 },
+                    { text: qsTr("10 s"), ms: 10000 }
                 ]
                 Component.onCompleted: currentIndex = Math.max(0, indexOfValue(view.live ? view.live.periodMs : 1000))
                 onActivated: if (view.live) view.live.periodMs = currentValue
@@ -467,6 +472,8 @@ FocusScope {
                 objectName: "valuesValueHeading"
                 Layout.preferredWidth: 10 + view.valueWidth
                 leftPadding: Type.groupSpacing
+                // Over its numbers, which stand right.
+                horizontalAlignment: Text.AlignRight
                 text: view.decoded.held ? qsTr("Value · held") : qsTr("Value")
                 font.pointSize: Type.caption
                 color: view.decoded.held ? Theme.info : Theme.textSecondary

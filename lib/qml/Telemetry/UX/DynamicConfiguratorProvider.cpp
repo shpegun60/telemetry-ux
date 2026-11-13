@@ -796,8 +796,8 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 		if (p->state)
 			p->endpoints.rebuild(p->state->view);
 	}
-	p->status =
-	    p->current() ? QStringLiteral("Select an endpoint") : QStringLiteral("Not connected");
+	// Connected and idle, the status says nothing: the panels say what to do.
+	p->status = p->current() ? QString() : QStringLiteral("Not connected");
 	p->present();
 	p->updating = false;
 	p->notify();

@@ -481,7 +481,7 @@ void tree(qt::ConnectionSession& session, DeviceFilesModel& files)
 	const auto events = child(files, logs, QStringLiteral("events.csv"));
 	CHECK(events.isValid() && files.parent(events) == logs);
 	CHECK(files.data(events, DeviceFilesModel::PathRole).toString() == QStringLiteral("/logs/events.csv"));
-	CHECK(files.data(events, DeviceFilesModel::SizeTextRole).toString() == QStringLiteral("300 B"));
+	CHECK(files.data(events, DeviceFilesModel::SizeTextRole).toString() == QStringLiteral("300\u00a0B"));
 	CHECK(files.data(events, DeviceFilesModel::AccessTextRole).toString() == QStringLiteral("read"));
 	// The device's names are kept exactly, the descriptor included.
 	CHECK(child(files, telemetryFolder, QStringLiteral("descriptor.bin")).isValid());
@@ -2632,7 +2632,7 @@ int main(int argc, char** argv)
 	QTemporaryDir folder;
 	CHECK(folder.isValid());
 	CHECK(DeviceFileTransfers::figures(98304, 131072, 43008, 1.2, true) ==
-	      QStringLiteral("96 / 128 KiB · 42 KiB/s · about 5 s left"));
+	      QStringLiteral("96 / 128\u00a0KiB · 42\u00a0KiB/s · about 5 s left"));
 	CHECK(DeviceFileTransfers::figures(143360, 131072, 0, -1, false).contains(QStringLiteral("growing")));
 
 	Peer peer{withDescriptor.view()};

@@ -140,17 +140,19 @@ QString pairInUnit(quint64 received, quint64 total, const QString& pattern = QSt
 		const double value = static_cast<double>(bytes) / scale;
 		return QLocale().toString(value, 'f', unit == 0 || value >= 10 ? 0 : 1);
 	};
-	return QString(pattern).arg(number(received), number(total), QString::fromLatin1(units[unit]));
+	// The total and its unit never part at a line's end.
+	return QString(pattern).arg(number(received), number(total), QString::fromLatin1(units[unit]))
+	    .replace(QStringLiteral(" ") + QString::fromLatin1(units[unit]), QChar(0x00A0) + QString::fromLatin1(units[unit]));
 }
 
 // In the same units as every size the panel shows: B below 1 KiB.
 QString rateText(double bytesPerSecond)
 {
 	if (bytesPerSecond < 1024)
-		return DeviceFileTransfers::tr("%1 B/s").arg(static_cast<int>(bytesPerSecond));
+		return DeviceFileTransfers::tr("%1 B/s").arg(static_cast<int>(bytesPerSecond)).replace(QLatin1Char(' '), QChar(0x00A0));
 	return DeviceFileTransfers::tr("%1/s").arg(
 	    QLocale().formattedDataSize(static_cast<qint64>(bytesPerSecond), 0,
-	                                QLocale::DataSizeIecFormat));
+	                                QLocale::DataSizeIecFormat).replace(QLatin1Char(' '), QChar(0x00A0)));
 }
 
 // Two parts of a progress line, joined so a translator can reorder them.

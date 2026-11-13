@@ -1,7 +1,8 @@
 // One row of the Values tree, and of the JSON tree: the name, the value and
 // the type in fixed columns; a group carries its Field count where a value
-// would be. A value that changed in the latest snapshot is marked with a dot
-// and the accent colour; a Field the device could not give says so. A long
+// would be. A value that changed in the latest snapshot is marked with a
+// 2 px line in the info colour and drawn in it - not a dot, which reads as the
+// Watchlist's OK; a Field the device could not give says so. A long
 // array opens as ranges of 256, "[0 … 255]", "[256 … 511]", … - as Eclipse
 // shows one - and a range opens like any row. The current row is
 // highlighted, and framed while the tree has the keyboard. MIT.
@@ -42,7 +43,7 @@ TreeViewDelegate {
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
     readonly property color valueColor: highlighted ? Theme.selectedForeground
                                       : group || unavailable ? Theme.textMuted
-                                      : changed ? Theme.accent : Theme.textPrimary
+                                      : changed ? Theme.info : Theme.textPrimary
 
     signal contextMenuRequested(var index, real x, real y)
 
@@ -75,14 +76,15 @@ TreeViewDelegate {
             Layout.preferredWidth: 10 + row.valueWidth
             Layout.fillHeight: true
             Rectangle {
-                width: 6
-                height: 6
-                radius: 3
+                objectName: "valuesChangeMark"
+                width: 2
+                height: Math.round(row.height * 0.6)
+                radius: 1
                 anchors.verticalCenter: parent.verticalCenter
                 x: valueLabel.x + Math.max(0, valueLabel.width - valueLabel.contentWidth) *
                    (valueLabel.horizontalAlignment === Text.AlignRight ? 1 : 0) - width - 4
                 visible: (row.group ? row.changedFields > 0 : row.changed) && !row.highlighted
-                color: Theme.accent
+                color: Theme.info
                 Accessible.ignored: true
             }
             Label {
