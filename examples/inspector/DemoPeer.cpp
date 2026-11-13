@@ -103,6 +103,26 @@ struct WritableDevice {
 		return telemetry::WriteResult::Applied;
 	}
 
+#ifdef TELEMETRY_TEST_BULK_WRITABLE
+	// Preserve IEEE-754 signed zero in the actual row-editor TCP regression.
+	float signedZero32 = -0.0f;
+	double signedZero64 = -0.0;
+	float readSignedZero32() const noexcept { return signedZero32; }
+	double readSignedZero64() const noexcept { return signedZero64; }
+	telemetry::WriteResult writeSignedZero32(const float& requested) noexcept
+	{
+		++writes;
+		signedZero32 = requested;
+		return telemetry::WriteResult::Applied;
+	}
+	telemetry::WriteResult writeSignedZero64(const double& requested) noexcept
+	{
+		++writes;
+		signedZero64 = requested;
+		return telemetry::WriteResult::Applied;
+	}
+#endif
+
 	telemetry::WriteResult write(const Config& requested) noexcept
 	{
 		++writes;
@@ -436,7 +456,11 @@ constexpr telemetry::FieldTable writableFields{
     telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
                                                                                 writablePrototype),
     telemetry::field<&demo::WritableDevice::readSetpoint, &demo::WritableDevice::writeSetpoint>(
-        "Setpoint", writablePrototype)};
+        "Setpoint", writablePrototype),
+    telemetry::field<&demo::WritableDevice::readSignedZero32, &demo::WritableDevice::writeSignedZero32>(
+        "SignedZero32", writablePrototype),
+    telemetry::field<&demo::WritableDevice::readSignedZero64, &demo::WritableDevice::writeSignedZero64>(
+        "SignedZero64", writablePrototype)};
 #else
 constexpr telemetry::FieldTable writableFields{
     telemetry::field<&demo::WritableDevice::read, &demo::WritableDevice::write>("Config",
@@ -482,7 +506,11 @@ struct DemoPeer::Impl {
 #ifdef TELEMETRY_TEST_BULK_WRITABLE
 	    ,
 	    telemetry::field<&demo::WritableDevice::readSetpoint, &demo::WritableDevice::writeSetpoint>(
-	        "Setpoint", device)
+	        "Setpoint", device),
+	    telemetry::field<&demo::WritableDevice::readSignedZero32, &demo::WritableDevice::writeSignedZero32>(
+	        "SignedZero32", device),
+	    telemetry::field<&demo::WritableDevice::readSignedZero64, &demo::WritableDevice::writeSignedZero64>(
+	        "SignedZero64", device)
 #endif
 	};
 	decltype(writableCatalogs) catalogs{telemetry::group("device", fields)

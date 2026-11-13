@@ -10,6 +10,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
@@ -20,6 +21,9 @@
 #include <cstdlib>
 #include <functional>
 #include <cstring>
+#include <bit>
+#include <cstdint>
+#include <memory>
 
 namespace ux = telemetry::ux;
 namespace host = telemetry::integration::qt;
@@ -707,6 +711,99 @@ void watchRowWrite()
 	connection.disconnect();
 }
 
+// Opening and submitting an unchanged floating-point row must preserve -0.
+// Drive the real QML editor with F2/Enter. Unchanged input must not turn into
+// a write; explicitly editing +0 back to -0 checks the actual TCP write bytes
+// and the separate confirming read, rather than calling writeWatch directly.
+void watchRowSignedZero()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	provider->setAllowMutations(true);
+	for (const auto& name : {QStringLiteral("SignedZero32"), QStringLiteral("SignedZero64")}) {
+		const auto field = endpoint(provider->endpoints(), name);
+		CHECK(field.isValid());
+		CHECK(provider->addWatchMany({QVariant::fromValue(field)}).value("added").toInt() == 1);
+	}
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive(); }));
+
+	QQmlApplicationEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	QQmlComponent component(&engine);
+	component.setData(R"qml(
+import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+ApplicationWindow {
+    width: 840; height: 480; visible: true
+    WatchlistPanel { anchors.fill: parent; provider: testProvider; collapsible: false }
+}
+)qml", QUrl(QStringLiteral("signed-zero-row.qml")));
+	CHECK(component.isReady());
+	std::unique_ptr<QObject> object(component.create());
+	auto* window = qobject_cast<QQuickWindow*>(object.get());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	window->requestActivate();
+	CHECK(QTest::qWaitForWindowActive(window));
+	auto* list = control(window->contentItem(), QStringLiteral("watchlistView"));
+	auto* rows = provider->watchlist();
+	QSignalSpy finished(provider, &ux::DynamicConfiguratorProvider::watchWriteFinished);
+	for (int row = 0; row < 2; ++row) {
+		const auto index = rows->index(row, 0);
+		CHECK(rows->data(index, ux::WatchlistModel::SampleExactRole).toBool());
+		const auto sampleBits = [&] {
+			return std::bit_cast<std::uint64_t>(
+			    rows->data(index, ux::WatchlistModel::SampleValueRole).toDouble());
+		};
+		const auto openEditor = [&] {
+			CHECK(list->setProperty("currentIndex", row));
+			list->forceActiveFocus(Qt::TabFocusReason);
+			CHECK(await([&] { return list->hasActiveFocus(); }));
+			QTest::keyClick(window, Qt::Key_F2);
+			auto* editor = control(window->contentItem(), QStringLiteral("watchValueEditor"));
+			CHECK(editor->hasActiveFocus());
+			return editor;
+		};
+		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
+		CHECK(openEditor()->property("text").toString() == QStringLiteral("-0"));
+		const auto writes = peer.nativeWrites();
+		// Workbench only applies dirty drafts. Opening -0 and immediately
+		// accepting it must therefore leave the device unchanged, with no write.
+		QTest::keyClick(window, Qt::Key_Return);
+		CHECK(await([&] { return finished.count() == row * 3 + 1 && !provider->watchActive(); }));
+		CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == writes);
+		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
+		// Set +0 through this same real editor, then deliberately enter -0.
+		CHECK(openEditor()->property("text").toString() == QStringLiteral("-0"));
+		QTest::keyClick(window, Qt::Key_0);
+		QTest::keyClick(window, Qt::Key_Return);
+		CHECK(await([&] { return finished.count() == row * 3 + 2 && !provider->watchActive(); }));
+		CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
+		CHECK(peer.lastWritePayload() == QByteArray(row == 0 ? 4 : 8, '\0'));
+		CHECK(sampleBits() == 0);
+		CHECK(openEditor()->property("text").toString() == QStringLiteral("0"));
+		QTest::keyClick(window, Qt::Key_Minus);
+		QTest::keyClick(window, Qt::Key_0);
+		QTest::keyClick(window, Qt::Key_Return);
+		CHECK(await([&] { return finished.count() == row * 3 + 3 && !provider->watchActive(); }));
+		CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 2);
+		const auto expected = QByteArray::fromHex(row == 0 ? "00000080" : "0000000000000080");
+		std::fprintf(stderr, "Signed zero F%d TCP payload=%s expected=%s\n", row == 0 ? 32 : 64,
+		             peer.lastWritePayload().toHex().constData(), expected.toHex().constData());
+		CHECK(peer.lastWritePayload() == expected);
+		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
+	}
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -990,6 +1087,7 @@ int main(int argc, char** argv)
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();
+	watchRowSignedZero();
 	presentationPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));

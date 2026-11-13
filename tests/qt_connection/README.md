@@ -13,6 +13,12 @@ same-peer fresh admission, removing accepted panels, factory self-deletion,
 reentrant disconnect and deleting Session from model reset. The same shipped
 example QML is loaded with zero tolerated warnings.
 
+The actual Watchlist row editor opens F32/F64 negative zero with F2 and accepts
+it unchanged with Enter: the unchanged draft must not become a device write.
+It then types +0 and -0, checking one device write per deliberate change, exact
+TCP payload bytes, and the sign bit in each separate confirming readback. These
+use test-only scalar Fields; the normal demonstration Descriptor is unchanged.
+
 The same gate also executes `tests/dynamic_watchlist`: controlled ticks and
 completion slots check 65-row chunking, smaller capability budgets, explicit
 Individual mode, Stop/drain, stale-source replacement and reentrant model

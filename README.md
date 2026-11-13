@@ -123,10 +123,14 @@ engine.setInitialProperties({{"deviceProvider", QVariant::fromValue(&provider)}}
 The page passes `deviceProvider` to `Configurator` and sets
 `watchlistVisible: false` to hide optional polling controls. The static provider
 supports Fields, Commands, Services and an explicit Individual FieldRead
-Watchlist whose size follows the supplied metadata and host memory. It reads
-scalar/enum Fields sequentially and does not advertise ReadMany. Its nominal
-polling interval is an integer from 1 to 60,000 milliseconds; throughput depends
-on the transport, device and event loop.
+Watchlist of at most 1024 readable scalar/enum Fields from the supplied metadata.
+It reads them sequentially and does not advertise ReadMany. Its nominal polling
+interval is an integer from 0 to 60,000 milliseconds; 0 selects continuous cycles
+with a cooperative timer, still at most one accepted read. Throughput depends on
+the transport, device and event loop. An open Field or request draft prevents
+Static Watchlist reads; accepted foreground mutations stop polling. Inline
+Watchlist writes and draft-independent polling belong to the Session-backed
+Dynamic provider, not this generated Static provider.
 Generated C++ callbacks
 validate values and encode requests. The provider borrows confirmed API caches,
 keeps a private draft and original canonical Field bytes, and preserves untouched

@@ -46,9 +46,11 @@ provider of the same view.
 ## Static Watchlist
 
 Select a readable scalar Field or enum and call `addWatch()`. Membership is limited
-by distinct Fields in the validated generated metadata and Qt's integer row
-capacity, not by a 32-item wire-operation budget. `refreshWatch()` performs one
-sequential cycle; `startWatch()` requests cycles at `watchIntervalMs` (1–60,000 ms).
+to 1024 distinct Fields from the validated generated metadata, not by a 32-item
+wire-operation budget. `watchLimit` exposes that host limit. `refreshWatch()`
+performs one sequential cycle; `startWatch()` requests cycles at
+`watchIntervalMs` (0–60,000 ms). Zero selects continuous cycles using the provider's
+10 ms cooperative timer; it neither spins nor accumulates requests.
 This is a nominal scheduling interval, not a guaranteed per-Field sample rate:
 the transport, owner loop, getters and whole-cycle duration determine throughput.
 `stopWatch()` stops future reads and
@@ -71,9 +73,14 @@ an error status, even when the generated API still retains an older cache value.
 The Watchlist owns no additional confirmed DTO or wire payload. Successful
 external cache notifications may update the corresponding projected value.
 
-Foreground reads serialize with the current cycle. Accepted foreground mutations
-stop polling and invalidate Watchlist presentation; restart explicitly after the
-operation. A session change immediately invalidates values and stops polling.
+Foreground actions wait until the current Individual cycle ends. An open Field
+draft or the request draft prepared by Command/Service selection prevents starting
+or advancing Watchlist reads; finish or discard that draft first. Accepted
+foreground mutations stop polling and invalidate Watchlist presentation; restart
+explicitly after the operation. This provider does not expose `writeWatch()` or
+an inline Watchlist editor. Those capabilities and polling alongside an open
+draft belong to the Session-backed Dynamic provider. A session change immediately
+invalidates values and stops polling.
 Membership is retained for the same generated schema, but a later admission never
 restarts polling or publishes an old callback. The host still owns transport
 recovery and physical quiescence.

@@ -70,11 +70,12 @@ the floors also reject accidentally skipped test paths.
 The isolated Watchlist contracts also register 65 distinct metadata endpoints and
 complete their Individual reads in order. Repeated injected timer ticks while a
 read is pending add no requests. A requested 1-ms interval uses Qt's precise timer;
-0 and values above 60,000 ms are refused. Stop retains the one accepted read until
-completion and prevents another cycle. These deterministic scheduling checks do
+Negative values and values above 60,000 ms are refused. Separate continuous-mode
+contracts accept 0 and check its 10 ms cooperative timer. Stop retains the one
+accepted read until completion and prevents another cycle. These deterministic scheduling checks do
 not measure a transport's achievable sampling rate or add ReadMany support to the
-static provider. Membership follows available validated metadata and Qt row
-capacity; it has no artificial 32-Field list limit.
+static provider. Membership follows available validated metadata up to the shared
+1024-Field host limit; it has no artificial 32-Field list limit.
 The actual QML window additionally types `1` into its editable millisecond
 interval control with QTest mouse/keyboard events and verifies the provider
 receives 1 ms without issuing endpoint work.

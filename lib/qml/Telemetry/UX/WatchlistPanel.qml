@@ -502,7 +502,10 @@ Pane {
                     if (!writable || editing)
                         return
                     editing = true
-                    valueEditor.text = model.sampleExact === true ? String(model.sampleValue) : watchRow.text
+                    // String(-0) loses the sign, although the typed sample is exact.
+                    valueEditor.text = model.sampleExact === true
+                        ? (model.sampleValue === 0 && 1 / model.sampleValue < 0 ? "-0" : String(model.sampleValue))
+                        : watchRow.text
                     valueEditor.forceActiveFocus()
                     valueEditor.selectAll()
                 }

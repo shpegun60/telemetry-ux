@@ -109,9 +109,10 @@ Actions retain the existing provider signatures:
     costs one pass over the tree. An index the walk did not see (a tree since
     replaced) is `stale`.
 
-The Watchlist and the rest of the panel work together. While it polls, selecting
-an endpoint, refreshing Details, editing, Apply, Commands, Services and Batch all
-work; only adding or removing rows waits for polling to stop. An open draft
+With a Session-backed Dynamic provider, the Watchlist and the rest of the panel
+work together. While it polls, selecting an endpoint, refreshing Details, editing,
+Apply, Commands, Services and Batch all work; only adding or removing rows waits
+for polling to stop. An open draft
 (a Field edit, or the request editor a selected Command or Service opens) does not
 hold the Watchlist: a watch read never touches it. Requests interleave in the
 session's one ordered FIFO: the Watchlist keeps at most one portion (up to 32
@@ -128,6 +129,12 @@ while it polls. Several Watchlists on one session take turns: each session
 progress starts with the next panel, and a Batch is never refused because the
 session is busy. One Watchlist holds at most 1024 Fields
 (`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
+
+The generated Static provider uses Individual FieldRead cycles instead. Its open
+Field or Command/Service request draft prevents Watchlist reads, foreground actions
+wait for the current cycle, and an accepted mutation stops polling. It supports
+0–60000 ms, with a 10 ms cooperative timer for continuous mode, and the same
+1024-Field host limit. See the [Static provider contract](StaticConfigurator.md).
 
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt
@@ -150,8 +157,9 @@ never has to parse display text:
 | `sampleRevision`, `sampleEpoch` | Change counters: a new reading increments the revision; a new session or admission changes the epoch |
 | `writable` | The Field accepts writes, taken from the device's endpoint table when the row is added |
 
-`writeWatch(row, text)` writes a watched Field from its row, as Details would: its
-own read, an exact draft of `text`, the write and a confirming read. It runs on a
+The Session-backed Dynamic provider's optional `writeWatch(row, text)` writes a
+watched Field from its row, as Details would: its own read, an exact draft of
+`text`, the write and a confirming read. It runs on a
 second view of the provider, so it never moves the Details selection or touches
 its draft (the Details snapshot is marked stale, as after any write). It is
 refused without permission (`canWriteWatch` false), for a read-only Field, or
@@ -161,6 +169,8 @@ device's refusal), `watchWriteFinished(confirmed)` signals the end, and the
 Watchlist reads the row again at once: within the running cycle, or as a Read
 once when it is not polling. Start during a Read once turns that cycle into the
 first one of polling.
+The Static provider does not expose this method or `canWriteWatch`; the shared
+view therefore leaves its rows read-only.
 
 Adding, group-adding and removing Fields inserts or removes rows (only Clear
 resets the model), so a persistent index — a view's current row, a Trend's
@@ -212,8 +222,9 @@ later changes.
 
 ```cpp
 QFont font = QGuiApplication::font();
-// A 16 px body (Windows' 9 pt becomes 12 pt); a larger system font stays larger.
-font.setPointSizeF(std::max(12.0, font.pointSizeF() * 4.0 / 3.0));
+// The compact desktop base: 10 pt (13.3 px at 96 dpi), following a larger system font.
+const qreal systemPoints = font.pointSizeF() > 0 ? font.pointSizeF() : 9.0;
+font.setPointSizeF(std::max(10.0, systemPoints * 10.0 / 9.0));
 QGuiApplication::setFont(font);  // menus, docks and every panel follow
 ```
 
@@ -250,9 +261,12 @@ the module under a qualifier, `import Telemetry.UX as UX`, and writes `UX.Theme.
 **Another body size.** `Type.body` defaults to the application font. A host whose
 controls take their font from `qtquickcontrols2.conf`, rather than from
 `QGuiApplication::setFont`, assigns `Type.body` once; `caption` and `heading` follow.
+For live zoom, change `Type.body` and the host controls' font together. Rows,
+controls, icons and spacing follow the body; assigning those derived size tokens
+directly breaks their bindings. The client provides remembered 80–200% zoom as a
+host feature; the library supplies the scale, not a settings store or shortcuts.
 
-**Status:** the panels in this module adopt the singletons in a following change; until
-then they keep their own colours.
+The panels in this module already use these colour roles and size tokens.
 
 ## Event history and current problems
 
@@ -327,6 +341,13 @@ every write to disk:
 - Both C++ models need a build with the `qt_connection` component
   (`TELEMETRY_UX_BUILD_QT_CONNECTION`), which links the SDK's session; the panel
   itself is in the configurator module.
+
+`headerShown` defaults to `true`. Set it to `false` when embedding the panel in
+a host Explorer that provides its own section header, Download and Refresh
+actions. This hides only the panel's header: selection, keyboard shortcuts,
+context menus and request signals still work. `transfersShown` independently
+controls the embedded transfer list; set it to `false` when the host shows
+`DeviceTransfersPanel` in a separate dock.
 
 The tree's rows are `DeviceFileRow` (the Basic style is imported there only):
 a format icon, the device's name, size and `rws` access letters in columns shared

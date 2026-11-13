@@ -32,6 +32,8 @@ Pane {
     required property var files
     required property var transfers
     property bool reducedMotion: false
+    // A host Explorer can provide its own compact section header and actions.
+    property bool headerShown: true
     // Transfers under the list; a host that gives them a dock of their own
     // (DeviceTransfersPanel) sets this false.
     property bool transfersShown: true
@@ -288,6 +290,7 @@ Pane {
         // pictograms, as an IDE's explorer carries its actions in its header.
         RowLayout {
             objectName: "deviceFilesHeader"
+            visible: panel.headerShown
             Layout.fillWidth: true
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.tight
