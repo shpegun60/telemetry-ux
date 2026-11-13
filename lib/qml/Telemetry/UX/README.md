@@ -54,6 +54,7 @@ The provider exposes notifying properties:
 | `selection`, `serviceResponseEndpoint` | QString display names |
 | `selectedEndpointIndex` | Optional current `QModelIndex` in `endpoints`; invalid when none is selected. Enables selection highlighting in `EndpointTreePanel`. |
 | `connected`, `busy`, `editing` | Connection/operation/draft state |
+| `selectionRequiresDiscard` | Optional host guard for changed input, including invalid editor text. Supplied by both built-in providers; independent of `canApply`. |
 | `canEdit`, `canApply`, `canRefresh` | Host-authorized Field actions |
 | `commandSelected`, `canExecute`, `serviceSelected`, `canCallService` | Operation selection and action gates |
 | `watchActive`, `watchPending`, `canAddWatch`, `watchCount` | Watchlist state and gates |
@@ -108,6 +109,31 @@ Actions retain the existing provider signatures:
     After that each question is a hash lookup, and a change of the Watchlist
     costs one pass over the tree. An index the walk did not see (a tree since
     replaced) is `stale`.
+
+### Host-controlled endpoint activation
+
+`EndpointTreePanel.selectionHandler` is an optional function receiving the source
+`QModelIndex` for an explicit click, Enter/Return, search activation or **Show
+details** action. With no handler, the tree keeps calling the provider directly.
+Watch boxes and cursor navigation do not invoke this handler. A host can route
+it through its own asynchronous discard decision and reveal an existing Details
+panel after accepted selection, without creating another provider or client.
+
+Pass the index immediately to an owner that validates it. A pending decision
+must retain a persistent index and invalidate it on model/session changes;
+keeping a plain index in JavaScript across a reset is insufficient.
+
+The built-in providers report `selectionRequiresDiscard` even for invalid input.
+Static conservatively reports it after editing back to an initial value. A fresh
+same-endpoint selection preserves its draft; a stale or cancelled request can
+still be explicitly prepared again. This property does not authorize an Apply,
+Execute or Call, and the library does not show a discard dialog automatically.
+
+For a host-owned prompt, `contextMenuVisible` and `contextMenuReturnFocus` expose
+the menu's visibility and borrowed pre-menu focus item. Capture that item while
+the menu is visible, before native popup activation; it becomes null on close.
+Opening the prompt after the menu closes avoids competing focus owners. The
+host remains responsible for lifetime checks, default Cancel and focus return.
 
 With a Session-backed Dynamic provider, the Watchlist and the rest of the panel
 work together. While it polls, selecting an endpoint, refreshing Details, editing,

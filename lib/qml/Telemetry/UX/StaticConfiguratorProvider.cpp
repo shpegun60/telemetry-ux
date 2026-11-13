@@ -1905,6 +1905,12 @@ bool StaticConfiguratorProvider::editing() const
 	return e && e->category == 1 && d->draftActive;
 }
 
+bool StaticConfiguratorProvider::selectionRequiresDiscard() const
+{
+	// Conservative after an edit back to the initial value; never loses invalid text.
+	return d->draftActive && !d->texts.isEmpty();
+}
+
 bool StaticConfiguratorProvider::allowMutations() const
 {
 	return d->allowed;

@@ -15,6 +15,92 @@
 
 using namespace dynamic_qml_fixture;
 
+static std::vector<std::byte> selectedDraftPayload(bool reselect)
+{
+	Harness h;
+	Provider provider{h.binding.get()};
+	provider.setAllowMutations(true);
+	CHECK(!provider.selectionRequiresDiscard());
+	select(provider, "Config");
+	CHECK(provider.refresh());
+	h.pump();
+	CHECK(provider.beginEdit() && !provider.selectionRequiresDiscard());
+	CHECK(edit(provider, "limit", "77") && provider.selectionRequiresDiscard());
+	const auto selected = provider.selectedEndpointIndex();
+	const auto packets = h.storage->packets;
+	QSignalSpy resets(provider.values(), &QAbstractItemModel::modelReset);
+	CHECK(resets.isValid());
+	if (reselect)
+		CHECK(provider.selectEndpoint(selected));
+	CHECK(provider.selectedEndpointIndex() == selected && provider.editing() &&
+	      provider.canApply() && provider.selectionRequiresDiscard());
+	CHECK(provider.values()->data(member(provider.values(), "limit"),
+	                              ValueModel::EditorTextRole).toString() == "77");
+	CHECK(resets.isEmpty() && h.storage->packets == packets &&
+	      h.storage->owner.pending() == 0 && device.writes == 0);
+	CHECK(provider.apply());
+	const auto packet = h.storage->offered();
+	const std::vector<std::byte> payload(packet.bytes.begin(), packet.bytes.end());
+	h.storage->execute(packet);
+	h.pump();
+	CHECK(device.writes == 1 && device.config.limit == 77 && !provider.selectionRequiresDiscard());
+	return payload;
+}
+
+static void selectionDiscardContract()
+{
+	// The entire actual encoded Write packet stays identical to the control,
+	// including untouched U64/S64/F32/F64 values, after revealing the current Field.
+	const auto control = selectedDraftPayload(false);
+	CHECK(selectedDraftPayload(true) == control);
+	Harness h;
+	Provider provider{h.binding.get()};
+	provider.setAllowMutations(true);
+	select(provider, "Config");
+	CHECK(provider.refresh());
+	h.pump();
+	CHECK(provider.beginEdit() && !provider.selectionRequiresDiscard());
+	const auto selected = provider.selectedEndpointIndex();
+	const auto packets = h.storage->packets;
+	CHECK(!edit(provider, "limit", "not-a-number"));
+	CHECK(provider.selectionRequiresDiscard() && provider.editing() && !provider.canApply());
+	QSignalSpy resets(provider.values(), &QAbstractItemModel::modelReset);
+	CHECK(provider.selectEndpoint(selected));
+	CHECK(provider.selectionRequiresDiscard() && provider.editing() && !provider.canApply() &&
+	      resets.isEmpty() && provider.selectedEndpointIndex() == selected);
+	CHECK(h.storage->packets == packets && h.storage->owner.pending() == 0);
+	CHECK(edit(provider, "limit", "1") && !provider.selectionRequiresDiscard());
+	provider.cancelEdit();
+	CHECK(!provider.selectionRequiresDiscard());
+	select(provider, "Reset");
+	CHECK(!provider.selectionRequiresDiscard()); // Void Command has no user input.
+	select(provider, "Inspect");
+	CHECK(!provider.selectionRequiresDiscard()); // Canonical-zero request is untouched.
+	CHECK(!edit(provider, "multiplier", "4294967296") && provider.selectionRequiresDiscard());
+	const auto request = provider.selectedEndpointIndex();
+	CHECK(provider.selectEndpoint(request) && provider.selectionRequiresDiscard() &&
+	      !provider.canCallService());
+	CHECK(edit(provider, "multiplier", "4") && provider.selectionRequiresDiscard());
+	CHECK(provider.selectEndpoint(request));
+	CHECK(provider.canCallService() && provider.selectionRequiresDiscard() &&
+	      provider.values()->data(member(provider.values(), "multiplier"),
+	                              ValueModel::EditorTextRole).toString() == "4");
+	CHECK(h.storage->packets == packets && h.storage->owner.pending() == 0 &&
+	      device.commands == 0 && device.services == 0);
+	for (const bool service : {false, true}) {
+		select(provider, service ? "Inspect" : "Reset");
+		const auto target = provider.selectedEndpointIndex();
+		provider.cancelEdit();
+		CHECK(!provider.editing() && !provider.selectionRequiresDiscard());
+		CHECK(service ? !provider.canCallService() : !provider.canExecute());
+		CHECK(provider.selectEndpoint(target));
+		CHECK(service ? provider.canCallService() : provider.canExecute());
+		CHECK(!provider.selectionRequiresDiscard());
+	}
+	CHECK(h.storage->packets == packets && h.storage->owner.pending() == 0 &&
+	      device.commands == 0 && device.services == 0);
+}
+
 static void independentFieldsAndRefusal()
 {
 	Harness h;
@@ -197,6 +283,14 @@ static void invalidatedRequestKeepsCategory()
 		h.pump();
 		CHECK(!selected.canRefresh() && !selected.refresh());
 		CHECK(device.reads == reads && h.storage->owner.pending() == 0);
+		// The same index may be stale after another panel changes the device.
+		// Explicit selection reparses its initial arguments without device I/O.
+		const auto packets = h.storage->packets;
+		CHECK(selected.selectEndpoint(endpoint(selected, service ? "Inspect" : "Reset")));
+		CHECK(service ? selected.canCallService() : selected.canExecute());
+		CHECK(!selected.selectionRequiresDiscard());
+		CHECK(h.storage->packets == packets && h.storage->owner.pending() == 0 &&
+		      device.commands == 1 && device.services == 0);
 	}
 }
 
@@ -676,6 +770,8 @@ int main(int argc, char** argv)
 	const auto arguments = application.arguments();
 	const auto caseAt = arguments.indexOf(QStringLiteral("--case"));
 	const auto selectedCase = caseAt >= 0 ? arguments.value(caseAt + 1) : QString{};
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("discard"))
+		selectionDiscardContract();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("independent"))
 		independentFieldsAndRefusal();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("exact"))

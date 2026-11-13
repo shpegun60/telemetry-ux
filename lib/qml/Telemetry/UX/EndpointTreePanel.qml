@@ -9,6 +9,9 @@ Pane {
     id: panel
     objectName: "endpointTreePane"
     required property var provider
+    // A host may defer explicit selection for a draft-discard decision. The
+    // provider remains the selection owner while that decision is pending.
+    property var selectionHandler: null
     // Evaluate the provider's O(1) current-index projection once per panel,
     // rather than querying it separately for every visible delegate.
     readonly property var selectedEndpointIndex: provider.selectedEndpointIndex
@@ -47,6 +50,16 @@ Pane {
     property string watchStatusFull: ""
     readonly property string pollingShort: qsTr("Stop polling to change the Watchlist.")
     readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
+
+    // Every explicit activation passes its source index through this route.
+    // Never optimistically change selectedEndpointIndex or the row highlight.
+    function requestSelection(index) {
+        if (!panel.provider || !index || !index.valid)
+            return false
+        if (typeof panel.selectionHandler === "function")
+            return panel.selectionHandler(index)
+        return panel.provider.selectEndpoint(index)
+    }
 
     // A row's box: -1 none, else Qt.Unchecked, PartiallyChecked or Checked.
     // revision is only there so a binding asks again when it moves.
@@ -329,7 +342,7 @@ Pane {
         if (watchApi ? stateOf(first.index, watchRevision) >= 0 : canMarkWatch(first.index))
             watchIndex(first.index)
         else
-            provider.selectEndpoint(first.index)
+            panel.requestSelection(first.index)
         return true
     }
     // Enter before the search has finished is kept and acted on when it does;
@@ -440,6 +453,11 @@ Pane {
         model: panel.searchSource
         delegate: Item {}
     }
+    // A host waits for the menu's focus restoration before asking for input.
+    readonly property bool contextMenuVisible: endpointMenu.visible
+    // Borrowed pre-menu origin; a host can preserve it before Popup.Window
+    // changes native focus. It becomes null when the menu finishes closing.
+    readonly property Item contextMenuReturnFocus: endpointMenu.returnFocus
     Menu {
         id: endpointMenu
         objectName: "endpointContextMenu"
@@ -496,7 +514,7 @@ Pane {
             objectName: "endpointMenuDetails"
             text: "Show details"
             enabled: endpointMenu.targetIsEndpoint
-            onTriggered: { const target = panel.menuTarget(); if (target) panel.provider.selectEndpoint(target) }
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.requestSelection(target) }
         }
         MenuSeparator {}
         MenuItem {
@@ -626,12 +644,12 @@ Pane {
             Keys.onReturnPressed: function(event) {
                 const index = endpointTree.selectionModel.currentIndex
                 if (index.valid)
-                    panel.provider.selectEndpoint(index)
+                    panel.requestSelection(index)
             }
             Keys.onEnterPressed: function(event) {
                 const index = endpointTree.selectionModel.currentIndex
                 if (index.valid)
-                    panel.provider.selectEndpoint(index)
+                    panel.requestSelection(index)
             }
             Keys.onSpacePressed: function(event) {
                 const index = endpointTree.selectionModel.currentIndex
@@ -694,7 +712,7 @@ Pane {
                 }
                 onClicked: {
                     if (isEndpoint)
-                        panel.provider.selectEndpoint(sourceIndex)
+                        panel.requestSelection(sourceIndex)
                 }
                 onContextMenuRequested: function(x, y) {
                     panel.openEndpointMenu(sourceIndex, isEndpoint, endpointDelegate, x, y)
@@ -740,7 +758,7 @@ Pane {
                              modelData.index === panel.selectedEndpointIndex
                 function activateResult() {
                     if (modelData.generation === panel.searchGeneration && modelData.index.valid)
-                        panel.provider.selectEndpoint(modelData.index)
+                        panel.requestSelection(modelData.index)
                 }
                 onClicked: activateResult()
                 Keys.onReturnPressed: function(event) { activateResult(); event.accepted = true }

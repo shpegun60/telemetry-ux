@@ -187,6 +187,41 @@ static QVariantList arrayValue(int count)
 	return result;
 }
 
+static void selectionDiscardContract()
+{
+	for (const int category : {1, 2, 3}) {
+		Api api;
+		auto b = binding(api, category);
+		auto other = b.endpoints.front();
+		other.id = 1;
+		other.name = "Other";
+		b.endpoints.append(other);
+		StaticConfiguratorProvider p(std::move(b));
+		p.setAllowMutations(true);
+		p.selectEndpoint(endpoint(p));
+		CHECK(!p.selectionRequiresDiscard());
+		if (category == 1)
+			p.beginEdit();
+		CHECK(!p.selectionRequiresDiscard());
+		auto* values = p.values();
+		const QPersistentModelIndex value(values->index(0, 0));
+		const auto selected = p.selectedEndpointIndex();
+		CHECK(value.isValid() && !p.setScalarText(value, "bad"));
+		CHECK(p.selectionRequiresDiscard()); // Invalid text needs protection too.
+		p.selectEndpoint(selected);
+		CHECK(value.isValid() && p.selectedEndpointIndex() == selected &&
+		      p.selectionRequiresDiscard() &&
+		      values->data(value, role(values, "editorText")).toString() == "bad");
+		CHECK(p.setScalarText(value, "18") && p.selectionRequiresDiscard());
+		p.selectEndpoint(selected);
+		CHECK(value.isValid() && p.selectionRequiresDiscard() &&
+		      values->data(value, role(values, "editorText")).toString() == "18");
+		CHECK(api.issued == 0 && api.calls.isEmpty());
+		p.selectEndpoint(endpoint(p, 1)); // Explicitly discard into the other endpoint.
+		CHECK(!p.selectionRequiresDiscard() && api.issued == 0 && api.calls.isEmpty());
+	}
+}
+
 static void actions()
 {
 	for (const int category : {2, 3}) {
@@ -1305,6 +1340,7 @@ static void largeWatchCycle()
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	selectionDiscardContract();
 	actions();
 	selectionIdentity();
 	draftAndReadback();

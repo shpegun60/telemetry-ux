@@ -53,6 +53,7 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
 	Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
 	Q_PROPERTY(bool editing READ editing NOTIFY stateChanged)
+	Q_PROPERTY(bool selectionRequiresDiscard READ selectionRequiresDiscard NOTIFY stateChanged)
 	Q_PROPERTY(bool allowMutations READ allowMutations WRITE setAllowMutations NOTIFY stateChanged)
 	Q_PROPERTY(bool canEdit READ canEdit NOTIFY stateChanged)
 	Q_PROPERTY(bool canApply READ canApply NOTIFY stateChanged)
@@ -145,6 +146,8 @@ public:
 	bool connected() const;
 	bool busy() const;
 	bool editing() const;
+	// Includes invalid user text; a host may ask before changing endpoints.
+	bool selectionRequiresDiscard() const;
 	bool allowMutations() const;
 	void setAllowMutations(bool allowed);
 	bool canEdit() const;

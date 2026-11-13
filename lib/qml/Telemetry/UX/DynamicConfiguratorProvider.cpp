@@ -1347,6 +1347,11 @@ bool DynamicConfiguratorProvider::editing() const
 	return d->current() && d->state->view.editing();
 }
 
+bool DynamicConfiguratorProvider::selectionRequiresDiscard() const
+{
+	return d->current() && (d->state->view.dirty() || !d->invalid.isEmpty());
+}
+
 bool DynamicConfiguratorProvider::allowMutations() const
 {
 	return d->allowed && d->binding && d->binding->mutationsAllowed();
@@ -1421,6 +1426,11 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	auto p = d;
 	if (!p->selectable())
 		return false;
+	// Keep a fresh Field or prepared request draft. An invalidated or
+	// cancelled request still needs explicit preparation on selection.
+	if (index.isValid() && index == p->selectedIndex && !p->state->staleData &&
+	    (p->category == 1 || p->state->view.editing()))
+		return true;
 	const auto endpoint = p->endpoints.endpoint(index);
 	if (endpoint.isEmpty())
 		return false;
