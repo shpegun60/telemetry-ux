@@ -3,6 +3,7 @@
 Create a complete application from the maintained examples, then edit your own
 Model and window. This optional host tool copies a small allowlist of application
 templates; it does not generate DTOs or introduce another code generator.
+Both Qt targets require CMake 3.25+, Ninja and a matching C++20 Qt 6.12+ kit.
 
 ## Qt Creator: connect to a device
 
@@ -83,7 +84,7 @@ python -B serve.py
 ```
 
 The first command creates application sources only. Preparation needs the usual
-C++20, CMake, Ninja, Node/npm and Python tools; the SDK prefix needs `core`,
+C++20, CMake 3.21+, Ninja, Node/npm and Python tools; the SDK prefix needs `core`,
 `encoded_server`, `batch_server`. Run `serve.py` with a Python environment that
 contains `websockets==15.0.1`. Its localhost address is printed at startup.
 The generated README gives tool overrides and an optional installed code-generator

@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,19 @@ def main():
         return run(label, [sys.executable, '-B', producer / 'tools/create_project.py', '--target', target,
                           '--name', name, '--output', destination, *options], expected=1 if refused else 0)
 
+    def check_cmake_minimum(project, relative='CMakeLists.txt'):
+        source = (project / relative).read_text(encoding='utf8')
+        match = re.search(r'cmake_minimum_required\(VERSION ([0-9.]+)\)', source)
+        check(match is not None, 'Created target declares its CMake minimum')
+        version = tuple(map(int, match[1].split('.')))
+        preset = project / 'CMakePresets.json'
+        if preset.exists():
+            declared = json.loads(preset.read_text(encoding='utf8'))['cmakeMinimumRequired']
+            check(tuple(declared[key] for key in ('major', 'minor', 'patch')) ==
+                  (version + (0, 0, 0))[:3], 'Preset minimum matches its copied CMake project')
+        check('CMake ' + match[1] + '+' in (project / 'README.md').read_text(encoding='utf8'),
+              'Created README states the copied target CMake minimum')
+
     try:
         # The producer fixture contains precisely the public template allowlist.
         # It can be hidden without renaming any actual checkout source.
@@ -127,6 +141,8 @@ def main():
                   'Generated project contains no absolute producer paths')
             check(not any(part in ('__pycache__', 'node_modules', 'build') for path in project.rglob('*') for part in path.parts),
                   'Only application sources were copied')
+            check_cmake_minimum(project, 'examples/web_device_starter/native/CMakeLists.txt'
+                                if project == web else 'CMakeLists.txt')
 
         empty = output / 'existing-empty'
         empty.mkdir()
@@ -206,6 +222,12 @@ def main():
             check(preset['configurePresets'][0]['cacheVariables']['CMAKE_PREFIX_PATH'] ==
                   ';'.join(str(path.absolute()) for path in (*prefixes, fake_qt)),
                   'Supported ' + label + ' layout retains the public installed prefixes')
+            check_cmake_minimum(destination)
+        configured_local = output / 'layout-local-model'
+        creator('create-layout-local-model', configured_local,
+                '--sdk-prefix', layout_prefixes['lib'][0], '--ux-prefix', layout_prefixes['lib'][1],
+                '--qt-prefix', fake_qt)
+        check_cmake_minimum(configured_local)
         for package_index, package_name in enumerate(('Telemetry', 'TelemetryUX')):
             prefixes = list(layout_prefixes['lib'])
             missing = output / ('missing-' + package_name)

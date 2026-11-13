@@ -126,8 +126,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 
 
 def cmake_presets(options):
+    # Only the two Qt targets receive a preset; both copied projects need 3.25.
     return encoded({
-        'version': 3, 'cmakeMinimumRequired': {'major': 3, 'minor': 21, 'patch': 0},
+        'version': 3, 'cmakeMinimumRequired': {'major': 3, 'minor': 25, 'patch': 0},
         'configurePresets': [{'name': 'local', 'generator': 'Ninja',
             'binaryDir': '${sourceDir}/build', 'cacheVariables': {
                 'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_FIND_USE_PACKAGE_REGISTRY': False,
@@ -158,7 +159,8 @@ def render(target, name, options):
         files['Main.qml'] = files['Main.qml'].replace(b'My Telemetry device', name.encode('ascii'))
         if options:
             files['CMakePresets.json'] = cmake_presets(options)
-        instructions = '''Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
+        instructions = '''Use CMake 3.25+, Ninja and a matching C++20 Qt 6.12+ kit.
+Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
 Set CMAKE_PREFIX_PATH to the matching SDK, UX and Qt prefixes if no preset was supplied.
 With supplied prefixes: `cmake --preset local` then `cmake --build --preset local`.
 Run the `telemetry_dynamic_example` target (add `.exe` on Windows).
@@ -193,7 +195,8 @@ lifetime comments in main.cpp before substituting an asynchronous transport.
             name.encode('ascii') + b' - one TCP connection, two panels')
         if options:
             files['CMakePresets.json'] = cmake_presets(options)
-        instructions = '''Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
+        instructions = '''Use CMake 3.25+, Ninja and a matching C++20 Qt 6.12+ kit.
+Open CMakeLists.txt in Qt Creator with the same Qt/compiler kit as your installed packages.
 Set CMAKE_PREFIX_PATH to the matching SDK, UX and Qt prefixes if no preset was supplied.
 With supplied prefixes: `cmake --preset local` then `cmake --build --preset local`.
 Run the `telemetry-qt-connection` target (add `.exe` on Windows).
