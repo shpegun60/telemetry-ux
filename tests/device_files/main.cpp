@@ -2010,6 +2010,56 @@ void textAndTable()
 	FileTableModel table;
 	CHECK(table.setText(QStringLiteral("name,value\nitem 10,5\nitem 2,10\nitem 1,\n\"a, b\",7\n")));
 	TableRowsModel rows(&table);
+
+	// Find's notification is a public direct-callback boundary. A receiver may
+	// abandon/reload/filter the query or its owner without returning an old cell.
+	{
+		FileTableModel source;
+		CHECK(source.setText(QStringLiteral("name\nalpha\nbeta\n")));
+		TableRowsModel shown(&source);
+		QObject receiver;
+		const auto replaced = [&](const std::function<void()>& action) {
+			bool called = false;
+			QMetaObject::Connection connection;
+			connection = QObject::connect(&shown, &TableRowsModel::matchesChanged, &receiver, [&] {
+				QObject::disconnect(connection);
+				called = true;
+				action();
+			});
+			const auto found = shown.find(QStringLiteral("alpha"), true, 0, 0);
+			QObject::disconnect(connection);
+			CHECK(called && found.value(QStringLiteral("row")).toInt() == -1 &&
+			      found.value(QStringLiteral("column")).toInt() == -1);
+		};
+		replaced([&] { shown.clearFind(); });
+		CHECK(shown.matchCount() == 0 && shown.matchIndex() == 0 && shown.rowCount() == 2);
+		replaced([&] { CHECK(source.setText(QStringLiteral("name\nreplacement\n"))); });
+		CHECK(shown.matchCount() == 0 && shown.rowCount() == 1 &&
+		      shown.cellText(0, 0) == QStringLiteral("replacement"));
+		CHECK(source.setText(QStringLiteral("name\nalpha\nbeta\n")));
+		replaced([&] { shown.setFilter(QStringLiteral("beta")); });
+		CHECK(shown.matchCount() == 0 && shown.rowCount() == 1 &&
+		      shown.cellText(0, 0) == QStringLiteral("beta"));
+		shown.setFilter({});
+		replaced([&] {
+			const auto newer = shown.find(QStringLiteral("beta"), true, 0, 0);
+			CHECK(newer.value(QStringLiteral("row")).toInt() == 1);
+		});
+		CHECK(shown.matchCount() == 1 && shown.matchIndex() == 1);
+		const auto normal = shown.find(QStringLiteral("alpha"), true, 0, 0);
+		CHECK(normal.value(QStringLiteral("row")).toInt() == 0 &&
+		      normal.value(QStringLiteral("column")).toInt() == 0);
+	}
+	{
+		FileTableModel source;
+		CHECK(source.setText(QStringLiteral("name\nalpha\n")));
+		QPointer<TableRowsModel> dying = new TableRowsModel(&source);
+		QObject receiver;
+		QObject::connect(dying, &TableRowsModel::matchesChanged, &receiver, [&] { delete dying.data(); });
+		const auto found = dying->find(QStringLiteral("alpha"), true, 0, 0);
+		CHECK(!dying && found.value(QStringLiteral("row")).toInt() == -1 &&
+		      found.value(QStringLiteral("column")).toInt() == -1);
+	}
 	const auto column = [&](int c) {
 		QStringList cells;
 		for (int r = 0; r < rows.rowCount(); ++r)

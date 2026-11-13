@@ -7,6 +7,7 @@
 #include "FileTextModels.hpp"
 #include "FileContent.hpp"
 #include <QtCore/QStringList>
+#include <QtCore/QPointer>
 #include <algorithm>
 #include <cmath>
 #include <optional>
@@ -450,6 +451,8 @@ bool TableRowsModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourcePa
 
 QVariantMap TableRowsModel::find(const QString& text, bool forward, int row, int column)
 {
+	const auto revision = ++findRevision_;
+	QPointer<TableRowsModel> alive(this);
 	const auto none = [](const QString& message) {
 		return QVariantMap{{QStringLiteral("row"), -1}, {QStringLiteral("column"), -1}, {QStringLiteral("message"), message}};
 	};
@@ -504,12 +507,17 @@ QVariantMap TableRowsModel::find(const QString& text, bool forward, int row, int
 		message = tr("Wrapped to the end");
 	}
 	Q_EMIT matchesChanged();
+	// A direct receiver can clear Find, reload/filter its source, start another
+	// Find or delete this model. Never inspect retired state or return old cells.
+	if (!alive || revision != findRevision_)
+		return none({});
 	const auto& at = matches_[static_cast<std::size_t>(current_)];
 	return {{QStringLiteral("row"), at.first}, {QStringLiteral("column"), at.second}, {QStringLiteral("message"), message}};
 }
 
 void TableRowsModel::clearFind()
 {
+	++findRevision_;
 	matches_.clear();
 	findText_.clear();
 	current_ = -1;

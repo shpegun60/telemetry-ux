@@ -83,7 +83,7 @@ def main():
     run('build', [tools['cmake'], '--build', build])
     suffix = '.exe' if os.name == 'nt' else ''
     for name, pattern, floor in (('telemetry_event_log_check', r'Event log: (\d+) checks, 0 failures', 41),
-                                 ('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 2021),
+                                 ('telemetry_device_files_check', r'Device files UX: (\d+) checks, 0 failures', 2036),
                                  ('telemetry_device_files_panel', r'Device files panel: (\d+) checks, warnings=0', 490)):
         text = run(name, [build / (name + suffix)], cwd=build, timeout=300)
         found = re.findall(pattern, text)

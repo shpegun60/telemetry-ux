@@ -13,6 +13,9 @@ over localhost TCP to the SDK's native server. No board.
     selection. Default invalid root indexes still address the whole tree.
     Direct Stat/selection/codec notifications and host codec callbacks may
     disconnect the session without continuing through retired nodes.
+    Table Find also rejects its old result when a direct notification receiver
+    clears the query, reloads or filters its source, starts a new Find, or
+    deletes the table model before the original call returns.
   - `DeviceFileTransfers` writes files byte for byte through `QSaveFile`, shows
     progress while a 300 KB file is read, and leaves nothing under the real name
     when cancelled.

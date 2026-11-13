@@ -144,7 +144,8 @@ public:
 	// The next or previous shown cell containing text (ignoring case), from
 	// the current match while the reader is on it, else from the reader's
 	// row and column: {row, column, message} - message as
-	// TextLinesModel::find, row -1 when nothing matches.
+	// TextLinesModel::find, row -1 when nothing matches or a direct
+	// notification receiver replaces/clears this Find before it returns.
 	Q_INVOKABLE QVariantMap find(const QString& text, bool forward, int row, int column);
 	Q_INVOKABLE void clearFind();
 	Q_INVOKABLE bool numeric(int column) const;
@@ -179,6 +180,7 @@ private:
 	bool descending_ = false, capped_ = false;
 	std::vector<std::pair<int, int>> matches_; // shown row, column
 	int current_ = -1;
+	quint64 findRevision_ = 0;
 };
 } // namespace telemetry::ux
 #endif
