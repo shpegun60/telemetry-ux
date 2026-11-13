@@ -9,7 +9,10 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
+#include <QtGui/QTransform>
 #include <algorithm>
+#include <array>
+#include <utility>
 
 namespace telemetry::ux {
 namespace {
@@ -141,8 +144,193 @@ QPainterPath lock()
 	path.lineTo(12, 16);
 	return path;
 }
+// The Device files icons (the designer's set, 13 November 2026): a known
+// format is its bare symbol, a page means a file of no known format.
+
+// A folder: a tab on its top left.
+QPainterPath folder()
+{
+	QPainterPath path;
+	path.moveTo(3.5, 6.5);
+	path.lineTo(9.5, 6.5);
+	path.lineTo(11.5, 8.5);
+	path.lineTo(20.5, 8.5);
+	path.lineTo(20.5, 18.5);
+	path.lineTo(3.5, 18.5);
+	path.closeSubpath();
+	return path;
+}
+// A page with its corner turned: a file of no known format.
+QPainterPath page()
+{
+	QPainterPath path;
+	path.moveTo(6, 3.5);
+	path.lineTo(13.5, 3.5);
+	path.lineTo(18.5, 8.5);
+	path.lineTo(18.5, 20.5);
+	path.lineTo(6, 20.5);
+	path.closeSubpath();
+	path.moveTo(13.5, 3.5);
+	path.lineTo(13.5, 8.5);
+	path.lineTo(18.5, 8.5);
+	return path;
+}
+// A page with a rhombus on it: a file a host's codec reads.
+QPainterPath pageWithCodec()
+{
+	QPainterPath path = page();
+	path.moveTo(12.25, 11.5);
+	path.lineTo(15.25, 14.5);
+	path.lineTo(12.25, 17.5);
+	path.lineTo(9.25, 14.5);
+	path.closeSubpath();
+	return path;
+}
+// Text: three lines, each shorter.
+QPainterPath lines()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 6.5);
+	path.lineTo(19.5, 6.5);
+	path.moveTo(4.5, 12);
+	path.lineTo(17, 12);
+	path.moveTo(4.5, 17.5);
+	path.lineTo(13, 17.5);
+	return path;
+}
+// A table: a frame, its header row, a row line and a first column.
+QPainterPath table()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 5);
+	path.lineTo(19.5, 5);
+	path.lineTo(19.5, 19);
+	path.lineTo(4.5, 19);
+	path.closeSubpath();
+	path.moveTo(4.5, 9.5);
+	path.lineTo(19.5, 9.5);
+	path.moveTo(4.5, 14.25);
+	path.lineTo(19.5, 14.25);
+	path.moveTo(10.5, 9.5);
+	path.lineTo(10.5, 19);
+	return path;
+}
+// JSON: a pair of braces, the right one the left mirrored.
+QPainterPath braces()
+{
+	QPainterPath left;
+	left.moveTo(9.5, 4.5);
+	left.arcTo(7.5, 4.5, 4, 4, 90, 90);
+	left.lineTo(7.5, 10);
+	left.arcTo(3.5, 8, 4, 4, 0, -90);
+	left.arcTo(3.5, 12, 4, 4, 90, -90);
+	left.lineTo(7.5, 17.5);
+	left.arcTo(7.5, 15.5, 4, 4, 180, 90);
+	QPainterPath path = left;
+	path.addPath(QTransform(-1, 0, 0, 1, 24, 0).map(left));
+	return path;
+}
+// The descriptor: a hierarchy - a root, its connector, two children.
+QPainterPath hierarchy()
+{
+	QPainterPath path;
+	path.moveTo(9, 3.5);
+	path.lineTo(15, 3.5);
+	path.lineTo(15, 8.5);
+	path.lineTo(9, 8.5);
+	path.closeSubpath();
+	path.moveTo(12, 8.5);
+	path.lineTo(12, 12);
+	path.moveTo(6.5, 15);
+	path.lineTo(6.5, 12);
+	path.lineTo(17.5, 12);
+	path.lineTo(17.5, 15);
+	path.moveTo(3.5, 15);
+	path.lineTo(9.5, 15);
+	path.lineTo(9.5, 20.5);
+	path.lineTo(3.5, 20.5);
+	path.closeSubpath();
+	path.moveTo(14.5, 15);
+	path.lineTo(20.5, 15);
+	path.lineTo(20.5, 20.5);
+	path.lineTo(14.5, 20.5);
+	path.closeSubpath();
+	return path;
+}
+// Values: a gauge - a half turn of radius 8 about (12, 16), its needle, its hub.
+QPainterPath gauge()
+{
+	QPainterPath path;
+	path.arcMoveTo(4, 8, 16, 16, 180);
+	path.arcTo(4, 8, 16, 16, 180, -180);
+	path.moveTo(12, 16);
+	path.lineTo(15.5, 11.5);
+	path.arcMoveTo(10.5, 14.5, 3, 3, 0);
+	path.arcTo(10.5, 14.5, 3, 3, 0, 360);
+	return path;
+}
+// Identity: a name tag pointing right, with its hole.
+QPainterPath nameTag()
+{
+	QPainterPath path;
+	path.moveTo(3.5, 7);
+	path.lineTo(14, 7);
+	path.lineTo(20.5, 12);
+	path.lineTo(14, 17);
+	path.lineTo(3.5, 17);
+	path.closeSubpath();
+	path.arcMoveTo(6.25, 10.75, 2.5, 2.5, 0);
+	path.arcTo(6.25, 10.75, 2.5, 2.5, 0, 360);
+	return path;
+}
+// Session: two arrows going opposite ways.
+QPainterPath exchange()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 8.5);
+	path.lineTo(18.5, 8.5);
+	path.moveTo(15, 5);
+	path.lineTo(18.5, 8.5);
+	path.lineTo(15, 12);
+	path.moveTo(19.5, 15.5);
+	path.lineTo(5.5, 15.5);
+	path.moveTo(9, 12);
+	path.lineTo(5.5, 15.5);
+	path.lineTo(9, 19);
+	return path;
+}
+// Capability: a switch, on - its rounded track and the knob at its right end.
+QPainterPath toggle()
+{
+	QPainterPath path;
+	path.moveTo(8, 7.5);
+	path.lineTo(16, 7.5);
+	path.arcTo(11.5, 7.5, 9, 9, 90, -180);
+	path.lineTo(8, 16.5);
+	path.arcTo(3.5, 7.5, 9, 9, 270, -180);
+	path.closeSubpath();
+	path.arcMoveTo(14.5, 10.5, 3, 3, 0);
+	path.arcTo(14.5, 10.5, 3, 3, 0, 360);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
+	static const std::array<std::pair<QLatin1String, QPainterPath (*)()>, 11> files{{
+	    {QLatin1String("folder"), folder},
+	    {QLatin1String("file"), page},
+	    {QLatin1String("fileCodec"), pageWithCodec},
+	    {QLatin1String("fileText"), lines},
+	    {QLatin1String("fileTable"), table},
+	    {QLatin1String("fileJson"), braces},
+	    {QLatin1String("fileDescriptor"), hierarchy},
+	    {QLatin1String("fileValues"), gauge},
+	    {QLatin1String("fileIdentity"), nameTag},
+	    {QLatin1String("fileSession"), exchange},
+	    {QLatin1String("fileCapability"), toggle},
+	}};
+	for (const auto& [known, draw] : files)
+		if (name == known)
+			return draw();
 	if (name == QLatin1String("edit"))
 		return pencil();
 	if (name == QLatin1String("download"))

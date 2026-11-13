@@ -36,7 +36,8 @@ void installTelemetryCodecs(OpenFiles& files);
 // device's descriptor, or a descriptor.bin with the same fingerprint
 // downloaded into a device's folder under one of devicesRoots(); a device's
 // file can be read live through session. A file that waited for its
-// descriptor is read again when a device is admitted.
+// descriptor is read again when a device is admitted. deviceFiles names a
+// file a codec takes by its path after that codec (setCodecLookup).
 void connectTelemetryDevice(OpenFiles& files, integration::qt::ConnectionSession* session,
                             DeviceFilesModel* deviceFiles, std::function<QStringList()> devicesRoots);
 } // namespace telemetry::ux

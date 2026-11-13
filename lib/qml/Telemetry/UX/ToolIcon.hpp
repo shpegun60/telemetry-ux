@@ -26,7 +26,9 @@ class ToolIcon : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
 	// "edit", "save", "download", "upload", "refresh", "undo", "redo",
-	// "warning" or "lock".
+	// "warning" or "lock"; for Device files "folder", "file", "fileCodec",
+	// "fileText", "fileTable", "fileJson", "fileDescriptor", "fileValues",
+	// "fileIdentity", "fileSession" and "fileCapability".
 	Q_PROPERTY(QString name READ name WRITE setName NOTIFY changed)
 	Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY changed)
 

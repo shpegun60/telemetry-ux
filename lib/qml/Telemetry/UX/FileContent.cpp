@@ -861,6 +861,23 @@ int OpenFiles::rowOf(const QString& localFile) const
 	return -1;
 }
 
+QString OpenFiles::codecForPath(const QString& devicePath) const
+{
+	// No bytes yet: only a codec sure of the place and name answers.
+	const FileIdentity identity{devicePath, {}, {}};
+	const FileCodec* surest = nullptr;
+	auto how = FileMatch::Guess;
+	for (const auto& codec : codecs_) {
+		if (!codec.match)
+			continue;
+		if (const auto match = codec.match(identity); match >= FileMatch::Path && (!surest || match > how)) {
+			surest = &codec;
+			how = match;
+		}
+	}
+	return surest ? surest->name : QString{};
+}
+
 void OpenFiles::close(int row)
 {
 	if (row < 0 || row >= count())

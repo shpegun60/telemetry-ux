@@ -586,7 +586,8 @@ void toolIcons()
 				count += ink(image, x, y) ? 1 : 0;
 		return count;
 	};
-	for (const char* name : {"edit", "save", "undo", "redo", "lock"})
+	for (const char* name : {"edit", "save", "undo", "redo", "lock", "folder", "file", "fileCodec", "fileText", "fileTable",
+	                         "fileJson", "fileDescriptor", "fileValues", "fileIdentity", "fileSession", "fileCapability"})
 		CHECK(inked(drawn(QString::fromLatin1(name))) > 20);
 	CHECK(inked(drawn(QStringLiteral("nothing"))) == 0);
 	const auto undo = drawn(QStringLiteral("undo"));
@@ -799,7 +800,8 @@ int main(int argc, char** argv)
 	}
 	CHECK(child(root, "deviceFilePropertiesSize")->property("text").toString() ==
 	      QStringLiteral("%1 bytes").arg(eventsBytes.size()));
-	CHECK(child(root, "deviceFilePropertiesAccess")->property("text").toString() == QStringLiteral("read"));
+	CHECK(child(root, "deviceFilePropertiesAccessMark")->property("text").toString() == QStringLiteral("r--") &&
+	      child(root, "deviceFilePropertiesAccess")->property("text").toString() == QStringLiteral("read only"));
 	child(root, "deviceFileProperties")->setProperty("visible", false);
 	// A folder's menu, and the menu for empty space.
 	const auto logsFolder = files.index(1, 0);
@@ -858,6 +860,16 @@ int main(int argc, char** argv)
 	auto* pill = visualChild(currentRow, QStringLiteral("deviceFileSelectedInside"));
 	CHECK(pill && pill->isVisible() && pill->property("text").toString() == QStringLiteral("2"));
 	CHECK(currentRow->property("insideText").toString() == QStringLiteral("2 of 2 files selected"));
+	// What each row is: a folder's icon and no access letters; a CSV's table
+	// and its three letters; the descriptor's own icon, in the program's hue.
+	CHECK(visualChild(currentRow, QStringLiteral("deviceFileIcon"))->property("name").toString() == QStringLiteral("folder"));
+	CHECK(visualChild(eventsRow, QStringLiteral("deviceFileIcon"))->property("name").toString() == QStringLiteral("fileTable") &&
+	      eventsRow->property("accessMark").toString() == QStringLiteral("r--") &&
+	      eventsRow->property("accessTip").toString().startsWith(QStringLiteral("Read only.")));
+	if (auto* descriptorRow = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("descriptor.bin")))
+		CHECK(visualChild(descriptorRow, QStringLiteral("deviceFileIcon"))->property("name").toString() ==
+		          QStringLiteral("fileDescriptor") &&
+		      descriptorRow->property("programFile").toBool());
 	files.clearSelection();
 	CHECK(await([&] { return !pill->isVisible(); }));
 

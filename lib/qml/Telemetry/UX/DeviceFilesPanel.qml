@@ -63,12 +63,16 @@ Pane {
 
     // One width per column, shared by the heading and every row.
     readonly property real sizeWidth: Math.ceil(sizeMetrics.advanceWidth) + 4
-    readonly property real accessWidth: Math.ceil(Math.max(accessMetrics.advanceWidth,
-                                                           countMetrics.advanceWidth)) + 4
-    readonly property bool accessShown: fileTree.width >= 360
+    // What a file is in words, from 360 px; its access as three letters at
+    // every width.
+    readonly property real kindWidth: Math.ceil(Math.max(kindMetrics.advanceWidth,
+                                                         countMetrics.advanceWidth)) + 4
+    readonly property bool kindShown: fileTree.width >= 360
+    readonly property real markWidth: Math.ceil(markMetrics.advanceWidth) + 2
     TextMetrics { id: sizeMetrics; font.pointSize: Type.caption; text: "888.8 KiB" }
-    TextMetrics { id: accessMetrics; font.pointSize: Type.caption; text: qsTr("read, write") }
+    TextMetrics { id: kindMetrics; font.pointSize: Type.caption; text: qsTr("Capability") }
     TextMetrics { id: countMetrics; font.pointSize: Type.caption; text: qsTr("%n files", "", 4096) }
+    TextMetrics { id: markMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rws" }
 
     function chosen() {
         return files.selectedFiles(currentIndex)
@@ -434,11 +438,26 @@ Pane {
                     text: qsTr("Size")
                 }
                 Label {
-                    visible: panel.accessShown
-                    Layout.preferredWidth: panel.accessWidth
+                    visible: panel.kindShown
+                    Layout.preferredWidth: panel.kindWidth
                     font.pointSize: Type.caption
                     color: Theme.textSecondary
-                    text: qsTr("Access")
+                    text: qsTr("Kind")
+                }
+                // The access letters' column, named by its letters.
+                Label {
+                    objectName: "deviceFilesAccessHeading"
+                    Layout.preferredWidth: panel.markWidth
+                    Layout.leftMargin: Type.padding
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: Theme.textMuted
+                    text: "rws"
+                    HoverHandler { id: accessHeadingHover }
+                    ToolTip.visible: accessHeadingHover.hovered
+                    ToolTip.delay: 300
+                    ToolTip.text: qsTr("Access: r can be read, w can be written, s keeps what is written across a restart.")
+                    Accessible.name: qsTr("Access")
                 }
             }
             Rectangle {
@@ -551,8 +570,9 @@ Pane {
 
             delegate: DeviceFileRow {
                 sizeWidth: panel.sizeWidth
-                accessWidth: panel.accessWidth
-                accessShown: panel.accessShown
+                kindWidth: panel.kindWidth
+                kindShown: panel.kindShown
+                markWidth: panel.markWidth
                 onRowClicked: function(index, row, modifiers) { panel.rowClicked(index, row, modifiers) }
                 onOpenRequested: function(index) { panel.openIndex(index) }
                 onContextMenuRequested: function(index, x, y) { panel.openMenu(index, this, x, y) }

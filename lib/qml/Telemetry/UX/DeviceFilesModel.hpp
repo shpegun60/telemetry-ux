@@ -17,6 +17,7 @@
 #include <QtCore/QAbstractItemModel>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -56,7 +57,20 @@ public:
 		SpokenSizeRole,     // the size as a screen reader should say it
 		DownloadableRole,   // a file the device lets us read, or a folder with one
 		SelectedInsideRole, // a folder: how many files below it are selected
-		ReadableInsideRole  // a folder: how many files below it can be read
+		ReadableInsideRole, // a folder: how many files below it can be read
+		// What the file is, for its icon: "folder"; the program's own
+		// "descriptor", "values", "identity", "session", "capability"; the
+		// formats "json", "table", "text"; "codec" (a host's codec reads it);
+		// "binary" for anything else.
+		KindRole,
+		KindTextRole,    // the same in words: "Descriptor", "CSV", "6 files"
+		ProgramFileRole, // a file the program itself uses
+		// Access as three letters, as ls writes them: read, write, and "s"
+		// when the device keeps what is written across a restart (a file
+		// that can be written only) - "rws", "rw-", "-ws", "-w-", "r--",
+		// "---"; "···" while not known, "?" when Stat failed.
+		AccessMarkRole,
+		AccessWordsRole // the same in words: "read and write, kept across a restart"
 	};
 	Q_ENUM(Role)
 
@@ -122,6 +136,13 @@ public:
 	// as maps of selectedFiles(), whatever is selected: Download folder,
 	// Download all.
 	Q_INVOKABLE QVariantList filesUnder(const QModelIndex& index = {}) const;
+	// The name of the codec that takes a device path by its place and name -
+	// OpenFiles::codecForPath - or empty: what the Kind role names a file a
+	// host's codec reads. Without one, only the program's own files and the
+	// formats known by their extension are told apart.
+	using CodecLookup = std::function<QString(const QString& devicePath)>;
+	void setCodecLookup(CodecLookup lookup);
+
 	// A size in the panel's words, for figures the panel composes itself.
 	Q_INVOKABLE QString formatSize(qulonglong bytes) const;
 	// The same size as a screen reader should say it: "4.2 kibibytes".
@@ -161,7 +182,18 @@ private:
 	void finish(QString failure = {});
 	void collect(const Node* from, QVariantList& into) const;
 
+	// What a file is: its kind, its words, whether the program uses it.
+	struct Kind {
+		QString kind, text;
+		bool program = false;
+	};
+	// Cached in the node; setCodecLookup forgets it.
+	const Kind& kindOf(const Node* at) const;
+	Kind findKind(const Node* at) const;
+	QString markOf(const Node* at) const;
+
 	QPointer<integration::qt::ConnectionSession> session_;
+	CodecLookup codecLookup_;
 	// Expires with the model; a queued completion checks it before touching this.
 	std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 	std::unique_ptr<Node> root_;
