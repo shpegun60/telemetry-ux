@@ -135,19 +135,25 @@ FocusScope {
         anchors.fill: parent
         spacing: Type.tight
 
-        // Which descriptor: its fingerprint, in groups of four, with Copy.
+        // One caption line: what the descriptor declares, then its
+        // fingerprint in groups of four, with Copy. The mode's segment above
+        // already says Descriptor.
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.padding
-            spacing: Type.padding
+            spacing: Type.spacing
             Label {
-                text: qsTr("Descriptor")
-                color: Theme.textPrimary
-                font.weight: Type.headingWeight
+                objectName: "descriptorSummary"
+                // Its own width, never more; narrow, it gives way (elided)
+                // before Copy does. The fingerprint takes what is left.
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: view.decoded.summary
             }
             Label {
-                text: qsTr("fingerprint")
+                text: view.decoded.summary.length > 0 ? qsTr("· fingerprint") : qsTr("Fingerprint")
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
             }
@@ -156,6 +162,7 @@ FocusScope {
                 Layout.fillWidth: true
                 elide: Text.ElideRight
                 font.family: Type.fixedFamily
+                font.pointSize: Type.caption
                 color: Theme.textSecondary
                 text: view.decoded.fingerprintGroups
                 HoverHandler { id: fingerprintHover }
@@ -169,16 +176,6 @@ FocusScope {
                 Accessible.name: qsTr("Copy the fingerprint")
                 onClicked: Clipboard.setText(view.decoded.fingerprint)
             }
-        }
-        Label {
-            objectName: "descriptorSummary"
-            Layout.fillWidth: true
-            Layout.leftMargin: Type.padding
-            Layout.rightMargin: Type.padding
-            elide: Text.ElideRight
-            font.pointSize: Type.caption
-            color: Theme.textSecondary
-            text: view.decoded.summary
         }
 
         // Find: the matches and their parents, the rest folded away.

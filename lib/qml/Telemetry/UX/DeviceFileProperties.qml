@@ -17,10 +17,23 @@ Popup {
 
     signal closedBack()
 
-    background: Rectangle {
-        color: Theme.surface
-        border.color: Theme.outline
-        radius: 4
+    // Raised over the list: a hairline and a soft shadow.
+    background: Item {
+        Rectangle {
+            x: 2
+            y: 3
+            width: parent.width
+            height: parent.height
+            radius: Type.radius + 1
+            color: Qt.rgba(0, 0, 0, 0.35)
+        }
+        Rectangle {
+            anchors.fill: parent
+            color: Theme.surface
+            border.color: Theme.outline
+            border.width: 1
+            radius: Type.radius + 1
+        }
     }
 
     contentItem: GridLayout {

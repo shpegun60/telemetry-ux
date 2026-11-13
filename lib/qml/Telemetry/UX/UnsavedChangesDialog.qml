@@ -52,8 +52,8 @@ Dialog {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             text: dialog.names.length === 1
-                  ? qsTr("Its edited bytes are not saved to the copy on this computer; without saving they are lost. A device's file is not changed either way.")
-                  : qsTr("%n files have edited bytes not saved to their copies on this computer: %1. Without saving they are lost. A device's file is not changed either way.", "", dialog.names.length)
+                  ? qsTr("Without saving, your edits are lost. The file on the device is not changed either way.")
+                  : qsTr("%n files have unsaved edits: %1. Without saving, your edits are lost. The files on the device are not changed either way.", "", dialog.names.length)
                         .arg(dialog.names.join(", "))
         }
         Label {

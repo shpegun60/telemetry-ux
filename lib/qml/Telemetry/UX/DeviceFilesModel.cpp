@@ -191,11 +191,15 @@ qulonglong DeviceFilesModel::markedBytes() const noexcept
 	return bytes;
 }
 
+// A size never breaks across lines: a no-break space joins the number and
+// its unit ("1.0 MiB"), whatever the locale wrote between them.
 QString DeviceFilesModel::sizeText(quint64 bytes)
 {
 	if (bytes < 1024)
-		return tr("%n B", nullptr, static_cast<int>(bytes));
-	return QLocale().formattedDataSize(static_cast<qint64>(bytes), 1, QLocale::DataSizeIecFormat);
+		return tr("%n B", nullptr, static_cast<int>(bytes)).replace(QLatin1Char(' '), QChar(0x00A0));
+	return QLocale()
+	    .formattedDataSize(static_cast<qint64>(bytes), 1, QLocale::DataSizeIecFormat)
+	    .replace(QLatin1Char(' '), QChar(0x00A0));
 }
 
 QString DeviceFilesModel::spokenSize(quint64 bytes)

@@ -120,10 +120,18 @@ Pane {
             return
         propertiesPopup.file = file
         const row = rowOf(index)
+        // A row scrolled away has no item to stand beside: bring it in first.
+        if (row >= 0) {
+            fileTree.positionViewAtRow(row, TableView.Contain)
+            fileTree.forceLayout()
+        }
         const item = row >= 0 ? fileTree.itemAtCell(Qt.point(0, row)) : null
-        const at = item ? item.mapToItem(panel, 24, item.height) : Qt.point(24, 48)
-        propertiesPopup.x = Math.min(at.x, Math.max(0, panel.width - propertiesPopup.width - 8))
-        propertiesPopup.y = at.y
+        const below = item ? item.mapToItem(panel, 24, item.height) : Qt.point(24, 48)
+        const above = item ? item.mapToItem(panel, 24, 0) : below
+        const height = propertiesPopup.implicitHeight
+        propertiesPopup.x = Math.min(below.x, Math.max(0, panel.width - propertiesPopup.implicitWidth - 8))
+        // Under its row, or above it where there is no room below.
+        propertiesPopup.y = !item || below.y + height <= panel.height ? below.y : Math.max(0, above.y - height - 4)
         propertiesPopup.open()
     }
     // The keyboard goes back to the tree after a menu or the properties.
@@ -281,34 +289,53 @@ Pane {
             text: qsTr("This device has no files.")
         }
 
-        // The columns' titles, at the rows' widths.
-        RowLayout {
-            objectName: "deviceFilesHeading"
+        // The columns' titles, at the rows' widths, on an opaque strip with a
+        // hairline: a row scrolled half away under it never reads as drawn
+        // through it.
+        Rectangle {
             visible: fileTree.visible
             Layout.fillWidth: true
-            Layout.leftMargin: Type.padding
-            Layout.rightMargin: Type.padding
-            spacing: Type.padding
+            Layout.preferredHeight: heading.implicitHeight + 1
+            z: 1
+            color: Theme.surfaceWindow
+            RowLayout {
+                id: heading
+                objectName: "deviceFilesHeading"
+                visible: fileTree.visible
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: Type.padding
+                anchors.rightMargin: Type.padding
+                spacing: Type.padding
 
-            Label {
-                Layout.fillWidth: true
-                font.pointSize: Type.caption
-                color: Theme.textSecondary
-                text: qsTr("Name")
+                Label {
+                    Layout.fillWidth: true
+                    font.pointSize: Type.caption
+                    color: Theme.textSecondary
+                    text: qsTr("Name")
+                }
+                Label {
+                    Layout.preferredWidth: panel.sizeWidth
+                    horizontalAlignment: Text.AlignRight
+                    font.pointSize: Type.caption
+                    color: Theme.textSecondary
+                    text: qsTr("Size")
+                }
+                Label {
+                    visible: panel.accessShown
+                    Layout.preferredWidth: panel.accessWidth
+                    font.pointSize: Type.caption
+                    color: Theme.textSecondary
+                    text: qsTr("Access")
+                }
             }
-            Label {
-                Layout.preferredWidth: panel.sizeWidth
-                horizontalAlignment: Text.AlignRight
-                font.pointSize: Type.caption
-                color: Theme.textSecondary
-                text: qsTr("Size")
-            }
-            Label {
-                visible: panel.accessShown
-                Layout.preferredWidth: panel.accessWidth
-                font.pointSize: Type.caption
-                color: Theme.textSecondary
-                text: qsTr("Access")
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.outlineVariant
             }
         }
 

@@ -668,6 +668,16 @@ int main(int argc, char** argv)
 	CHECK(await([&] {
 		return child(root, "deviceFilesTransfers")->property("visible").toBool();
 	}));
+	// While it runs, under its title alone, the row is whole: its foot, where
+	// the progress runs, inside the list.
+	if (transfers.data(transfers.index(row), DeviceFileTransfers::ActiveRole).toBool()) {
+		auto* list = qobject_cast<QQuickItem*>(child(root, "deviceFilesTransfers"));
+		auto* running = delegateWhere(root, "deviceFileTransfer", "index", row);
+		if (list && running) {
+			const auto inList = running->mapRectToItem(list, QRectF{0, 0, running->width(), running->height()});
+			CHECK(inList.top() >= -0.5 && inList.bottom() <= list->height() + 0.5);
+		}
+	}
 	CHECK(await([&] {
 		return !transfers.data(transfers.index(row), DeviceFileTransfers::ActiveRole).toBool();
 	}));
