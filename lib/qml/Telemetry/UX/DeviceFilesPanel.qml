@@ -132,9 +132,17 @@ Pane {
         files.selectIndexes(indexes, add)
     }
     function rowClicked(index, row, modifiers) {
+        const before = fileTree.currentRow
         fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
         if (modifiers & Qt.ShiftModifier) {
-            selectRows(anchorRow(row), row, modifiers & Qt.ControlModifier)
+            // No anchor, or one now hidden: the range starts where the
+            // current row was, and that is the anchor from now on.
+            let from = anchorRow(-1)
+            if (from < 0) {
+                from = before >= 0 ? before : row
+                setAnchor(fileTree.index(from, 0))
+            }
+            selectRows(from, row, modifiers & Qt.ControlModifier)
             return
         }
         if (modifiers & Qt.ControlModifier)
@@ -150,11 +158,14 @@ Pane {
             return
         row = Math.max(0, Math.min(fileTree.rows - 1, row))
         const index = fileTree.index(row, 0)
-        const from = anchorRow(fileTree.currentRow >= 0 ? fileTree.currentRow : row)
+        const anchored = anchorRow(-1)
+        const from = anchored >= 0 ? anchored : fileTree.currentRow >= 0 ? fileTree.currentRow : row
         fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
         fileTree.positionViewAtRow(row, TableView.Contain)
         if (modifiers & Qt.ShiftModifier) {
-            if (anchorPath.length === 0)
+            // No anchor, or one now hidden: the range grows from where it
+            // started, never slides with the current row.
+            if (anchored < 0)
                 setAnchor(fileTree.index(from, 0))
             selectRows(from, row, false)
         } else if (!(modifiers & Qt.ControlModifier)) {
@@ -206,10 +217,17 @@ Pane {
         const item = row >= 0 ? fileTree.itemAtCell(Qt.point(0, row)) : null
         const below = item ? item.mapToItem(panel, 24, item.height) : Qt.point(24, 48)
         const above = item ? item.mapToItem(panel, 24, 0) : below
-        const height = propertiesPopup.implicitHeight
-        propertiesPopup.x = Math.min(below.x, Math.max(0, panel.width - propertiesPopup.implicitWidth - 8))
-        // Under its row, or above it where there is no room below.
-        propertiesPopup.y = !item || below.y + height <= panel.height ? below.y : Math.max(0, above.y - height - 4)
+        // Bound to the popup's own size, which settles only once it has laid
+        // out the new file: under its row, or above it - its bottom 4 px
+        // over the row's top - where there is no room below.
+        const found = !!item
+        propertiesPopup.x = Qt.binding(function() {
+            return Math.min(below.x, Math.max(0, panel.width - propertiesPopup.width - 8))
+        })
+        propertiesPopup.y = Qt.binding(function() {
+            const height = propertiesPopup.height
+            return !found || below.y + height <= panel.height ? below.y : Math.max(0, above.y - height - 4)
+        })
         propertiesPopup.open()
     }
     // The keyboard goes back to the tree after a menu or the properties.
@@ -450,6 +468,9 @@ Pane {
             // The selection is the model's (the panel's gestures): the view's
             // own would take Ctrl+click for itself. It keeps only the current row.
             selectionBehavior: TableView.SelectionDisabled
+            // Scrolled at once, as an IDE's list is: a row brought into view
+            // is where it will stay, so Properties can stand beside it.
+            animate: false
             columnWidthProvider: function() { return Math.max(1, fileTree.width) }
             onWidthChanged: Qt.callLater(function() { if (fileTree) fileTree.forceLayout() })
 

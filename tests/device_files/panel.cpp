@@ -586,7 +586,7 @@ void toolIcons()
 				count += ink(image, x, y) ? 1 : 0;
 		return count;
 	};
-	for (const char* name : {"edit", "save", "undo", "redo"})
+	for (const char* name : {"edit", "save", "undo", "redo", "lock"})
 		CHECK(inked(drawn(QString::fromLatin1(name))) > 20);
 	CHECK(inked(drawn(QStringLiteral("nothing"))) == 0);
 	const auto undo = drawn(QStringLiteral("undo"));
@@ -765,6 +765,12 @@ int main(int argc, char** argv)
 	CHECK(openItem->property("text").toString().startsWith(QStringLiteral("&Open\t")) &&
 	      openItem->property("enabled").toBool());
 	CHECK(child(root, "deviceFileMenuDownload")->property("enabled").toBool());
+	// The items for other kinds are hidden and off: the arrow keys reach a
+	// hidden item, and Enter would run it.
+	for (const char* hidden : {"deviceFileMenuDownloadAll", "deviceFileMenuSelectAll", "deviceFileMenuSelectNone",
+	                           "deviceFileMenuRefresh", "deviceFileMenuExpand", "deviceFileMenuSelectFolder",
+	                           "deviceFileMenuDownloadSelected"})
+		CHECK(!child(root, hidden)->property("enabled").toBool());
 	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuCopyPath"), "triggered"));
 	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("/logs/events.csv"));
 	CHECK(QMetaObject::invokeMethod(child(root, "deviceFileMenuOpenHex"), "triggered"));
@@ -777,6 +783,20 @@ int main(int argc, char** argv)
 		return properties && properties->property("visible").toBool();
 	}));
 	CHECK(child(root, "deviceFilePropertiesPath")->property("text").toString() == QStringLiteral("/logs/events.csv"));
+	{
+		// Beside its row, never over it, once it has laid out the file.
+		auto* properties = child(root, "deviceFileProperties");
+		auto* popupParent = properties->property("parent").value<QQuickItem*>();
+		QQuickItem* described = nullptr;
+		CHECK(popupParent && await([&] {
+			described = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("events.csv"));
+			return described && properties->property("height").toReal() > 0;
+		}));
+		const auto rowRect = described->mapRectToItem(popupParent, QRectF(0, 0, described->width(), described->height()));
+		const QRectF popupRect(properties->property("x").toReal(), properties->property("y").toReal(),
+		                       properties->property("width").toReal(), properties->property("height").toReal());
+		CHECK(!popupRect.intersects(rowRect.adjusted(0, 1, 0, -1)));
+	}
 	CHECK(child(root, "deviceFilePropertiesSize")->property("text").toString() ==
 	      QStringLiteral("%1 bytes").arg(eventsBytes.size()));
 	CHECK(child(root, "deviceFilePropertiesAccess")->property("text").toString() == QStringLiteral("read"));
@@ -933,6 +953,20 @@ int main(int argc, char** argv)
 		CHECK(await([&] { return rowOf(descriptor) < 0; }));
 		clickRow(logsPath, Qt::ShiftModifier);
 		CHECK(paths() == QStringList{events});
+		CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) >= 0; }));
+		// An anchor folded away: Shift+arrows grow the range from where they
+		// started, never slide it along with the current row.
+		clickRow(descriptor);
+		CHECK(QMetaObject::invokeMethod(tree, "collapse", Q_ARG(int, telemetryRow)));
+		CHECK(await([&] { return rowOf(descriptor) < 0; }));
+		selection->setCurrentIndex(files.indexOfPath(telemetryPath), QItemSelectionModel::NoUpdate);
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == QStringList{descriptor});
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events}));
+		press(tree, Qt::Key_Down, Qt::ShiftModifier);
+		CHECK(paths() == (QStringList{descriptor, events, large}));
 		CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, telemetryRow)));
 		CHECK(await([&] { return rowOf(descriptor) >= 0; }));
 		// Ctrl+arrows move the current row alone; Space and Ctrl+Space add it

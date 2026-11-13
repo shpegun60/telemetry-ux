@@ -926,6 +926,23 @@ void openInViewer(qt::ConnectionSession& session, DeviceFilesModel& files, const
 		CHECK(secondContent && await([&] { return !secondContent->loading(); }));
 		CHECK(secondContent->loaded() && again.rowCount() == 0);
 	}
+	// A tab closed before its file came: nothing showed the file, so its row
+	// stays as the file's only trace.
+	{
+		DeviceFileTransfers closing(&session);
+		OpenFiles shown;
+		const auto closed = folder + QStringLiteral("/open/closed.bin");
+		const auto closedRow = closing.openIn(&shown, QStringLiteral("/logs/large.bin"),
+		                                      files.data(large, DeviceFilesModel::FileIndexRole).toInt(),
+		                                      largeBytes.size(), closed);
+		CHECK(closedRow >= 0);
+		shown.close(shown.rowOf(closed));
+		CHECK(await([&] {
+			return closing.rowCount() == 1 &&
+			       !closing.data(closing.index(0), DeviceFileTransfers::ActiveRole).toBool();
+		}));
+		CHECK(closing.rowCount() == 1);
+	}
 	// Not in a device's folder (open/ is not logs/): no device's layer.
 	CHECK(!content->hasReference());
 

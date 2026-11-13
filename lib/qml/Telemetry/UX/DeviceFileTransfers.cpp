@@ -980,7 +980,9 @@ void DeviceFileTransfers::leave(quint64 ended)
 {
 	const auto at = std::find_if(jobs_.begin(), jobs_.end(),
 	                             [ended](const auto& job) { return job->id == ended; });
-	if (at == jobs_.end() || !(*at)->leaves || (*at)->active())
+	// Only once a tab showed the file: one closed while it was read leaves
+	// the row as the file's only trace.
+	if (at == jobs_.end() || !(*at)->leaves || !(*at)->viewerTold || (*at)->active())
 		return;
 	const auto row = static_cast<int>(at - jobs_.begin());
 	beginRemoveRows({}, row, row);

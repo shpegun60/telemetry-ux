@@ -25,7 +25,8 @@ namespace telemetry::ux {
 class ToolIcon : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
-	// "edit", "save", "undo" or "redo".
+	// "edit", "save", "download", "upload", "refresh", "undo", "redo",
+	// "warning" or "lock".
 	Q_PROPERTY(QString name READ name WRITE setName NOTIFY changed)
 	Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY changed)
 

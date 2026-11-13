@@ -2,7 +2,8 @@
 // Open first (in bold, the double-click), Open with, Download, Copy path and
 // name, Add to or Remove from the selection, Properties; on a folder, on a
 // selection, and on empty space its own items. A disabled item keeps its text
-// and says why in brackets. MIT.
+// and says why in brackets. An item hidden for this kind is disabled too: the
+// arrow keys do not skip a hidden item, and Enter would run it. MIT.
 //
 // The panel sets `kind` ("file", "folder", "selection", "empty") and `file`
 // (the model's fileAt(index), or the folder's path) before popup().
@@ -30,7 +31,7 @@ Menu {
         height: visible ? implicitHeight : 0
         text: qsTr("&Open%1\tEnter").arg(menu.why)
         font.bold: true
-        enabled: menu.connected && menu.readable
+        enabled: menu.kind === "file" && menu.connected && menu.readable
         onTriggered: menu.panel.openRequested(menu.file)
     }
     Menu {
@@ -41,6 +42,7 @@ Menu {
         MenuItem {
             objectName: "deviceFileMenuOpenTable"
             visible: menu.csv
+            enabled: menu.csv
             height: visible ? implicitHeight : 0
             text: qsTr("&Table")
             onTriggered: menu.panel.openWithRequested(menu.file, "table")
@@ -68,7 +70,7 @@ Menu {
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("&Download…%1\tCtrl+S").arg(menu.why)
-        enabled: menu.connected && menu.readable
+        enabled: menu.kind === "file" && menu.connected && menu.readable
         onTriggered: menu.panel.downloadRequested([menu.file])
     }
 
@@ -78,6 +80,7 @@ Menu {
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
         text: menu.panel.isExpanded(menu.index) ? qsTr("&Collapse\t←") : qsTr("&Expand\t→")
+        enabled: menu.kind === "folder"
         onTriggered: menu.panel.toggleFolder(menu.index)
     }
     MenuSeparator { visible: menu.kind === "folder"; height: visible ? implicitHeight : 0 }
@@ -94,7 +97,10 @@ Menu {
         objectName: "deviceFileMenuSelectFolder"
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
-        text: qsTr("&Select the files in %1\tSpace").arg(menu.kind === "folder" ? menu.files.data(menu.index, Qt.DisplayRole) : "")
+        // The device's name, its & a letter rather than an access key.
+        text: qsTr("&Select the files in %1\tSpace").arg(
+                  menu.kind === "folder" ? String(menu.files.data(menu.index, Qt.DisplayRole)).replace(/&/g, "&&") : "")
+        enabled: menu.kind === "folder"
         onTriggered: menu.files.select(menu.index, true)
     }
 
@@ -107,7 +113,7 @@ Menu {
         readonly property int skipped: menu.files.selectedCount - readable
         text: (skipped > 0 ? qsTr("&Download %n selected files… (%1 can't be read)\tCtrl+S", "", readable).arg(skipped)
                            : qsTr("&Download %n selected files…\tCtrl+S", "", readable))
-        enabled: menu.connected && readable > 0
+        enabled: menu.kind === "selection" && menu.connected && readable > 0
         onTriggered: menu.panel.download()
     }
     MenuItem {
@@ -115,7 +121,7 @@ Menu {
         visible: menu.kind === "selection" || menu.kind === "empty"
         height: visible ? implicitHeight : 0
         text: qsTr("Select &none\tEsc")
-        enabled: menu.files.selectedCount > 0
+        enabled: (menu.kind === "selection" || menu.kind === "empty") && menu.files.selectedCount > 0
         onTriggered: menu.files.clearSelection()
     }
 
@@ -125,7 +131,7 @@ Menu {
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
         text: qsTr("&Refresh\tCtrl+R")
-        enabled: menu.connected && !menu.files.loading
+        enabled: menu.kind === "empty" && menu.connected && !menu.files.loading
         onTriggered: menu.files.refresh()
     }
     MenuItem {
@@ -134,7 +140,7 @@ Menu {
         height: visible ? implicitHeight : 0
         readonly property var everything: menu.kind === "empty" ? menu.panel.allReadable() : []
         text: qsTr("Download &all…") + (everything.length === 0 ? qsTr(" (no readable files)") : "")
-        enabled: menu.connected && everything.length > 0
+        enabled: menu.kind === "empty" && menu.connected && everything.length > 0
         onTriggered: menu.panel.downloadRequested(everything)
     }
     MenuItem {
@@ -142,6 +148,7 @@ Menu {
         visible: menu.kind === "empty"
         height: visible ? implicitHeight : 0
         text: qsTr("Select &all files\tCtrl+A")
+        enabled: menu.kind === "empty"
         onTriggered: menu.files.selectAll()
     }
 
@@ -152,6 +159,7 @@ Menu {
         visible: menu.kind !== "empty"
         height: visible ? implicitHeight : 0
         text: menu.kind === "selection" ? qsTr("Copy &paths\tAlt+Shift+C") : qsTr("Copy &path\tAlt+Shift+C")
+        enabled: menu.kind !== "empty"
         onTriggered: menu.panel.copyPaths(menu.kind, menu.file)
     }
     MenuItem {
@@ -159,6 +167,7 @@ Menu {
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("Copy &name")
+        enabled: menu.kind === "file"
         onTriggered: Clipboard.setText(menu.file.name)
     }
 
@@ -171,6 +180,7 @@ Menu {
         readonly property bool selected: menu.kind === "file" && menu.index !== undefined
                                          && menu.files.selectedCount >= 0 && menu.files.isSelected(menu.index)
         text: selected ? qsTr("&Remove from the selection\tCtrl+Space") : qsTr("&Add to the selection\tCtrl+Space")
+        enabled: menu.kind === "file"
         onTriggered: menu.files.toggleSelected(menu.index)
     }
     MenuItem {
@@ -178,6 +188,7 @@ Menu {
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
         text: qsTr("P&roperties\tAlt+Enter")
+        enabled: menu.kind === "file"
         onTriggered: menu.panel.showProperties(menu.index)
     }
 

@@ -88,24 +88,43 @@ TreeViewDelegate {
             text: fileRow.name
             color: fileRow.textColor
         }
-        // A folder holding selected files: how many, in a pill.
+        // A folder holding selected files: how many, in a pill in the
+        // selection's own fill - quiet with it while the tree lacks the
+        // keyboard; a capsule, never narrower than tall, from two digits.
         Label {
             id: inside
             objectName: "deviceFileSelectedInside"
             visible: fileRow.isFolder && fileRow.selectedInside > 0
-            leftPadding: Type.tight + 1
-            rightPadding: Type.tight + 1
+            Layout.minimumWidth: implicitHeight
+            leftPadding: 4
+            rightPadding: 4
+            horizontalAlignment: Text.AlignHCenter
             font.pointSize: Type.caption
-            color: Theme.selectedForeground
+            color: fileRow.focused ? Theme.selectedForeground : Theme.textPrimary
             text: qsTr("%L1").arg(fileRow.selectedInside)
             background: Rectangle {
                 radius: height / 2
-                color: Theme.selectionFill
+                color: fileRow.focused ? Theme.stateSelected : Theme.stateSelectedInactive
             }
             HoverHandler { id: insideHover }
             ToolTip.visible: insideHover.hovered
             ToolTip.delay: 300
             ToolTip.text: fileRow.insideText
+            Accessible.ignored: true
+        }
+        // A file the device does not let us read: a lock in the same column,
+        // so the reason shows without a pointer and not by colour alone.
+        ToolIcon {
+            objectName: "deviceFileLocked"
+            visible: fileRow.unreadable
+            Layout.preferredWidth: 14
+            Layout.preferredHeight: 14
+            name: "lock"
+            color: fileRow.highlighted ? fileRow.textColor : Theme.textSecondary
+            HoverHandler { id: lockHover }
+            ToolTip.visible: lockHover.hovered
+            ToolTip.delay: 300
+            ToolTip.text: fileRow.unreadableText
             Accessible.ignored: true
         }
         Label {
