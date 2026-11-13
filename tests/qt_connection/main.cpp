@@ -24,6 +24,7 @@
 #include <bit>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace ux = telemetry::ux;
 namespace host = telemetry::integration::qt;
@@ -276,6 +277,87 @@ void twoPanels()
 	connect(connection, peer);
 	CHECK(first->connected() && second->connected() && peer.nativeWrites() == 1);
 	CHECK(first->values()->rowCount() == 0 && first->selection().isEmpty());
+}
+
+
+QByteArray frameBits(const ux::WatchFrameRow& row)
+{
+	return QByteArray(reinterpret_cast<const char*>(row.value.bytes.data()), row.value.size);
+}
+
+void nativeWatchFrames()
+{
+	// This fixture's ordinary Descriptor does not advertise ReadMany: exercise
+	// the real Individual callback, not an invented TCP capability.
+	inspector_qml::TcpDemoServer peer;
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	for (const auto& name : {QStringLiteral("Counter"), QStringLiteral("Offset"), QStringLiteral("Mode")})
+		CHECK(provider->addWatchMany({QVariant::fromValue(endpoint(provider->endpoints(), name))}).value("added").toInt() == 1);
+	std::vector<ux::WatchFrame> frames;
+	QObject observer;
+	QObject::connect(provider, &ux::DynamicConfiguratorProvider::watchCompleted, &observer,
+	                 [&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	provider->refreshWatch();
+	CHECK(await([&] { return frames.size() == 3 && !provider->watchActive() && !provider->watchPending(); }));
+	const auto first = frames;
+	for (std::size_t i = 0; i != first.size(); ++i) {
+		const auto& frame = first[i];
+		CHECK(frame.count == 1 && frame.exact && frame.correlated && frame.operation == ux::WatchOperation::FieldRead);
+		CHECK(frame.phase == ux::WatchCompletionPhase::Current && frame.sequence == qint64(i + 1) && frame.portion == qint64(i));
+		CHECK(frame.native.client == 0 && frame.native.dispatch == 0 && frame.native.endpoint == 0 &&
+		      frame.native.codec == 0 && frame.native.value == 0 && frame.rows[0].itemStatus == 0 && frame.rows[0].valueStatus == 0);
+		CHECK(frame.source.nativeSession != 0 && frame.source.fingerprint == connection.storage()->schema.fingerprint() &&
+		      frame.source.schemaGeneration == connection.storage()->schema.generation());
+		CHECK(frame.completed.monotonicNs >= frame.startedNs && frame.completed.utcMs > 0);
+	}
+	CHECK(first[0].rows[0].value.type.scalar == ux::WatchScalar::U64 && frameBits(first[0].rows[0]) == QByteArray::fromHex("ffffffffffffffff"));
+	CHECK(first[1].rows[0].value.type.scalar == ux::WatchScalar::S64 && frameBits(first[1].rows[0]) == QByteArray::fromHex("0000000000000080"));
+	CHECK(first[2].rows[0].value.type.scalar == ux::WatchScalar::S16 && first[2].rows[0].value.type.enumeration &&
+	      frameBits(first[2].rows[0]) == QByteArray::fromHex("feff"));
+	provider->refreshWatch();
+	CHECK(await([&] { return frames.size() == 6 && !provider->watchActive(); }));
+	for (std::size_t i = 0; i != first.size(); ++i)
+		CHECK(frameBits(frames[i].rows[0]) == frameBits(first[i].rows[0])); // prior RX borrow has been reused
+	peer.setNextFieldReadUnavailable();
+	provider->refreshWatch();
+	CHECK(await([&] { return frames.size() == 9 && !provider->watchActive(); }));
+	CHECK(frames[6].count == 1 && frames[6].rows[0].id == first[0].rows[0].id &&
+	      frames[6].phase == ux::WatchCompletionPhase::Current && frames[6].rows[0].value.size == 0);
+	CHECK(frames[6].native.client == 0 && frames[6].native.dispatch == 9 &&
+	      frames[6].rows[0].valueStatus != 0 && frames[6].rows[0].value.type.valid());
+	peer.setReplyDelay(20);
+	provider->refreshWatch();
+	CHECK(provider->watchPending());
+	provider->stopWatch();
+	CHECK(await([&] { return frames.size() == 10 && !provider->watchActive() && !provider->watchPending(); }));
+	CHECK(frames.back().phase == ux::WatchCompletionPhase::Drained && frames.back().count == 1 && connection.ready());
+	connection.disconnect();
+
+	inspector_qml::TcpDemoServer writable;
+	writable.setWritableDemo(true);
+	CHECK(writable.listen());
+	host::ConnectionSession zeros;
+	ux::QtConnectionBinding zeroPresentation{&zeros};
+	auto* zeroProvider = zeroPresentation.createProvider();
+	connect(zeros, writable);
+	zeroProvider->setWatchIndividual(true);
+	for (const auto& name : {QStringLiteral("SignedZero32"), QStringLiteral("SignedZero64")})
+		CHECK(zeroProvider->addWatchMany({QVariant::fromValue(endpoint(zeroProvider->endpoints(), name))}).value("added").toInt() == 1);
+	std::vector<ux::WatchFrame> zeroFrames;
+	QObject::connect(zeroProvider, &ux::DynamicConfiguratorProvider::watchCompleted, &observer,
+	                 [&](const ux::WatchFrame& frame) { zeroFrames.push_back(frame); });
+	zeroProvider->refreshWatch();
+	CHECK(await([&] { return zeroFrames.size() == 2 && !zeroProvider->watchActive(); }));
+	CHECK(zeroFrames[0].exact && zeroFrames[0].rows[0].value.type.scalar == ux::WatchScalar::F32 &&
+	      frameBits(zeroFrames[0].rows[0]) == QByteArray::fromHex("00000080"));
+	CHECK(zeroFrames[1].exact && zeroFrames[1].rows[0].value.type.scalar == ux::WatchScalar::F64 &&
+	      frameBits(zeroFrames[1].rows[0]) == QByteArray::fromHex("0000000000000080"));
+	zeros.disconnect();
 }
 
 void bulkSessionWatch()
@@ -1082,6 +1164,7 @@ int main(int argc, char** argv)
 		std::fprintf(stderr, "%s\n", qPrintable(text));
 	});
 	twoPanels();
+	nativeWatchFrames();
 	bulkSessionWatch();
 	groupWatchBoxes();
 	requestSelectionKeepsWatchlist();

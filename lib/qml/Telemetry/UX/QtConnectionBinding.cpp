@@ -4,6 +4,7 @@
 #include "DynamicBatch.hpp"
 #include <QtCore/QThread>
 #include <algorithm>
+#include <memory>
 #include <vector>
 
 namespace telemetry::ux {
@@ -98,6 +99,41 @@ BatchSource batchSource(integration::qt::ConnectionSession* value)
 	return source;
 }
 
+WatchValueType watchType(const integration::qt::ConnectionStorage& storage, quint32 id)
+{
+	const auto binding = storage.inspector.bindField(id);
+	const auto* type = binding ? storage.schema.type(binding.endpoint.responseType()) : nullptr;
+	if (!type || (type->kind != TypeKind::Scalar && type->kind != TypeKind::Enum) ||
+	    type->wireBytes == 0 || type->wireBytes > 8) return {};
+	const auto* scalar = type->kind == TypeKind::Enum ? storage.schema.type(type->relatedTypeId) : type;
+	if (!scalar || scalar->kind != TypeKind::Scalar) return {};
+	WatchScalar code = WatchScalar::Unknown;
+	switch (scalar->scalarCode) {
+		case ScalarCode::Bool: code = WatchScalar::Boolean; break;
+		case ScalarCode::U8: code = WatchScalar::U8; break;
+		case ScalarCode::S8: code = WatchScalar::S8; break;
+		case ScalarCode::U16: code = WatchScalar::U16; break;
+		case ScalarCode::S16: code = WatchScalar::S16; break;
+		case ScalarCode::U32: code = WatchScalar::U32; break;
+		case ScalarCode::S32: code = WatchScalar::S32; break;
+		case ScalarCode::U64: code = WatchScalar::U64; break;
+		case ScalarCode::S64: code = WatchScalar::S64; break;
+		case ScalarCode::F32: code = WatchScalar::F32; break;
+		case ScalarCode::F64: code = WatchScalar::F64; break;
+	}
+	WatchValueType result{type->id, code, quint8(type->wireBytes), type->kind == TypeKind::Enum};
+	return result.valid() ? result : WatchValueType{};
+}
+WatchNativeStatus watchStatus(const client::ResultView& result, int valueStatus)
+{
+	return {qint32(result.status), result.dispatch, result.endpointStatus, result.codec, valueStatus};
+}
+void copyWatchValue(WatchValueBits& into, const runtime::DynamicValueView& value)
+{
+	const auto bytes = value.bytes();
+	if (bytes) (void)into.assign(bytes.value.data(), bytes.value.size());
+}
+
 WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 {
 	using Session = integration::qt::ConnectionSession;
@@ -148,13 +184,25 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 		}
 		return ids;
 	};
-	source.readMany = [session, current](std::span<const std::uint32_t> ids,
+	source.readMany = [session, storage, current](std::span<const std::uint32_t> ids,
 	                                     WatchlistSource::Completion done) -> client::Submission {
 		if (!current())
 			return {client::Status::NotAdmitted, {}};
+		if (ids.empty() || ids.size() > 32) return {client::Status::InvalidArgument, {}};
+		auto frozen = std::make_shared<std::array<WatchlistCompletion::Row, 32>>();
+		for (std::size_t i = 0; i < ids.size(); ++i) {
+			(*frozen)[i].id = ids[i];
+			(*frozen)[i].value.type = watchType(*storage, ids[i]);
+			if (!(*frozen)[i].value.type.valid()) return {client::Status::NotAdmitted, {}};
+		}
+		const WatchSourceSnapshot origin{storage->inspector.session(), storage->schema.fingerprint(), storage->schema.generation()};
 		return session->readMany(
-		    ids, [done = std::move(done)](const rm::ReadManyResult& result) noexcept {
+		    ids, [done = std::move(done), frozen = std::move(frozen), origin](const rm::ReadManyResult& result) noexcept {
 			    WatchlistCompletion out;
+			    out.rows = *frozen;
+			    out.source = origin;
+			    out.native = watchStatus(result.operation, int(result.valueStatus));
+			    out.completed = WatchTimestamp::now();
 			    out.status = result.operation.status;
 			    if (out.status == client::Status::Ok &&
 			        (!result.operation.succeeded() || result.valueStatus != rm::ValueStatus::Ok))
@@ -168,6 +216,8 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 				    const auto& item = result.items[i];
 				    auto& row = out.rows[i];
 				    row.id = item.id;
+				    row.itemStatus = qint32(item.status);
+				    row.valueStatus = qint32(item.valueStatus);
 				    switch (item.status) {
 					    case rm::wire::ItemStatus::Ok:
 						    row.status =
@@ -187,6 +237,7 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 						    break;
 				    }
 				    if (item.hasValue()) {
+					    copyWatchValue(row.value, item.value);
 					    row.text = WatchlistModel::formatValue(item.value);
 					    row.sample = WatchlistModel::sampleOf(item.value);
 				    }
@@ -194,14 +245,23 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 			    *done = std::move(out);
 		    });
 	};
-	source.readField = [session, current](quint32 id,
+	source.readField = [session, storage, current](quint32 id,
 	                                      WatchlistSource::Completion done) -> client::Submission {
 		if (!current())
 			return {client::Status::NotAdmitted, {}};
+		const auto type = watchType(*storage, id);
+		if (!type.valid()) return {client::Status::NotAdmitted, {}};
+		const WatchSourceSnapshot origin{storage->inspector.session(), storage->schema.fingerprint(), storage->schema.generation()};
 		return session->readFieldValue(
-		    id, [id, done = std::move(done)](
+		    id, [id, type, origin, done = std::move(done)](
 		            const integration::dynamic::DynamicResult& result) noexcept {
 			    WatchlistCompletion out;
+			    out.source = origin;
+			    out.native = watchStatus(result.operation, int(result.valueStatus));
+			    out.completed = WatchTimestamp::now();
+			    out.rows[0].value.type = type;
+			    out.rows[0].itemStatus = result.operation.endpointStatus;
+			    out.rows[0].valueStatus = qint32(result.valueStatus);
 			    out.status = result.operation.status;
 			    out.count = 1;
 			    out.rows[0].id = id;
@@ -213,6 +273,7 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 			    if (result.operation.succeeded() && !result.hasValue())
 				    out.status = client::Status::CodecError;
 			    if (result.hasValue()) {
+				    copyWatchValue(out.rows[0].value, result.value);
 				    out.rows[0].text = WatchlistModel::formatValue(result.value);
 				    out.rows[0].sample = WatchlistModel::sampleOf(result.value);
 			    }

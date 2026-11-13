@@ -1,6 +1,7 @@
 // Session-independent Qt scheduling over a borrowed execution source. MIT.
 #pragma once
 #include "WatchlistModel.hpp"
+#include "WatchFrame.hpp"
 #include <functional>
 #include <optional>
 #include <span>
@@ -14,11 +15,16 @@ struct WatchlistCompletion {
 		quint32 id = 0;
 		QString status, text;
 		WatchSample sample; // WatchlistModel::sampleOf() of the same value as text
+		qint32 itemStatus = -1, valueStatus = -1;
+		WatchValueBits value;
 	};
 
 	client::Status status = client::Status::Ok;
 	int count = 0;
 	std::array<Row, 32> rows{};
+	WatchNativeStatus native;
+	WatchSourceSnapshot source;
+	WatchTimestamp completed;
 };
 
 struct WatchlistSource {
@@ -45,6 +51,10 @@ public:
 	explicit DynamicWatchlist(QObject* context);
 	~DynamicWatchlist();
 	void setNotify(std::function<void()> notify, std::function<bool()> blocked);
+	// Direct owner-thread terminal publication after callback/progress. The value
+	// owns its bytes; a recorder receiver performs bounded enqueue only. Stop is
+	// allowed there; recursive poll/start is refused until publication returns.
+	void setCompletionObserver(std::function<void(const WatchFrame&)> observer);
 	void setSource(WatchlistSource source);
 	void setWritable(std::function<bool(quint32)> writable);
 	void retire(bool clearRows = true);

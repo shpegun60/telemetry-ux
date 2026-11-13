@@ -375,6 +375,42 @@ context menus and request signals still work. `transfersShown` independently
 controls the embedded transfer list; set it to `false` when the host shows
 `DeviceTransfersPanel` in a separate dock.
 
+### Recording Watch completions
+
+`DynamicConfiguratorProvider::watchCompleted(const WatchFrame&)` publishes one
+owned terminal result for an accepted Watch request, after native progress has
+returned and before row notifications. The Qt connection adapter freezes types
+and source identity before submission and copies canonical scalar/enum bytes
+inside the native callback. No schema or RX view is borrowed by the frame.
+
+A frame contains at most 32 requested IDs, including when an aggregate failure
+returned no rows. Native aggregate, per-item and value statuses remain distinct.
+An unavailable value has no raw bytes; it is never converted into zero. Sequence,
+cycle and portion identify requests, not simultaneous device measurements.
+Completion UTC and monotonic timestamps are host receipt times.
+
+`Current` means the completion belongs to the current source at publication;
+it does not promise every item succeeded or that a receiver kept the UI current.
+`Failed` and `Drained` must not be published as fresh measurements. The captured
+source snapshot remains meaningful after live admission retires. `sourceBinding`
+is a provider-local source attachment identity, not the native admission epoch.
+`exact` describes typed capture availability, separately from successful data.
+
+A recorder consumes this signal directly on the owner thread and performs only
+a bounded enqueue. Stop is allowed in the receiver; recursive polling/start is
+refused during publication. A queued connection per frame would create another
+unbounded queue. The host keeps the provider/session alive through accepted-work
+drain, then flushes its storage before switching project or closing. Destroying
+an arbitrary provider does not independently guarantee recording durability.
+The first implementation covers Dynamic Watch sources; Static Watch capture
+is not provided. SDK/UX acquire no SQL dependency or second device FIFO.
+
+`WatchlistPanel.startHandler(polling)` and `stopHandler()` optionally delegate
+explicit actions to a host workflow. `operationActive` keeps Stop available while
+that workflow prepares or flushes. Without handlers the panel calls the existing
+provider methods directly. Neither adding Fields nor installing a handler starts
+polling by itself.
+
 ### Closing a file view
 
 `OpenFiles.close(row)` announces `FileContent.retiring` before removing its row.

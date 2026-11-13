@@ -2,6 +2,7 @@
 #include <Telemetry/UX/DynamicWatchlist.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QByteArray>
 #include <QtCore/QEvent>
 #include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QSignalSpy>
@@ -38,7 +39,7 @@ QString text(ux::DynamicWatchlist& watch, int row)
 }
 
 struct Peer {
-	bool current = true, busy = false, supported = true;
+	bool current = true, busy = false, supported = true, inCallback = false;
 	ux::WatchlistSource::Limits limits{32, 130, 514};
 	std::vector<std::vector<std::uint32_t>> calls;
 	ux::WatchlistSource::Completion completion;
@@ -84,12 +85,30 @@ struct Peer {
 	void finish(cl::Status status = cl::Status::Ok, bool malformed = false)
 	{
 		CHECK(busy && bool(completion));
+		inCallback = true;
 		ux::WatchlistCompletion result;
 		result.status = status;
+		result.native.client = qint32(status);
+		result.native.value = status == cl::Status::Ok ? 0 : 2;
+		result.completed = ux::WatchTimestamp::now();
 		result.count = int(pending.size());
 		for (int row = 0; row < result.count; ++row) {
 			result.rows[row].id = pending[row];
 			result.rows[row].status = QStringLiteral("Ok");
+			auto& exact = result.rows[row];
+			exact.itemStatus = status == cl::Status::Ok ? 0 : -1;
+			exact.valueStatus = status == cl::Status::Ok ? 0 : 2;
+			const auto id = pending[std::size_t(row)];
+			exact.value.type = {id, id == 2 ? ux::WatchScalar::S64 : id == 3 ? ux::WatchScalar::S16
+			    : id == 4 || id == 5 ? ux::WatchScalar::F32 : id == 6 ? ux::WatchScalar::F64 : ux::WatchScalar::U64,
+			    quint8(id == 3 ? 2 : id == 4 || id == 5 ? 4 : 8), id == 3};
+			const quint64 bits = id == 1 ? UINT64_MAX : id == 2 || id == 6 ? UINT64_C(0x8000000000000000)
+			    : id == 3 ? UINT64_C(0xff85) : id == 4 ? UINT64_C(0x7fc12345)
+			    : id == 5 ? UINT64_C(0x80000000) : id;
+			std::array<std::byte, 8> borrowed{};
+			for (unsigned i = 0; i != borrowed.size(); ++i) borrowed[i] = std::byte((bits >> (8 * i)) & 0xff);
+			if (status == cl::Status::Ok) CHECK(exact.value.assign(borrowed.data(), exact.value.type.width));
+			borrowed.fill(std::byte{0x55}); // RX borrow expires before the scheduler sees it.
 			result.rows[row].text = pending[row] == 1   ? QStringLiteral("18446744073709551615")
 			                        : pending[row] == 2 ? QStringLiteral("-9223372036854775808")
 			                        : pending[row] == 3 ? QStringLiteral("-123 (unknown)")
@@ -106,6 +125,7 @@ struct Peer {
 		auto done = std::exchange(completion, {});
 		busy = false;
 		*done = std::move(result); // Deliberately no watch.poll() while callback active.
+		inCallback = false;
 	}
 };
 
@@ -121,6 +141,8 @@ void bulkPublication()
 	Peer peer;
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
 	QSignalSpy inserted(watch.model(), &QAbstractItemModel::rowsInserted);
 	QVector<QPair<quint32, QString>> fields;
 	for (quint32 i = 1; i <= 65; ++i)
@@ -137,6 +159,12 @@ void bulkPublication()
 		peer.finish(); watch.poll(); events();
 	}
 	CHECK(!watch.active());
+	CHECK(frames.size() == 3 && frames[0].count == 32 && frames[1].count == 32 && frames[2].count == 1);
+	for (std::size_t i = 0; i != frames.size(); ++i) {
+		CHECK(frames[i].sequence == qint64(i + 1) && frames[i].cycle == frames[0].cycle && frames[i].portion == qint64(i));
+		CHECK(frames[i].phase == ux::WatchCompletionPhase::Current && frames[i].exact);
+	}
+	CHECK(frames[0].rows[0].id == 1 && frames[1].rows[0].id == 33 && frames[2].rows[0].id == 65);
 
 	QObject otherOwner;
 	Peer other;
@@ -630,11 +658,121 @@ void replaceSourceDuringPublication()
 	CHECK(!watch.active() && fresh.calls.size() == 1);
 	CHECK(text(watch, 0) == QStringLiteral("18446744073709551615"));
 }
+
+QByteArray raw(const ux::WatchValueBits& value)
+{
+	return QByteArray(reinterpret_cast<const char*>(value.bytes.data()), value.size);
+}
+
+void exactCompletionFrames()
+{
+	QObject owner;
+	Peer old, fresh;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(old.source());
+	fill(watch, 6);
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) {
+		CHECK(!old.inCallback && !fresh.inCallback);
+		frames.push_back(frame);
+	});
+	CHECK(watch.begin(false));
+	old.finish();
+	CHECK(frames.empty()); // filling the native completion slot publishes nothing
+	watch.poll(); events();
+	CHECK(frames.size() == 1 && frames[0].count == 6 && frames[0].exact && frames[0].correlated);
+	CHECK(frames[0].phase == ux::WatchCompletionPhase::Current && frames[0].operation == ux::WatchOperation::ReadMany);
+	CHECK(frames[0].sequence == 1 && frames[0].cycle == 1 && frames[0].portion == 0 && frames[0].sourceBinding > 0);
+	CHECK(frames[0].completed.monotonicNs >= frames[0].startedNs);
+	CHECK(raw(frames[0].rows[0].value) == QByteArray::fromHex("ffffffffffffffff"));
+	CHECK(raw(frames[0].rows[1].value) == QByteArray::fromHex("0000000000000080"));
+	CHECK(frames[0].rows[2].value.type.enumeration && frames[0].rows[2].value.type.scalar == ux::WatchScalar::S16 &&
+	      raw(frames[0].rows[2].value) == QByteArray::fromHex("85ff"));
+	CHECK(raw(frames[0].rows[3].value) == QByteArray::fromHex("4523c17f"));
+	CHECK(raw(frames[0].rows[4].value) == QByteArray::fromHex("00000080"));
+	CHECK(raw(frames[0].rows[5].value) == QByteArray::fromHex("0000000000000080"));
+	watch.setIndividual(true);
+	CHECK(watch.begin(false));
+	for (int i = 0; i != 6; ++i) { old.finish(); watch.poll(); events(); }
+	CHECK(frames.size() == 7 && !watch.active());
+	for (int i = 0; i != 6; ++i) {
+		const auto& frame = frames[std::size_t(i + 1)];
+		CHECK(frame.operation == ux::WatchOperation::FieldRead && frame.count == 1 && frame.rows[0].id == quint32(i + 1));
+		CHECK(frame.sequence == i + 2 && frame.cycle == 2 && frame.portion == i && frame.exact);
+	}
+	watch.setIndividual(false);
+	CHECK(watch.begin(false));
+	const auto slot = old.completion;
+	old.finish(cl::Status::Timeout);
+	(*slot)->count = 0; // a real aggregate failure is allowed to return no items
+	watch.poll(); events();
+	CHECK(frames.size() == 8 && frames.back().phase == ux::WatchCompletionPhase::Failed && frames.back().count == 6);
+	CHECK(frames.back().native.client == qint32(cl::Status::Timeout) && !frames.back().correlated);
+	for (int i = 0; i != 6; ++i) CHECK(frames.back().rows[std::size_t(i)].id == quint32(i + 1) &&
+	    frames.back().rows[std::size_t(i)].value.size == 0 && frames.back().rows[std::size_t(i)].value.type.valid());
+	CHECK(watch.begin(false));
+	watch.stop();
+	old.finish(); watch.poll(); events();
+	CHECK(frames.size() == 9 && frames.back().phase == ux::WatchCompletionPhase::Drained && !watch.active());
+	CHECK(watch.begin(false));
+	watch.setSource(fresh.source());
+	old.finish(); watch.poll(); events();
+	CHECK(frames.size() == 10 && frames.back().phase == ux::WatchCompletionPhase::Drained && watch.count() == 0);
+	const auto oldBinding = frames.back().sourceBinding;
+	fill(watch, 1);
+	CHECK(watch.begin(false));
+	fresh.finish(); watch.poll(); events();
+	CHECK(frames.size() == 11 && frames.back().phase == ux::WatchCompletionPhase::Current && frames.back().sourceBinding > oldBinding);
+	CHECK(watch.begin(false));
+	const auto unavailable = fresh.completion;
+	fresh.finish();
+	(*unavailable)->rows[0].itemStatus = 3;
+	(*unavailable)->rows[0].valueStatus = 2;
+	(*unavailable)->rows[0].value.size = 0;
+	(*unavailable)->rows[0].status = QStringLiteral("Unavailable");
+	(*unavailable)->rows[0].text.clear();
+	(*unavailable)->rows[0].sample = {};
+	watch.poll(); events();
+	CHECK(frames.size() == 12 && frames.back().phase == ux::WatchCompletionPhase::Current && frames.back().exact);
+	CHECK(frames.back().rows[0].itemStatus == 3 && frames.back().rows[0].valueStatus == 2 && frames.back().rows[0].value.size == 0);
+	CHECK(watch.begin(false));
+	fresh.finish(cl::Status::Ok, true); watch.poll(); events();
+	CHECK(frames.size() == 13 && frames.back().phase == ux::WatchCompletionPhase::Failed && !frames.back().correlated);
+	CHECK(frames.back().rows[0].id == 1 && frames.back().rows[0].value.size == 0);
+	// One direct bounded recorder can halt the next cycle on backpressure. It
+	// cannot recursively consume or start another request from this publication.
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) {
+		frames.push_back(frame);
+		watch.stop();
+		CHECK(!watch.begin(true));
+		watch.poll();
+	});
+	CHECK(watch.begin(true));
+	fresh.finish(); watch.poll(); events();
+	CHECK(frames.size() == 14 && !watch.active() && fresh.calls.size() == 4);
+	const auto frameCount = frames.size();
+	watch.poll(); events();
+	CHECK(frames.size() == frameCount);
+	// Destruction in a public terminal observer cannot continue with row writes.
+	auto doomedOwner = std::make_unique<QObject>();
+	auto doomed = std::make_unique<ux::DynamicWatchlist>(doomedOwner.get());
+	Peer peer;
+	doomed->setSource(peer.source()); fill(*doomed, 1);
+	int destroyedFrames = 0;
+	doomed->setCompletionObserver([&](const ux::WatchFrame&) {
+		++destroyedFrames;
+		doomedOwner.reset();
+		doomed.reset();
+	});
+	CHECK(doomed->begin(false)); peer.finish(); doomed->poll();
+	CHECK(!doomedOwner && !doomed && destroyedFrames == 1 && peer.calls.size() == 1);
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	exactCompletionFrames();
 	bulkPublication();
 	rowLimit();
 	wakeAfterWrites();

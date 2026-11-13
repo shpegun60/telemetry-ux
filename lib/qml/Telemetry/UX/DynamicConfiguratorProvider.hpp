@@ -2,6 +2,7 @@
 #pragma once
 #include "DynamicConfiguratorBinding.hpp"
 #include "WatchSample.hpp"
+#include "WatchFrame.hpp"
 #include <QtCore/QAbstractItemModel>
 #include <memory>
 
@@ -174,6 +175,9 @@ public:
 
 Q_SIGNALS:
 	void stateChanged();
+	// Direct owner-thread publication of one accepted terminal Watch request.
+	// Owns exact bytes; Current describes source validity, not atomic UI commit.
+	void watchCompleted(const telemetry::ux::WatchFrame& frame);
 	void readFinished(bool published);
 	void applyFinished(bool confirmed);
 	void commandFinished(bool executed, bool accepted);

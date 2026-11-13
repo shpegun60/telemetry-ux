@@ -681,6 +681,10 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		    // read never touches it.
 		    return !p || p->busy() || p->updating;
 	    });
+	d->watch.setCompletionObserver([weak](const WatchFrame& frame) {
+		if (const auto p = weak.lock(); p && p->q)
+			Q_EMIT p->q->watchCompleted(frame);
+	});
 	d->watch.setWritable([weak](quint32 id) {
 		const auto p = weak.lock();
 		return p && p->endpoints.fieldWritable(id);

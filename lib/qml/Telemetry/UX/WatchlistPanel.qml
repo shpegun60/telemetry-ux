@@ -13,6 +13,20 @@ import QtQuick.Templates as T
 Pane {
     id: panel
     required property var provider
+    // Optional host workflow (for example, prepare a project recording before
+    // starting). Without handlers the existing provider is called directly.
+    property var startHandler: null
+    property var stopHandler: null
+    property bool operationActive: false
+    function requestStart(polling) {
+        if (typeof startHandler === "function") startHandler(polling)
+        else if (polling) provider.startWatch()
+        else provider.refreshWatch()
+    }
+    function requestStop() {
+        if (typeof stopHandler === "function") stopHandler()
+        else provider.stopWatch()
+    }
     objectName: "watchlistPane"
     palette.window: Theme.surfaceWindow
     palette.windowText: Theme.textPrimary
@@ -44,7 +58,7 @@ Pane {
                                            && provider.watchRequiresExplicitIndividual === true
                                            && provider.watchIndividual !== true
 
-    readonly property bool active: provider.watchActive === true
+    readonly property bool active: provider.watchActive === true || operationActive
     readonly property int count: provider.watchCount
     readonly property bool connected: provider.connected === true
     readonly property bool canRead: connected && count > 0 && !active
@@ -163,7 +177,7 @@ Pane {
                 visible: panel.readOnceInBar
                 text: qsTr("Read once")
                 enabled: panel.canRead
-                onClicked: panel.provider.refreshWatch()
+                onClicked: panel.requestStart(false)
                 ToolTip.visible: hovered
                 ToolTip.delay: 700
                 ToolTip.text: qsTr("Read every watched Field once")
@@ -181,7 +195,7 @@ Pane {
                 verticalPadding: 0
                 text: panel.active ? qsTr("Stop") : qsTr("Start")
                 enabled: panel.active || (panel.connected && panel.count > 0)
-                onClicked: panel.active ? panel.provider.stopWatch() : panel.provider.startWatch()
+                onClicked: panel.active ? panel.requestStop() : panel.requestStart(true)
                 Accessible.name: panel.active ? qsTr("Stop polling") : qsTr("Start polling")
             }
             Label {
@@ -357,7 +371,7 @@ Pane {
                 text: qsTr("Read once")
                 // Off while hidden: the menu's arrows do not skip a hidden item.
                 enabled: panel.canRead && !panel.readOnceInBar
-                onTriggered: panel.provider.refreshWatch()
+                onTriggered: panel.requestStart(false)
             }
             MenuItem {
                 objectName: "addWatchItem"

@@ -5,6 +5,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <algorithm>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -14,6 +15,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		std::shared_ptr<void> storage;
 		std::uint64_t revision = 0;
 		int cursor = 0, count = 0;
+		qint64 sequence = 0, cycle = 0, portion = 0, sourceBinding = 0, startedNs = 0;
+		bool individual = false;
 		bool urgent = false; // a written Field read again, outside the cycle's order
 		std::array<std::uint32_t, 32> ids{};
 		std::optional<WatchlistCompletion> completion;
@@ -30,6 +33,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	std::optional<WatchlistSource> desired;
 	std::shared_ptr<Request> request;
 	std::function<void()> notify;
+	std::function<void(const WatchFrame&)> completed;
+	qint64 sequence = 0, cycleNumber = 0, portion = 0, sourceBinding = 0;
+	bool reportingCompletion = false;
 	std::function<bool()> blocked;
 	QString status = QStringLiteral("ReadMany; not started");
 	std::uint64_t revision = 0;
@@ -82,8 +88,49 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			notify();
 	}
 
+	bool startCycle()
+	{
+		if (cycleNumber == (std::numeric_limits<qint64>::max)()) {
+			fail(QStringLiteral("Watch cycle identities exhausted"));
+			return false;
+		}
+		++cycleNumber;
+		portion = 0;
+		cycle = true;
+		cursor = 0;
+		return true;
+	}
+
+	bool prepare(Request& value)
+	{
+		if (sequence == (std::numeric_limits<qint64>::max)()) {
+			fail(QStringLiteral("Watch completion identities exhausted"));
+			return false;
+		}
+		value.sequence = sequence + 1;
+		value.cycle = cycleNumber;
+		value.portion = portion;
+		value.sourceBinding = sourceBinding;
+		value.individual = individual;
+		value.startedNs = WatchTimestamp::now().monotonicNs;
+		return true;
+	}
+
+	void accepted(const Request& value)
+	{
+		sequence = value.sequence;
+		++portion;
+	}
+
 	void attach(WatchlistSource value)
 	{
+		if (sourceBinding == (std::numeric_limits<qint64>::max)()) {
+			attached = false;
+			source = {};
+			fail(QStringLiteral("Watch source identities exhausted"));
+			return;
+		}
+		++sourceBinding;
 		source = std::move(value);
 		attached = true;
 		const std::weak_ptr<Impl> weak = shared_from_this();
@@ -173,9 +220,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			// Between cycles: the next one starts now, not on the timer. It sends
 			// nothing while the session is busy (a write that caused this wake is
 			// often still queued); the session's progress drives it on.
-			cycle = true;
-			cursor = 0;
-			continueCycle();
+			if (startCycle())
+				continueCycle();
 			return;
 		}
 		if (written) {
@@ -251,6 +297,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			pending->urgent = true;
 			pending->ids[0] = id;
 			pending->count = 1;
+			if (!prepare(*pending)) return true;
 			auto complete = WatchlistSource::Completion{pending, &pending->completion};
 			const auto submitted =
 			    individual ? source.readField(id, std::move(complete))
@@ -266,6 +313,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				continue;
 			}
 			urgent.erase(urgent.begin());
+			accepted(*pending);
 			request = std::move(pending);
 			status = QStringLiteral("Reading a written Field again");
 			changed();
@@ -286,7 +334,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void next()
 	{
-		if (guarded() || !cycle || request)
+		if (guarded() || reportingCompletion || !cycle || request)
 			return;
 		if (unavailable()) {
 			retry.start();
@@ -312,9 +360,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			changed();
 			if ((rerun || intervalMs == 0) && running && !guarded()) {
 				rerun = false;
-				cycle = true;
-				cursor = 0;
-				continueCycle();
+				if (startCycle())
+					continueCycle();
 			}
 			return;
 		}
@@ -357,6 +404,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				return;
 			}
 		}
+		if (!prepare(*pending)) return;
 		// An aliasing shared pointer retains the immutable request and its storage.
 		// The native adapter can only fill this slot, never call a QObject callback.
 		auto complete = WatchlistSource::Completion{pending, &pending->completion};
@@ -376,6 +424,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				    QStringLiteral("Watch submission refused: %1").arg(unsigned(submitted.status)));
 			return;
 		}
+		accepted(*pending);
 		request = std::move(pending);
 		status = QStringLiteral("Reading Fields %1-%2 of %3")
 		             .arg(cursor + 1)
@@ -386,13 +435,60 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void poll()
 	{
-		if (guarded())
+		if (guarded() || reportingCompletion)
 			return;
 		if (!current() && (running || cycle || model.count()))
 			retire(true);
 		if (request && request->completion) {
 			auto completed = std::move(request);
 			auto result = std::move(*completed->completion);
+			// The accepted Request, not a possibly empty failure body, owns the IDs.
+			WatchFrame frame;
+			frame.sequence = completed->sequence;
+			frame.cycle = completed->cycle;
+			frame.portion = completed->portion;
+			frame.sourceBinding = completed->sourceBinding;
+			frame.startedNs = completed->startedNs;
+			frame.completed = result.completed;
+			frame.source = result.source;
+			frame.native = result.native;
+			frame.presentationStatus = qint32(result.status);
+			frame.operation = completed->individual ? WatchOperation::FieldRead : WatchOperation::ReadMany;
+			frame.urgent = completed->urgent;
+			frame.count = completed->count;
+			frame.correlated = result.count == completed->count && result.count > 0 && result.count <= 32;
+			frame.exact = true;
+			for (int i = 0; i < frame.count; ++i) {
+				auto& row = frame.rows[std::size_t(i)];
+				const auto& value = result.rows[std::size_t(i)];
+				row.id = completed->ids[std::size_t(i)];
+				if (value.id == row.id) {
+					row.itemStatus = value.itemStatus;
+					row.valueStatus = value.valueStatus;
+					row.value = value.value;
+				} else {
+					frame.correlated = false;
+				}
+				if (!row.value.type.valid() || (row.itemStatus == 0 && row.valueStatus == 0 &&
+				    row.value.size != row.value.type.width)) frame.exact = false;
+			}
+			bool applicable = result.status == client::Status::Ok && frame.correlated;
+			if (completed->urgent) applicable = applicable && rowOf(completed->ids[0]) >= 0;
+			else {
+				applicable = applicable && completed->cursor == cursor && result.count <= model.count() - cursor;
+				for (int i = 0; applicable && i < result.count; ++i)
+					applicable = model.id(cursor + i) == completed->ids[std::size_t(i)];
+			}
+			frame.phase = completed->revision != revision || !current() ? WatchCompletionPhase::Drained
+			              : applicable ? WatchCompletionPhase::Current : WatchCompletionPhase::Failed;
+			// No native callback or row notification is on this stack. A receiver can
+			// stop/rebind/delete the panel; retain Impl and revalidate before applying.
+			const auto before = revision;
+			const auto observer = this->completed;
+			reportingCompletion = true;
+			if (observer) observer(frame);
+			reportingCompletion = false;
+			if (!context || before != revision) return;
 			if (completed->revision != revision || !current()) {
 				status = QStringLiteral("Stopped - accepted read drained");
 			} else if (completed->urgent) {
@@ -449,11 +545,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// shares the session with a continuous one.
 	void tick()
 	{
-		if (guarded() || !running || cycle || request || !current())
+		if (guarded() || reportingCompletion || !running || cycle || request || !current())
 			return;
-		cycle = true;
-		cursor = 0;
-		next();
+		if (startCycle())
+			next();
 	}
 };
 
@@ -476,6 +571,11 @@ void DynamicWatchlist::setNotify(std::function<void()> notify, std::function<boo
 {
 	d->notify = std::move(notify);
 	d->blocked = std::move(blocked);
+}
+
+void DynamicWatchlist::setCompletionObserver(std::function<void(const WatchFrame&)> observer)
+{
+	d->completed = std::move(observer);
 }
 
 void DynamicWatchlist::setSource(WatchlistSource source)
@@ -783,6 +883,7 @@ void DynamicWatchlist::setInterval(int ms)
 bool DynamicWatchlist::begin(bool polling)
 {
 	auto p = d;
+	if (p->reportingCompletion) return false;
 	if (polling && p->cycle && !p->running && !p->guarded() && p->current()) {
 		// Start while a Read once runs: that cycle becomes the first one of
 		// polling instead of the Start being refused.
@@ -802,8 +903,7 @@ bool DynamicWatchlist::begin(bool polling)
 	p->urgent.clear();
 	p->rerun = false;
 	p->running = polling;
-	p->cycle = true;
-	p->cursor = 0;
+	if (!p->startCycle()) return false;
 	if (polling)
 		p->timer.start();
 	p->next();
