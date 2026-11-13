@@ -333,7 +333,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			const auto limits = source.capability ? source.capability() : std::nullopt;
 			if (!limits || !source.readMany) {
 				fail(QStringLiteral(
-				    "ReadMany unavailable - explicitly select Individual FieldRead"));
+				    "This device can't read several Fields at once: choose Read each Field with FieldRead in the Watchlist's menu."));
 				return;
 			}
 			unsigned reply = 2;

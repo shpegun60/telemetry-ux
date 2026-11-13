@@ -81,14 +81,34 @@ or showing a Watchlist panel does not stop or restart polling. If the applicatio
 wants to stop polling, it must request that explicitly via the provider. A new
 provider has its own presentation and polling state and must be chosen deliberately.
 
-`WatchlistPanel` shows its rows when `expanded` is true. A host that gives the
-Watchlist a dock of its own sets `collapsible: false`: the rows are then always
-shown and the expand box is hidden. From 500 px wide (`tableRows`) every Field is one 28 px row
-under Name, Value and Status titles: the value right-aligned on one line, `Ok` as
-a green dot, any other status in words (Stale and failures highlighted), and a
-small remove button clear of the scrollbar, framed when it has keyboard focus;
-cut text shows in full as a tooltip. Narrower panels wrap
-name, value and status over two lines instead.
+`WatchlistPanel` shows its rows when `expanded` is true; its title (a chevron,
+"Watchlist" and the count) folds them. A host that gives the Watchlist a dock of
+its own sets `collapsible: false`: the rows are then always shown and the title
+is hidden, and `framed: false` drops the card. One toolbar row stays above the
+rows - Read once, Start, "Every" and the interval, a ⋯ menu with Watch the
+selected Field, the two read modes and Clear the Watchlist… - and gives way as
+the panel narrows: "Every" first, then Read once moves into ⋯. The interval is a
+list of steps with Other… for any interval in milliseconds. The polling status
+is a wrapped line under the toolbar; a host whose status bar already says it
+sets `statusShown: false`, and advice the status bar would cut short (the device
+cannot read with ReadMany and FieldRead is not chosen) still shows there.
+
+From about 360 px wide (`tableRows`) every Field is one row under Name, Value and
+Status titles that stay put while the rows scroll: the value right-aligned in the
+fixed-width font, `Ok` as a green dot, any other status in a word (Refused,
+Stale, Timed out…; the provider's own word is its tooltip), and × on the row
+under the pointer or the current row, clear of the scrollbar. Narrower panels
+give a Field two lines - its name and ×, then its value and status - each a row
+high. From the keyboard the arrows move the current row, Delete removes it and
+F2 writes a writable value. Every size follows `Type`.
+
+Removed with the one-row toolbar (no host in these repositories used them): the
+scroll-anchoring properties (`scrollAnchor`, `scrollOffset`,
+`headerImplicitHeight`, `seenHeaderHeight`, `adjustingScroll`) and the object
+names `addWatchButton`, `clearWatchButton`, `watchMode`, `watchFrequency`,
+`watchIntervalHint`, `watchSettings`, `watchActions` and `watchlistScroll`; their
+actions are `addWatchItem`, `clearWatchItem`, `watchModeReadMany` /
+`watchModeFieldRead` and `watchInterval` / `watchIntervalInput`.
 
 A writable Field is changed in its own row, as in Live Expressions: double-click
 the value (or press the pencil that appears on hover), type, and Enter writes; Esc

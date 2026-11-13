@@ -24,6 +24,9 @@ Pane {
     palette.highlight: Theme.stateSelected
     palette.highlightedText: Theme.selectedForeground
     palette.placeholderText: Theme.textMuted
+    palette.disabled.buttonText: Theme.textDisabled
+    palette.disabled.windowText: Theme.textDisabled
+    palette.disabled.text: Theme.textDisabled
     property bool expanded: false
     // A host that gives the Watchlist its own dock sets this false: the list is
     // then always open and its title, which folds it, is not shown.
@@ -33,8 +36,13 @@ Pane {
     // `framed: false` drops the card for a dock.
     property bool framed: true
     // The polling status as a line under the toolbar. A host whose status bar
-    // already says it sets this false.
+    // already says it sets this false; advice it would cut short still shows.
     property bool statusShown: true
+    // The device cannot read several Fields at once and the Watchlist still
+    // asks it to: the status is advice, read whole, in the warning colour.
+    readonly property bool readManyAdvice: provider.watchReadManySupported === false
+                                           && provider.watchRequiresExplicitIndividual === true
+                                           && provider.watchIndividual !== true
 
     readonly property bool active: provider.watchActive === true
     readonly property int count: provider.watchCount
@@ -59,6 +67,7 @@ Pane {
         case "Unsupported": case "UnsupportedType": return qsTr("Unsupported")
         case "Unavailable": return qsTr("Unavailable")
         case "ReadError": return qsTr("Read error")
+        case "MalformedReply": return qsTr("Bad reply")
         }
         if (status.startsWith("SubmissionRefused"))
             return qsTr("Refused")
@@ -74,7 +83,7 @@ Pane {
     readonly property real barGap: Type.spacing
     readonly property real barCore: (fold.visible ? fold.implicitWidth + barGap : 0)
                                     + start.barWidth + barGap + interval.barWidth
-                                    + barGap + more.implicitWidth
+                                    + 2 * barGap + more.implicitWidth
     readonly property bool readOnceInBar: availableWidth >= barCore + readOnce.barWidth + barGap
     readonly property bool everyShown: availableWidth >= barCore + readOnce.barWidth + every.implicitWidth + 2 * barGap
     // One line per Field down to about 360 px; narrower rows take two lines.
@@ -133,54 +142,16 @@ Pane {
             Layout.fillWidth: true
             Layout.minimumHeight: Type.controlHeight
             spacing: panel.barGap
-            // The title, which folds the list: a chevron, "Watchlist" and how
-            // many. One state, two ways in: a host may set `expanded` and the
-            // title shows it; a click sets it.
-            T.AbstractButton {
+            // The title, which folds the list. One state, two ways in: a host
+            // may set `expanded` and the title shows it; a click sets it.
+            FoldTitle {
                 id: fold
                 objectName: "watchlistExpanded"
                 visible: panel.collapsible
-                checkable: true
+                text: qsTr("Watchlist")
+                countText: qsTr("%L1").arg(panel.count)
                 checked: panel.expanded
                 onCheckedChanged: if (panel.expanded !== checked) panel.expanded = checked
-                focusPolicy: Qt.StrongFocus
-                hoverEnabled: true
-                leftPadding: Type.tight
-                rightPadding: Type.spacing
-                implicitWidth: implicitContentWidth + leftPadding + rightPadding
-                implicitHeight: Type.controlHeight
-                text: qsTr("Watchlist")
-                contentItem: Row {
-                    spacing: Type.tight
-                    Chevron {
-                        anchors.verticalCenter: parent.verticalCenter
-                        open: fold.checked
-                    }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: fold.text
-                        font.weight: Type.headingWeight
-                        color: Theme.textPrimary
-                    }
-                    Label {
-                        objectName: "watchCount"
-                        anchors.verticalCenter: parent.verticalCenter
-                        leftPadding: Type.tight
-                        text: qsTr("%L1").arg(panel.count)
-                        color: Theme.textMuted
-                        font.pointSize: Type.caption
-                    }
-                }
-                background: Rectangle {
-                    radius: Type.radius
-                    color: fold.down ? Theme.statePressed : fold.hovered ? Theme.stateHover : "transparent"
-                    border.width: fold.visualFocus ? 2 : 0
-                    border.color: Theme.focusRing
-                }
-                Accessible.role: Accessible.CheckBox
-                Accessible.name: qsTr("Watchlist, %L1 Fields").arg(panel.count)
-                Accessible.checkable: true
-                Accessible.checked: checked
             }
             Button {
                 id: readOnce
@@ -300,6 +271,9 @@ Pane {
                     Keys.onEscapePressed: finish()
                     onActiveFocusChanged: if (!activeFocus && visible) {
                         visible = false
+                        // The panel is a focus scope: let go, or it would give
+                        // the keys back to this hidden field.
+                        focus = false
                         interval.resync()
                     }
                 }
@@ -363,24 +337,31 @@ Pane {
                 let widest = 0
                 for (let i = 0; i < count; ++i) {
                     const item = itemAt(i)
-                    if (item)
+                    if (item && item.height > 0)
                         widest = Math.max(widest, item.implicitWidth)
                 }
                 return widest
             }
             width: Math.max(implicitWidth, widestItem + leftPadding + rightPadding)
+            // A style that draws the check inside the item's left padding has
+            // kept the column there already (TelemetryDark); one that draws it
+            // at the padding's edge pushes the label past it (Basic).
+            readonly property real checkColumn: readManyItem.leftPadding
+                + (readManyItem.indicator && readManyItem.indicator.x >= readManyItem.leftPadding
+                   ? readManyItem.indicator.width + readManyItem.spacing : 0)
             MenuItem {
                 objectName: "refreshWatchItem"
                 visible: !panel.readOnceInBar
                 height: panel.readOnceInBar ? 0 : implicitHeight
-                leftPadding: readManyItem.leftPadding
+                leftPadding: moreMenu.checkColumn
                 text: qsTr("Read once")
-                enabled: panel.canRead
+                // Off while hidden: the menu's arrows do not skip a hidden item.
+                enabled: panel.canRead && !panel.readOnceInBar
                 onTriggered: panel.provider.refreshWatch()
             }
             MenuItem {
                 objectName: "addWatchItem"
-                leftPadding: readManyItem.leftPadding
+                leftPadding: moreMenu.checkColumn
                 text: qsTr("Watch the selected Field")
                 enabled: panel.provider.canAddWatch === true && !panel.active
                 onTriggered: {
@@ -399,7 +380,7 @@ Pane {
                 ButtonGroup.group: modes
                 checkable: true
                 checked: !moreMenu.individual
-                enabled: !panel.active
+                enabled: moreMenu.choosable && !panel.active
                 text: moreMenu.readManySupported ? qsTr("Read with ReadMany") : qsTr("Read with ReadMany (unavailable)")
                 onTriggered: panel.provider.watchIndividual = false
             }
@@ -415,7 +396,7 @@ Pane {
             MenuSeparator {}
             MenuItem {
                 objectName: "clearWatchItem"
-                leftPadding: readManyItem.leftPadding
+                leftPadding: moreMenu.checkColumn
                 text: qsTr("Clear the Watchlist…")
                 enabled: panel.count > 0 && !panel.active
                 onTriggered: clearDialog.open()
@@ -426,11 +407,15 @@ Pane {
         // whole, however long, and the toolbar does not move as it changes.
         Label {
             objectName: "watchStatusLabel"
-            visible: panel.statusShown && text.length > 0
+            visible: (panel.statusShown || panel.readManyAdvice) && text.length > 0
             Layout.fillWidth: true
+            // The height its text takes, wrapped: the layout missed this
+            // label's implicit height growing (a bigger font, a glyph from a
+            // fallback font) and cut the last line.
+            Layout.preferredHeight: Math.ceil(contentHeight)
             textFormat: Text.PlainText
             text: panel.statusText
-            color: Theme.textSecondary
+            color: panel.readManyAdvice ? Theme.warning : Theme.textSecondary
             font.pointSize: Type.caption
             wrapMode: Text.Wrap
         }
@@ -439,6 +424,7 @@ Pane {
             objectName: "watchWriteOutcome"
             visible: panel.open && text.length > 0
             Layout.fillWidth: true
+            Layout.preferredHeight: Math.ceil(contentHeight)
             textFormat: Text.PlainText
             text: panel.provider.watchWriteOutcome === undefined ? "" : panel.provider.watchWriteOutcome
             color: Theme.textSecondary
@@ -460,7 +446,9 @@ Pane {
         }
 
         // Folded, the list keeps its place at no height rather than hiding:
-        // shown and given its model at once, a view makes its rows twice.
+        // hidden, then shown with its model in the same change, this panel made
+        // its rows twice and a held row was destroyed (Qt 6.12, the inspector's
+        // check; not reproduced in a smaller case).
         ListView {
             id: watchList
             objectName: "watchlistView"
@@ -644,7 +632,12 @@ Pane {
                         Keys.onEnterPressed: watchRow.commitEdit()
                         Keys.onEscapePressed: watchRow.finishEdit()
                         // Clicking elsewhere cancels: nothing is written by accident.
-                        onActiveFocusChanged: if (!activeFocus && watchRow.editing) watchRow.editing = false
+                        // The list is a focus scope: the hidden editor lets go of
+                        // its focus too, or the list would give the keys back to it.
+                        onActiveFocusChanged: if (!activeFocus && watchRow.editing) {
+                            watchRow.editing = false
+                            focus = false
+                        }
                         Accessible.name: qsTr("New value for %1").arg(watchRow.name)
                     }
                     // A good reading is a quiet dot; anything else is its word,
@@ -745,7 +738,7 @@ Pane {
                 color: Theme.textMuted
                 text: !panel.connected ? qsTr("Connect to a device to watch its Fields.")
                     : panel.treeBoxes ? qsTr("Tick Fields in the Device tree to watch them.")
-                    : qsTr("Select a Field in the Device tree, then choose Watch the selected Field in ⋯.")
+                    : qsTr("Select a Field in the Device tree, then choose Watch the selected Field in the Watchlist's menu.")
             }
         }
     }
@@ -774,6 +767,9 @@ Pane {
         palette.highlightedText: Theme.selectedForeground
         title: panel.count === 1 ? qsTr("Remove the one Field from the Watchlist?")
                                  : qsTr("Remove all %L1 Fields from the Watchlist?").arg(panel.count)
+        // No body: the question is the title, the answer the buttons.
+        topPadding: 0
+        bottomPadding: 0
         footer: DialogButtonBox {
             Button {
                 objectName: "clearWatchConfirm"
@@ -792,6 +788,6 @@ Pane {
                 panel.provider.clearWatch()
             }
         }
-        onOpened: clearCancel.forceActiveFocus()
+        onOpened: clearCancel.forceActiveFocus(Qt.TabFocusReason)
     }
 }

@@ -12,7 +12,8 @@ Item {
     x: !row.mirrored ? indent : row.width - indent - width
     y: Math.round((row.height - height) / 2)
     implicitWidth: Type.indent
-    implicitHeight: Type.iconSize
+    // A row high, so the whole height opens the branch, as Basic's did.
+    implicitHeight: row.height
     Accessible.ignored: true
     Chevron {
         anchors.centerIn: parent

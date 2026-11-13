@@ -77,16 +77,6 @@ QQuickItem* item(QQuickItem* root, const QString& name)
 	return nullptr;
 }
 
-QQuickItem* itemWithText(QQuickItem* root, const QString& name, const QString& text)
-{
-    if (root->objectName() == name && root->property("text").toString() == text)
-        return root;
-    for (auto* child : root->childItems())
-        if (auto* found = itemWithText(child, name, text))
-            return found;
-    return nullptr;
-}
-
 QQuickItem* rowItem(QQuickItem* root, int row)
 {
 	if (root->objectName() == QStringLiteral("endpointRow") &&
@@ -601,7 +591,20 @@ int main(int argc, char** argv)
                 CHECK(input->isVisible() && input->hasActiveFocus() && !interval->isVisible());
                 inBar("watchIntervalInput");
             };
-            other();
+            // The first time through the list's own popup, as a person picks it.
+            {
+                click(narrowWindow, interval);
+                auto* popup = interval->property("popup").value<QObject*>();
+                CHECK(popup && popup->property("visible").toBool());
+                auto* choices = qobject_cast<QQuickItem*>(popup->property("contentItem").value<QObject*>());
+                CHECK(choices && QMetaObject::invokeMethod(choices, "positionViewAtEnd"));
+                settle();
+                QQuickItem* otherChoice = nullptr;
+                CHECK(QMetaObject::invokeMethod(choices, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, otherChoice),
+                                                Q_ARG(int, count() - 1)) && otherChoice);
+                click(narrowWindow, otherChoice);
+                CHECK(input->isVisible() && input->hasActiveFocus() && !interval->isVisible());
+            }
             QTest::keyClick(narrowWindow, '3');
             QTest::keyClick(narrowWindow, '7');
             QTest::keyClick(narrowWindow, Qt::Key_Return);
@@ -619,6 +622,15 @@ int main(int argc, char** argv)
             settle();
             CHECK(!input->isVisible() && interval->isVisible() && ms() == 37);
             CHECK(index() == 0 && interval->property("currentText").toString() == QStringLiteral("37 ms"));
+            // Left by a click elsewhere, the field lets go of its focus: the
+            // panel, a focus scope, never gives the keys back to it hidden.
+            other();
+            narrowList->forceActiveFocus(Qt::MouseFocusReason);
+            settle();
+            CHECK(!input->isVisible() && interval->isVisible() && ms() == 37);
+            narrowPanel->forceActiveFocus(Qt::OtherFocusReason);
+            settle();
+            CHECK(narrowWindow->activeFocusItem() != input);
             CHECK(narrowProvider->setProperty("watchIntervalMs", 100));
             settle();
         }
@@ -803,6 +815,13 @@ int main(int argc, char** argv)
                 named("watchInterval")->forceActiveFocus();
                 settle();
                 CHECK(!editor->isVisible());
+                click(narrowWindow, failedRow);
+                {
+                    // The list or its current row has the keys, never the hidden editor.
+                    auto* focused = narrowWindow->activeFocusItem();
+                    CHECK(focused && focused != editor && narrowList->hasActiveFocus() &&
+                          (focused == narrowList || focused->objectName() == QStringLiteral("watchlistRow")));
+                }
                 CHECK(narrowProvider->property("writes").toStringList().size() == 1);
                 auto* readOnlyValue = item(failedRow, QStringLiteral("watchValueText"));
                 doubleClick(readOnlyValue);

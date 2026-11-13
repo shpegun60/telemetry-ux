@@ -52,8 +52,9 @@ Pane {
         id: transferList
         objectName: "deviceFilesTransfers"
         anchors.fill: parent
-        // Always shown: a view hidden while empty would never hear its count
-        // change, and the empty line above says when there is nothing.
+        // Always shown: hidden while empty, this list stayed hidden when rows
+        // came (the client's Transfers dock on Qt 6.12; not reproduced in a
+        // smaller case). The empty line above says when there is nothing.
         clip: true
         model: transfersPane.transfers
         spacing: Type.tight
