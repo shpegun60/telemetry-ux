@@ -58,9 +58,10 @@ Pane {
     readonly property int outcomePartial: 8
     readonly property int outcomeFailed: 9
 
-    readonly property var currentIndex: fileTree.selectionModel.currentIndex
-    readonly property bool currentIsFile: files.isFile(currentIndex)
-    readonly property string currentName: currentIsFile ? files.data(currentIndex, Qt.DisplayRole) : ""
+    property bool modelResetting: false
+    readonly property var currentIndex: modelResetting ? null : fileTree.selectionModel.currentIndex
+    readonly property bool currentIsFile: !modelResetting && !!currentIndex && currentIndex.valid && files.isFile(currentIndex)
+    readonly property string currentName: currentIsFile && currentIndex && currentIndex.valid ? files.data(currentIndex, Qt.DisplayRole) : ""
     readonly property int finishedTransfers: transfers.rowCount() - transfers.activeCount
 
     // One width per column, shared by the heading and every row.
@@ -77,7 +78,9 @@ Pane {
     TextMetrics { id: markMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rws" }
 
     function chosen() {
-        return files.selectedFiles(currentIndex)
+        if (modelResetting)
+            return []
+        return currentIndex && currentIndex.valid ? files.selectedFiles(currentIndex) : files.selectedFiles()
     }
     function download() {
         const selection = chosen()
@@ -85,6 +88,7 @@ Pane {
             panel.downloadRequested(selection)
     }
     function openIndex(index) {
+        if (modelResetting || !index || !index.valid) return
         const file = files.fileAt(index)
         if (file.path !== undefined && (!file.sizeKnown || file.readable))
             panel.openRequested(file)
@@ -98,6 +102,7 @@ Pane {
     // Enter: on a selected file, every selected file the device lets us read;
     // on any other file, that file; a folder folds or unfolds.
     function activateCurrent() {
+        if (modelResetting || !currentIndex || !currentIndex.valid) return
         if (currentIsFile) {
             const selected = files.isSelected(currentIndex) ? files.selectedFiles(currentIndex) : []
             if (selected.length > 1 && selected.length <= openAtOnce)
@@ -109,7 +114,7 @@ Pane {
         }
     }
     function rowOf(index) {
-        return fileTree.rowAtIndex(index)
+        return modelResetting || !index || !index.valid ? -1 : fileTree.rowAtIndex(index)
     }
     // The selection, as a file explorer's: the model keeps it, files only,
     // by path across Refresh; a folder row stands for its files. The anchor,
@@ -198,13 +203,20 @@ Pane {
     }
     // Copy path on a file or folder; on a selection, every selected path, one a line.
     function copyPaths(kind, file) {
+        if (modelResetting) return
         if (kind === "selection") {
             Clipboard.setText(files.selectedPaths().join("\n"))
-        } else {
-            Clipboard.setText(kind === "file" ? file.path : files.pathAt(currentIndex))
+        } else if (kind === "file") {
+            if (file && typeof file.path === "string")
+                Clipboard.setText(file.path)
+        } else if (kind === "folder" && currentIndex && currentIndex.valid) {
+            const path = files.pathAt(currentIndex)
+            if (path.length > 0)
+                Clipboard.setText(path)
         }
     }
     function showProperties(index) {
+        if (modelResetting || !index || !index.valid) return
         const file = files.fileAt(index)
         if (file.path === undefined)
             return
@@ -245,6 +257,7 @@ Pane {
     // as in a file explorer; a selected file among two or more selected acts
     // on the selection.
     function openMenu(index, from, x, y) {
+        if (modelResetting) return
         let kind = "empty"
         if (index && index.valid) {
             fileTree.selectionModel.setCurrentIndex(index, ItemSelectionModel.NoUpdate)
@@ -270,6 +283,44 @@ Pane {
             openMenu(currentIndex, item, 16, item.height)
         else
             openMenu(null, fileTree, 16, 16)
+    }
+
+    // Release plain indexes while their nodes still exist. Popup close handlers
+    // may publish/focus synchronously, so no old menu target survives close().
+    function clearModelTargets() {
+        if (fileMenu) {
+            fileMenu.index = undefined
+            fileMenu.kind = "empty"
+            fileMenu.file = ({})
+        }
+        if (propertiesPopup) propertiesPopup.file = ({})
+        if (fileTree && fileTree.selectionModel) fileTree.selectionModel.clear()
+        if (fileMenu) fileMenu.close()
+        if (propertiesPopup) propertiesPopup.close()
+    }
+    onFilesChanged: {
+        modelResetting = true
+        clearModelTargets()
+        anchorPath = ""
+        modelResetting = false
+    }
+    Connections {
+        target: panel.files
+        function onModelAboutToBeReset() {
+            panel.modelResetting = true
+            panel.clearModelTargets()
+        }
+        function onModelReset() {
+            panel.clearModelTargets()
+            panel.modelResetting = false
+            Qt.callLater(function() { if (fileTree) fileTree.expandRecursively() })
+        }
+        function onStateChanged() {
+            if (!panel.files.available) {
+                panel.clearModelTargets()
+                panel.anchorPath = ""
+            }
+        }
     }
 
     DeviceFileMenu {
@@ -534,9 +585,11 @@ Pane {
                 } else if (control && event.key === Qt.Key_S) {
                     panel.download()
                 } else if (alt && shift && event.key === Qt.Key_C) {
-                    panel.copyPaths(panel.currentIsFile && panel.files.isSelected(panel.currentIndex)
-                                    && panel.files.selectedCount > 1 ? "selection"
-                                    : panel.currentIsFile ? "file" : "folder", panel.files.fileAt(panel.currentIndex))
+                    panel.copyPaths(panel.currentIsFile && panel.currentIndex && panel.currentIndex.valid
+                                    && panel.files.isSelected(panel.currentIndex) && panel.files.selectedCount > 1 ? "selection"
+                                    : panel.currentIsFile ? "file" : "folder",
+                                    panel.currentIsFile && panel.currentIndex && panel.currentIndex.valid
+                                        ? panel.files.fileAt(panel.currentIndex) : ({}))
                 } else if (control && shift && event.key === Qt.Key_A) {
                     panel.files.clearSelection()
                 } else if (control && event.key === Qt.Key_A) {
@@ -593,12 +646,6 @@ Pane {
                 if (fileTree)
                     fileTree.expandRecursively()
             })
-            Connections {
-                target: panel.files
-                function onModelReset() {
-                    Qt.callLater(function() { if (fileTree) fileTree.expandRecursively() })
-                }
-            }
         }
 
         Label {

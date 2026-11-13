@@ -7,6 +7,12 @@ over localhost TCP to the SDK's native server. No board.
   - `DeviceFilesModel` builds the tree from the device's own paths, folders with
     their file count and size, format icons and `rws` access, path-based
     selection and the readable subset a download takes.
+    Plain file/folder indexes retained across disconnect and repeated rebuilds
+    are rejected by every lookup, including roles and flags; old identities
+    never alias replacement rows. Foreign-model indexes cannot clear a fresh
+    selection. Default invalid root indexes still address the whole tree.
+    Direct Stat/selection/codec notifications and host codec callbacks may
+    disconnect the session without continuing through retired nodes.
   - `DeviceFileTransfers` writes files byte for byte through `QSaveFile`, shows
     progress while a 300 KB file is read, and leaves nothing under the real name
     when cancelled.

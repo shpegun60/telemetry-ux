@@ -15,6 +15,7 @@
 
 #include <integration/qt/ConnectionSession.hpp>
 #include <QtCore/QAbstractItemModel>
+#include <QtCore/QHash>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <functional>
@@ -125,6 +126,8 @@ public:
 	Q_INVOKABLE QVariantList selection(const QModelIndex& current = {}) const;
 
 	// A file's or a folder's index by its device path ("/logs" for a folder).
+	// Indexes belong to this model's current tree. Retained indexes from an
+	// earlier reset or another model are refused without accessing old nodes.
 	Q_INVOKABLE QModelIndex indexOfPath(const QString& path) const;
 	Q_INVOKABLE bool isFile(const QModelIndex& index) const;
 	// The file at index, as one map of selectedFiles(), whatever is selected;
@@ -153,6 +156,7 @@ public:
 	int rowCount(const QModelIndex& parent = {}) const override;
 	int columnCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+	Qt::ItemFlags flags(const QModelIndex& index) const override;
 	QHash<int, QByteArray> roleNames() const override;
 
 	// Size as people read it: exact bytes below 1 KiB, else IEC units.
@@ -178,7 +182,7 @@ private:
 	void connectionChanged();
 	void listFrom(quint64 cursor);
 	void statNext();
-	void build();
+	bool build();
 	void finish(QString failure = {});
 	void collect(const Node* from, QVariantList& into) const;
 
@@ -188,7 +192,7 @@ private:
 		bool program = false;
 	};
 	// Cached in the node; setCodecLookup forgets it.
-	const Kind& kindOf(const Node* at) const;
+	Kind kindOf(const Node* at) const;
 	Kind findKind(const Node* at) const;
 	QString markOf(const Node* at) const;
 
@@ -197,12 +201,16 @@ private:
 	// Expires with the model; a queued completion checks it before touching this.
 	std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 	std::unique_ptr<Node> root_;
+	// QModelIndex retains an integer identity, never a borrowed Node pointer.
+	// Clearing the tree drops every lookup; identities are not reused on reset.
+	QHash<quintptr, Node*> nodes_;
+	quintptr nextToken_ = 1;
 	std::vector<Node*> files_; // in the device's order; index = FileIndex
 	QStringList paths_;
 	QString error_;
 	quint64 generation_ = 0;
 	std::size_t nextStat_ = 0;
-	bool loading_ = false, wasAvailable_ = false, truncated_ = false;
+	bool loading_ = false, wasAvailable_ = false, truncated_ = false, changing_ = false;
 };
 } // namespace telemetry::ux
 #endif

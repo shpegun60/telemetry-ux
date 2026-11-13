@@ -14,14 +14,17 @@
 #include <QtCore/QTimer>
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <utility>
 
 namespace telemetry::ux {
 namespace files = integration::files;
 
 struct DeviceFilesModel::Node {
+	quintptr token = 0;
 	QString name, path;
 	Node* parent = nullptr;
+	int rowInParent = 0;
 	std::vector<std::unique_ptr<Node>> children;
 	bool folder = false;
 	int fileIndex = -1;
@@ -38,12 +41,7 @@ struct DeviceFilesModel::Node {
 
 	int row() const noexcept
 	{
-		if (!parent)
-			return 0;
-		for (std::size_t i = 0; i < parent->children.size(); ++i)
-			if (parent->children[i].get() == this)
-				return static_cast<int>(i);
-		return 0;
+		return rowInParent;
 	}
 
 	// A file Download takes, unless the device said it cannot be read; one not
@@ -293,18 +291,26 @@ void DeviceFilesModel::connectionChanged()
 
 void DeviceFilesModel::reset()
 {
-	++generation_;
+	const auto epoch = ++generation_;
+	QPointer<DeviceFilesModel> alive(this);
+	changing_ = true;
 	beginResetModel();
+	nodes_.clear();
 	root_ = std::make_unique<Node>();
 	root_->folder = true;
 	files_.clear();
 	paths_.clear();
+	changing_ = false;
 	endResetModel();
+	if (!alive || epoch != generation_)
+		return;
 	truncated_ = false;
 	loading_ = false;
 	error_.clear();
 	nextStat_ = 0;
 	Q_EMIT stateChanged();
+	if (!alive || epoch != generation_)
+		return;
 	Q_EMIT selectionChanged();
 }
 
@@ -317,13 +323,16 @@ void DeviceFilesModel::refresh()
 	// The rows stay until the new list replaces them, so a refresh reads as
 	// "Refreshing…" over the tree rather than an empty panel; replies to the
 	// previous pass are ignored by their generation.
-	++generation_;
+	const auto epoch = ++generation_;
+	QPointer<DeviceFilesModel> alive(this);
 	paths_.clear();
 	error_.clear();
 	truncated_ = false;
 	nextStat_ = 0;
 	loading_ = true;
 	Q_EMIT stateChanged();
+	if (!alive || epoch != generation_)
+		return;
 	listFrom(0);
 }
 
@@ -368,8 +377,9 @@ void DeviceFilesModel::listFrom(quint64 cursor)
 			    if (stuck)
 				    finish(tr("the device's file list did not advance"));
 			    else if (eof) {
-				    build();
-				    statNext();
+				    QPointer<DeviceFilesModel> alive(this);
+				    if (build() && alive && epoch == generation_)
+					    statNext();
 			    } else
 				    listFrom(next);
 		    });
@@ -385,15 +395,30 @@ void DeviceFilesModel::listFrom(quint64 cursor)
 		finish(clientWords(submitted.status));
 }
 
-void DeviceFilesModel::build()
+bool DeviceFilesModel::build()
 {
+	const auto epoch = generation_;
+	QPointer<DeviceFilesModel> alive(this);
+	// Reserve enough identities even if no folder can be shared. Exhaustion is
+	// terminal for this model; wrapping would make an old index alias new data.
+	quintptr remaining = nextToken_ == 0 ? 0 : std::numeric_limits<quintptr>::max() - nextToken_ + 1;
+	for (const auto& path : paths_) {
+		const auto required = static_cast<quintptr>(path.count(QLatin1Char('/'))) + 1;
+		if (required > remaining) {
+			finish(tr("the file tree's index identities are exhausted"));
+			return false;
+		}
+		remaining -= required;
+	}
 	// The selection survives a refresh by path; a file not listed any more
 	// leaves it, so the counts are only ever of files there now.
 	QSet<QString> selectedPaths;
 	for (const auto* file : files_)
 		if (file->selected)
 			selectedPaths.insert(file->path);
+	changing_ = true;
 	beginResetModel();
+	nodes_.clear();
 	root_ = std::make_unique<Node>();
 	root_->folder = true;
 	files_.clear();
@@ -418,13 +443,16 @@ void DeviceFilesModel::build()
 					}
 			if (!next) {
 				auto created = std::make_unique<Node>();
+				created->token = nextToken_++;
 				created->name = parts[p];
 				created->path = last ? path : prefix;
 				created->parent = at;
+				created->rowInParent = static_cast<int>(at->children.size());
 				created->folder = !last;
 				if (last)
 					created->fileIndex = i;
 				next = created.get();
+				nodes_.insert(created->token, next);
 				at->children.push_back(std::move(created));
 			}
 			at = next;
@@ -432,10 +460,16 @@ void DeviceFilesModel::build()
 		at->selected = selectedPaths.contains(at->path);
 		files_.push_back(at);
 	}
+	changing_ = false;
 	endResetModel();
+	if (!alive || epoch != generation_)
+		return false;
 	nextStat_ = 0;
 	Q_EMIT stateChanged();
+	if (!alive || epoch != generation_)
+		return false;
 	Q_EMIT selectionChanged();
+	return alive && epoch == generation_;
 }
 
 void DeviceFilesModel::statNext()
@@ -470,12 +504,18 @@ void DeviceFilesModel::statNext()
 		    QTimer::singleShot(0, this, [this, epoch, file, selected] {
 			    if (epoch != generation_)
 				    return;
+			    QPointer<DeviceFilesModel> alive(this);
 			    for (const Node* at = file; at && at != root_.get(); at = at->parent) {
 				    const auto changed = indexOf(at);
 				    Q_EMIT dataChanged(changed, changed);
+				    if (!alive || epoch != generation_)
+					    return;
 			    }
-			    if (selected)
+			    if (selected) {
 				    Q_EMIT selectionChanged();
+				    if (!alive || epoch != generation_)
+					    return;
+			    }
 			    ++nextStat_;
 			    statNext();
 		    });
@@ -525,9 +565,13 @@ void DeviceFilesModel::publishSelection(const Touched& touched)
 {
 	if (touched.isEmpty())
 		return;
+	const auto epoch = generation_;
+	QPointer<DeviceFilesModel> alive(this);
 	for (const Node* at : touched) {
 		const auto changed = indexOf(at);
 		Q_EMIT dataChanged(changed, changed, {IsSelectedRole, SelectedInsideRole});
+		if (!alive || epoch != generation_)
+			return;
 	}
 	Q_EMIT selectionChanged();
 }
@@ -557,6 +601,8 @@ void DeviceFilesModel::select(const QModelIndex& index, bool selected)
 
 void DeviceFilesModel::selectOnly(const QModelIndex& index)
 {
+	if (changing_ || (index.isValid() && !node(index)))
+		return;
 	QSet<const Node*> wanted;
 	if (const auto* at = index.isValid() ? node(index) : nullptr)
 		targetsOf(at, wanted);
@@ -576,12 +622,19 @@ void DeviceFilesModel::toggleSelected(const QModelIndex& index)
 
 void DeviceFilesModel::selectIndexes(const QVariantList& indexes, bool add)
 {
+	if (changing_)
+		return;
 	QSet<const Node*> wanted;
+	bool knownTarget = false;
 	for (const auto& value : indexes) {
 		const auto index = value.value<QModelIndex>();
-		if (const auto* at = index.isValid() && index.model() == this ? node(index) : nullptr)
+		if (const auto* at = index.isValid() ? node(index) : nullptr) {
+			knownTarget = true;
 			targetsOf(at, wanted);
+		}
 	}
+	if (!indexes.isEmpty() && !knownTarget)
+		return;
 	Touched touched;
 	for (auto* file : files_)
 		if (wanted.contains(file))
@@ -593,6 +646,8 @@ void DeviceFilesModel::selectIndexes(const QVariantList& indexes, bool add)
 
 void DeviceFilesModel::selectAll()
 {
+	if (changing_)
+		return;
 	Touched touched;
 	for (auto* file : files_)
 		if (file->downloadable())
@@ -602,6 +657,8 @@ void DeviceFilesModel::selectAll()
 
 void DeviceFilesModel::clearSelection()
 {
+	if (changing_)
+		return;
 	Touched touched;
 	for (auto* file : files_)
 		setSelected(file, false, touched);
@@ -624,6 +681,8 @@ bool DeviceFilesModel::isSelected(const QModelIndex& index) const
 QStringList DeviceFilesModel::selectedPaths() const
 {
 	QStringList paths;
+	if (changing_)
+		return paths;
 	for (const auto* file : files_)
 		if (file->selected)
 			paths << file->path;
@@ -633,6 +692,8 @@ QStringList DeviceFilesModel::selectedPaths() const
 QVariantList DeviceFilesModel::selectedFiles(const QModelIndex& current) const
 {
 	QVariantList chosen;
+	if (changing_)
+		return chosen;
 	bool any = false;
 	for (const auto* file : files_) {
 		any = any || file->selected;
@@ -701,6 +762,8 @@ QString DeviceFilesModel::pathAt(const QModelIndex& index) const
 
 QVariantList DeviceFilesModel::filesUnder(const QModelIndex& index) const
 {
+	if (changing_)
+		return {};
 	const auto* from = index.isValid() ? node(index) : root_.get();
 	QVariantList found;
 	if (!from)
@@ -721,6 +784,12 @@ QVariantList DeviceFilesModel::filesUnder(const QModelIndex& index) const
 void DeviceFilesModel::setCodecLookup(CodecLookup lookup)
 {
 	codecLookup_ = std::move(lookup);
+	if (changing_)
+		return;
+	const auto epoch = generation_;
+	QPointer<DeviceFilesModel> alive(this);
+	QList<QPair<QModelIndex, QModelIndex>> ranges;
+	// Finish traversing borrowed nodes before the first public notification.
 	const std::function<void(Node*)> forget = [&](Node* folder) {
 		for (const auto& child : folder->children)
 			if (child->folder)
@@ -729,11 +798,15 @@ void DeviceFilesModel::setCodecLookup(CodecLookup lookup)
 				child->kindKnown = false;
 		if (!folder->children.empty()) {
 			const auto parent = indexOf(folder);
-			Q_EMIT dataChanged(index(0, 0, parent), index(static_cast<int>(folder->children.size()) - 1, 0, parent),
-			                   {KindRole, KindTextRole, ProgramFileRole});
+			ranges.append({index(0, 0, parent), index(static_cast<int>(folder->children.size()) - 1, 0, parent)});
 		}
 	};
 	forget(root_.get());
+	for (const auto& range : ranges) {
+		Q_EMIT dataChanged(range.first, range.second, {KindRole, KindTextRole, ProgramFileRole});
+		if (!alive || epoch != generation_)
+			return;
+	}
 }
 
 QString DeviceFilesModel::markOf(const Node* at) const
@@ -741,19 +814,28 @@ QString DeviceFilesModel::markOf(const Node* at) const
 	return accessMark(at->sizeKnown, !at->statError.isEmpty(), at->readable, at->writable, at->savable);
 }
 
-const DeviceFilesModel::Kind& DeviceFilesModel::kindOf(const Node* at) const
+DeviceFilesModel::Kind DeviceFilesModel::kindOf(const Node* at) const
 {
-	if (!at->kindKnown) {
-		at->kind = findKind(at);
-		at->kindKnown = true;
-	}
-	return at->kind;
+	if (at->kindKnown)
+		return at->kind;
+	const auto epoch = generation_;
+	QPointer<const DeviceFilesModel> alive(this);
+	const auto found = findKind(at);
+	// A host codec lookup is a direct user callback, just like a signal receiver.
+	if (!alive || epoch != generation_)
+		return {};
+	at->kind = found;
+	at->kindKnown = true;
+	return found;
 }
 
 DeviceFilesModel::Kind DeviceFilesModel::findKind(const Node* at) const
 {
 	if (at->folder)
 		return {QStringLiteral("folder"), {}, false};
+	const auto path = at->path;
+	const auto name = at->name;
+	const auto lookup = codecLookup_;
 	const auto words = [](const QString& kind) {
 		if (kind == QLatin1String("descriptor"))
 			return tr("Descriptor");
@@ -776,21 +858,21 @@ DeviceFilesModel::Kind DeviceFilesModel::findKind(const Node* at) const
 	// The program's own files, by the names their codecs know them by - so
 	// an icon never drifts from what opens the file - and by their place.
 	QString program;
-	if (DescriptorContent::names(at->path))
+	if (DescriptorContent::names(path))
 		program = QStringLiteral("descriptor");
-	else if (ValuesContent::names(at->path))
+	else if (ValuesContent::names(path))
 		program = QStringLiteral("values");
-	else if (CapabilityContent::names(at->path))
+	else if (CapabilityContent::names(path))
 		program = QStringLiteral("capability");
-	else if (at->path == QLatin1String("/telemetry/identity.bin"))
+	else if (path == QLatin1String("/telemetry/identity.bin"))
 		program = QStringLiteral("identity");
-	else if (at->path == QLatin1String("/telemetry/session.bin"))
+	else if (path == QLatin1String("/telemetry/session.bin"))
 		program = QStringLiteral("session");
 	if (!program.isEmpty())
 		return {program, words(program), true};
 	// A host's codec that takes the file by its place and name.
-	if (codecLookup_) {
-		const auto codec = codecLookup_(at->path);
+	if (lookup) {
+		const auto codec = lookup(path);
 		if (codec == QLatin1String("JSON"))
 			return {QStringLiteral("json"), words(QStringLiteral("json")), false};
 		if (!codec.isEmpty() && codec != QLatin1String("Descriptor") && codec != QLatin1String("Values") &&
@@ -798,8 +880,8 @@ DeviceFilesModel::Kind DeviceFilesModel::findKind(const Node* at) const
 			return {QStringLiteral("codec"), codec, false};
 	}
 	// The formats a view of the program's own opens, by their extension.
-	const auto suffix = at->name.section(QLatin1Char('.'), -1).toLower();
-	const bool hasSuffix = at->name.contains(QLatin1Char('.'));
+	const auto suffix = name.section(QLatin1Char('.'), -1).toLower();
+	const bool hasSuffix = name.contains(QLatin1Char('.'));
 	static const QStringList textual{
 	    QStringLiteral("txt"),  QStringLiteral("log"),  QStringLiteral("md"),   QStringLiteral("ini"),
 	    QStringLiteral("cfg"),  QStringLiteral("conf"), QStringLiteral("yaml"), QStringLiteral("yml"),
@@ -828,6 +910,8 @@ QString DeviceFilesModel::speakSize(qulonglong bytes) const
 
 QModelIndex DeviceFilesModel::indexOfPath(const QString& path) const
 {
+	if (changing_)
+		return {};
 	for (const auto* file : files_)
 		if (file->path == path)
 			return indexOf(file);
@@ -837,14 +921,21 @@ QModelIndex DeviceFilesModel::indexOfPath(const QString& path) const
 
 DeviceFilesModel::Node* DeviceFilesModel::node(const QModelIndex& index) const noexcept
 {
-	return index.isValid() ? static_cast<Node*>(index.internalPointer()) : root_.get();
+	if (changing_)
+		return nullptr;
+	if (!index.isValid())
+		return root_.get();
+	if (index.model() != this || index.column() != 0)
+		return nullptr;
+	auto* at = nodes_.value(index.internalId(), nullptr);
+	return at && at->row() == index.row() ? at : nullptr;
 }
 
 QModelIndex DeviceFilesModel::indexOf(const Node* at) const
 {
 	if (!at || at == root_.get())
 		return {};
-	return createIndex(at->row(), 0, const_cast<Node*>(at));
+	return createIndex(at->row(), 0, at->token);
 }
 
 QModelIndex DeviceFilesModel::index(int row, int column, const QModelIndex& parentIndex) const
@@ -852,7 +943,7 @@ QModelIndex DeviceFilesModel::index(int row, int column, const QModelIndex& pare
 	const auto* owner = node(parentIndex);
 	if (!owner || column != 0 || row < 0 || row >= static_cast<int>(owner->children.size()))
 		return {};
-	return createIndex(row, 0, owner->children[static_cast<std::size_t>(row)].get());
+	return createIndex(row, 0, owner->children[static_cast<std::size_t>(row)]->token);
 }
 
 QModelIndex DeviceFilesModel::parent(const QModelIndex& child) const
@@ -869,9 +960,14 @@ int DeviceFilesModel::rowCount(const QModelIndex& parentIndex) const
 	return owner ? static_cast<int>(owner->children.size()) : 0;
 }
 
-int DeviceFilesModel::columnCount(const QModelIndex&) const
+int DeviceFilesModel::columnCount(const QModelIndex& parentIndex) const
 {
-	return 1;
+	return node(parentIndex) ? 1 : 0;
+}
+
+Qt::ItemFlags DeviceFilesModel::flags(const QModelIndex& index) const
+{
+	return index.isValid() && node(index) ? Qt::ItemIsEnabled | Qt::ItemIsSelectable : Qt::NoItemFlags;
 }
 
 QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
@@ -927,13 +1023,18 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 		case DownloadableRole:
 			return at->folder ? downloadables > 0 : at->downloadable();
 		case KindRole:
-			return kindOf(at).kind;
 		case KindTextRole:
-			if (at->folder)
+		case ProgramFileRole: {
+			if (role == KindTextRole && at->folder)
 				return files == 1 ? tr("1 file") : tr("%n files", nullptr, files);
-			return kindOf(at).text;
-		case ProgramFileRole:
-			return kindOf(at).program;
+			const auto kind = kindOf(at);
+			// A host lookup may have retired the source during this query.
+			if (kind.kind.isNull())
+				return {};
+			if (role == KindRole)
+				return kind.kind;
+			return role == KindTextRole ? QVariant(kind.text) : QVariant(kind.program);
+		}
 		case AccessMarkRole:
 			return at->folder ? QString{} : markOf(at);
 		case AccessWordsRole:

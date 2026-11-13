@@ -88,7 +88,7 @@ Menu {
         objectName: "deviceFileMenuDownloadFolder"
         visible: menu.kind === "folder"
         height: visible ? implicitHeight : 0
-        readonly property var inside: menu.kind === "folder" ? menu.files.filesUnder(menu.index) : []
+        readonly property var inside: menu.kind === "folder" && menu.index && menu.index.valid ? menu.files.filesUnder(menu.index) : []
         text: qsTr("&Download folder…%1\tCtrl+S").arg(inside.length === 0 ? qsTr(" (no readable files)") : "")
         enabled: menu.connected && inside.length > 0
         onTriggered: menu.panel.downloadRequested(inside)
@@ -99,9 +99,13 @@ Menu {
         height: visible ? implicitHeight : 0
         // The device's name, its & a letter rather than an access key.
         text: qsTr("&Select the files in %1\tSpace").arg(
-                  menu.kind === "folder" ? String(menu.files.data(menu.index, Qt.DisplayRole)).replace(/&/g, "&&") : "")
-        enabled: menu.kind === "folder"
-        onTriggered: menu.files.select(menu.index, true)
+                  menu.kind === "folder" && menu.index && menu.index.valid
+                      ? String(menu.files.data(menu.index, Qt.DisplayRole)).replace(/&/g, "&&") : "")
+        enabled: menu.kind === "folder" && !!menu.index && menu.index.valid
+        onTriggered: {
+            if (menu.index && menu.index.valid)
+                menu.files.select(menu.index, true)
+        }
     }
 
     // On a selection of two or more.
@@ -177,11 +181,14 @@ Menu {
         objectName: "deviceFileMenuSelect"
         visible: menu.kind === "file"
         height: visible ? implicitHeight : 0
-        readonly property bool selected: menu.kind === "file" && menu.index !== undefined
+        readonly property bool selected: menu.kind === "file" && !!menu.index && menu.index.valid
                                          && menu.files.selectedCount >= 0 && menu.files.isSelected(menu.index)
         text: selected ? qsTr("&Remove from the selection\tCtrl+Space") : qsTr("&Add to the selection\tCtrl+Space")
-        enabled: menu.kind === "file"
-        onTriggered: menu.files.toggleSelected(menu.index)
+        enabled: menu.kind === "file" && !!menu.index && menu.index.valid
+        onTriggered: {
+            if (menu.index && menu.index.valid)
+                menu.files.toggleSelected(menu.index)
+        }
     }
     MenuItem {
         objectName: "deviceFileMenuProperties"

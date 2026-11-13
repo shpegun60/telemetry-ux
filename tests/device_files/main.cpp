@@ -34,6 +34,7 @@
 #include <QDynamicPropertyChangeEvent>
 #include <QLocale>
 #include <QPointer>
+#include <QPersistentModelIndex>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -577,6 +578,179 @@ void tree(qt::ConnectionSession& session, DeviceFilesModel& files)
 	files.setCodecLookup({});
 	CHECK(kindOf(large) == QStringLiteral("binary"));
 	(void)session;
+}
+
+// A different, valid model can expose exactly the same integer ID. A file
+// index belongs to its model as well as to one incarnation of its tree.
+class ForeignFileIndexes final : public QAbstractItemModel {
+public:
+	QModelIndex withId(quintptr id, int column = 0) const { return createIndex(0, column, id); }
+	QModelIndex index(int, int, const QModelIndex& = {}) const override { return {}; }
+	QModelIndex parent(const QModelIndex&) const override { return {}; }
+	int rowCount(const QModelIndex& = {}) const override { return 1; }
+	int columnCount(const QModelIndex& = {}) const override { return 2; }
+	QVariant data(const QModelIndex&, int = Qt::DisplayRole) const override { return {}; }
+};
+
+void fileIndexLifetime()
+{
+	Peer peer{withDescriptor.view()};
+	qt::ConnectionSession session;
+	DeviceFilesModel files(&session);
+	const auto connect = [&] {
+		CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+		CHECK(await([&] { return session.ready() && files.available() && !files.loading() && files.fileCount() == 4; }));
+	};
+	const auto rejected = [&](const QModelIndex& index) {
+		// This is intentionally a plain index retained by a reactive QML binding:
+		// isValid() can remain true after reset, but its old row must be harmless.
+		CHECK(index.isValid());
+		CHECK(!files.data(index, Qt::DisplayRole).isValid());
+		for (int role = DeviceFilesModel::NameRole; role <= DeviceFilesModel::AccessWordsRole; ++role)
+			CHECK(!files.data(index, role).isValid());
+		CHECK(files.fileAt(index).isEmpty());
+		CHECK(files.pathAt(index).isEmpty());
+		CHECK(!files.isFile(index) && !files.isSelected(index));
+		CHECK(!files.parent(index).isValid());
+		CHECK(files.rowCount(index) == 0 && !files.index(0, 0, index).isValid());
+		CHECK(files.filesUnder(index).isEmpty());
+		CHECK(files.selectedFiles(index).isEmpty() && files.selection(index).isEmpty());
+		CHECK(files.flags(index) == Qt::NoItemFlags);
+	};
+	connect();
+	const auto firstFile = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+	const auto firstFolder = files.indexOfPath(QStringLiteral("/logs"));
+	QPersistentModelIndex persistent = firstFile;
+	CHECK(firstFile.isValid() && firstFolder.isValid() && persistent.isValid());
+	session.disconnect();
+	CHECK(!files.available() && files.fileCount() == 0 && !persistent.isValid());
+	rejected(firstFile);
+	rejected(firstFolder);
+	CHECK(files.selectedFiles(firstFile).isEmpty() && files.selection(firstFile).isEmpty());
+	CHECK(files.filesUnder().isEmpty());
+	connect();
+	std::vector<QModelIndex> old{firstFile, firstFolder};
+	for (int pass = 0; pass < 3; ++pass) {
+		const auto currentFile = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+		const auto currentFolder = files.indexOfPath(QStringLiteral("/logs"));
+		CHECK(currentFile.isValid() && currentFolder.isValid() && files.isFile(currentFile));
+		for (const auto& previous : old) {
+			rejected(previous);
+			CHECK(previous.internalId() != currentFile.internalId() && previous.internalId() != currentFolder.internalId());
+		}
+		// No selection exists: even the wrappers must not revive an old file.
+		CHECK(files.selectedFiles(old.front()).isEmpty() && files.selection(old.front()).isEmpty());
+		CHECK(files.filesUnder().size() == 4 && files.rowCount() == 3);
+		ForeignFileIndexes foreign;
+		for (int column = 0; column < 2; ++column) {
+			const auto other = foreign.withId(currentFile.internalId(), column);
+			CHECK(other.model() != &files && other.internalId() == currentFile.internalId());
+			rejected(other);
+		}
+		CHECK(!files.index(0, 1).isValid() && !files.index(0, 1, currentFolder).isValid());
+		// A rejected stale or foreign selection request is not "select none".
+		files.selectOnly(currentFile);
+		CHECK(files.selectedPaths() == QStringList{QStringLiteral("/logs/events.csv")});
+		unsigned changed = 0;
+		const auto observer = QObject::connect(&files, &DeviceFilesModel::selectionChanged, [&] { ++changed; });
+		for (const auto& previous : old) {
+			files.select(previous, false);
+			files.toggleSelected(previous);
+			files.selectOnly(previous);
+			files.selectIndexes({QVariant::fromValue(previous)}, false);
+		}
+		const auto other = foreign.withId(currentFile.internalId());
+		files.select(other, false);
+		files.toggleSelected(other);
+		files.selectOnly(other);
+		files.selectIndexes({QVariant::fromValue(other)}, false);
+		CHECK(changed == 0 && files.selectedPaths() == QStringList{QStringLiteral("/logs/events.csv")});
+		QObject::disconnect(observer);
+		files.clearSelection();
+		old.push_back(currentFile);
+		old.push_back(currentFolder);
+		persistent = currentFile;
+		files.refresh();
+		CHECK(await([&] { return !files.loading() && files.fileCount() == 4; }));
+		CHECK(!persistent.isValid());
+	}
+	for (const auto& previous : old)
+		rejected(previous);
+	session.disconnect();
+
+	// A direct receiver may retire the session while a Stat result is being
+	// published. Continuing to its parent or to the next Stat would use old nodes.
+	{
+		Peer statPeer{withDescriptor.view()};
+		qt::ConnectionSession statSession;
+		DeviceFilesModel statFiles(&statSession);
+		unsigned published = 0;
+		QObject::connect(&statFiles, &QAbstractItemModel::dataChanged, &statSession,
+		                 [&](const QModelIndex&, const QModelIndex&) {
+			                 ++published;
+			                 statSession.disconnect();
+		                 });
+		CHECK(statSession.connectTcpReference(QStringLiteral("127.0.0.1"), statPeer.listener.serverPort()));
+		CHECK(await([&] { return published != 0 && !statFiles.available() && !statFiles.loading(); }));
+		CHECK(published == 1 && statFiles.fileCount() == 0 && !statSession.ready() && !statSession.busy());
+	}
+	// A multi-row selection has a set of old nodes awaiting publication. Stop
+	// immediately if its first dataChanged receiver resets the source tree.
+	{
+		Peer selectionPeer{withDescriptor.view()};
+		qt::ConnectionSession selectionSession;
+		DeviceFilesModel selectionFiles(&selectionSession);
+		CHECK(selectionSession.connectTcpReference(QStringLiteral("127.0.0.1"), selectionPeer.listener.serverPort()));
+		CHECK(await([&] { return selectionFiles.available() && !selectionFiles.loading() && selectionFiles.fileCount() == 4; }));
+		unsigned published = 0, summaries = 0;
+		QObject::connect(&selectionFiles, &DeviceFilesModel::selectionChanged, &selectionSession, [&] { ++summaries; });
+		QObject::connect(&selectionFiles, &QAbstractItemModel::dataChanged, &selectionSession,
+		                 [&](const QModelIndex&, const QModelIndex&) {
+			                 ++published;
+			                 selectionSession.disconnect();
+		                 });
+		selectionFiles.select(selectionFiles.indexOfPath(QStringLiteral("/logs")), true);
+		CHECK(published == 1 && summaries == 1 && !selectionFiles.available() && selectionFiles.fileCount() == 0);
+		CHECK(selectionFiles.selectedCount() == 0 && !selectionSession.ready() && !selectionSession.busy());
+	}
+	// Reclassifying the rows publishes them too; its first receiver may reset
+	// all the remaining nodes before their new icons are announced.
+	{
+		Peer codecPeer{withDescriptor.view()};
+		qt::ConnectionSession codecSession;
+		DeviceFilesModel codecFiles(&codecSession);
+		CHECK(codecSession.connectTcpReference(QStringLiteral("127.0.0.1"), codecPeer.listener.serverPort()));
+		CHECK(await([&] { return codecFiles.available() && !codecFiles.loading() && codecFiles.fileCount() == 4; }));
+		unsigned published = 0;
+		QObject::connect(&codecFiles, &QAbstractItemModel::dataChanged, &codecSession,
+		                 [&](const QModelIndex&, const QModelIndex&) {
+			                 ++published;
+			                 codecSession.disconnect();
+		                 });
+		codecFiles.setCodecLookup([](const QString&) { return QStringLiteral("Custom"); });
+		CHECK(published == 1 && !codecFiles.available() && codecFiles.fileCount() == 0 && !codecSession.busy());
+	}
+	// A host codec is user code. It can retire this source while the lookup is
+	// running: no kind may then be cached into, or returned from, its freed node.
+	{
+		Peer lookupPeer{withDescriptor.view()};
+		qt::ConnectionSession lookupSession;
+		DeviceFilesModel lookupFiles(&lookupSession);
+		CHECK(lookupSession.connectTcpReference(QStringLiteral("127.0.0.1"), lookupPeer.listener.serverPort()));
+		CHECK(await([&] { return lookupFiles.available() && !lookupFiles.loading() && lookupFiles.fileCount() == 4; }));
+		unsigned calls = 0;
+		QString requested;
+		lookupFiles.setCodecLookup([&](const QString& path) {
+			++calls;
+			requested = path;
+			lookupSession.disconnect();
+			return QStringLiteral("Custom");
+		});
+		const auto index = lookupFiles.indexOfPath(QStringLiteral("/logs/events.csv"));
+		CHECK(index.isValid() && !lookupFiles.data(index, DeviceFilesModel::KindRole).isValid());
+		CHECK(calls == 1 && requested == QStringLiteral("/logs/events.csv") && !lookupFiles.available() &&
+		      lookupFiles.fileCount() == 0 && !lookupSession.busy());
+	}
 }
 
 void downloads(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
@@ -3325,6 +3499,7 @@ int main(int argc, char** argv)
 	}));
 	CHECK(session.ready());
 	tree(session, files);
+	fileIndexLifetime();
 	downloads(session, files, folder.path());
 	transferSafety(session, files, folder.path());
 	openInViewer(session, files, folder.path());
