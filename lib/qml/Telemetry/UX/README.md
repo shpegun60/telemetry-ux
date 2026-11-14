@@ -72,6 +72,38 @@ Actions retain the existing provider signatures:
   view preserves invalid/intermediate text and uses the result to gate its input.
 - `addWatch() -> bool`, `removeWatch(int)`, `clearWatch()`, `refreshWatch()`,
   `startWatch()` and `stopWatch()`.
+- **The Watchlist's two views (WL-2).** `watchRows` (a `WatchRows`, both
+  providers) is the Watchlist as the panel shows it: the `watchlist` model's
+  rows in a list, one per value with its whole path (`tree: false`, in the
+  order added or, with `sorted`, by path A-Z with numbers in order), or in a
+  tree grouped by path (`tree: true`): a group, the Field, its members and
+  array elements, each value under the node it belongs to, only above
+  something watched, in descriptor order (by `watchKey`).
+  - Its rows carry the `watchlist` roles it finds by name (a role the source
+    lacks reads as nothing) and its own: `sourceRow` (-1 for a node above
+    values), `depth`, `branch`, `expanded`, `node` (`value`, `group`,
+    `struct`, `array`, `element`), `leaves` and `nested` (a member or element
+    inside a Field, whose Status and rw the Field row carries). A node's
+    `name` is its path, `leafStart` where its own step starts, `typeText` from
+    the source's optional `pathTypes` role, and `text`, while it is folded,
+    the summary of its values (`{Gain 1.5, Enabled true}`).
+  - `folded` holds the paths of the folded nodes; a fold outlives the rows
+    under it, and adding a value opens the nodes above it.
+    `setExpanded(row, bool)`, `expandAll()`, `collapseAll()`,
+    `parentRow(row)`, `sourceRows(row)` (the values at and under a row),
+    `reveal(sourceRow)` and `revealPath(path)` (the row, its parents opened).
+  - A change of the Watchlist's rows changes only the rows it touches (the
+    rows before and after are compared by path), so a row being edited keeps
+    its editor while values come and go around it; a reading moves no row and
+    tells the nodes above it once per event-loop turn. Switching the view or
+    the sort resets the rows; the panel keeps the current value current.
+  - The provider makes it, so a host needs no registered type for it. A
+    provider without `watchRows` shows its `watchlist` in a list, with no
+    List | Tree switch.
+- `removeWatchRows(QVariantList of rows) -> QVariantMap` (Dynamic) stops
+  watching several rows as one change that `undoWatch()` takes back; the panel
+  uses it for a node's × and Delete. `{status: ok, invalid or refused,
+  changed}`. Without it the panel removes the rows one by one.
 - `watchCandidate(QModelIndex) -> bool` tells whether an `endpoints` row could be
   watched, without selecting it. `addWatchMany(QVariantList of QModelIndex) ->
   QVariantMap` adds several Fields in one model change, leaving the selected

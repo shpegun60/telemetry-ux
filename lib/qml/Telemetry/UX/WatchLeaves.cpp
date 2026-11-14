@@ -124,6 +124,7 @@ std::optional<WatchLeaves::Leaf> WatchLeaves::locate(TypeId root, quint32 ordina
 		} else {
 			return std::nullopt;
 		}
+		leaf.types[leaf.depth] = leaf.type;
 		leaf.steps[leaf.depth++] = step;
 	}
 	if (offset > (std::numeric_limits<quint32>::max)())

@@ -218,3 +218,17 @@ A FieldRead `WatchFrame` may now hold up to 32 values of one Field.
 The Watchlist's rows in the row family's columns (WL-2a) add only the
 `WatchlistModel` roles `leafStart` and `access`; a host's own Watchlist model
 without them shows the whole name in one colour and no rw column.
+
+## The Watchlist as a list or a tree (WL-2b, November 2026)
+
+The Watchlist panel shows the provider's `watchRows` (`WatchRows.hpp`, new in
+the base target) instead of `watchlist`, and its rows' `index` is no longer
+the `watchlist` row: the panel passes `sourceRow` to `removeWatch` and
+`writeWatch`, so a provider's calls keep their meaning. Both providers gain
+`watchRows`; Dynamic gains `removeWatchRows`. A host's own provider without
+`watchRows` keeps the list it had, without the List | Tree switch. A host
+test that finds a Watchlist row by `index` finds it in the order shown: in
+the list as added, the same as before.
+
+The panel's row is a `FocusScope` (it was an `Item`), so an open editor keeps
+the focus when the list gives the row the focus again.

@@ -16,6 +16,10 @@ class StaticConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
+	// The Watchlist's rows as shown: a list of whole paths or a tree grouped
+	// by path (a WatchRows over watchlist). Made here, so a host needs no
+	// registered type for the panel's two views.
+	Q_PROPERTY(QObject* watchRows READ watchRows CONSTANT)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
 	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
@@ -61,6 +65,7 @@ public:
 	QAbstractItemModel* values() const;
 	QAbstractItemModel* responses() const;
 	QAbstractItemModel* watchlist() const;
+	QObject* watchRows() const;
 	QString selection() const;
 	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;

@@ -5,9 +5,10 @@
  * SPDX-License-Identifier: MIT
  *
  * The module is a static library without a plugin, so the registration Qt
- * generates for its QML_ELEMENT types (HexView, ToolIcon) is an object nothing else
- * refers to, and a linker drops it. Calling this keeps it, as the Qt
- * documentation prescribes; the registration then runs by itself.
+ * generates for its QML_ELEMENT types (HexView, ToolIcon, WatchRows) is an object
+ * nothing else refers to, and a linker drops it. Calling this keeps it, as the
+ * Qt documentation prescribes; the registration then runs by itself. The
+ * Watchlist needs none of it: the providers make their own WatchRows.
  */
 #ifndef TELEMETRY_UX_QML_TYPES_HPP
 #define TELEMETRY_UX_QML_TYPES_HPP

@@ -995,6 +995,12 @@ void memberPlan()
 	CHECK(model->data(memberRow, ux::WatchlistModel::TypeTextRole).toString() == "u16");
 	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::TypeTextRole).toString() == "f32");
 	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::MemberRole).toString().isEmpty());
+	// Each step's type for the tree's nodes: the Field's, then down to the value's.
+	CHECK(model->data(memberRow, ux::WatchlistModel::PathTypesRole).toStringList() ==
+	      QStringList({"struct (3)", "u16[300]", "u16"}));
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::PathTypesRole).toStringList() ==
+	      QStringList({"struct (3)", "f32"}));
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::PathTypesRole).toStringList().size() <= 1);  // the Peer's whole Fields are not in its schema
 
 	std::vector<ux::WatchFrame> frames;
 	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });

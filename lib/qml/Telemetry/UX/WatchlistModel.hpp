@@ -37,6 +37,9 @@ struct WatchEntry {
 	QString scope;
 	quint32 others = 0;
 	enum class Kind : quint8 { Members, Elements, Values } kind = Kind::Members;
+	// The type each step inside the Field leads to, the value's own last;
+	// empty for a whole Field. The tree's nodes take their types from it.
+	QVector<TypeId> steps;
 
 	// An entry for key; its write scope is the Watchlist's to fill in.
 	static WatchEntry of(WatchKey key, QString name, QString member = {}, TypeId type = 0)
@@ -84,7 +87,10 @@ public:
 		// muted before "Gain", "data.Samples" before "[3]".
 		LeafStartRole,
 		// The row's access as the row family marks it: "rw" or "r-".
-		AccessRole
+		AccessRole,
+		// The type of each step of the path below its group, as words: the
+		// Field's first, the value's last ({"struct (3)", "u16[64]", "u16"}).
+		PathTypesRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
@@ -150,6 +156,7 @@ private:
 		TypeId type = 0;
 		quint32 others = 0;
 		WatchEntry::Kind kind = WatchEntry::Kind::Members;
+		QVector<TypeId> steps;
 		quint64 sampleRevision = 0;
 		WatchSample sample;
 		bool writable = false;

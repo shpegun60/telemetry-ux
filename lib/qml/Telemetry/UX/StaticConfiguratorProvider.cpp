@@ -3,6 +3,7 @@
 #include "PresentationOverlay.hpp"
 #include "WatchSample.hpp"
 #include "WatchCoverage.hpp"
+#include "WatchRows.hpp"
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QSet>
 #include <QtCore/QThread>
@@ -834,6 +835,8 @@ struct StaticConfiguratorProvider::Impl {
 	QPersistentModelIndex selectedIndex;
 	ValueTree valueModel, responseModel;
 	WatchList watchModel;
+	// After watchModel: it goes first, while the rows it shows still exist.
+	WatchRows watchRows;
 	QTimer watchTimer;
 	bool watchRunning = false, watchCycle = false, watchContinuation = false;
 	int watchCursor = 0, pendingWatchRow = -1;
@@ -1507,6 +1510,7 @@ StaticConfiguratorProvider::StaticConfiguratorProvider(StaticConfiguratorBinding
                                                        QObject* parent)
     : QObject(parent), d(std::make_unique<Impl>(this, std::move(binding)))
 {
+	d->watchRows.setSource(&d->watchModel);
 	const auto treeChanged = [this] {
 		d->coverage.reset();
 		++d->treeEpoch;
@@ -1564,6 +1568,11 @@ QAbstractItemModel* StaticConfiguratorProvider::responses() const
 QAbstractItemModel* StaticConfiguratorProvider::watchlist() const
 {
 	return &d->watchModel;
+}
+
+QObject* StaticConfiguratorProvider::watchRows() const
+{
+	return &d->watchRows;
 }
 
 bool StaticConfiguratorProvider::watchActive() const

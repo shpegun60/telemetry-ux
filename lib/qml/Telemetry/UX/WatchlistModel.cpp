@@ -179,6 +179,7 @@ WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
 		row.scope = entry.scope;
 		row.others = entry.others;
 		row.kind = entry.kind;
+		row.steps = entry.steps;
 	}
 	row.writable = writable_ && writable_(entry.key);
 	row.refusal = !row.writable && refusal_ ? refusal_(entry.key) : QString{};
@@ -270,7 +271,7 @@ QVector<WatchlistModel::Removed> WatchlistModel::removeIds(const QSet<WatchKey>&
 	for (int row = 0; row < count_; ++row)
 		if (keys.contains(rows_[row].key))
 			removed.push_back({row, {rows_[row].key, rows_[row].name, rows_[row].member, rows_[row].type,
-			                         rows_[row].scope, rows_[row].others, rows_[row].kind}});
+			                         rows_[row].scope, rows_[row].others, rows_[row].kind, rows_[row].steps}});
 	if (removed.isEmpty())
 		return removed;
 	Mutation mutation{changing_};
@@ -506,6 +507,18 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		}
 		case AccessRole:
 			return row.writable ? QStringLiteral("rw") : QStringLiteral("r-");
+		case PathTypesRole: {
+			QStringList types;
+			const auto* field = metadata_ ? metadata_->field(watch_key::field(row.key)) : nullptr;
+			if (!field)
+				return types;
+			types.append(field->label);
+			for (const auto step : row.steps) {
+				const auto* type = metadata_->type(step);
+				types.append(type ? type->label : QString{});
+			}
+			return types;
+		}
 		case NameRole:
 		case Qt::DisplayRole:
 			return row.name;
@@ -569,7 +582,8 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {WriteScopeRole, "writeScope"},
 	        {WriteRefusalRole, "writeRefusal"},
 	        {LeafStartRole, "leafStart"},
-	        {AccessRole, "access"}};
+	        {AccessRole, "access"},
+	        {PathTypesRole, "pathTypes"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

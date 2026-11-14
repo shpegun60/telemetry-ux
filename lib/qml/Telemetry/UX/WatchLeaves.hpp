@@ -45,6 +45,8 @@ public:
 		quint32 offset = 0;  // bytes from the root value's start
 		QString suffix;      // appended to the Field's path: ".Gain", "[3]"
 		std::array<Step, 32> steps{};
+		// The type each step leads to; the last is the leaf's own.
+		std::array<TypeId, 32> types{};
 		quint8 depth = 0;
 		// The suffix as a saved member: "Gain", "[3]", "Phase[2].Offset".
 		[[nodiscard]] QString member() const;
