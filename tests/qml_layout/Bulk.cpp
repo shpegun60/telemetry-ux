@@ -105,6 +105,15 @@ int main(int argc, char** argv) {
             CHECK(boxes->setProperty("watchActive", true));
             settle();
             CHECK(!firstBox->isEnabled() && status->property("text").toString() == QStringLiteral("Stop polling to change the Watchlist."));
+            // A provider that takes changes while polling (fix 8): the boxes stay on.
+            CHECK(boxes->setProperty("watchChangesWhilePolling", true));
+            settle();
+            CHECK(firstBox->isEnabled() && status->property("text").toString() != QStringLiteral("Stop polling to change the Watchlist."));
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 3 && firstRow->property("watchState").toInt() == Qt::Checked);
+            click(boxesWindow, firstBox);
+            CHECK(boxes->property("calls").toInt() == 4 && firstRow->property("watchState").toInt() == Qt::Unchecked);
+            CHECK(boxes->setProperty("watchChangesWhilePolling", false));
             CHECK(boxes->setProperty("watchActive", false));
             CHECK(boxes->setProperty("full", true));
             settle();

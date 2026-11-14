@@ -740,6 +740,62 @@ void memberRowWrite()
 	connection.disconnect();
 }
 
+// Fix 8: the Watchlist takes changes while it polls a real session. Boxes,
+// a struct's member, Undo, remove and Clear change the rows between two reads;
+// polling never stops and nothing reports a failure.
+void watchChangesWhilePolling()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	CHECK(provider->watchChangesWhilePolling());
+	auto* model = provider->endpoints();
+	const auto child = [](const QModelIndex& parent, const QString& name) {
+		auto* rows = const_cast<QAbstractItemModel*>(parent.model());
+		while (rows->canFetchMore(parent))
+			rows->fetchMore(parent);
+		for (int row = 0; row < rows->rowCount(parent); ++row) {
+			const auto index = rows->index(row, 0, parent);
+			if (index.data(ux::EndpointModel::NameRole).toString() == name)
+				return index;
+		}
+		return QModelIndex{};
+	};
+	const auto one = [](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
+	const auto first = endpoint(model, QStringLiteral("Value_0"));
+	const auto second = endpoint(model, QStringLiteral("Value_1"));
+	const auto gain = child(endpoint(model, QStringLiteral("Config"), {}, 1), QStringLiteral("Gain"));
+	CHECK(first.isValid() && second.isValid() && gain.isValid());
+	auto* list = provider->watchlist();
+	const auto text = [list](int row) { return list->index(row, 0).data(ux::WatchlistModel::TextRole).toString(); };
+	CHECK(provider->setWatchMany(one(first), true).value("changed").toInt() == 1);
+	provider->setWatchIndividual(true);
+	provider->setWatchIntervalMs(20);
+	provider->startWatch();
+	CHECK(await([&] { return provider->watchActive() && !text(0).isEmpty(); }));
+	// Ticked while polling: a whole Field and a struct's member join the reads.
+	auto result = provider->setWatchMany({QVariant::fromValue(second), QVariant::fromValue(gain)}, true);
+	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && provider->watchActive());
+	CHECK(await([&] { return provider->watchCount() == 3 && !text(1).isEmpty() && text(2) == "1"; }));
+	CHECK(provider->watchState(gain) == Qt::Checked && provider->canUndoWatch());
+	CHECK(provider->undoWatch().value("changed").toInt() == 2 && provider->watchCount() == 1 && provider->watchActive());
+	provider->removeWatch(0);
+	CHECK(provider->watchCount() == 0 && provider->watchActive());
+	CHECK(provider->setWatchMany(one(second), true).value("changed").toInt() == 1);
+	CHECK(await([&] { return !text(0).isEmpty(); }));
+	provider->clearWatch();
+	CHECK(provider->watchCount() == 0 && provider->watchActive());
+	CHECK(await([&] { return provider->watchStatus() == "Nothing to read. Add a value, or Stop."; }));
+	CHECK(!provider->watchStatus().startsWith("Watch read failed"));
+	provider->stopWatch();
+	CHECK(await([&] { return !provider->watchActive() && !provider->watchPending(); }));
+	connection.disconnect();
+}
+
 // The Watchlist and the rest of the panel work together. Selecting a Command or
 // Service (its request editor is open, so the provider reports editing) leaves
 // Read once and polling going. While it polls, the tree selects, Details
@@ -1639,6 +1695,7 @@ int main(int argc, char** argv)
 	memberWatchBoxes();
 	memberRowWrite();
 	watchBindings();
+	watchChangesWhilePolling();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();

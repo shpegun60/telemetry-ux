@@ -108,8 +108,8 @@ Actions retain the existing provider signatures:
     that can't read struct members.
   - `undoWatch() -> QVariantMap` undoes the last such change: removed rows go
     back in their places. `canUndoWatch` says whether it can: nothing else may
-    have changed the Watchlist or the tree since, and the Watchlist must not be
-    polling.
+    have changed the Watchlist or the tree since. In Dynamic it works while the
+    Watchlist polls.
   - `watchRevision` moves whenever a box may show something else: the Fields
     held, the tree, or whether boxes can be answered at all (a model update, a
     new connection, the Watchlist's source). A view asks `watchState` again
@@ -206,8 +206,16 @@ remain authoritative.
 
 With a Session-backed Dynamic provider, the Watchlist and the rest of the panel
 work together. While it polls, selecting an endpoint, refreshing Details, editing,
-Apply, Commands, Services and Batch all work; only adding or removing rows waits
-for polling to stop. An open draft
+Apply, Commands, Services and Batch all work, and so do the Watchlist's own
+changes: ticking boxes, adding, removing, Undo and Clear (`watchChangesWhilePolling`
+is true). A change enters the list at once; a read already sent finishes as asked
+and is applied to the rows still there; the next portion is planned from the rows
+shown then, so every cycle reads one list. An addition between two cycles is read
+at once, a removal waits for the timer; an empty list polls nothing and says so.
+Each `WatchFrame` carries the `membership` its read was planned from, so a recorder
+files it under the list it asked for. The read mode and the interval still wait
+for polling to stop. A provider without `watchChangesWhilePolling` (the Static
+one) keeps its rows while it polls. An open draft
 (a Field edit, or the request editor a selected Command or Service opens) does not
 hold the Watchlist: a watch read never touches it. Requests interleave in the
 session's one ordered FIFO: the Watchlist keeps at most one portion (up to 32

@@ -41,6 +41,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		Portion::Kind kind = Portion::Kind::Many;
 		quint32 field = 0;
 		bool urgent = false; // a written Field read again, outside the cycle's order
+		quint64 membership = 0; // the rows the plan was built from
 		std::array<std::uint32_t, 32> ids{};
 		std::vector<std::uint32_t> leaves;
 		std::optional<WatchlistCompletion> completion;
@@ -64,7 +65,11 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	QString status = QStringLiteral("ReadMany; not started");
 	std::uint64_t revision = 0;
 	// The cycle's plan; cursor is the next portion and done the rows read.
+	// replan: the rows changed since the plan was built; the cycle is planned
+	// again at the next portion boundary, never under a read in flight.
 	std::vector<Portion> plan;
+	bool replan = false, startSoon = false;
+	quint64 planMembership = 0;
 	QHash<quint32, int> planOf;
 	int cursor = 0, done = 0;
 	bool hasMembers = false;
@@ -153,6 +158,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		plan.clear();
 		planOf.clear();
 		hasMembers = false;
+		replan = false;
+		planMembership = model.membership();
 		QString failure;
 		std::optional<WatchlistSource::Limits> limits;
 		bool asked = false;
@@ -244,6 +251,28 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		}
 	}
 
+	// The rows changed (added, removed, put back, cleared). Mid-cycle the plan
+	// follows at the next portion; between two cycles of polling an addition
+	// starts the next cycle now, a removal waits for the timer.
+	void membershipChanged(bool added)
+	{
+		if (cycle) {
+			replan = true;
+		} else if (running && added && context) {
+			const std::weak_ptr<Impl> weak = shared_from_this();
+			QMetaObject::invokeMethod(
+			    context,
+			    [weak] {
+				    const auto p = weak.lock();
+				    if (p && p->running && !p->cycle && !p->request && !p->guarded() && p->current() &&
+				        p->startCycle())
+					    p->continueCycle();
+			    },
+			    Qt::QueuedConnection);
+		}
+		changed();
+	}
+
 	bool prepare(Request& value)
 	{
 		if (sequence == (std::numeric_limits<qint64>::max)()) {
@@ -255,6 +284,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		value.portion = portion;
 		value.sourceBinding = sourceBinding;
 		value.startedNs = WatchTimestamp::now().monotonicNs;
+		value.membership = planMembership;
 		return true;
 	}
 
@@ -592,17 +622,28 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			retry.start(); // No accumulation behind foreground/other panels.
 			return;
 		}
+		if (replan) {
+			// The rows changed: a new cycle over the rows shown now, which
+			// reads every row, so written Fields need no read of their own.
+			urgent.clear();
+			rerun = false;
+			if (!startCycle())
+				return;
+		}
 		if (submitUrgent())
 			return;
 		if (cursor >= int(plan.size())) {
 			cycle = false;
-			status = QStringLiteral("%1 complete - %2 %3")
-			             .arg(individual ? QStringLiteral("Individual FieldRead")
-			                             : QStringLiteral("ReadMany"))
-			             .arg(model.count())
-			             .arg(rowsWord());
+			status = model.count() == 0
+			             ? QStringLiteral("Nothing to read. Add a value, or Stop.")
+			             : QStringLiteral("%1 complete - %2 %3")
+			                   .arg(individual ? QStringLiteral("Individual FieldRead")
+			                                   : QStringLiteral("ReadMany"))
+			                   .arg(model.count())
+			                   .arg(rowsWord());
 			changed();
-			if ((rerun || intervalMs == 0) && running && !guarded()) {
+			// An empty list waits for the timer rather than spin.
+			if ((rerun || intervalMs == 0) && running && !guarded() && model.count() > 0) {
 				rerun = false;
 				if (startCycle())
 					continueCycle();
@@ -668,6 +709,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		frame.operation = completed.kind == Portion::Kind::Many ? WatchOperation::ReadMany
 		                                                        : WatchOperation::FieldRead;
 		frame.urgent = completed.urgent;
+		frame.membership = completed.membership;
 		return frame;
 	}
 
@@ -803,13 +845,11 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 						frame.correlated = false;
 					if (!exactRow(row)) frame.exact = false;
 				}
+				// Rows that left the list while the read was out are skipped below;
+				// the read itself still answered what it was asked.
 				bool applicable = result.status == client::Status::Ok && frame.correlated;
-				if (completed->urgent) applicable = applicable && rowOf(completed->ids[0]) >= 0;
-				else {
+				if (!completed->urgent)
 					applicable = applicable && completed->step == cursor;
-					for (int i = 0; applicable && i < result.count; ++i)
-						applicable = rowOf(completed->ids[std::size_t(i)]) >= 0;
-				}
 				frame.phase = completed->revision != revision || !current() ? WatchCompletionPhase::Drained
 				              : applicable ? WatchCompletionPhase::Current : WatchCompletionPhase::Failed;
 				// No native callback or row notification is on this stack. A receiver can
@@ -836,16 +876,18 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 					             result.count == completed->count && result.count > 0 &&
 					             result.count <= 32 && completed->step == cursor;
 					for (int i = 0; valid && i < result.count; ++i)
-						valid = result.rows[i].id == completed->ids[i] && rowOf(completed->ids[i]) >= 0;
+						valid = result.rows[i].id == completed->ids[i];
 					if (!valid) {
 						stopFailed(result.status);
 					} else {
 						publishing = true;
-						for (int i = 0; context && i < result.count; ++i)
-							model.setResult(rowOf(completed->ids[std::size_t(i)]),
-							                std::move(result.rows[i].status),
-							                std::move(result.rows[i].text), result.rows[i].sample,
-							                result.rows[i].value);
+						for (int i = 0; context && i < result.count; ++i) {
+							const auto row = rowOf(completed->ids[std::size_t(i)]);
+							if (row >= 0)
+								model.setResult(row, std::move(result.rows[i].status),
+								                std::move(result.rows[i].text), result.rows[i].sample,
+								                result.rows[i].value);
+						}
 						publishing = false;
 						++cursor;
 						done += result.count;
@@ -974,7 +1016,7 @@ bool DynamicWatchlist::pending() const
 bool DynamicWatchlist::canAdd(quint32 id) const
 {
 	auto p = d;
-	if (p->guarded() || !p->current() || p->active() || !p->source.fieldBytes ||
+	if (p->guarded() || p->reportingCompletion || !p->current() || !p->source.fieldBytes ||
 	    p->model.count() == WatchlistModel::maxRows)
 		return false;
 	const auto bytes = p->source.fieldBytes(id);
@@ -989,10 +1031,8 @@ bool DynamicWatchlist::add(quint32 id, QString name)
 	if (!canAdd(id))
 		return false;
 	const bool added = p->model.add(id, std::move(name));
-	if (added) {
-		++p->revision;
-		p->changed();
-	}
+	if (added)
+		p->membershipChanged(true);
 	return added;
 }
 
@@ -1011,7 +1051,7 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
 	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
 	                   {QStringLiteral("unsupported"), 0}, {QStringLiteral("capacity"), 0}};
-	if (p->guarded() || !p->current() || p->active() || !p->source.fieldBytes)
+	if (p->guarded() || p->reportingCompletion || !p->current() || !p->source.fieldBytes)
 		return result;
 	// Block changes and defer source replacement throughout preparation and
 	// publication. Once insert signals start, accepted rows are committed as a
@@ -1028,7 +1068,7 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 	QVector<WatchEntry> accepted;
 	int duplicates = 0, unsupported = 0, capacity = 0;
 	for (auto entry : entries) {
-		if (!p->current() || p->revision != revision || p->active()) {
+		if (!p->current() || p->revision != revision) {
 			result[QStringLiteral("status")] = QStringLiteral("stale");
 			return result;
 		}
@@ -1040,7 +1080,7 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 		bool holdable = false;
 		if (watch_key::isWhole(entry.key)) {
 			const auto bytes = p->source.fieldBytes(watch_key::field(entry.key));
-			if (!p->current() || p->revision != revision || p->active()) {
+			if (!p->current() || p->revision != revision) {
 				result[QStringLiteral("status")] = QStringLiteral("stale");
 				return result;
 			}
@@ -1060,14 +1100,18 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 		}
 		accepted.push_back(std::move(entry));
 	}
-	if (!p->current() || p->revision != revision || p->active()) {
+	if (!p->current() || p->revision != revision) {
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
 	if (!accepted.isEmpty() && !p->model.addMany(accepted))
 		return result;
-	if (!accepted.isEmpty())
-		++p->revision;
+	if (!accepted.isEmpty()) {
+		if (p->cycle)
+			p->replan = true;
+		else if (p->running)
+			p->startSoon = true;
+	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
 	result[QStringLiteral("added")] = accepted.size();
 	result[QStringLiteral("duplicate")] = duplicates;
@@ -1078,8 +1122,13 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 	if (!accepted.isEmpty() && p->context) {
 		const std::weak_ptr<Impl> weak = p;
 		QMetaObject::invokeMethod(p->context, [weak] {
-			if (const auto state = weak.lock())
-				state->changed();
+			if (const auto state = weak.lock()) {
+				// Polling between two cycles: the added rows are read now.
+				if (std::exchange(state->startSoon, false))
+					state->membershipChanged(true);
+				else
+					state->changed();
+			}
 		}, Qt::QueuedConnection);
 	}
 	return result;
@@ -1088,16 +1137,14 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 void DynamicWatchlist::remove(int row)
 {
 	auto p = d;
-	if (!p->guarded() && !p->active() && p->model.remove(row)) {
-		++p->revision;
-		p->changed();
-	}
+	if (!p->guarded() && !p->reportingCompletion && p->model.remove(row))
+		p->membershipChanged(false);
 }
 
 void DynamicWatchlist::clear()
 {
 	auto p = d;
-	if (!p->guarded() && !p->active()) {
+	if (!p->guarded() && !p->reportingCompletion) {
 		p->model.clear();
 		const std::weak_ptr<Impl> weak = p;
 		p->model.bind([weak] {
@@ -1105,8 +1152,7 @@ void DynamicWatchlist::clear()
 			return state && state->current();
 		});
 		if (!p->copySchemaMetadata()) return;
-		++p->revision;
-		p->changed();
+		p->membershipChanged(false);
 	}
 }
 
@@ -1254,23 +1300,20 @@ quint64 DynamicWatchlist::membership() const
 QVector<WatchlistModel::Removed> DynamicWatchlist::removeMany(const QSet<WatchKey>& keys)
 {
 	auto p = d;
-	if (p->guarded() || p->active() || !p->current())
+	if (p->guarded() || p->reportingCompletion || !p->current())
 		return {};
 	const auto removed = p->model.removeIds(keys);
-	if (!removed.isEmpty()) {
-		++p->revision;
-		p->changed();
-	}
+	if (!removed.isEmpty())
+		p->membershipChanged(false);
 	return removed;
 }
 
 bool DynamicWatchlist::restore(const QVector<WatchlistModel::Removed>& rows)
 {
 	auto p = d;
-	if (p->guarded() || p->active() || !p->current() || !p->model.restore(rows))
+	if (p->guarded() || p->reportingCompletion || !p->current() || !p->model.restore(rows))
 		return false;
-	++p->revision;
-	p->changed();
+	p->membershipChanged(true);
 	return true;
 }
 

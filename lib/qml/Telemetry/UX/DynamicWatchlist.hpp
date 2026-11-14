@@ -126,7 +126,9 @@ public:
 	QSet<WatchKey> held() const;
 	quint64 membership() const;
 	// Takes every row of keys out, and puts such rows back; refused (empty,
-	// false) while polling or while the Watchlist cannot change.
+	// false) while the Watchlist cannot change. Rows may be added and removed
+	// while it polls: a change enters the list at once, and the reads follow
+	// it from the next portion on (the read in flight finishes as asked).
 	QVector<WatchlistModel::Removed> removeMany(const QSet<WatchKey>& keys);
 	bool restore(const QVector<WatchlistModel::Removed>& rows);
 	int count() const;

@@ -619,8 +619,8 @@ void chunks()
 		for (int tick = 0; tick < 50; ++tick)
 			watch.tick();
 		CHECK(peer.calls.size() == std::size_t(batch + 1));
-		watch.remove(0);
-		watch.clear();
+		// The read mode and the interval wait for the cycle (rows may change
+		// meanwhile, fix 8; removeDuringRead and clearWhilePolling check that).
 		watch.setIndividual(true);
 		watch.setInterval(1);
 		CHECK(watch.count() == 65 && !watch.individual() && watch.interval() == 1000);
@@ -697,14 +697,18 @@ void drainAndStale()
 	std::weak_ptr<int> lease = peer.lease;
 	watch.stop();
 	CHECK(watch.active() && watch.pending());
+	// Rows change while the read drains (fix 8); the read mode does not.
 	watch.remove(0);
+	CHECK(watch.count() == 64);
 	watch.clear();
 	watch.setIndividual(true);
-	CHECK(watch.count() == 65 && !watch.individual());
+	CHECK(watch.count() == 0 && !watch.individual());
 	peer.finish();
 	watch.poll();
 	events();
-	CHECK(!watch.active() && peer.calls.size() == 1 && text(watch, 0).isEmpty());
+	CHECK(!watch.active() && peer.calls.size() == 1);
+	fill(watch, 65);
+	CHECK(text(watch, 0).isEmpty());
 	CHECK(watch.begin(false));
 	peer.current = false;
 	CHECK(text(watch, 0).isEmpty()); // Guard works before the owner publishes reset.
@@ -1147,6 +1151,193 @@ void memberFailure()
 	}
 }
 
+// Fix 8: the Watchlist takes changes while it polls. A change enters the
+// list at once; the read in flight finishes as it was asked and is applied
+// to the rows still there; the plan follows at the next portion.
+void removeDuringRead()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	CHECK(watch.begin(true));
+	const auto asked = watch.membership();
+	const auto removed = watch.removeMany({2});
+	CHECK(removed.size() == 1 && watch.count() == 2 && watch.active() && watch.membership() != asked);
+	peer.finish(); watch.poll(); events();
+	CHECK(frames.size() == 1 && frames[0].phase == ux::WatchCompletionPhase::Current && frames[0].correlated &&
+	      frames[0].count == 3 && frames[0].membership == asked);
+	CHECK(text(watch, 0) == "18446744073709551615" && text(watch, 1) == "-123 (unknown)");
+	CHECK(watch.active() && !watch.status().startsWith("Watch read failed"));
+	// The next cycle reads the rows there now.
+	watch.tick();
+	CHECK(peer.calls.size() == 2 && peer.calls[1] == std::vector<std::uint32_t>{1, 3});
+	peer.finish(); watch.poll(); events();
+	CHECK(frames.size() == 2 && frames[1].membership == watch.membership());
+	watch.stop();
+	events();
+}
+
+void addDuringCycle()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 40);
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	CHECK(watch.begin(true));
+	CHECK(peer.calls.size() == 1 && peer.calls[0].size() == 32);
+	CHECK(watch.add(50, QStringLiteral("catalog.Field50")) && watch.count() == 41);
+	// The new row waits for the next portion boundary; its value is empty.
+	CHECK(text(watch, 40).isEmpty());
+	peer.finish(); watch.poll(); events();
+	// A new cycle over the rows shown now: it starts again from the first row.
+	CHECK(peer.calls.size() == 2 && peer.calls[1].size() == 32 && peer.calls[1][0] == 1);
+	CHECK(frames.size() == 1 && frames[0].phase == ux::WatchCompletionPhase::Current);
+	peer.finish(); watch.poll(); events();
+	CHECK(peer.calls.size() == 3 && peer.calls[2].size() == 9 && peer.calls[2].back() == 50);
+	peer.finish(); watch.poll(); events();
+	CHECK(frames.size() == 3 && frames[2].cycle == frames[1].cycle && frames[1].cycle == frames[0].cycle + 1);
+	CHECK(text(watch, 40) == "50");
+	watch.stop();
+	events();
+}
+
+void addBetweenCycles()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 2);
+	CHECK(watch.begin(true));
+	peer.finish(); watch.poll(); events();
+	CHECK(peer.calls.size() == 1 && watch.active() && !watch.pending());
+	// Polling between two cycles: an addition is read now, not at the tick.
+	const auto added = watch.addEntries({entryOf(ux::watch_key::whole(3), QStringLiteral("catalog.Field3"))});
+	CHECK(added.value("added").toInt() == 1);
+	for (int step = 0; step < 4; ++step) events(); // notice, then start, then send
+	CHECK(peer.calls.size() == 2 && peer.calls[1] == std::vector<std::uint32_t>{1, 2, 3});
+	peer.finish(); watch.poll(); events();
+	// A removal waits for the timer.
+	watch.remove(0);
+	events();
+	CHECK(peer.calls.size() == 2 && watch.count() == 2);
+	watch.tick();
+	CHECK(peer.calls.size() == 3 && peer.calls[2] == std::vector<std::uint32_t>{2, 3});
+	peer.finish(); watch.poll(); events();
+	watch.stop();
+	events();
+}
+
+void memberChangeDuringRead()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	CHECK(watch.addEntries(configEntries({0, 1})).value("added").toInt() == 2);
+	CHECK(watch.begin(true));
+	CHECK(peer.memberCalls.size() == 1 && peer.memberCalls[0].second == std::vector<std::uint32_t>{0, 1});
+	CHECK(watch.removeMany({ux::watch_key::member(members::config, 1)}).size() == 1);
+	// A value added to the struct joins its read from the next cycle on.
+	CHECK(watch.addEntries(configEntries({5})).value("added").toInt() == 1);
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(text(watch, 0) == "0" && text(watch, 1).isEmpty() && !watch.status().startsWith("Watch read failed"));
+	CHECK(peer.memberCalls.size() == 2 && peer.memberCalls[1].second == std::vector<std::uint32_t>{0, 5});
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(text(watch, 1) == "5");
+	watch.stop();
+	events();
+}
+
+void clearWhilePolling()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 3);
+	CHECK(watch.begin(true));
+	watch.clear();
+	CHECK(watch.count() == 0 && watch.active());
+	peer.finish(); watch.poll(); events();
+	// Nothing to read: polling idles without spinning and says so.
+	CHECK(watch.active() && !watch.pending() && peer.calls.size() == 1);
+	CHECK(watch.status() == "Nothing to read. Add a value, or Stop.");
+	watch.tick();
+	events();
+	CHECK(peer.calls.size() == 1);
+	CHECK(watch.add(7, QStringLiteral("catalog.Field7")));
+	for (int step = 0; step < 4; ++step) events();
+	CHECK(peer.calls.size() == 2 && peer.calls[1] == std::vector<std::uint32_t>{7});
+	peer.finish(); watch.poll(); events();
+	watch.stop();
+	events();
+}
+
+void urgentAfterChange()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 40);
+	CHECK(watch.begin(true));
+	watch.wake(1);   // in flight: would be read again before the cycle goes on
+	watch.remove(39);
+	peer.finish(); watch.poll(); events();
+	// The change replans the cycle, which reads every row: no separate read of 1.
+	CHECK(peer.calls.size() == 2 && peer.calls[1].size() == 32 && peer.calls[1][0] == 1);
+	peer.finish(); watch.poll(); events();
+	CHECK(peer.calls.size() == 3 && peer.calls[2].size() == 7);
+	peer.finish(); watch.poll(); events();
+	watch.stop();
+	events();
+}
+
+void readOnceReplans()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 40);
+	CHECK(watch.begin(false));
+	CHECK(watch.add(60, QStringLiteral("catalog.Field60")));
+	peer.finish(); watch.poll(); events();
+	// Read once reads the rows shown when it finishes, the added one too.
+	CHECK(peer.calls.size() == 2 && peer.calls[1][0] == 1);
+	peer.finish(); watch.poll(); events();
+	CHECK(peer.calls.size() == 3 && peer.calls[2].back() == 60);
+	peer.finish(); watch.poll(); events();
+	CHECK(!watch.active() && text(watch, 40) == "60");
+}
+
+void changeInsideCompletion()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	fill(watch, 2);
+	bool refused = false;
+	watch.setCompletionObserver([&](const ux::WatchFrame&) {
+		refused = !watch.add(9, QStringLiteral("catalog.Field9")) && watch.removeMany({1}).isEmpty() &&
+		          watch.addEntries({entryOf(ux::watch_key::whole(8), QStringLiteral("catalog.Field8"))})
+		                  .value("status") == "refused";
+	});
+	CHECK(watch.begin(false));
+	peer.finish(); watch.poll(); events();
+	CHECK(refused && watch.count() == 2);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -1168,6 +1359,14 @@ int main(int argc, char** argv)
 	memberFanOut();
 	memberUrgent();
 	memberFailure();
+	removeDuringRead();
+	addDuringCycle();
+	addBetweenCycles();
+	memberChangeDuringRead();
+	clearWhilePolling();
+	urgentAfterChange();
+	readOnceReplans();
+	changeInsideCompletion();
 	std::printf("Dynamic Watchlist checks=%u chunks=32,32,1 member_frames=10 no_native_callback_signals=1\n",
 	            checks);
 }

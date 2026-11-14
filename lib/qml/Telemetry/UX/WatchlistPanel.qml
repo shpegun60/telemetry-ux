@@ -62,6 +62,9 @@ Pane {
                                            && provider.watchIndividual !== true
 
     readonly property bool active: provider.watchActive === true || operationActive
+    // Rows are added, removed and cleared while polling when the provider
+    // takes changes between two reads; the interval and modes still wait.
+    readonly property bool changeLocked: provider.watchActive === true && provider.watchChangesWhilePolling !== true
     readonly property int count: provider.watchCount
     readonly property bool connected: provider.connected === true
     readonly property bool canRead: connected && count > 0 && !active
@@ -78,7 +81,8 @@ Pane {
         switch (status) {
         case "Ok": return qsTr("OK")
         case "Pending": return qsTr("Reading…")
-        case "Not read": case "NotRead": return qsTr("Not read")
+        // A row added while polling waits for the next read; that is not a problem.
+        case "Not read": case "NotRead": return panel.provider.watchActive === true ? qsTr("Next read") : qsTr("Not read")
         case "Stale": return qsTr("Stale")
         case "NotFound": return qsTr("Not found")
         case "Unsupported": case "UnsupportedType": return qsTr("Unsupported")
@@ -381,7 +385,7 @@ Pane {
                 objectName: "addWatchItem"
                 leftPadding: moreMenu.checkColumn
                 text: qsTr("Watch the selected Field")
-                enabled: panel.provider.canAddWatch === true && !panel.active
+                enabled: panel.provider.canAddWatch === true && !panel.changeLocked
                 onTriggered: {
                     // Through the property: setting the title's state would
                     // break its binding to `expanded`.
@@ -416,7 +420,7 @@ Pane {
                 objectName: "clearWatchItem"
                 leftPadding: moreMenu.checkColumn
                 text: qsTr("Clear the Watchlist…")
-                enabled: panel.count > 0 && !panel.active
+                enabled: panel.count > 0 && !panel.changeLocked
                 onTriggered: clearDialog.open()
             }
         }
@@ -489,7 +493,7 @@ Pane {
             Keys.onPressed: event => {
                 if (currentIndex < 0)
                     return
-                if (event.key === Qt.Key_Delete && !panel.active) {
+                if (event.key === Qt.Key_Delete && !panel.changeLocked) {
                     panel.provider.removeWatch(currentIndex)
                     event.accepted = true
                 } else if ((event.key === Qt.Key_F2 || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
@@ -942,7 +946,7 @@ Pane {
                             focusPolicy: Qt.NoFocus
                             padding: 0
                             text: "×"
-                            enabled: !panel.active
+                            enabled: !panel.changeLocked
                             font.pointSize: Type.body
                             contentItem: Text {
                                 text: remove.text
