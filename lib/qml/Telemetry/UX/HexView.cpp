@@ -23,6 +23,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace telemetry::ux {
 namespace {
@@ -371,7 +372,7 @@ void HexView::selectRange(qint64 start, qint64 length)
 	if (bytes_.isEmpty() || length <= 0)
 		return;
 	start = std::clamp<qint64>(start, 0, bytes_.size() - 1);
-	const auto end = std::clamp<qint64>(start + length - 1, start, bytes_.size() - 1);
+	const auto end = start + std::min<qint64>(length, bytes_.size() - start) - 1;
 	anchor_ = start;
 	cursor_ = end;
 	ensureVisible(start, true);
@@ -440,6 +441,10 @@ qint64 HexView::evaluate(const QString& expression, QString* error) const
 		value = text.toLongLong(&ok, 16);
 	if (!ok || value < 0)
 		return fail(tr("Not an offset: %1").arg(expression.trimmed()));
+	// Both bases are nonnegative offsets; subtraction cannot underflow, but
+	// a valid signed input added to one can exceed qint64 before Go to checks it.
+	if (sign > 0 && value > std::numeric_limits<qint64>::max() - base)
+		return fail(tr("Offset is too large: %1").arg(expression.trimmed()));
 	return base + sign * value;
 }
 
@@ -471,9 +476,11 @@ QString HexView::selectBlock(const QString& start, const QString& lengthOrEnd, b
 	if (bytes_.isEmpty())
 		return tr("This file is empty.");
 	const auto last = bytes_.size() - 1;
-	const auto end = isEnd ? other : from + other - 1;
-	if (from < 0 || from > last || end < from || end > last)
+	// Check the start and remaining room before adding a user-provided length.
+	if (from < 0 || from > last ||
+	    (isEnd ? other < from || other > last : other <= 0 || other > bytes_.size() - from))
 		return tr("Not in this file: 0 to 0x%1.").arg(hex(last, 1));
+	const auto end = isEnd ? other : from + other - 1;
 	selectRange(from, end - from + 1);
 	return {};
 }

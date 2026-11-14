@@ -1294,6 +1294,53 @@ static void groupWatchBoxes()
 	      large.watchState(all) == Qt::Unchecked && !large.canUndoWatch());
 }
 
+static void groupWatchPublicationLifetime()
+{
+	QObject observer;
+	for (int scenario = 0; scenario < 4; ++scenario) {
+		Api api;
+		QPointer<StaticConfiguratorProvider> provider =
+		    new StaticConfiguratorProvider(watchBinding(api, 4));
+		const QVariantList separated{QVariant::fromValue(endpoint(*provider, 0)),
+		                             QVariant::fromValue(endpoint(*provider, 2))};
+		if (scenario == 1 || scenario == 3) {
+			QVariantList all;
+			for (int i = 0; i < 4; ++i)
+				all.push_back(QVariant::fromValue(endpoint(*provider, i)));
+			CHECK(provider->addWatchMany(all).value("added").toInt() == 4);
+		}
+		if (scenario == 2)
+			CHECK(provider->setWatchMany(separated, true).value("changed").toInt() == 2);
+		if (scenario == 3)
+			CHECK(provider->setWatchMany(separated, false).value("changed").toInt() == 2);
+		QPointer<QAbstractItemModel> model = provider->watchlist();
+		int publications = 0;
+		const auto retire = [&] {
+			++publications;
+			delete provider.data();
+		};
+		if (scenario == 0 || scenario == 3)
+			QObject::connect(model, &QAbstractItemModel::rowsInserted, &observer, retire);
+		else
+			QObject::connect(model, &QAbstractItemModel::rowsRemoved, &observer, retire);
+		// Both directions of a group edit and Undo may retire the provider.
+		// Removal/restore of fields 0 and 2 needs two structural ranges: no
+		// continuation may touch the dead model after the first publication.
+		if (scenario == 0)
+			provider->setWatchMany(separated, true);
+		else if (scenario == 1)
+			provider->setWatchMany(separated, false);
+		else {
+			CHECK(provider->canUndoWatch());
+			provider->undoWatch();
+		}
+		CHECK(!provider && !model && publications == 1);
+		CHECK(api.calls.isEmpty() && api.issued == 0);
+		api.changed(); // The API's old subscription context was retired too.
+		CHECK(api.calls.isEmpty());
+	}
+}
+
 static void largeWatchCycle()
 {
 	Api api;
@@ -1360,6 +1407,7 @@ int main(int argc, char** argv)
 	watchBoundsAndReentrancy();
 	bulkWatch();
 	groupWatchBoxes();
+	groupWatchPublicationLifetime();
 	largeWatchCycle();
 	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
 	return failures ? 1 : 0;

@@ -609,6 +609,7 @@ public:
 	QVector<QPair<int, Row>> removeEndpoints(const QSet<int>& endpoints)
 	{
 		QVector<QPair<int, Row>> removed;
+		const QPointer<WatchList> alive(this);
 		for (int row = 0; row < rows.size(); ++row)
 			if (endpoints.contains(rows[row].endpoint))
 				removed.push_back({row, rows[row]});
@@ -620,6 +621,8 @@ public:
 			beginRemoveRows({}, first, last);
 			rows.remove(first, last - first + 1);
 			endRemoveRows();
+			if (!alive)
+				return removed;
 			end = start;
 		}
 		if (!removed.isEmpty())
@@ -635,6 +638,7 @@ public:
 			return;
 		if (!canTake(taken.size()))
 			qFatal("Static Watchlist index space exhausted");
+		const QPointer<WatchList> alive(this);
 		for (auto start = qsizetype(0); start < taken.size();) {
 			auto end = start + 1;
 			while (end < taken.size() && taken[end].first == taken[end - 1].first + 1)
@@ -648,6 +652,8 @@ public:
 				rows.insert(taken[i].first, row);
 			}
 			endInsertRows();
+			if (!alive)
+				return;
 			start = end;
 		}
 		++membership;
@@ -1792,7 +1798,8 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 			QPointer<StaticConfiguratorProvider> alive(this);
 			p->changeWatch([&] {
 				p->watchModel.append(rows);
-				p->recordUndo(true, added, {});
+				if (alive)
+					p->recordUndo(true, added, {});
 			});
 			if (!alive)
 				return result;
@@ -1809,7 +1816,8 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 			p->changeWatch([&] {
 				auto removed = p->watchModel.removeEndpoints(remove);
 				count = static_cast<int>(removed.size());
-				p->recordUndo(false, {}, std::move(removed));
+				if (alive)
+					p->recordUndo(false, {}, std::move(removed));
 			});
 			if (!alive)
 				return result;

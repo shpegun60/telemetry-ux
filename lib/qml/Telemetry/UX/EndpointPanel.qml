@@ -27,21 +27,30 @@ Pane {
     property Component footerComponent: null
     readonly property int selectedCategory: provider.commandSelected ? 2 : provider.serviceSelected ? 3 : 1
     readonly property bool selectionMatches: categoryFilter === 0 || (provider.selection.length > 0 && selectedCategory === categoryFilter)
+    readonly property bool disconnected: typeof provider.connected === "boolean" && !provider.connected
+    // The complete Configurator keeps its empty workspace and host extension
+    // slots while offline. Category-only panels show retained outcomes alone.
+    readonly property bool showSelection: selectionMatches && (categoryFilter === 0 || !disconnected)
+    readonly property bool hasOutcome: outcomeVisible(1, provider.writeOutcome)
+        || outcomeVisible(2, provider.commandOutcome) || outcomeVisible(3, provider.serviceOutcome)
     readonly property bool showResponse: (categoryFilter === 0 || categoryFilter === 3) && (provider.serviceSelected || provider.serviceResponseEndpoint.length > 0)
+    function outcomeVisible(category, text) {
+        return (categoryFilter === 0 || categoryFilter === category) && text.length > 0
+            && (selectionMatches || disconnected)
+    }
     background: Rectangle {
         color: panel.framed ? Theme.surface : Theme.surfaceWindow
         radius: panel.framed ? Type.radius * 2 : 0
     }
     ColumnLayout {
         anchors.fill: parent
-        visible: panel.selectionMatches
         spacing: Type.spacing
-        Loader { Layout.fillWidth: true; active: panel.headerComponent !== null; sourceComponent: panel.headerComponent }
+        Loader { Layout.fillWidth: true; active: panel.showSelection && panel.headerComponent !== null; sourceComponent: panel.headerComponent }
         GridLayout {
             id: selectionHeader
             Layout.fillWidth: true
             // Nothing selected: the value area's one line says what to do.
-            visible: panel.hasSelection
+            visible: panel.showSelection && panel.hasSelection
             columns: width < 560 ? 1 : 2
             columnSpacing: Type.spacing
             rowSpacing: Type.tight
@@ -125,7 +134,7 @@ Pane {
         // A draft's, a Command's or a Service's note, one caption line under the name.
         Label {
             objectName: "endpointNote"
-            visible: panel.hasSelection && text.length > 0
+            visible: panel.showSelection && panel.hasSelection && text.length > 0
             textFormat: Text.PlainText
             text: panel.provider.serviceSelected
                 ? qsTr("Request values start at zero. Call sends one request; the response stays until the next accepted change or session.")
@@ -141,6 +150,7 @@ Pane {
         }
         GridLayout {
             id: valueColumns
+            visible: panel.showSelection
             Layout.fillWidth: true
             Layout.fillHeight: true
             columns: panel.showResponse && width >= 650 ? 2 : 1
@@ -323,9 +333,16 @@ Pane {
             }
         }
         Label {
+            visible: panel.disconnected && panel.hasOutcome
+            text: qsTr("Previous connection")
+            color: Theme.textMuted
+            font.pointSize: Type.caption
+            Layout.fillWidth: true
+        }
+        Label {
             textFormat: Text.PlainText
             objectName: "writeOutcomeLabel"
-            visible: (panel.categoryFilter === 0 || panel.categoryFilter === 1) && panel.provider.writeOutcome.length > 0
+            visible: panel.outcomeVisible(1, panel.provider.writeOutcome)
             text: qsTr("Last write: %1").arg(panel.provider.writeOutcome)
             color: Theme.warning
             Layout.fillWidth: true
@@ -334,7 +351,7 @@ Pane {
         Label {
             textFormat: Text.PlainText
             objectName: "commandOutcomeLabel"
-            visible: (panel.categoryFilter === 0 || panel.categoryFilter === 2) && panel.provider.commandOutcome.length > 0
+            visible: panel.outcomeVisible(2, panel.provider.commandOutcome)
             text: qsTr("Last command: %1").arg(panel.provider.commandOutcome)
             color: Theme.warning
             Layout.fillWidth: true
@@ -343,17 +360,18 @@ Pane {
         Label {
             textFormat: Text.PlainText
             objectName: "serviceOutcomeLabel"
-            visible: (panel.categoryFilter === 0 || panel.categoryFilter === 3) && panel.provider.serviceOutcome.length > 0
+            visible: panel.outcomeVisible(3, panel.provider.serviceOutcome)
             text: qsTr("Last service: %1").arg(panel.provider.serviceOutcome)
             color: Theme.warning
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
-        Loader { Layout.fillWidth: true; active: panel.footerComponent !== null; sourceComponent: panel.footerComponent }
+        Loader { Layout.fillWidth: true; active: panel.showSelection && panel.footerComponent !== null; sourceComponent: panel.footerComponent }
+        Item { visible: !panel.showSelection; Layout.fillHeight: true }
     }
     Label {
         anchors.centerIn: parent
-        visible: !panel.selectionMatches
+        visible: !panel.showSelection && !panel.hasOutcome
         textFormat: Text.PlainText
         text: panel.categoryFilter === 1 ? "Select a Field" : panel.categoryFilter === 2 ? "Select a Command" : "Select a Service"
     }

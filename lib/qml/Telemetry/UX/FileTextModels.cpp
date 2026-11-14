@@ -158,7 +158,7 @@ QString TextLinesModel::find(const QString& text, bool caseSensitive, bool forwa
 	}
 	const auto sensitivity = caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
 	if (text != findText_ || caseSensitive != findCase_) {
-		// Counted once, to the cap; the matches themselves are found as they are needed.
+		// Enumerate non-overlapping matches once, to the cap.
 		positions_.clear();
 		capped_ = false;
 		const auto step = std::max<qsizetype>(1, text.size());
@@ -182,21 +182,44 @@ QString TextLinesModel::find(const QString& text, bool caseSensitive, bool forwa
 	const auto line = std::clamp(fromLine, 0, lineCount() - 1);
 	// From the current match while the reader is still on its line; else from the reader's line.
 	const bool fromCurrent = current_ >= 0 && lineAt(current_) == line;
+	const auto step = text.size();
+	// Walk the same matches that are counted/highlighted. Beyond the bounded
+	// index, continue their non-overlapping enumeration without caching more.
+	const auto nextMatch = [&](qsizetype from) {
+		const auto at = std::lower_bound(positions_.begin(), positions_.end(), from);
+		if (at != positions_.end())
+			return *at;
+		if (!capped_)
+			return qsizetype{-1};
+		auto tail = text_.indexOf(text, positions_.back() + step, sensitivity);
+		while (tail >= 0 && tail < from)
+			tail = text_.indexOf(text, tail + step, sensitivity);
+		return tail;
+	};
+	const auto previousMatch = [&](qsizetype from) {
+		const auto after = std::upper_bound(positions_.begin(), positions_.end(), from);
+		auto found = after == positions_.begin() ? qsizetype{-1} : *(after - 1);
+		if (capped_ && from > positions_.back())
+			for (auto tail = text_.indexOf(text, positions_.back() + step, sensitivity); tail >= 0 && tail <= from;
+			     tail = text_.indexOf(text, tail + step, sensitivity))
+				found = tail;
+		return found;
+	};
 	QString message;
 	qsizetype found = -1;
 	if (forward) {
-		const auto from = fromCurrent ? current_ + 1 : starts_[static_cast<std::size_t>(line)];
-		found = text_.indexOf(text, from, sensitivity);
+		const auto from = fromCurrent ? current_ + step : starts_[static_cast<std::size_t>(line)];
+		found = nextMatch(from);
 		if (found < 0) {
-			found = text_.indexOf(text, 0, sensitivity);
+			found = positions_.front();
 			message = tr("Wrapped to the start");
 		}
 	} else {
 		const auto lineEnd = starts_[static_cast<std::size_t>(line)] + lengths_[static_cast<std::size_t>(line)];
 		const auto from = fromCurrent ? current_ - 1 : lineEnd - text.size();
-		found = from >= 0 ? text_.lastIndexOf(text, from, sensitivity) : -1;
+		found = previousMatch(from);
 		if (found < 0) {
-			found = text_.lastIndexOf(text, -1, sensitivity);
+			found = previousMatch(text_.size());
 			message = tr("Wrapped to the end");
 		}
 	}

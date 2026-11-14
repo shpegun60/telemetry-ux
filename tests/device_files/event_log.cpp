@@ -231,6 +231,73 @@ void filesOnlyLoss()
 	      problems.has(QStringLiteral("session.connection")));
 	CHECK(log.newest() == session.lastError());
 }
+
+void sessionPublicationLifetime()
+{
+	Peer peer;
+	const auto port = peer.listener.serverPort();
+	peer.listener.close();
+	Peer reconnected;
+	for (int scenario = 0; scenario < 4; ++scenario) {
+		auto session = std::make_unique<qt::ConnectionSession>();
+		CHECK(session->connectTcpReference(QStringLiteral("127.0.0.1"), port));
+		CHECK(await([&] { return !session->connecting() && !session->lastError().isEmpty(); }));
+		LogModel log;
+		auto problems = std::make_unique<ProblemsModel>(&log);
+		auto adapter = std::make_unique<SessionProblems>(session.get(), problems.get());
+		CHECK(problems->has(QStringLiteral("session.connection")));
+		// Start with no problem, so the next update inserts the connection
+		// error and publishes a final countsChanged, outside native progress.
+		problems->resolveScope(QStringLiteral("device"));
+		CHECK(problems->count() == 0);
+		const QPointer<SessionProblems> adapterAlive(adapter.get());
+		const QPointer<qt::ConnectionSession> sessionAlive(session.get());
+		const QPointer<ProblemsModel> problemsAlive(problems.get());
+		int publications = 0;
+		QObject::connect(problems.get(), &ProblemsModel::countsChanged, &log, [&] {
+			if (++publications != 1)
+				return;
+			if (scenario == 0)
+				adapter.reset();
+			else if (scenario == 1)
+				session.reset();
+			else if (scenario == 2)
+				problems.reset();
+			else
+				// A new attempt clears lastError, while its previous Problem
+				// stays until admission confirms the replacement connection.
+				CHECK(session->connectTcpReference(QStringLiteral("127.0.0.1"),
+				                                  reconnected.listener.serverPort()));
+		});
+		CHECK(QMetaObject::invokeMethod(session.get(), "stateChanged", Qt::DirectConnection));
+		CHECK(publications >= 1);
+		if (scenario == 0) {
+			CHECK(!adapterAlive && sessionAlive && problemsAlive);
+			CHECK(problems->count() == 1);
+		} else if (scenario == 1) {
+			CHECK(adapterAlive && !sessionAlive && problemsAlive);
+			CHECK(problems->count() == 1);
+		} else if (scenario == 2) {
+			CHECK(adapterAlive && sessionAlive && !problemsAlive);
+		} else {
+			CHECK(adapterAlive && sessionAlive && problemsAlive);
+			std::printf("SessionProblems reentrant admission: error='%s' count=%d publications=%d connecting=%d\n",
+			            qPrintable(session->lastError()), problems->count(), publications,
+			            int(session->connecting()));
+			CHECK(session->lastError().isEmpty() && session->connecting());
+			const bool admitted = await([&] {
+				return session->filesOnly() && !problems->has(QStringLiteral("session.connection")) &&
+				       problems->has(QStringLiteral("session.limitation"));
+			});
+			std::printf("SessionProblems reentrant admitted: filesOnly=%d errors=%d warnings=%d publications=%d\n",
+			            int(session->filesOnly()), problems->errorCount(), problems->warningCount(), publications);
+			CHECK(admitted && problems->errorCount() == 0 && problems->warningCount() == 1);
+			// Error inserted, resolved at admission, then the files-only
+			// limitation inserted: no obsolete connection Problem survives.
+			CHECK(publications == 3);
+		}
+	}
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -240,6 +307,7 @@ int main(int argc, char** argv)
 	problemLifecycle();
 	publicationLifetime();
 	filesOnlyLoss();
+	sessionPublicationLifetime();
 	std::printf("Event log: %u checks, 0 failures\n", checks);
 	return 0;
 }

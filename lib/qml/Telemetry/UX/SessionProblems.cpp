@@ -21,36 +21,46 @@ SessionProblems::SessionProblems(qt::ConnectionSession* session, ProblemsModel* 
 
 void SessionProblems::update()
 {
-	if (!session_ || !problems_)
+	const QPointer<SessionProblems> alive(this);
+	const auto session = session_;
+	const auto problems = problems_;
+	if (!session || !problems)
 		return;
 	const auto device = QString::fromLatin1(scope);
-	const bool ready = session_->ready() || session_->filesOnly();
-	const bool recovery = session_->recoveryRequired();
-	const auto why = session_->lastError();
+	const bool ready = session->ready() || session->filesOnly();
+	const bool recovery = session->recoveryRequired();
+	const auto why = session->lastError();
 	// Files-only connections have no same-peer recovery obligation even when
 	// their link fails. The recorded error distinguishes that failure from
 	// closing a working connection deliberately.
-	const bool failed = !ready && !session_->connecting() && !why.isEmpty();
-	if (!ready && !session_->connecting() && !recovery && !failed) {
-		problems_->resolveScope(device);
+	const bool failed = !ready && !session->connecting() && !why.isEmpty();
+	if (!ready && !session->connecting() && !recovery && !failed) {
+		problems->resolveScope(device);
 		return;
 	}
 	const auto connectionKey = QStringLiteral("session.connection");
 	if (recovery || failed) {
-		problems_->raise(connectionKey, Severity::Error, tr("Connection"),
+		problems->raise(connectionKey, Severity::Error, tr("Connection"),
 		                 why.isEmpty() ? tr("Connection dropped.") : why, device);
 	} else if (ready) {
-		problems_->resolve(connectionKey);
+		problems->resolve(connectionKey);
 	}
+	// Model publication calls the host synchronously. It can close this
+	// adapter, the connection or Problems; later stages need live objects and
+	// fresh session facts when that publication also changed the connection.
+	if (!alive || !session || !problems)
+		return;
 	const auto limitationKey = QStringLiteral("session.limitation");
-	if (session_->filesOnly() && session_->limitation() != qt::ConnectionSession::Limitation::None)
-		problems_->raise(limitationKey, Severity::Warning, tr("Device"), session_->limitationText(), device);
-	else if (ready)
-		problems_->resolve(limitationKey);
+	if (session->filesOnly() && session->limitation() != qt::ConnectionSession::Limitation::None)
+		problems->raise(limitationKey, Severity::Warning, tr("Device"), session->limitationText(), device);
+	else if (session->ready() || session->filesOnly())
+		problems->resolve(limitationKey);
+	if (!alive || !session || !problems)
+		return;
 	const auto identityKey = QStringLiteral("session.identity");
-	if (const auto problem = session_->identityProblem(); !problem.isEmpty())
-		problems_->raise(identityKey, Severity::Warning, tr("Device"), problem, device);
+	if (const auto problem = session->identityProblem(); !problem.isEmpty())
+		problems->raise(identityKey, Severity::Warning, tr("Device"), problem, device);
 	else
-		problems_->resolve(identityKey);
+		problems->resolve(identityKey);
 }
 } // namespace telemetry::ux

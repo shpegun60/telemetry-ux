@@ -793,6 +793,52 @@ void watchRowWrite()
 	connection.disconnect();
 }
 
+// A row write may execute before disconnect loses its ACK. Its presentation
+// must preserve that uncertainty, without claiming the Field was not written.
+void watchRowWriteUnknown()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	const auto field = endpoint(provider->endpoints(), QStringLiteral("Setpoint"));
+	CHECK(field.isValid());
+	CHECK(provider->addWatchMany({QVariant::fromValue(field)}).value("added").toInt() == 1);
+	QSignalSpy finished(provider, &ux::DynamicConfiguratorProvider::watchWriteFinished);
+	bool armed = false;
+	QObject::connect(&presentation, &ux::QtConnectionBinding::operationFinished, &presentation,
+	                 [&](const QVariantMap& facts) {
+		                 // Completion is published before the row editor submits its
+		                 // Write: drop that Write's reply, never the preliminary Read.
+		                 if (!armed && facts.value(QStringLiteral("operation")).toUInt() ==
+		                                   unsigned(cl::Operation::FieldRead) &&
+		                     facts.value(QStringLiteral("succeeded")).toBool()) {
+			                 armed = true;
+			                 peer.setDropNextEncodedReply();
+		                 }
+	                 });
+	CHECK(provider->writeWatch(0, QStringLiteral("1234")));
+	CHECK(await([&] { return peer.nativeWrites() == 1; }));
+	CHECK(armed && finished.count() == 0);
+	connection.disconnect();
+	CHECK(await([&] { return finished.count() == 1 && !provider->watchWriting(); }));
+	CHECK(!finished.last().at(0).toBool());
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")));
+	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")));
+	CHECK(!provider->watchWriting() && connection.recoveryRequired());
+	const auto writes = peer.nativeWrites();
+	connect(connection, peer);
+	CHECK(!connection.recoveryRequired() && peer.nativeWrites() == writes && finished.count() == 1);
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")) &&
+	      provider->watchWriteOutcome().contains(QStringLiteral("previous session")));
+	connection.disconnect();
+}
+
 // Opening and submitting an unchanged floating-point row must preserve -0.
 // Drive the real QML editor with F2/Enter. Unchanged input must not turn into
 // a write; explicitly editing +0 back to -0 checks the actual TCP write bytes
@@ -1004,6 +1050,71 @@ void presentationPanels()
 	CHECK(peer.nativeWrites() == 0 && peer.nativeCommands() == 0 && peer.nativeServices() == 0);
 }
 
+void disconnectedPanels()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	readConfig(*provider);
+	CHECK(provider->beginEdit());
+	CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")), QStringLiteral("2")));
+	CHECK(provider->apply() && await([&] { return !provider->busy(); }));
+	CHECK(!provider->writeOutcome().isEmpty());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
+	CHECK(provider->executeCommand() && await([&] { return !provider->busy(); }));
+	CHECK(!provider->commandOutcome().isEmpty());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Transform"))));
+	CHECK(provider->callService() && await([&] { return !provider->busy(); }));
+	CHECK(!provider->serviceOutcome().isEmpty());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Config"))));
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	QQmlComponent component(&engine);
+	component.setData(R"qml(
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Telemetry.UX
+ApplicationWindow {
+    width: 960; height: 600; visible: true
+    RowLayout {
+        anchors.fill: parent
+        FieldEditor { objectName: "fieldPanel"; Layout.fillWidth: true; Layout.fillHeight: true; provider: testProvider }
+        CommandPanel { objectName: "commandPanel"; Layout.fillWidth: true; Layout.fillHeight: true; provider: testProvider }
+        ServicePanel { objectName: "servicePanel"; Layout.fillWidth: true; Layout.fillHeight: true; provider: testProvider }
+    }
+}
+)qml", QUrl(QStringLiteral("retained-outcomes.qml")));
+	CHECK(component.isReady());
+	std::unique_ptr<QObject> object(component.create());
+	auto* window = qobject_cast<QQuickWindow*>(object.get());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	CHECK(visual(window->contentItem(), QStringLiteral("writeOutcomeLabel")));
+	CHECK(!visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")));
+	CHECK(!visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
+	const auto writes = peer.nativeWrites(), commands = peer.nativeCommands(), services = peer.nativeServices();
+	connection.disconnect();
+	CHECK(await([&] {
+		return visual(window->contentItem(), QStringLiteral("writeOutcomeLabel")) &&
+		       visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")) &&
+		       visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel"));
+	}));
+	CHECK(!visual(window->contentItem(), QStringLiteral("applyButton")) &&
+	      !visual(window->contentItem(), QStringLiteral("executeButton")) &&
+	      !visual(window->contentItem(), QStringLiteral("callServiceButton")));
+	connect(connection, peer);
+	CHECK(!visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")) &&
+	      !visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
+	CHECK(peer.nativeWrites() == writes && peer.nativeCommands() == commands && peer.nativeServices() == services);
+	connection.disconnect();
+}
+
 void phase(const QString& name)
 {
 	inspector_qml::TcpDemoServer peer;
@@ -1170,8 +1281,10 @@ int main(int argc, char** argv)
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();
+	watchRowWriteUnknown();
 	watchRowSignedZero();
 	presentationPanels();
+	disconnectedPanels();
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));
 	phase(QStringLiteral("prepared"));

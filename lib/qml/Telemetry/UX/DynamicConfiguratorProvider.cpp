@@ -262,7 +262,7 @@ struct DynamicConfiguratorProvider::Impl {
 	// A second view only for writes from Watchlist rows, so a row write never
 	// moves the Details selection or touches its draft.
 	std::shared_ptr<DynamicViewState> writer;
-	quint32 writeId = 0;
+	quint32 writeId = 0, watchWriteSession = 0;
 	QString writeText, writeName, watchWrite;
 	bool watchWroteLast = false;
 	EndpointModel endpoints;
@@ -494,7 +494,10 @@ struct DynamicConfiguratorProvider::Impl {
 			                                   QStringLiteral(": written, confirmed by a fresh read")
 			             : result.writeCompleted && result.write.succeeded()
 			                 ? writeName + QStringLiteral(": written, readback unconfirmed")
-			                 : writeName + QStringLiteral(" not written: ") + operationText(result.write);
+			                 : writeName + (result.write.status == cl::Status::OutcomeUnknown
+			                                    ? QStringLiteral(": ")
+			                                    : QStringLiteral(" not written: ")) +
+			                       operationText(result.write);
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
 		if (state) {
@@ -747,7 +750,7 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 		return;
 	// Host replacement settles the old owner first. Never move accepted work to
 	// a different binding. A caller may retry attachment after the old completion.
-	if (p->busy()) {
+	if (p->busy() || (p->writer && p->writer->action != DynamicViewState::Action::None)) {
 		p->desired = binding;
 		if (p->state)
 			p->state->retire();
@@ -770,7 +773,6 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 		return;
 	p->state.reset();
 	p->writer.reset();
-	p->watchWrite.clear();
 	p->binding = target;
 	p->desired = target;
 	p->allowed = false;
@@ -1264,7 +1266,7 @@ bool DynamicConfiguratorProvider::watchWriting() const
 
 QString DynamicConfiguratorProvider::watchWriteOutcome() const
 {
-	return d->watchWrite;
+	return d->history(d->watchWrite, d->watchWriteSession);
 }
 
 bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
@@ -1278,6 +1280,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		return false;
 	const auto id = model->data(index, WatchlistModel::EndpointIdRole).toUInt();
 	auto& view = p->writer->view;
+	p->watchWriteSession = view.session();
 	if (view.editing())
 		view.cancelEdit();
 	const auto field = view.bindField(id);

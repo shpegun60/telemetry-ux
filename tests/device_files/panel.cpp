@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <memory>
 namespace qt = telemetry::integration::qt;
 namespace tcp = telemetry::integration::tcp;
@@ -346,6 +347,26 @@ void hexView()
 	      view.selectionStart() == 16 && view.selectionLength() == 4);
 	CHECK(!view.selectBlock(QStringLiteral("0x10"), QStringLiteral("0x8"), true).isEmpty());
 	CHECK(!view.selectBlock(QStringLiteral("0x120"), QStringLiteral("100"), false).isEmpty());
+	// Valid qint64 inputs can still overflow once made relative to the cursor
+	// or added as a block length. Refusal keeps both cursor and selection.
+	const auto beforeCursor = view.cursor();
+	const auto beforeStart = view.selectionStart();
+	const auto beforeLength = view.selectionLength();
+	for (const auto& expression : {QStringLiteral("+9223372036854775807"),
+	                              QStringLiteral("end+9223372036854775807")}) {
+		QString error;
+		CHECK(view.evaluate(expression, &error) == -1 && !error.isEmpty());
+		CHECK(!view.goTo(expression).isEmpty());
+		CHECK(view.cursor() == beforeCursor && view.selectionStart() == beforeStart &&
+		      view.selectionLength() == beforeLength);
+	}
+	for (const auto& start : {QStringLiteral("16"), QStringLiteral("9223372036854775807")}) {
+		CHECK(!view.selectBlock(start, QStringLiteral("9223372036854775807"), false).isEmpty());
+		CHECK(view.cursor() == beforeCursor && view.selectionStart() == beforeStart &&
+		      view.selectionLength() == beforeLength);
+	}
+	view.selectRange(17, std::numeric_limits<qint64>::max());
+	CHECK(view.selectionStart() == 17 && view.cursor() == 299 && view.selectionLength() == 283);
 
 	// The inspector at E8 03 00 00: 1000 little-endian, its bytes the other way big-endian.
 	QByteArray value(16, '\0');

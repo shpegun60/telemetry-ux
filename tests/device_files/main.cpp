@@ -1957,6 +1957,30 @@ void textAndTable()
 	lines.setText(QStringLiteral("one\n"));
 	CHECK(lines.lineCount() == 1);
 
+	// Next/Previous visit exactly the non-overlapping counted/highlighted
+	// matches: "aaaa" contains two "aa" matches, never an unnumbered hit at 1.
+	{
+		TextLinesModel overlap;
+		overlap.setText(QStringLiteral("aaaa"));
+		CHECK(overlap.find(QStringLiteral("aa"), true, true, 0).isEmpty() && overlap.matchCount() == 2 &&
+		      overlap.matchIndex() == 1 && overlap.data(overlap.index(0), TextLinesModel::CurrentRole).toInt() == 0);
+		CHECK(overlap.data(overlap.index(0), TextLinesModel::MatchesRole).toList() ==
+		      QVariantList({QVariantList{0, 2}, QVariantList{2, 2}}));
+		CHECK(overlap.find(QStringLiteral("aa"), true, true, 0).isEmpty() && overlap.matchIndex() == 2 &&
+		      overlap.data(overlap.index(0), TextLinesModel::CurrentRole).toInt() == 2);
+		CHECK(overlap.find(QStringLiteral("aa"), true, false, 0).isEmpty() && overlap.matchIndex() == 1);
+		CHECK(overlap.find(QStringLiteral("aa"), true, false, 0) == QStringLiteral("Wrapped to the end") &&
+		      overlap.matchIndex() == 2);
+		CHECK(overlap.find(QStringLiteral("aa"), true, true, 0) == QStringLiteral("Wrapped to the start") &&
+		      overlap.matchIndex() == 1);
+		overlap.setText(QStringLiteral("aAaA"));
+		CHECK(overlap.find(QStringLiteral("AA"), false, false, 0).isEmpty() && overlap.matchCount() == 2 &&
+		      overlap.matchIndex() == 2 && overlap.data(overlap.index(0), TextLinesModel::CurrentRole).toInt() == 2);
+		CHECK(overlap.find(QStringLiteral("AA"), false, false, 0).isEmpty() && overlap.matchIndex() == 1);
+		CHECK(overlap.find(QStringLiteral("AA"), true, true, 0) == QStringLiteral("Not found") &&
+		      overlap.matchCount() == 0 && overlap.matchIndex() == 0);
+	}
+
 	// A log of about 10 MB: split and searched at once.
 	QString big;
 	big.reserve(10 * 1024 * 1024);
@@ -1989,6 +2013,18 @@ void textAndTable()
 		CHECK(crowded.find(QStringLiteral("x"), false, true, crowded.matchLine()).isEmpty() &&
 		      crowded.matchLine() == 149001);
 		CHECK(crowded.data(crowded.index(149500), TextLinesModel::MatchesRole).toList().size() == 1);
+		// The uncached tail follows the same non-overlapping order, both ways.
+		crowded.setText(QStringLiteral("aaaa\n").repeated(TextLinesModel::maxMatches / 2 + 2));
+		constexpr auto last = TextLinesModel::maxMatches / 2 + 1;
+		CHECK(crowded.find(QStringLiteral("aa"), true, true, last).isEmpty() && crowded.matchesCapped() &&
+		      crowded.matchCount() == TextLinesModel::maxMatches && crowded.matchIndex() == 0 &&
+		      crowded.matchLine() == last && crowded.data(crowded.index(last), TextLinesModel::CurrentRole).toInt() == 0);
+		CHECK(crowded.find(QStringLiteral("aa"), true, true, last).isEmpty() && crowded.matchIndex() == 0 &&
+		      crowded.data(crowded.index(last), TextLinesModel::CurrentRole).toInt() == 2);
+		CHECK(crowded.find(QStringLiteral("aa"), true, false, last).isEmpty() &&
+		      crowded.data(crowded.index(last), TextLinesModel::CurrentRole).toInt() == 0);
+		CHECK(crowded.find(QStringLiteral("aa"), true, false, last).isEmpty() && crowded.matchLine() == last - 1 &&
+		      crowded.data(crowded.index(last - 1), TextLinesModel::CurrentRole).toInt() == 2);
 	}
 	// A line of 30000 characters shows its first 10000 and says how many more;
 	// Copy takes it whole.
@@ -2838,6 +2874,82 @@ private:
 	int& stopped_;
 };
 
+void fileAppendPublication(const QString& folder)
+{
+	using telemetry::ux::OpenFiles;
+	const auto local = folder + QStringLiteral("/append-publication.bin");
+	const auto earlier = folder + QStringLiteral("/append-earlier.bin");
+	const auto replacement = folder + QStringLiteral("/append-replacement.bin");
+	const auto devicePath = QStringLiteral("/append-publication.bin");
+	QObject callbacks;
+	for (const bool reading : {false, true}) {
+		const auto open = [&](OpenFiles& files) {
+			return reading ? files.reading(local, devicePath) : files.open(local, devicePath);
+		};
+		{
+			OpenFiles files;
+			bool closed = false;
+			QObject::connect(&files, &OpenFiles::countChanged, &callbacks, [&] {
+				if (!closed && files.count() == 1) {
+					closed = true;
+					files.close(0);
+				}
+			});
+			CHECK(open(files) == -1);
+			CHECK(closed && files.count() == 0 && !files.contentFor(local));
+		}
+		{
+			QPointer<OpenFiles> files = new OpenFiles;
+			QObject::connect(files, &OpenFiles::countChanged, &callbacks, [&] {
+				delete files.data();
+			});
+			CHECK(open(*files) == -1);
+			CHECK(!files);
+		}
+		{
+			QPointer<OpenFiles> files = new OpenFiles;
+			int countNotices = 0;
+			QObject::connect(files, &OpenFiles::countChanged, &callbacks, [&] { ++countNotices; });
+			QObject::connect(files, &QAbstractItemModel::rowsInserted, &callbacks, [&] {
+				delete files.data();
+			});
+			CHECK(open(*files) == -1);
+			CHECK(!files && countNotices == 0);
+		}
+		{
+			OpenFiles files;
+			CHECK(files.open(earlier) == 0);
+			bool shifted = false;
+			QObject::connect(&files, &OpenFiles::countChanged, &callbacks, [&] {
+				if (!shifted && files.count() == 2) {
+					shifted = true;
+					files.close(0);
+				}
+			});
+			CHECK(open(files) == 0);
+			CHECK(shifted && files.count() == 1 && files.rowOf(local) == 0 && !files.contentFor(earlier));
+			CHECK(files.contentFor(local)->devicePath() == devicePath);
+			CHECK(files.contentFor(local)->loading() == reading);
+		}
+		{
+			OpenFiles files;
+			bool replaced = false;
+			QObject::connect(&files, &OpenFiles::countChanged, &callbacks, [&] {
+				if (!replaced && files.count() == 1) {
+					replaced = true;
+					files.close(0);
+					CHECK(files.open(replacement) == 0);
+				}
+			});
+			CHECK(open(files) == -1);
+			CHECK(replaced && files.count() == 1 && !files.contentFor(local));
+			CHECK(files.contentFor(replacement)->localFile() == replacement &&
+			      files.contentFor(replacement)->devicePath().isEmpty() &&
+			      !files.contentFor(replacement)->loading());
+		}
+	}
+}
+
 void fileViewRetirement(const QString& folder)
 {
 	using telemetry::ux::FileContent;
@@ -3577,6 +3689,7 @@ int main(int argc, char** argv)
 	deviceLayer(folder.path());
 	deviceRecordSizes(folder.path());
 	uploads(folder.path());
+	fileAppendPublication(folder.path());
 	fileViewRetirement(folder.path());
 	liveValues(folder.path());
 	truncatedList();

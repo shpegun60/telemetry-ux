@@ -835,11 +835,23 @@ int OpenFiles::append()
 	file->setLiveFactory(&liveFactory_);
 	file->setReferenceLookup(&referenceLookup_);
 	const auto row = static_cast<int>(files_.size());
+	QPointer<OpenFiles> alive(this);
+	QPointer<FileContent> added(file.get());
 	beginInsertRows({}, row, row);
 	files_.push_back(std::move(file));
 	endInsertRows();
+	if (!alive || !added)
+		return -1;
 	Q_EMIT countChanged();
-	return row;
+	// The host may close this new tab, shift it by closing an earlier one,
+	// or destroy the model from countChanged. Return only this same content's
+	// current row; an unrelated replacement at the old row is not our file.
+	if (!alive || !added)
+		return -1;
+	for (std::size_t at = 0; at < files_.size(); ++at)
+		if (files_[at].get() == added)
+			return static_cast<int>(at);
+	return -1;
 }
 
 int OpenFiles::open(const QString& localFile, const QString& devicePath)
@@ -856,6 +868,8 @@ int OpenFiles::open(const QString& localFile, const QString& devicePath)
 		}
 	}
 	const auto row = append();
+	if (row < 0)
+		return -1;
 	auto& file = *files_[static_cast<std::size_t>(row)];
 	file.setDevicePath(devicePath);
 	file.setLocalFile(localFile);
@@ -872,6 +886,8 @@ int OpenFiles::reading(const QString& localFile, const QString& devicePath)
 		return row;
 	if (row < 0)
 		row = append();
+	if (row < 0)
+		return -1;
 	QPointer<OpenFiles> alive(this);
 	QPointer<FileContent> file(files_[static_cast<std::size_t>(row)].get());
 	file->beginReading(localFile, devicePath);
