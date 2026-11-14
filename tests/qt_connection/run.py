@@ -30,7 +30,9 @@ def sources():
              ROOT / 'tests/dynamic_qml_configurator/Fixture.hpp',
              ROOT / 'examples/inspector/DemoPeer.cpp', ROOT / 'examples/inspector/DemoPeer.hpp',
              ROOT / 'examples/inspector/TcpDemoServer.cpp', ROOT / 'examples/inspector/TcpDemoServer.hpp']
-    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch', ROOT / 'tests/qml_layout', ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
+    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch',
+                      ROOT / 'tests/endpoint_previews', ROOT / 'tests/qml_layout',
+                      ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(paths))}
 
@@ -167,6 +169,40 @@ def main():
         report['batch_presentation'] = dict(checks=int(batch_checks[1]),
             executable_sha256=digest(batch_executable), bounded_items=32,
             signals_in_native_callback=False, execution_source='controlled')
+        preview_executable = build / ('telemetry_endpoint_previews_check.exe' if os.name == 'nt' else 'telemetry_endpoint_previews_check')
+        preview_log = run('endpoint-preview-runtime', [preview_executable], env=headless_environment)
+        preview_checks = re.search(r'Endpoint preview checks=(\d+) warnings=0', preview_log)
+        if not preview_checks or int(preview_checks[1]) < 1020:
+            raise RuntimeError('Bounded endpoint previews did not reach their warning-free assertion floor')
+        report['endpoint_previews'] = dict(checks=int(preview_checks[1]), warnings=0,
+            executable_sha256=digest(preview_executable), execution_source='controlled',
+            cache_fields=64, cache_bytes=256 * 1024, field_bytes=8192,
+            refresh_ms=5000, minimum_spacing_ms=500)
+        preview_model_executable = build / ('telemetry_endpoint_preview_models_check.exe' if os.name == 'nt' else 'telemetry_endpoint_preview_models_check')
+        preview_model_log = run('endpoint-preview-model-runtime', [preview_model_executable], env=headless_environment)
+        preview_model_checks = re.search(r'Endpoint preview model checks=(\d+) warnings=0', preview_model_log)
+        if not preview_model_checks or int(preview_model_checks[1]) < 897:
+            raise RuntimeError('Endpoint metadata/value models did not reach their warning-free assertion floor')
+        report['endpoint_preview_models'] = dict(checks=int(preview_model_checks[1]), warnings=0,
+            executable_sha256=digest(preview_model_executable), native_encoded=True,
+            window=False, descendant_limit=4096)
+        preview_ui_executable = build / ('telemetry_endpoint_previews_ui_check.exe' if os.name == 'nt' else 'telemetry_endpoint_previews_ui_check')
+        preview_ui_output = output / 'endpoint-previews'
+        preview_ui_output.mkdir()
+        preview_ui_log = run('endpoint-preview-ui-runtime', [preview_ui_executable, preview_ui_output])
+        preview_ui_checks = re.search(r'Endpoint preview UI checks=(\d+) warnings=0', preview_ui_log)
+        if not preview_ui_checks or int(preview_ui_checks[1]) < 478:
+            raise RuntimeError('Endpoint tree UI did not reach its warning-free assertion floor')
+        preview_ui_images = [preview_ui_output / name for name in (
+            'details-unread-320.png', 'details-unread-480.png',
+            'tree-preview-480.png', 'tree-preview-320.png',
+            'details-edit-480.png', 'details-edit-320.png',
+            'service-request-response-880.png')]
+        report['endpoint_preview_ui'] = dict(checks=int(preview_ui_checks[1]), warnings=0,
+            executable_sha256=digest(preview_ui_executable),
+            loopback_tcp=True,
+            screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
+                                for image in preview_ui_images})
         layout_executable = build / ('telemetry_qml_layout_check.exe' if os.name == 'nt' else 'telemetry_qml_layout_check')
         layout_log = run('layout-runtime', [layout_executable, output])
         layout_checks = re.search(r'QML layout checks=(\d+) warnings=0', layout_log)

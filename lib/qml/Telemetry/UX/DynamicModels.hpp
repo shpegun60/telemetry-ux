@@ -20,6 +20,8 @@
 
 namespace telemetry::ux {
 
+class EndpointPreviews;
+
 using Inspector = telemetry::integration::inspector::InspectorModel<8, 4096, 65536>;
 // ReadMany copies its bounded binding into the existing FIFO completion slot.
 // This opt-in GUI budget does not change the portable Workbench default.
@@ -40,7 +42,21 @@ public:
 		CategoryRole,
 		ReadableRole,
 		IsEndpointRole,
-		WritableRole
+		WritableRole,
+		TypeTextRole,
+		AccessTextRole,
+		UnitRole,
+		WireBytesRole,
+		TypeIdRole,
+		ResponseTypeTextRole,
+		PreviewEligibleRole,
+		PreviewFieldIdRole,
+		PreviewAggregateRole,
+		PreviewChildRole,
+		PreviewValueRole,
+		PreviewStateRole,
+		PreviewAgeMsRole,
+		PreviewReasonRole
 	};
 	Q_ENUM(Role)
 
@@ -53,7 +69,15 @@ public:
 	[[nodiscard]] bool changing() const noexcept;
 	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
 	                     bool notify = true);
+	// Copy labels and sizes from the currently admitted schema. No schema or
+	// descriptor views are retained, and metadata publication never sends I/O.
+	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
+	void setPreviews(EndpointPreviews* previews);
+	// Invalid QVariant means no demand; Field ID zero is a valid demand.
+	Q_INVOKABLE QVariant previewDemandField(const QModelIndex& index) const;
+	Q_INVOKABLE bool previewOnlyChange(const QList<int>& roles) const;
 	Q_INVOKABLE QVariantMap endpoint(const QModelIndex& index) const;
+	Q_INVOKABLE bool isGroup(const QModelIndex& index) const;
 	// Resolve the current model index without retaining one across a reset.
 	bool matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const;
 	// Whether the current device's Field with this id accepts writes.
@@ -64,12 +88,17 @@ public:
 	int columnCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 	QHash<int, QByteArray> roleNames() const override;
+	bool canFetchMore(const QModelIndex& parent) const override;
+	void fetchMore(const QModelIndex& parent) override;
+	bool hasChildren(const QModelIndex& parent = {}) const override;
 
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 	void rebuildSource(const Inspector* inspector, const Workbench* workbench,
 	                   const WorkbenchView* view = nullptr);
+	void previewSourceChanged();
+	void previewValuesChanged();
 };
 
 class ValueModel final : public QAbstractItemModel {
@@ -84,7 +113,12 @@ public:
 		ChildCountRole,
 		LoadedCountRole,
 		EditableRole,
-		EditorTextRole
+		EditorTextRole,
+		EditorKindRole,
+		EditorChoicesRole,
+		EditorChoicesTruncatedRole,
+		CanonicalTextRole,
+		TypeTextRole
 	};
 	Q_ENUM(Role)
 	static constexpr int fetchBatch = 128;
@@ -105,6 +139,9 @@ public:
 	[[nodiscard]] bool changing() const noexcept;
 	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
 	                     int category, quint32 id, const QString& role, bool notify = true);
+	// The host supplies its admitted schema; only Qt-owned enum choices remain.
+	// Boolean choices need no schema. Unknown enum codes stay editable as text.
+	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& index) const override;
 	int rowCount(const QModelIndex& parent = {}) const override;

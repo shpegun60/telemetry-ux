@@ -9,10 +9,15 @@
 namespace telemetry::ux {
 struct WatchlistSource;
 struct BatchSource;
+class EndpointPreviews;
 
 class DynamicConfiguratorProvider final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
+	Q_PROPERTY(bool previewsSupported READ previewsSupported NOTIFY stateChanged)
+	Q_PROPERTY(QVariantMap selectionInfo READ selectionInfo NOTIFY stateChanged)
+	Q_PROPERTY(QAbstractItemModel* definitions READ definitions CONSTANT)
+	Q_PROPERTY(QModelIndex definitionRootIndex READ definitionRootIndex NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* batchItems READ batchItems CONSTANT)
@@ -74,6 +79,12 @@ public:
 	~DynamicConfiguratorProvider() override;
 	void setBinding(DynamicConfiguratorBinding* binding);
 	QAbstractItemModel* endpoints() const;
+	QVariantMap selectionInfo() const;
+	QAbstractItemModel* definitions() const;
+	QModelIndex definitionRootIndex() const;
+	bool previewsSupported() const;
+	Q_INVOKABLE bool setPreviewDemand(QObject* view, const QVariantList& indexes);
+	Q_INVOKABLE void clearPreviewDemand(QObject* view);
 	QAbstractItemModel* values() const;
 	QAbstractItemModel* responses() const;
 	QAbstractItemModel* batchItems() const;
@@ -190,6 +201,7 @@ Q_SIGNALS:
 private:
 	friend class QtConnectionBinding;
 	friend class ConnectionViews;
+	void setEndpointPreviews(EndpointPreviews* previews);
 	void setWatchSource(WatchlistSource source);
 	void pollWatch();
 	void setBatchSource(BatchSource source);

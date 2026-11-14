@@ -2,6 +2,7 @@
 #include "QtConnectionBinding.hpp"
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
+#include "EndpointPreviews.hpp"
 #include <QtCore/QThread>
 #include <algorithm>
 #include <memory>
@@ -294,7 +295,10 @@ public:
 	// session take turns instead of the first one always going first.
 	std::size_t turn = 0;
 	std::vector<QPointer<QtConnectionBinding>> adapters;
-	bool allowed = false, publishing = false;
+	bool allowed = false, publishing = false, previewQueued = false;
+	EndpointPreviews previews{this};
+	QHash<DynamicConfiguratorProvider*, QPair<int, bool>> watchRevisions;
+	QSet<quint32> watched;
 
 	explicit ConnectionViews(integration::qt::ConnectionSession& owner)
 	    : QObject(&owner), session(&owner)
@@ -307,7 +311,9 @@ public:
 		});
 		QObject::connect(&owner, &integration::qt::ConnectionSession::dataInvalidated, this,
 		                 [this] {
-			                 if (current)
+			                 const QPointer<ConnectionViews> alive(this);
+			                 previews.invalidateValues();
+			                 if (alive && current)
 				                 current->invalidateData();
 		                 });
 		QObject::connect(&owner, &integration::qt::ConnectionSession::admissionChanged, this,
@@ -335,6 +341,10 @@ public:
 
 	void retire()
 	{
+		const QPointer<ConnectionViews> guard(this);
+		previews.retire();
+		if (!guard) return;
+		watched.clear(); watchRevisions.clear();
 		if (!current)
 			return;
 		current->retire();
@@ -385,6 +395,30 @@ public:
 		std::erase_if(adapters, [](const auto& value) {
 			return value.isNull();
 		});
+		// Watch membership is copied only when it changes, never per visible row.
+		QHash<DynamicConfiguratorProvider*, QPair<int, bool>> revisions;
+		for (const auto& provider : providers)
+			if (provider) revisions.insert(provider.data(), {provider->watchRevision(), provider->watchActive()});
+		if (revisions != watchRevisions) {
+			watched.clear();
+			for (const auto& provider : providers) if (provider && provider->watchActive()) {
+				const auto* model = provider->watchlist();
+				for (int row = 0; row < model->rowCount(); ++row)
+					watched.insert(model->data(model->index(row, 0), WatchlistModel::EndpointIdRole).toUInt());
+			}
+			watchRevisions = std::move(revisions);
+		}
+		// progressed() is published while Session still guards native progress.
+		// Its public readFieldValue() correctly refuses submissions on that stack.
+		// Coalesce one owner-loop turn after every explicit view and Watch/Batch
+		// had its turn; recheck demand, admission and busy there before submitting.
+		if (!previewQueued) {
+			previewQueued = true;
+			QMetaObject::invokeMethod(this, [this] {
+				previewQueued = false;
+				previews.poll();
+			}, Qt::QueuedConnection);
+		}
 		publishing = false;
 	}
 
@@ -404,6 +438,48 @@ public:
 		    owner->inspector, owner, nullptr,
 		    QStringLiteral("0x%1").arg(owner->schema.fingerprint(), 16, 16, QLatin1Char('0')));
 		current->setMutationsAllowed(allowed);
+		EndpointPreviewSource source;
+		const QPointer<ConnectionViews> registry(this);
+		const QPointer<integration::qt::ConnectionSession> target(session);
+		source.backing = owner;
+		source.current = [target, owner] {
+			return target && target->ready() && target->storage() == owner && owner->inspector.isCurrent();
+		};
+		const auto valid = source.current;
+		source.schema = [owner, valid] { return valid() ? owner->schema : runtime::RuntimeSchema{}; };
+		source.session = [owner, valid] { return valid() ? owner->inspector.session() : 0; };
+		source.watched = [registry](quint32 id) { return registry && registry->watched.contains(id); };
+		source.busy = [registry, target, valid] {
+			if (!registry || !target || !valid() || target->busy()) return true;
+			for (const auto& provider : registry->providers)
+				if (provider && (provider->busy() || provider->watchPending() ||
+				    provider->batchPending() || provider->watchWriting())) return true;
+			return false;
+		};
+		source.read = [target, valid](quint32 id, EndpointPreviewSource::Completion done) -> client::Submission {
+			if (!target || !valid()) return {client::Status::NotAdmitted, {}};
+			return target->readFieldValue(id, [done = std::move(done)](const integration::dynamic::DynamicResult& result) noexcept {
+				EndpointPreviewResult out;
+				out.status = result.operation.status;
+				out.hasValue = result.operation.succeeded() && result.hasValue();
+				if (out.hasValue) {
+					const auto bytes = result.value.bytes();
+					if (bytes && bytes.value.size() <= EndpointPreviews::fieldBytesLimit)
+						out.bytes = QByteArray(reinterpret_cast<const char*>(bytes.value.data()), qsizetype(bytes.value.size()));
+					else out.hasValue = false;
+				}
+				if (!out.hasValue)
+					out.reason = QStringLiteral("Field unavailable (client %1, dispatch %2, endpoint %3, value %4).")
+					    .arg(int(result.operation.status)).arg(result.operation.dispatch)
+					    .arg(result.operation.endpointStatus).arg(int(result.valueStatus));
+				*done = std::move(out);
+			});
+		};
+		const QPointer<ConnectionViews> sourceGuard(this);
+		previews.setSource(std::move(source));
+		if (!sourceGuard || !current) return;
+		QObject::connect(current.get(), &DynamicConfiguratorBinding::managedMutationAccepted,
+		                 &previews, &EndpointPreviews::invalidateValues);
 		QObject::connect(current.get(), &DynamicConfiguratorBinding::operationFinished, this,
 		                 [this](const QVariantMap& facts) {
 			                 const auto observers = adapters;
@@ -415,7 +491,9 @@ public:
 		const QPointer<ConnectionViews> alive(this);
 		for (const auto& provider : liveProviders) {
 			if (provider) {
-				provider->setBinding(current.get());
+				provider->setEndpointPreviews(&previews);
+				if (!alive) return;
+				if (provider) provider->setBinding(current.get());
 				if (provider)
 					provider->setWatchSource(watchSource(session));
 				if (provider)
@@ -461,6 +539,11 @@ DynamicConfiguratorProvider* QtConnectionBinding::createProvider(QObject* parent
 	                                                 parent ? parent : this);
 	if (registry)
 		registry->providers.emplace_back(provider);
+	if (registry) {
+		provider->setEndpointPreviews(&registry->previews);
+		QObject::connect(provider, &DynamicConfiguratorProvider::watchCompleted, &registry->previews,
+		                 &EndpointPreviews::ingest);
+	}
 	provider->setWatchSource(watchSource(session_));
 	provider->setBatchSource(batchSource(session_));
 	providers_.removeIf([](const auto& value) {

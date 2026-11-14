@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: MIT
  */
 #include "DynamicModels.hpp"
+#include "EndpointPreviews.hpp"
+#include "SchemaText.hpp"
 
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
@@ -123,14 +125,86 @@ struct Row {
 	quintptr token = 0;
 	Row* parent = nullptr;
 	int row = 0;
-	QString name, detail, value, type, path, editorText;
+	QString name, detail, value, type, path, editorText, accessText, responseTypeText;
+	QString canonicalText;
+	QString editorKind = QStringLiteral("text");
 	QVariantList valuePath;
 	std::uint32_t endpointId = 0, totalChildren = 0;
+	TypeId typeId = 0, responseTypeId = 0;
+	std::uint32_t wireBytes = 0, responseWireBytes = 0;
+	std::uint32_t previewFieldId = 0, previewOffset = 0, previewFieldBytes = 0;
+	std::uint32_t rangeFirst = 0, rangeCount = 0;
 	int category = 0;
 	bool readable = false, writable = false, endpoint = false, aggregate = false;
+	bool previewOwner = false, previewReadable = false, previewChild = false, previewRange = false;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
+
+struct TypeMetadata {
+	QString label;
+	std::uint32_t wireBytes = 0;
+};
+
+constexpr std::uint32_t previewRangeSize = 256;
+constexpr std::size_t previewNodeLimit = 4096;
+
+void previewShape(Row& row, const telemetry::runtime::RuntimeSchema& schema)
+{
+	const auto* type = schema.type(row.typeId);
+	row.aggregate = row.previewOwner && type &&
+	                (type->kind == Kind::Struct || type->kind == Kind::Array);
+	row.totalChildren = !row.aggregate ? 0
+	                    : row.previewRange ? row.rangeCount
+	                    : type->kind == Kind::Struct ? type->memberCount
+	                    : type->elementCount <= previewRangeSize ? type->elementCount
+	                    : (type->elementCount - 1) / previewRangeSize + 1;
+}
+
+bool previewEligible(const Row& row)
+{
+	return row.previewOwner && row.previewReadable && !row.type.isEmpty() &&
+	       row.previewFieldBytes <= EndpointPreviews::fieldBytesLimit;
+}
+
+QString endpointDetail(const Row& row)
+{
+	auto detail = QStringLiteral("ID ") + integerText(row.endpointId);
+	if (!row.type.isEmpty()) {
+		detail += QStringLiteral(" · ");
+		if (row.category != static_cast<int>(Category::Field))
+			detail += QStringLiteral("Request: ");
+		detail += row.type + QStringLiteral(" (#") + integerText(row.typeId) +
+		          QStringLiteral(", ") + integerText(row.wireBytes) + QStringLiteral(" B)");
+		if (row.category == static_cast<int>(Category::Service))
+			detail += QStringLiteral(" → Response: ") + row.responseTypeText +
+			          QStringLiteral(" (#") + integerText(row.responseTypeId) +
+			          QStringLiteral(", ") + integerText(row.responseWireBytes) +
+			          QStringLiteral(" B)");
+	}
+	if (!row.accessText.isEmpty())
+		detail += QStringLiteral(" · ") + row.accessText;
+	return detail;
+}
+
+QString enumCode(std::uint64_t bits, Code code)
+{
+	switch (code) {
+		case Code::U8: return integerText(static_cast<std::uint8_t>(bits));
+		case Code::S8: return integerText(std::bit_cast<std::int8_t>(static_cast<std::uint8_t>(bits)));
+		case Code::U16: return integerText(static_cast<std::uint16_t>(bits));
+		case Code::S16: return integerText(std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(bits)));
+		case Code::U32: return integerText(static_cast<std::uint32_t>(bits));
+		case Code::S32: return integerText(std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(bits)));
+		case Code::U64: return integerText(bits);
+		case Code::S64: return integerText(std::bit_cast<std::int64_t>(bits));
+		case Code::Bool:
+		case Code::F32:
+		case Code::F64:
+			return {};
+	}
+	return {};
+}
 
 // A QModelIndex stores only an integer token. Clear never reuses a token, so an
 // index retained across reset cannot dereference a deleted or replacement row.
@@ -363,6 +437,10 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 		return {};
 	auto row = std::make_unique<Row>();
 	row->handle = handle;
+	row->typeId = info.value.type;
+	row->editorKind = info.value.kind == Kind::Enum ? QStringLiteral("enum")
+	                  : info.value.kind == Kind::Scalar && info.value.code == Code::Bool
+	                      ? QStringLiteral("bool") : QStringLiteral("text");
 	row->name = info.value.arrayElement
 	                ? QLatin1Char('[') + integerText(info.value.index) + QLatin1Char(']')
 	                : text(info.value.name);
@@ -383,6 +461,7 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 			return {};
 		row->value = scalarText(scalar.value);
 		row->editorText = scalarNumberText(scalar.value);
+		row->canonicalText = row->editorText;
 	}
 	row->detail = row->type + QStringLiteral(" #") + integerText(info.value.type);
 	return row;
@@ -395,10 +474,50 @@ struct EndpointModel::Impl {
 	std::uint64_t admission = 0;
 	PresentationOverlay presentation;
 	QString fingerprint;
+	QPointer<EndpointPreviews> previews;
+	QMetaObject::Connection previewChanged, previewSource, previewDestroyed;
+	QHash<TypeId, TypeMetadata> types;
+	std::size_t previewNodes = 0;
 
 	bool current() const
 	{
 		return inspector.isCurrent() && inspector.snapshotInfo().admission == admission;
+	}
+
+	bool matchesSchema(const telemetry::runtime::RuntimeSchema& schema) const
+	{
+		if (!current() || !schema.valid())
+			return false;
+		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
+			const auto admitted = inspector.endpoints(category);
+			const auto supplied = schema.endpoints(category);
+			if (admitted.size() != supplied.size() ||
+			    (!admitted.empty() && admitted.data() != supplied.data()))
+				return false;
+		}
+		return true;
+	}
+
+	bool previewCurrent() const
+	{
+		return previews && matchesSchema(previews->schema());
+	}
+
+	TypeMetadata metadata(const telemetry::runtime::RuntimeSchema& schema, TypeId id)
+	{
+		const auto found = types.constFind(id);
+		if (found != types.cend())
+			return found.value();
+		const auto* type = schema.type(id);
+		const TypeMetadata value{schema_text::typeText(schema, id), type ? type->wireBytes : 0};
+		types.insert(id, value);
+		return value;
+	}
+
+	bool expansionLimited(const Row& row) const
+	{
+		return row.aggregate && row.children.size() < row.totalChildren &&
+		       previewNodes >= previewNodeLimit;
 	}
 };
 
@@ -412,11 +531,18 @@ void EndpointModel::clear()
 {
 	if (changing())
 		return;
-	const ChangeGuard guard{impl_->tree.changing};
+	impl_->tree.changing = true;
+	const QPointer<EndpointModel> alive(this);
 	beginResetModel();
+	if (!alive)
+		return;
 	impl_->tree.clear();
+	impl_->types.clear();
+	impl_->previewNodes = 0;
 	impl_->inspector = {};
 	endResetModel();
+	if (alive)
+		impl_->tree.changing = false;
 }
 
 bool EndpointModel::changing() const noexcept
@@ -436,10 +562,110 @@ void EndpointModel::setPresentation(const PresentationOverlay& overlay, const QS
 		indices.append(createIndex(row->row, 0, row->token));
 	const QPointer<EndpointModel> alive(this);
 	for (const auto& index : indices) {
-		Q_EMIT dataChanged(index, index, {Qt::DisplayRole, NameRole, DetailRole});
+		Q_EMIT dataChanged(index, index, {Qt::DisplayRole, NameRole, DetailRole, UnitRole});
 		if (!alive)
 			return;
 	}
+}
+
+void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema)
+{
+	if (changing() || !impl_->matchesSchema(schema))
+		return;
+	QVector<QModelIndex> indices;
+	for (auto* row : std::as_const(impl_->tree.rows)) {
+		if (!row->endpoint)
+			continue;
+		const auto value = impl_->metadata(schema, row->typeId);
+		row->type = value.label;
+		row->wireBytes = value.wireBytes;
+		if (row->category == static_cast<int>(Category::Service)) {
+			const auto response = impl_->metadata(schema, row->responseTypeId);
+			row->responseTypeText = response.label;
+			row->responseWireBytes = response.wireBytes;
+		}
+		if (row->category == static_cast<int>(Category::Field)) {
+			row->previewOwner = true;
+			row->previewFieldId = row->endpointId;
+			row->previewReadable = row->readable;
+			row->previewFieldBytes = row->wireBytes;
+			previewShape(*row, schema);
+		}
+		row->detail = endpointDetail(*row);
+		indices.append(createIndex(row->row, 0, row->token));
+	}
+	const auto admission = impl_->admission;
+	const QPointer<EndpointModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive || !impl_->current() || impl_->admission != admission)
+			return;
+		if (!impl_->tree.at(this, index))
+			continue;
+		Q_EMIT dataChanged(index, index, {DetailRole, TypeTextRole, WireBytesRole,
+		                                 ResponseTypeTextRole, PreviewEligibleRole,
+		                                 PreviewFieldIdRole, PreviewAggregateRole});
+	}
+}
+
+void EndpointModel::setPreviews(EndpointPreviews* previews)
+{
+	if (impl_->previews == previews)
+		return;
+	QObject::disconnect(impl_->previewChanged);
+	QObject::disconnect(impl_->previewSource);
+	QObject::disconnect(impl_->previewDestroyed);
+	impl_->previews = previews;
+	if (previews) {
+		impl_->previewChanged = connect(previews, &EndpointPreviews::changed,
+		                                this, &EndpointModel::previewValuesChanged);
+		impl_->previewSource = connect(previews, &EndpointPreviews::sourceChanged,
+		                               this, &EndpointModel::previewSourceChanged);
+		impl_->previewDestroyed = connect(previews, &QObject::destroyed,
+		                                  this, &EndpointModel::previewValuesChanged);
+	}
+	previewSourceChanged();
+}
+
+void EndpointModel::previewSourceChanged()
+{
+	const QPointer<EndpointModel> alive(this);
+	if (impl_->previews)
+		setSchemaMetadata(impl_->previews->schema());
+	if (alive)
+		previewValuesChanged();
+}
+
+void EndpointModel::previewValuesChanged()
+{
+	if (changing())
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->previewOwner)
+			indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<EndpointModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {PreviewValueRole, PreviewStateRole,
+			                                 PreviewAgeMsRole, PreviewReasonRole});
+	}
+}
+
+QVariant EndpointModel::previewDemandField(const QModelIndex& index) const
+{
+	const auto* row = impl_->tree.at(this, index);
+	return row && impl_->previewCurrent() && previewEligible(*row)
+	           ? QVariant::fromValue(row->previewFieldId) : QVariant{};
+}
+
+bool EndpointModel::previewOnlyChange(const QList<int>& roles) const
+{
+	return !roles.isEmpty() && std::all_of(roles.cbegin(), roles.cend(), [](int role) {
+		return role == PreviewValueRole || role == PreviewStateRole ||
+		       role == PreviewAgeMsRole || role == PreviewReasonRole;
+	});
 }
 
 void EndpointModel::rebuild(const Inspector& inspector)
@@ -462,9 +688,14 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 {
 	if (changing())
 		return;
-	const ChangeGuard guard{impl_->tree.changing};
+	impl_->tree.changing = true;
+	const QPointer<EndpointModel> alive(this);
 	beginResetModel();
+	if (!alive)
+		return;
 	impl_->tree.clear();
+	impl_->types.clear();
+	impl_->previewNodes = 0;
 	impl_->inspector = {inspector, workbench, false, false, view};
 	impl_->admission = impl_->inspector.snapshotInfo().admission;
 	if (impl_->current()) {
@@ -496,6 +727,8 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 					row->category = static_cast<int>(category);
 					row->endpoint = true;
 					row->endpointId = endpoint.id;
+					row->typeId = endpoint.typeId;
+					row->responseTypeId = endpoint.responseTypeId;
 					row->name = text(endpoint.name);
 					row->path = group->name + QLatin1Char('.') + row->name;
 					row->readable =
@@ -508,16 +741,25 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 					    (endpoint.capabilities &
 					     static_cast<std::uint8_t>(telemetry::descriptor::Capability::Writable)) !=
 					        0;
-					row->detail = QStringLiteral("ID ") + integerText(endpoint.id);
-					if (category == Category::Field)
-						row->detail += row->writable ? QStringLiteral(" · writable Field")
-						                             : QStringLiteral(" · read-only Field");
+					row->accessText = category == Category::Command ? QStringLiteral("Execute")
+					                  : category == Category::Service ? QStringLiteral("Call")
+					                  : row->readable && row->writable ? QStringLiteral("Read / Write")
+					                  : row->readable ? QStringLiteral("Read-only")
+					                  : row->writable ? QStringLiteral("Write-only")
+					                                  : QStringLiteral("Unavailable");
+					row->detail = endpointDetail(*row);
 					impl_->tree.append(std::move(row), group);
 				}
 			}
 		}
 	}
 	endResetModel();
+	if (!alive)
+		return;
+	impl_->tree.changing = false;
+	// The registry can publish its source before the provider rebuilds rows.
+	if (impl_->previews)
+		setSchemaMetadata(impl_->previews->schema());
 }
 
 QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
@@ -525,10 +767,27 @@ QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
 	const auto* row = impl_->tree.at(this, index);
 	if (!row || !row->endpoint || !impl_->current())
 		return {};
+	const auto unit = row->category == static_cast<int>(Category::Field)
+	                      ? impl_->presentation.hints(impl_->fingerprint, row->category,
+	                                                  row->endpointId, QStringLiteral("value")).unit
+	                      : QString{};
 	return {
 	    {QStringLiteral("id"), row->endpointId},     {QStringLiteral("category"), row->category},
 	    {QStringLiteral("readable"), row->readable}, {QStringLiteral("writable"), row->writable},
-	    {QStringLiteral("name"), row->name},         {QStringLiteral("path"), row->path}};
+	    {QStringLiteral("name"), row->name},         {QStringLiteral("path"), row->path},
+	    {QStringLiteral("typeId"), row->typeId},     {QStringLiteral("typeText"), row->type},
+	    {QStringLiteral("wireBytes"), row->wireBytes},
+	    {QStringLiteral("accessText"), row->accessText}, {QStringLiteral("unit"), unit},
+	    {QStringLiteral("responseTypeId"), row->responseTypeId},
+	    {QStringLiteral("responseTypeText"), row->responseTypeText},
+	    {QStringLiteral("responseWireBytes"), row->responseWireBytes}};
+}
+
+bool EndpointModel::isGroup(const QModelIndex& index) const
+{
+	const auto* row = impl_->tree.at(this, index);
+	return row && impl_->current() && !row->endpoint && !row->previewOwner &&
+	       !row->children.empty();
 }
 
 bool EndpointModel::fieldWritable(std::uint32_t id) const
@@ -581,11 +840,18 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 	if (!row || !impl_->current())
 		return {};
 	const auto hints =
-	    row->endpoint
+	    row->previewChild
+	        ? impl_->presentation.hints(impl_->fingerprint, static_cast<int>(Category::Field),
+	                                    row->previewFieldId, QStringLiteral("value"), row->valuePath)
+	    : row->endpoint
 	        ? impl_->presentation.hints(impl_->fingerprint, row->category, row->endpointId,
 	                                    row->category == 1 ? QStringLiteral("value")
 	                                                       : QStringLiteral("request"))
 	        : PresentationHints{};
+	const auto previewInfo = [&]() {
+		return row->previewOwner && impl_->previewCurrent()
+		           ? impl_->previews->info(row->previewFieldId) : QVariantMap{};
+	};
 	switch (role) {
 		case Qt::DisplayRole:
 		case NameRole:
@@ -604,6 +870,49 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			return row->endpoint;
 		case WritableRole:
 			return row->writable;
+		case TypeTextRole:
+			return row->type;
+		case AccessTextRole:
+			return row->accessText;
+		case UnitRole:
+			return row->previewOwner || (row->endpoint && row->category == static_cast<int>(Category::Field))
+			           ? hints.unit : QString{};
+		case WireBytesRole:
+			return row->wireBytes;
+		case TypeIdRole:
+			return row->typeId;
+		case ResponseTypeTextRole:
+			return row->responseTypeText;
+		case PreviewEligibleRole:
+			return previewEligible(*row);
+		case PreviewFieldIdRole:
+			return row->previewFieldId;
+		case PreviewAggregateRole:
+			return row->previewOwner && row->aggregate;
+		case PreviewChildRole:
+			return row->previewChild;
+		case PreviewValueRole: {
+			if (!row->previewOwner || !impl_->previewCurrent())
+				return QString{};
+			if (row->previewRange)
+				return previewInfo().value(QStringLiteral("hasValue")).toBool()
+				           ? tr("%1 elements").arg(row->rangeCount) : QString{};
+			const auto value = impl_->previews->value(row->previewFieldId, row->typeId,
+			                                           row->previewOffset);
+			return value; // UnitRole is separate; never append it twice in a row.
+		}
+		case PreviewStateRole:
+			return !row->previewOwner ? QString{}
+			       : impl_->expansionLimited(*row) ? QStringLiteral("Open Details")
+			       : !impl_->previews ? QStringLiteral("Not read")
+			       : !impl_->previewCurrent() ? QStringLiteral("Stale")
+			       : previewInfo().value(QStringLiteral("state")).toString();
+		case PreviewAgeMsRole:
+			return previewInfo().value(QStringLiteral("ageMs"), qint64{-1});
+		case PreviewReasonRole:
+			return impl_->expansionLimited(*row)
+			           ? tr("Tree preview expansion is limited to 4096 rows. Open Details to inspect this value.")
+			           : previewInfo().value(QStringLiteral("reason"), QString{});
 		default:
 			return {};
 	}
@@ -615,7 +924,119 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {DetailRole, "detail"},         {ValueRole, "value"},
 	        {EndpointIdRole, "endpointId"}, {CategoryRole, "category"},
 	        {ReadableRole, "readable"},     {IsEndpointRole, "isEndpoint"},
-	        {WritableRole, "writable"}};
+	        {WritableRole, "writable"},     {TypeTextRole, "typeText"},
+	        {AccessTextRole, "accessText"}, {UnitRole, "unit"},
+	        {WireBytesRole, "wireBytes"},   {TypeIdRole, "typeId"},
+	        {ResponseTypeTextRole, "responseTypeText"},
+	        {PreviewEligibleRole, "previewEligible"}, {PreviewFieldIdRole, "previewFieldId"},
+	        {PreviewAggregateRole, "previewAggregate"}, {PreviewChildRole, "previewChild"},
+	        {PreviewValueRole, "previewValue"}, {PreviewStateRole, "previewState"},
+	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"}};
+}
+
+bool EndpointModel::canFetchMore(const QModelIndex& parent) const
+{
+	const auto* row = impl_->tree.at(this, parent);
+	return row && impl_->current() && impl_->previews && row->previewOwner &&
+	       row->aggregate && row->children.size() < row->totalChildren &&
+	       impl_->previewNodes < previewNodeLimit &&
+	       impl_->matchesSchema(impl_->previews->schema());
+}
+
+void EndpointModel::fetchMore(const QModelIndex& parent)
+{
+	if (changing() || !canFetchMore(parent))
+		return;
+	auto* row = impl_->tree.at(this, parent);
+	const auto schema = impl_->previews->schema();
+	const auto* type = schema.type(row->typeId);
+	if (!type)
+		return;
+	const auto first = row->children.size();
+	const auto count = (std::min)({std::size_t{128}, std::size_t{row->totalChildren} - first,
+	                             previewNodeLimit - impl_->previewNodes});
+	std::vector<std::unique_ptr<Row>> pending;
+	pending.reserve(count);
+	for (std::size_t at = first; at < first + count; ++at) {
+		auto child = std::make_unique<Row>();
+		child->category = static_cast<int>(Category::Field);
+		child->previewOwner = true;
+		child->previewReadable = row->previewReadable;
+		child->previewChild = true;
+		child->previewFieldId = row->previewFieldId;
+		child->previewFieldBytes = row->previewFieldBytes;
+		child->valuePath = row->valuePath;
+		std::uint64_t offset = row->previewOffset;
+		if (type->kind == Kind::Struct) {
+			const auto members = schema.members(row->typeId);
+			if (at >= members.size())
+				return;
+			const auto& member = members[at];
+			child->name = text(member.name);
+			child->typeId = member.typeId;
+			child->valuePath.append(child->name);
+			offset += member.wireOffset;
+		} else if (type->kind == Kind::Array) {
+			if (!row->previewRange && type->elementCount > previewRangeSize) {
+				const auto rangeFirst = static_cast<std::uint32_t>(at * previewRangeSize);
+				child->previewRange = true;
+				child->rangeFirst = rangeFirst;
+				child->rangeCount = (std::min)(previewRangeSize, type->elementCount - rangeFirst);
+				child->typeId = row->typeId;
+				child->name = QStringLiteral("[%1 … %2]").arg(rangeFirst)
+				                  .arg(rangeFirst + child->rangeCount - 1);
+			} else {
+				const auto elementIndex = static_cast<std::uint32_t>(at) +
+				                          (row->previewRange ? row->rangeFirst : 0);
+				const auto* element = schema.type(type->relatedTypeId);
+				if (!element || elementIndex >= type->elementCount)
+					return;
+				child->name = QStringLiteral("[%1]").arg(elementIndex);
+				child->typeId = type->relatedTypeId;
+				child->valuePath.append(elementIndex);
+				offset += std::uint64_t{elementIndex} * element->wireBytes;
+			}
+		} else {
+			return;
+		}
+		if (offset > (std::numeric_limits<std::uint32_t>::max)())
+			return;
+		child->previewOffset = static_cast<std::uint32_t>(offset);
+		const auto metadata = impl_->metadata(schema, child->typeId);
+		child->type = metadata.label;
+		child->wireBytes = metadata.wireBytes;
+		child->path = row->path + (type->kind == Kind::Struct ? QStringLiteral(".") : QString{}) + child->name;
+		child->detail = child->type + QStringLiteral(" (#") + integerText(child->typeId) +
+		                QStringLiteral(", ") + integerText(child->wireBytes) + QStringLiteral(" B)");
+		previewShape(*child, schema);
+		pending.push_back(std::move(child));
+	}
+	if (pending.empty() || impl_->tree.nextToken == 0 ||
+	    pending.size() - 1 > (std::numeric_limits<quintptr>::max)() - impl_->tree.nextToken)
+		return;
+	impl_->tree.changing = true;
+	const QPointer<EndpointModel> alive(this);
+	beginInsertRows(parent, static_cast<int>(first), static_cast<int>(first + pending.size() - 1));
+	if (!alive)
+		return;
+	for (auto& child : pending) {
+		impl_->tree.append(std::move(child), row);
+		++impl_->previewNodes;
+	}
+	endInsertRows();
+	if (!alive)
+		return;
+	impl_->tree.changing = false;
+	if (impl_->previewNodes == previewNodeLimit)
+		previewValuesChanged();
+}
+
+bool EndpointModel::hasChildren(const QModelIndex& parent) const
+{
+	if (!parent.isValid())
+		return !impl_->tree.roots.empty();
+	const auto* row = impl_->tree.at(this, parent);
+	return row && (!row->children.empty() || canFetchMore(parent));
 }
 
 struct ValueModel::Impl {
@@ -626,6 +1047,15 @@ struct ValueModel::Impl {
 	QString fingerprint, role;
 	int category = 0;
 	quint32 endpointId = 0;
+	struct EnumChoices {
+		QVariantList choices;
+		bool truncated = false;
+	};
+	QHash<TypeId, EnumChoices> enums;
+	QHash<TypeId, QString> typeLabels;
+	// Identity tokens only, never dereferenced: copied metadata cannot be used
+	// by another admitted descriptor with coincident TypeIds.
+	std::array<std::pair<quintptr, std::size_t>, 3> metadataEndpoints{};
 
 	bool current() const
 	{
@@ -633,6 +1063,21 @@ struct ValueModel::Impl {
 			return false;
 		const auto snapshot = inspector.snapshotInfo();
 		return snapshot.ready && snapshot.admission == admission && snapshot.revision == revision;
+	}
+
+	bool metadataCurrent() const
+	{
+		if (!inspector || inspector.snapshot || !inspector.isCurrent())
+			return false;
+		std::size_t n = 0;
+		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
+			const auto endpoints = inspector.endpoints(category);
+			const auto& [address, count] = metadataEndpoints[n++];
+			if (endpoints.size() != count ||
+			    (!endpoints.empty() && reinterpret_cast<quintptr>(endpoints.data()) != address))
+				return false;
+		}
+		return true;
 	}
 };
 
@@ -676,6 +1121,56 @@ void ValueModel::setPresentation(const PresentationOverlay& overlay, const QStri
 		Q_EMIT dataChanged(index, index, {Qt::DisplayRole, NameRole, DetailRole, ValueRole});
 		if (!alive)
 			return;
+	}
+}
+
+void ValueModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema)
+{
+	if (changing())
+		return;
+	QHash<TypeId, Impl::EnumChoices> enums;
+	QHash<TypeId, QString> typeLabels;
+	std::array<std::pair<quintptr, std::size_t>, 3> endpointTokens{};
+	if (schema.valid()) {
+		std::size_t n = 0;
+		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
+			const auto endpoints = schema.endpoints(category);
+			endpointTokens[n++] = {reinterpret_cast<quintptr>(endpoints.data()), endpoints.size()};
+		}
+		for (TypeId id = 0; const auto* type = schema.type(id); ++id) {
+			typeLabels.insert(id, schema_text::typeText(schema, id));
+			if (type->kind != Kind::Enum)
+				continue;
+			const auto* underlying = schema.type(type->relatedTypeId);
+			if (!underlying)
+				continue;
+			const auto entries = schema.enumEntries(id);
+			Impl::EnumChoices copied;
+			copied.truncated = entries.size() > 256;
+			for (const auto& entry : entries.first(std::min<std::size_t>(entries.size(), 256))) {
+				const auto number = enumCode(entry.codeBits, underlying->scalarCode);
+				if (number.isEmpty())
+					continue;
+				copied.choices.append(QVariantMap{
+				    {QStringLiteral("label"), text(entry.name) + QStringLiteral(" (") + number + QLatin1Char(')')},
+				    {QStringLiteral("text"), number}});
+			}
+			enums.insert(id, std::move(copied));
+		}
+	}
+	impl_->enums = std::move(enums);
+	impl_->typeLabels = std::move(typeLabels);
+	impl_->metadataEndpoints = endpointTokens;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {TypeRole, TypeTextRole, EditorKindRole,
+			                                 EditorChoicesRole, EditorChoicesTruncatedRole});
 	}
 }
 
@@ -779,7 +1274,9 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 		case ValueRole:
 			return row->aggregate ? row->value : hints.displayValue(row->value);
 		case TypeRole:
-			return row->type;
+		case TypeTextRole:
+			return impl_->metadataCurrent() ? impl_->typeLabels.value(row->typeId, row->type)
+			                                : row->type;
 		case AggregateRole:
 			return row->aggregate;
 		case ChildCountRole:
@@ -791,6 +1288,22 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			       row->type != QStringLiteral("void");
 		case EditorTextRole:
 			return row->editorText;
+		case CanonicalTextRole:
+			return row->canonicalText;
+		case EditorKindRole:
+			return row->editorKind == QStringLiteral("enum") &&
+			               (!impl_->metadataCurrent() || !impl_->enums.contains(row->typeId))
+			           ? QStringLiteral("text") : row->editorKind;
+		case EditorChoicesRole:
+			if (row->editorKind == QStringLiteral("bool"))
+				return QVariantList{
+				    QVariantMap{{QStringLiteral("label"), QStringLiteral("false (0)")},
+				                {QStringLiteral("text"), QStringLiteral("false")}},
+				    QVariantMap{{QStringLiteral("label"), QStringLiteral("true (1)")},
+				                {QStringLiteral("text"), QStringLiteral("true")}}};
+			return impl_->metadataCurrent() ? impl_->enums.value(row->typeId).choices : QVariantList{};
+		case EditorChoicesTruncatedRole:
+			return impl_->metadataCurrent() && impl_->enums.value(row->typeId).truncated;
 		default:
 			return {};
 	}
@@ -807,7 +1320,12 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {ChildCountRole, "childCount"},
 	        {LoadedCountRole, "loadedCount"},
 	        {EditableRole, "editable"},
-	        {EditorTextRole, "editorText"}};
+	        {EditorTextRole, "editorText"},
+	        {EditorKindRole, "editorKind"},
+	        {EditorChoicesRole, "editorChoices"},
+	        {EditorChoicesTruncatedRole, "editorChoicesTruncated"},
+	        {CanonicalTextRole, "canonicalText"},
+	        {TypeTextRole, "typeText"}};
 }
 
 ins::NodeResult ValueModel::node(const QModelIndex& index) const
@@ -833,7 +1351,8 @@ void ValueModel::updateScalar(const QModelIndex& index)
 		return;
 	row->value = scalarText(scalar.value);
 	row->editorText = scalarNumberText(scalar.value);
-	Q_EMIT dataChanged(index, index, {ValueRole, EditorTextRole});
+	row->canonicalText = row->editorText;
+	Q_EMIT dataChanged(index, index, {ValueRole, EditorTextRole, CanonicalTextRole});
 }
 
 bool ValueModel::canFetchMore(const QModelIndex& parent) const

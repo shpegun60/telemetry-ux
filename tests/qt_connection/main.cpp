@@ -119,10 +119,14 @@ QQuickItem* visual(QQuickItem* parent, const QString& name, const QString& text 
 QQuickItem* control(QQuickItem* parent, const QString& name, const QString& text = {})
 {
 	QQuickItem* result = nullptr;
-	CHECK(await([&] {
+	const bool available = await([&] {
 		result = visual(parent, name, text);
 		return result && result->width() > 0 && result->height() > 0;
-	}));
+	});
+	if (!available)
+		std::fprintf(stderr, "Missing control %s text=%s under %s\n", qPrintable(name),
+		             qPrintable(text), qPrintable(parent->objectName()));
+	CHECK(available);
 	return result;
 }
 
@@ -183,6 +187,12 @@ void twoPanels()
 	CHECK(engine.rootObjects().size() == 1);
 	auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
 	CHECK(window && QTest::qWaitForWindowExposed(window));
+	// This journey counts only explicit foreground requests. Exercise the
+	// user-visible preview opt-out, while the separate endpoint-preview UI
+	// journey verifies background demand and its shared FIFO end to end.
+	const auto trees = window->findChildren<QObject*>(QStringLiteral("endpointTreePane"));
+	CHECK(trees.size() == 2);
+	for (auto* tree : trees) CHECK(tree->setProperty("previewValues", false));
 	click(*window, *control(window->contentItem(), QStringLiteral("openTrend")));
 	auto* trendWindow = window->findChild<QQuickWindow*>(QStringLiteral("trendWindow"));
 	CHECK(trendWindow && QTest::qWaitForWindowExposed(trendWindow));

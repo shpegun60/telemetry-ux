@@ -50,6 +50,50 @@ Pane {
     property string watchStatusFull: ""
     readonly property string pollingShort: qsTr("Stop polling to change the Watchlist.")
     readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
+    property bool previewValues: true
+    readonly property bool previewsSupported: !!provider && typeof provider.previewsSupported === "boolean" && provider.previewsSupported &&
+        typeof provider.setPreviewDemand === "function" && typeof provider.clearPreviewDemand === "function"
+    readonly property bool previewDemandActive: previewsSupported && previewValues && visible && width > 0 && height > 0 &&
+        searchInput.text.trim().length === 0 && !!panel.Window.window && panel.Window.window.visible &&
+        panel.Window.window.visibility !== Window.Minimized
+    property var previewDemandProvider: null
+
+    function clearPreviews() {
+        const prior = previewDemandProvider
+        previewDemandProvider = null
+        if (prior && typeof prior.clearPreviewDemand === "function")
+            prior.clearPreviewDemand(panel)
+    }
+    function updatePreviewDemand() {
+        if (!previewDemandActive) {
+            clearPreviews()
+            return
+        }
+        const indexes = []
+        // Only loaded cells intersecting the viewport, never a model traversal.
+        for (let row = endpointTree.topRow; row >= 0 && row <= endpointTree.bottomRow; ++row) {
+            const cell = endpointTree.itemAtCell(Qt.point(0, row))
+            if (!cell || !cell.visible || cell.y + cell.height <= endpointTree.contentY ||
+                cell.y >= endpointTree.contentY + endpointTree.height || !cell.previewEligible ||
+                (cell.previewAggregate && cell.hasChildren && !cell.previewChild && !cell.expanded))
+                continue
+            const index = cell.sourceIndex
+            if (index && index.valid)
+                indexes.push(index)
+        }
+        const currentProvider = provider
+        if (previewDemandProvider && previewDemandProvider !== currentProvider)
+            clearPreviews()
+        previewDemandProvider = currentProvider
+        currentProvider.setPreviewDemand(panel, indexes)
+    }
+    function suspendPreviews() {
+        clearPreviews()
+        if (previewDemandActive)
+            previewDemandTimer.restart()
+    }
+    onPreviewDemandActiveChanged: suspendPreviews()
+    Component.onDestruction: clearPreviews()
 
     // Every explicit activation passes its source index through this route.
     // Never optimistically change selectedEndpointIndex or the row highlight.
@@ -310,7 +354,30 @@ Pane {
         return true
     }
     function isGroup(index) {
-        return !!searchSource && !!index && index.valid && searchSource.rowCount(index) > 0
+        if (!searchSource || !index || !index.valid || searchSource.rowCount(index) <= 0)
+            return false
+        // This model query is available immediately during discovery/reset;
+        // DelegateModel's presentation items may not have been incubated yet.
+        if (typeof searchSource.isGroup === "function")
+            return searchSource.isGroup(index)
+        nameModel.rootIndex = index.parent
+        const item = index.row >= 0 && index.row < nameModel.count ? nameModel.items.get(index.row) : null
+        return !!item && !!item.model && item.model.isEndpoint !== true && item.model.previewChild !== true
+    }
+    function openInitialGroups() {
+        if (!openOnLoad)
+            return
+        // A connected model can reset after this panel was created empty.
+        // Materialize its new root rows before inspecting the flattened view.
+        endpointTree.forceLayout()
+        if (endpointTree.rows === 0)
+            return
+        const first = endpointTree.modelIndex(Qt.point(0, 0))
+        if (!isGroup(first))
+            return
+        // Exactly the category and catalog levels. Field value children start
+        // below them and remain collapsed; do not walk a changing flat row list.
+        endpointTree.expandRecursively(0, 2)
     }
     // Opens the actions of one row next to the item it was opened from.
     function openEndpointMenu(index, isEndpoint, anchor, x, y) {
@@ -441,8 +508,8 @@ Pane {
             }
         }
     }
-    onProviderChanged: clearWatchMarks()
-    onSearchSourceChanged: { clearWatchMarks(); scheduleSearch() }
+    onProviderChanged: { clearPreviews(); clearWatchMarks() }
+    onSearchSourceChanged: { clearPreviews(); clearWatchMarks(); scheduleSearch() }
     DelegateModel {
         id: searchModel
         model: panel.searchSource
@@ -524,6 +591,15 @@ Pane {
         }
     }
     Timer { id: searchTimer; repeat: false; onTriggered: panel.scanSearch() }
+    // Demand publication is cheap metadata work; the provider schedules I/O.
+    Timer {
+        id: previewDemandTimer
+        objectName: "endpointPreviewDemandTimer"
+        interval: 250
+        repeat: true
+        running: panel.previewDemandActive
+        onTriggered: panel.updatePreviewDemand()
+    }
     // The defaults are the Theme's roles; a host may still set the palette.
     palette.window: Theme.surfaceWindow
     palette.windowText: Theme.textPrimary
@@ -568,48 +644,64 @@ Pane {
                 Accessible.name: "Clear selected Watchlist fields"
             }
         }
-        TextField {
-            id: searchInput
-            objectName: "endpointSearch"
+        RowLayout {
             Layout.fillWidth: true
-            placeholderText: qsTr("Find by name (Ctrl+K)")
-            maximumLength: 256
-            // Room for the clear button inside the field.
-            rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
-            onTextChanged: panel.scheduleSearch()
-            Keys.onEscapePressed: function(event) {
-                if (text.length === 0)
-                    return
-                clear()
-                event.accepted = true
-            }
-            Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
-            Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
-            // Down moves into the results (or the tree) with the keyboard.
-            Keys.onDownPressed: function(event) {
-                if (searchList.visible && searchList.count > 0) {
-                    searchList.currentIndex = 0
-                    searchList.positionViewAtBeginning()
-                    if (searchList.currentItem)
-                        searchList.currentItem.forceActiveFocus()
-                } else if (endpointTree.visible) {
-                    endpointTree.forceActiveFocus()
+            spacing: Type.spacing
+            TextField {
+                id: searchInput
+                objectName: "endpointSearch"
+                Layout.fillWidth: true
+                placeholderText: qsTr("Find by name (Ctrl+K)")
+                maximumLength: 256
+                // Room for the clear button inside the field.
+                rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
+                onTextChanged: panel.scheduleSearch()
+                Keys.onEscapePressed: function(event) {
+                    if (text.length === 0)
+                        return
+                    clear()
+                    event.accepted = true
                 }
-                event.accepted = true
+                Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
+                Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
+                // Down moves into the results (or the tree) with the keyboard.
+                Keys.onDownPressed: function(event) {
+                    if (searchList.visible && searchList.count > 0) {
+                        searchList.currentIndex = 0
+                        searchList.positionViewAtBeginning()
+                        if (searchList.currentItem)
+                            searchList.currentItem.forceActiveFocus()
+                    } else if (endpointTree.visible) {
+                        endpointTree.forceActiveFocus()
+                    }
+                    event.accepted = true
+                }
+                ToolButton {
+                    id: searchClear
+                    objectName: "endpointSearchClear"
+                    anchors.right: parent.right
+                    anchors.rightMargin: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: height
+                    height: parent.height - 6
+                    visible: searchInput.text.length > 0
+                    focusPolicy: Qt.NoFocus
+                    text: "✕"
+                    onClicked: { searchInput.clear(); searchInput.forceActiveFocus() }
+                    Accessible.name: qsTr("Clear the search")
+                }
             }
-            ToolButton {
-                id: searchClear
-                objectName: "endpointSearchClear"
-                anchors.right: parent.right
-                anchors.rightMargin: 2
-                anchors.verticalCenter: parent.verticalCenter
-                width: height
-                height: parent.height - 6
-                visible: searchInput.text.length > 0
-                focusPolicy: Qt.NoFocus
-                text: "✕"
-                onClicked: { searchInput.clear(); searchInput.forceActiveFocus() }
-                Accessible.name: qsTr("Clear the search")
+            CheckBox {
+                id: previewToggle
+                objectName: "endpointPreviewValues"
+                visible: panel.previewsSupported
+                text: qsTr("Preview values")
+                checked: panel.previewValues
+                onToggled: panel.previewValues = checked
+                Accessible.name: qsTr("Preview values")
+                Accessible.description: qsTr("Read visible Fields slowly while this tree is shown. This does not change the Watchlist.")
+                ToolTip.visible: hovered
+                ToolTip.text: previewToggle.Accessible.description
             }
         }
         Label {
@@ -637,6 +729,10 @@ Pane {
             visible: searchInput.text.trim().length === 0
             clip: true
             model: panel.provider.endpoints
+            onTopRowChanged: panel.suspendPreviews()
+            onBottomRowChanged: panel.suspendPreviews()
+            onExpanded: panel.suspendPreviews()
+            onCollapsed: panel.suspendPreviews()
             // Current keyboard row is a navigation cursor, not operation
             // selection. Only an explicit click/Enter asks the provider.
             activeFocusOnTab: true
@@ -689,6 +785,17 @@ Pane {
             // reads its required roles, never model.display.
             delegate: EndpointTreeRow {
                 id: endpointDelegate
+                typeText: typeof model.typeText === "string" ? model.typeText : ""
+                accessText: typeof model.accessText === "string" ? model.accessText : ""
+                unit: typeof model.unit === "string" ? model.unit : ""
+                previewEligible: model.previewEligible === true
+                previewAggregate: model.previewAggregate === true
+                previewChild: model.previewChild === true
+                previewValue: typeof model.previewValue === "string" ? model.previewValue : ""
+                previewState: typeof model.previewState === "string" ? model.previewState : ""
+                previewAgeMs: typeof model.previewAgeMs === "number" ? model.previewAgeMs : -1
+                previewReason: typeof model.previewReason === "string" ? model.previewReason : ""
+                previewsShown: panel.previewsSupported && panel.previewValues
                 // Optional for third-party providers. Selection stays owned by the
                 // provider, including when it refuses a click while busy.
                 highlighted: isEndpoint && panel.selectedEndpointIndex !== undefined
@@ -735,8 +842,7 @@ Pane {
             Component.onCompleted: Qt.callLater(function() {
                 if (!endpointTree) return
                 endpointTree.forceLayout()
-                if (panel.openOnLoad)
-                    endpointTree.expandRecursively(0, 2)
+                panel.openInitialGroups()
             })
         }
         ListView {
@@ -910,20 +1016,25 @@ Pane {
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
-        function onModelAboutToBeReset() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onModelReset() {
             panel.scheduleSearch()
-            Qt.callLater(function() { if (endpointTree && panel.openOnLoad) endpointTree.expandRecursively(0, 2) })
+            Qt.callLater(function() { if (endpointTree) panel.openInitialGroups() })
         }
-        function onRowsAboutToBeRemoved() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onRowsAboutToBeRemoved() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsRemoved() { panel.scheduleSearch() }
-        function onRowsAboutToBeInserted() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onRowsAboutToBeInserted() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsInserted() { panel.scheduleSearch() }
-        function onRowsAboutToBeMoved() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onRowsAboutToBeMoved() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsMoved() { panel.scheduleSearch() }
-        function onLayoutAboutToBeChanged() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onLayoutAboutToBeChanged() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onLayoutChanged() { panel.scheduleSearch() }
-        function onDataChanged() { panel.scheduleSearch() }
-        function onDestroyed() { panel.clearWatchMarks(); panel.cancelSearch() }
+        function onDataChanged(topLeft, bottomRight, roles) {
+            if (panel.searchSource && typeof panel.searchSource.previewOnlyChange === "function" &&
+                panel.searchSource.previewOnlyChange(roles))
+                return
+            panel.scheduleSearch()
+        }
+        function onDestroyed() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
     }
 }

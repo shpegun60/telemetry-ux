@@ -7,6 +7,7 @@
 #include "SchemaText.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QStringList>
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -130,10 +131,11 @@ QString typeText(const rt::RuntimeSchema& schema, TypeId id)
 			return scalarName(type->scalarCode);
 		case TypeKind::Enum: {
 			QStringList names;
-			for (const auto& entry : schema.enumEntries(id))
+			const auto entries = schema.enumEntries(id);
+			for (const auto& entry : entries.first(std::min<std::size_t>(entries.size(), 4)))
 				names << text(entry.name);
-			const auto shown = names.mid(0, 4).join(QStringLiteral(", "));
-			return names.size() > 4 ? tr("enum %1, …").arg(shown) : tr("enum %1").arg(shown);
+			const auto shown = names.join(QStringLiteral(", "));
+			return entries.size() > 4 ? tr("enum %1, …").arg(shown) : tr("enum %1").arg(shown);
 		}
 		case TypeKind::Struct:
 			return type->memberCount == 1 ? tr("struct, 1 member") : tr("struct, %1 members").arg(type->memberCount);

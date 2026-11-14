@@ -61,6 +61,8 @@ The provider exposes notifying properties:
 | `watchStatus`, `writeOutcome`, `commandOutcome`, `serviceOutcome`, `statusText` | Already-classified display text; the view does not infer execution certainty |
 | `watchIndividual`, `watchIntervalMs` | Writable watch mode and polling interval (0 to 60000 ms; 0 reads continuously at low priority); the provider validates changes |
 | `watchIntervalMinimumMs` | The smallest interval the provider accepts (0 here); the interval box starts there, at 1 for a provider that does not say |
+| `previewsSupported` | Optional Dynamic Qt Session capability; shows the tree's Preview values control when available |
+| `selectionInfo`, `definitions`, `definitionRootIndex` | Optional Dynamic metadata map and filtered definition tree for the selected endpoint before a value is read |
 
 Actions retain the existing provider signatures:
 
@@ -134,6 +136,56 @@ the menu's visibility and borrowed pre-menu focus item. Capture that item while
 the menu is visible, before native popup activation; it becomes null on close.
 Opening the prompt after the menu closes avoids competing focus owners. The
 host remains responsible for lifetime checks, default Cancel and focus return.
+
+### Dynamic tree previews and typed Details
+
+The [device-tree contract](../../../../doc/ENDPOINT_PREVIEWS.md) describes the
+Session-backed Dynamic presentation. `QtConnectionBinding::createProvider()`
+attaches the existing Session's preview cache automatically; hosts do not create
+another client, queue or owner loop. Providers without this optional capability,
+including the generated Static provider, retain the existing metadata/text
+fallback and do not show a background-preview toggle.
+
+Selecting a Field exposes its wire type, access and byte size through
+`selectionInfo`. `definitions` projects the selected branch of `endpoints`, with
+`definitionRootIndex` locating its parent. Structure members and array ranges are
+created locally from the schema. Expanding them sends no read and supplies no
+invented payload. Details initially says **Not read**; Refresh performs the
+explicit Field read. Command/Service metadata selection does not execute or call
+the endpoint.
+
+`EndpointTreePanel.previewValues` defaults to `true`; its toggle is available
+only when `previewsSupported`. The view calls
+`setPreviewDemand(QObject* view, QVariantList sourceIndexes)` with actual visible
+rows and `clearPreviewDemand(QObject* view)` when demand ends. Collapsed
+aggregates, hidden/offscreen rows and metadata search do not create future
+demand. Children resolve to their owning Field ID, including ID zero, and are
+neither endpoints nor Watch candidates. An accepted request may drain after a
+view is hidden; its stale completion cannot warm a replacement lease/session.
+
+The existing progress owner services previews after foreground, Watchlist and
+Batch work, with one pending request, at least 500 ms between attempts and a
+5,000 ms refresh age. The shared cache holds at most 64 Fields and 256 KiB of
+payload, with an 8 KiB per-Field limit. At most 16 view leases each contribute
+256 IDs; 256 is not a global union limit. Local expansion adds at most 4,096
+descendants per model, in pages of 128 and array ranges of 256. Limit/stale/error
+states stay explicit. These bounds do not guarantee a sampling frequency.
+
+Metadata-enabled Dynamic value models additionally expose `typeText`,
+`editorKind`, `editorChoices`, `editorChoicesTruncated` and `canonicalText`.
+Field, Command and Service use the same editor. Boolean labels are `false (0)` /
+`true (1)`; enum labels combine name and exact decimal code. Choice `text` is
+the canonical string supplied to `setScalarText`, never a JavaScript Number.
+Up to 256 named enum choices are shown; **Enter code…** keeps unnamed or omitted
+codes editable. A missing enum metadata cache uses the text fallback.
+
+`canonicalText` is backend-formatted from the prepared typed value, separate
+from the user's incomplete or invalid input. Finite F32/F64 readouts use 9/17
+significant digits for round trip: entered `0.1` can remain visible while its
+F32 caption says **Encoded: 0.100000001 (f32)**. It does not claim successful
+transmission or device storage. Overflow/underflow refusals do not replace the
+previous typed value or send a request; existing permission and Apply gates
+remain authoritative.
 
 With a Session-backed Dynamic provider, the Watchlist and the rest of the panel
 work together. While it polls, selecting an endpoint, refreshing Details, editing,

@@ -361,8 +361,11 @@ int main(int argc, char** argv)
         auto* legacyRow = rowItem(legacyTreePanel, 0);
         CHECK(row && secondRow && mirrorRow && mirrorSecondRow && legacyRow);
         CHECK(!legacyRow->property("highlighted").toBool());
-        auto* rowContent = row->property("contentItem").value<QObject*>();
-        CHECK(rowContent && rowContent->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
+        // The content wrapper also lays out metadata and preview text. Check
+        // the actual visible endpoint name, whose theme contrast is the contract.
+        auto* rowName = item(row, QStringLiteral("endpointRowName"));
+        CHECK(rowName && rowName->isVisible() &&
+              rowName->property("color").value<QColor>() == QColor(QStringLiteral("#e8edf5")));
         click(separateWindow, row);
         CHECK(shared->property("selections").toInt() == 1);
         CHECK(selected->property("text").toString() == QStringLiteral("Field voltage"));

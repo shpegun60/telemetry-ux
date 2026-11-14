@@ -1,5 +1,6 @@
 // Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
 #include "DynamicConfiguratorProvider.hpp"
+#include "EndpointPreviews.hpp"
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "ScalarEditor.hpp"
@@ -7,6 +8,7 @@
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
+#include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QThread>
 #include <algorithm>
 #include <array>
@@ -255,6 +257,30 @@ QString operationText(const ins::OperationResult& result)
 
 } // namespace
 
+// One selected schema branch, reusing the endpoint model's local type traversal.
+// It never asks the preview scheduler for demand and never invents a payload.
+class EndpointDefinitionModel final : public QSortFilterProxyModel {
+public:
+	QPersistentModelIndex selected;
+	void setSelection(const QModelIndex& index) {
+		if (selected == index) return;
+		beginFilterChange(); selected = index; endFilterChange(Direction::Rows);
+	}
+	QModelIndex rootIndex() const {
+		return selected.isValid() ? mapFromSource(selected.parent()) : QModelIndex{};
+	}
+protected:
+	bool filterAcceptsRow(int row, const QModelIndex& parent) const override {
+		if (!selected.isValid() || !sourceModel()) return false;
+		const auto index = sourceModel()->index(row, 0, parent);
+		for (QModelIndex p = selected; p.isValid(); p = p.parent())
+			if (p == index) return true;
+		for (QModelIndex p = index.parent(); p.isValid(); p = p.parent())
+			if (p == selected) return true;
+		return false;
+	}
+};
+
 struct DynamicConfiguratorProvider::Impl {
 	QPointer<DynamicConfiguratorProvider> q;
 	QPointer<DynamicConfiguratorBinding> binding, desired;
@@ -266,6 +292,11 @@ struct DynamicConfiguratorProvider::Impl {
 	QString writeText, writeName, watchWrite;
 	bool watchWroteLast = false;
 	EndpointModel endpoints;
+	EndpointDefinitionModel definitions;
+	QPointer<EndpointPreviews> previews;
+	QList<QPointer<QObject>> previewViews;
+	QMetaObject::Connection previewSourceChanged;
+	quint64 previewRevision = 0;
 	QPersistentModelIndex selectedIndex;
 	ValueModel values, responses;
 	DynamicWatchlist watch;
@@ -453,8 +484,25 @@ struct DynamicConfiguratorProvider::Impl {
 		           : value;
 	}
 
+	bool releasePreviewLeases()
+	{
+		// Rebinding one presentation must not retire the shared cache or the
+		// other panels' leases. Each release can synchronously delete/rebind us.
+		const auto revision = ++previewRevision;
+		const auto views = std::move(previewViews);
+		const QPointer<EndpointPreviews> cache = previews;
+		for (const auto& view : views) {
+			if (view && cache)
+				cache->clearDemand(view);
+			if (!q || previewRevision != revision)
+				return false;
+		}
+		return q && previewRevision == revision;
+	}
+
 	void notify()
 	{
+		definitions.setSelection(current() ? QModelIndex(selectedIndex) : QModelIndex{});
 		const bool now = current() && !updating && !endpoints.changing() && watch.canTellHoldable();
 		if (now != available) {
 			available = now;
@@ -544,6 +592,10 @@ struct DynamicConfiguratorProvider::Impl {
 				                       : operationText(result.operation);
 			}
 			if (!current()) {
+				if (!releasePreviewLeases()) {
+					updating = false;
+					return;
+				}
 				watch.retire();
 				batch.retire();
 				allowed = false;
@@ -671,6 +723,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
                                                          QObject* parent)
     : QObject(parent), d(std::make_shared<Impl>(this))
 {
+	d->definitions.setSourceModel(&d->endpoints);
 	std::weak_ptr<Impl> weak = d;
 	d->watch.setNotify(
 	    [weak] {
@@ -727,6 +780,13 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 
 DynamicConfiguratorProvider::~DynamicConfiguratorProvider()
 {
+	d->q.clear();
+	++d->previewRevision;
+	QObject::disconnect(d->previewSourceChanged);
+	const auto views = std::move(d->previewViews);
+	const QPointer<EndpointPreviews> cache = d->previews;
+	for (const auto& view : views)
+		if (view && cache) cache->clearDemand(view);
 	if (d->state)
 		d->state->retire();
 	if (d->writer)
@@ -743,6 +803,8 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	if (p->updating || (binding == p->binding && (!p->state || !p->state->retired)))
 		return;
 	if (binding && binding->thread() != thread())
+		return;
+	if (!p->releasePreviewLeases())
 		return;
 	p->watch.retire();
 	p->batch.retire();
@@ -850,6 +912,71 @@ QString DynamicConfiguratorProvider::presentationError() const
 QAbstractItemModel* DynamicConfiguratorProvider::endpoints() const
 {
 	return &d->endpoints;
+}
+
+QVariantMap DynamicConfiguratorProvider::selectionInfo() const
+{
+	return d->current() ? d->endpoints.endpoint(d->selectedIndex) : QVariantMap{};
+}
+QAbstractItemModel* DynamicConfiguratorProvider::definitions() const { return &d->definitions; }
+QModelIndex DynamicConfiguratorProvider::definitionRootIndex() const { return d->definitions.rootIndex(); }
+
+bool DynamicConfiguratorProvider::previewsSupported() const
+{
+	return d->previews && d->previews->current();
+}
+
+void DynamicConfiguratorProvider::setEndpointPreviews(EndpointPreviews* previews)
+{
+	auto p = d;
+	const auto revision = ++p->previewRevision;
+	const QPointer<DynamicConfiguratorProvider> alive(this);
+	const QPointer<EndpointPreviews> target(previews);
+	QObject::disconnect(p->previewSourceChanged);
+	const auto views = std::move(p->previewViews);
+	const QPointer<EndpointPreviews> previous = p->previews;
+	for (const auto& view : views) {
+		if (view && previous) previous->clearDemand(view);
+		if (!alive || p->previewRevision != revision) return;
+	}
+	p->previews = target;
+	p->endpoints.setPreviews(target);
+	if (!alive || p->previewRevision != revision) return;
+	if (target) {
+		const auto sourceChanged = [weak = std::weak_ptr<Impl>(p)] {
+			if (auto state = weak.lock(); state && state->q) {
+				const auto schema = state->previews ? state->previews->schema() : runtime::RuntimeSchema{};
+				state->values.setSchemaMetadata(schema);
+				if (state->q) state->responses.setSchemaMetadata(schema);
+				if (state->q) state->notify();
+			}
+		};
+		p->previewSourceChanged = connect(target, &EndpointPreviews::sourceChanged, this, sourceChanged);
+		sourceChanged();
+	}
+}
+
+bool DynamicConfiguratorProvider::setPreviewDemand(QObject* view, const QVariantList& indexes)
+{
+	auto p = d;
+	if (!p->previews || !p->current() || !view || indexes.size() > EndpointPreviews::demandLimit)
+		return false;
+	QList<quint32> ids;
+	for (const auto& item : indexes) {
+		if (!item.canConvert<QModelIndex>()) continue;
+		const auto id = p->endpoints.previewDemandField(item.value<QModelIndex>());
+		if (id.isValid() && !ids.contains(id.toUInt())) ids.append(id.toUInt());
+	}
+	p->previewViews.removeIf([](const auto& item) { return item.isNull(); });
+	if (!p->previewViews.contains(view)) p->previewViews.append(view);
+	return p->previews->setDemand(view, ids);
+}
+
+void DynamicConfiguratorProvider::clearPreviewDemand(QObject* view)
+{
+	auto p = d;
+	if (p->previews) p->previews->clearDemand(view);
+	p->previewViews.removeIf([view](const auto& item) { return !item || item == view; });
 }
 
 QAbstractItemModel* DynamicConfiguratorProvider::values() const

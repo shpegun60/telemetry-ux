@@ -71,7 +71,8 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
         WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp
-        DynamicBatch.cpp DynamicBatch.hpp)
+        DynamicBatch.cpp DynamicBatch.hpp EndpointPreviews.cpp EndpointPreviews.hpp
+        SchemaText.cpp SchemaText.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
     set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
         EXPORT_NAME dynamic_configurator AUTOMOC ON)
@@ -88,7 +89,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     install(EXPORT TelemetryUXDynamicTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
-        WatchlistModel.hpp DynamicWatchlist.hpp DynamicBatch.hpp
+        WatchlistModel.hpp DynamicWatchlist.hpp DynamicBatch.hpp EndpointPreviews.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
 
@@ -99,7 +100,7 @@ if(TELEMETRY_UX_BUILD_QT_CONNECTION)
     add_library(telemetry_ux_qt_connection STATIC QtConnectionBinding.cpp QtConnectionBinding.hpp
         DeviceFilesModel.cpp DeviceFilesModel.hpp DeviceFileTransfers.cpp DeviceFileTransfers.hpp
         DescriptorContent.cpp DescriptorContent.hpp TelemetryCodecs.cpp TelemetryCodecs.hpp
-        SchemaText.cpp SchemaText.hpp ValuesContent.cpp ValuesContent.hpp
+        ValuesContent.cpp ValuesContent.hpp
         DeviceFileLive.cpp DeviceFileLive.hpp CapabilityContent.cpp CapabilityContent.hpp
         SessionProblems.cpp SessionProblems.hpp)
     add_library(TelemetryUX::qt_connection ALIAS telemetry_ux_qt_connection)

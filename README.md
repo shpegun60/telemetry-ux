@@ -68,7 +68,7 @@ Configurator {
 
 The [provider contract](lib/qml/Telemetry/UX/README.md) keeps connection controls,
 permission opt-in and device ownership in the host. The view creates no client,
-transport, polling timer or FIFO. Use the installed
+transport or FIFO; device progress remains host-owned. Use the installed
 [Dynamic QML provider](doc/DynamicConfigurator.md) for independent panels over an
 existing native Workbench owner. The Inspector uses those same installed models
 and can create independent providers through `createConfigurator()`. For a known schema, use the
@@ -99,6 +99,26 @@ Optional [presentation metadata](doc/PresentationMetadata.md) adds labels, units
 plain-text help and advisory range/step hints to Web and Qt editors using the
 same JSON document. It is matched to a schema fingerprint; it does not change
 wire values, permissions, validation or connection ownership.
+
+The Session-backed Dynamic Qt provider also supports
+[device-tree previews and typed Details](doc/ENDPOINT_PREVIEWS.md). Selecting a
+Field shows its type, access, size and expandable local definition before Read.
+Selection and definition expansion send no request; Refresh reads the Field.
+The tree's **Preview values** control starts enabled for a supported provider
+and requests Fields visible under expanded branches at low priority. An
+aggregate's payload is requested only when expanded, then its children share
+one owned Field payload. Commands and Services are metadata only in this tree.
+
+The shared Dynamic Field/Command/Service editor offers Boolean choices and enum
+choices labelled with both name and exact numeric code. Unknown enum codes stay
+manually editable. F32/F64 editors keep entered text separate from the prepared
+typed `canonicalText`, displayed as **Encoded**, without converting U64/S64 or
+enum codes through a QML Number. Preview requests are spaced by at least 500 ms,
+with a 5-second refresh age, one pending request, at most 64 cached Fields,
+256 KiB cached payload and 8 KiB per Field. The generated Static provider keeps
+its existing text-editor/metadata fallback; this does not advertise background
+previews or typed dropdowns for it. The linked contract gives the remaining
+demand, expansion and lifecycle bounds.
 
 ## Generated typed QML provider
 
