@@ -157,10 +157,14 @@ int main(int argc, char** argv)
 			settle();
 			auto* view = item(window->contentItem(), QStringLiteral("layoutConfigurator"));
 			auto* tree = item(view, QStringLiteral("endpointTree"));
-			auto* values = item(view, QStringLiteral("valueTree"));
+			auto* valueTree = item(view, QStringLiteral("valueTree"));
+			auto* values = item(view, QStringLiteral("emptyEndpointLabel"));
 			auto* watchToggle = item(view, QStringLiteral("watchlistExpanded"));
 			auto* batchToggle = item(view, QStringLiteral("batchToggle"));
-			CHECK(tree && values && watchToggle && batchToggle);
+			CHECK(tree && valueTree && values && watchToggle && batchToggle);
+			// This real Session is disconnected and has no selection. Its primary
+			// Details viewport is the empty state, not an invisible value table.
+			CHECK(provider->selection().isEmpty() && !valueTree->isVisible() && values->isVisible());
 			auto* selectionTitle = item(view, QStringLiteral("endpointSelectionTitle"));
 			auto* selectionActions = item(view, QStringLiteral("endpointSelectionActions"));
 			CHECK(selectionTitle && selectionActions && selectionTitle->parentItem());

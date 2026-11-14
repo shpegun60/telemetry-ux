@@ -281,7 +281,7 @@ Pane {
         }
         GridLayout {
             id: valueColumns
-            visible: panel.showSelection
+            visible: panel.showSelection && panel.hasSelection
             Layout.fillWidth: true
             Layout.fillHeight: !panel.showResponse || responseSection.hasRows
             columns: panel.showResponse && responseSection.hasRows && width >= panel.minimumTableWidth * 2 + Type.spacing ? 2 : 1
@@ -328,7 +328,9 @@ Pane {
                                 cellName: name; cellType: typeText; cellValue: qsTr("Not read")
                                 cellHint: detail + "\n" + panel.contextHelp
                                 valueComponent: Label {
+                                    objectName: "metadataValueLabel"
                                     text: "\u2014"; color: metadataDelegate.highlighted ? Theme.selectedForeground : Theme.textMuted
+                                    horizontalAlignment: panel.numericType(metadataDelegate.typeText) ? Text.AlignRight : Text.AlignLeft
                                     Accessible.description: qsTr("Not read")
                                 }
                             }
@@ -626,6 +628,16 @@ Pane {
                     ScrollBar.horizontal: ScrollBar { policy: panel.minimumTableWidth > responseTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
                 }
             }
+        }
+        Label {
+            objectName: "emptyEndpointLabel"
+            visible: panel.showSelection && !panel.hasSelection
+            Layout.fillWidth: true; Layout.fillHeight: true
+            Layout.minimumHeight: implicitHeight
+            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.Wrap; textFormat: Text.PlainText
+            text: qsTr("Select an endpoint in the Device tree")
+            color: Theme.textMuted
         }
         Item {
             visible: panel.showSelection && panel.showResponse && !responseSection.hasRows

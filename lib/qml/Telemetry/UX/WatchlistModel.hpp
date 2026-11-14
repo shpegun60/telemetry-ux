@@ -96,7 +96,7 @@ private:
 		quint64 sampleRevision = 0;
 		WatchSample sample;
 		bool writable = false;
-		WatchValueBits value;
+		WatchValueBits value{};
 	};
 
 	std::unique_ptr<detail::ScalarEditorMetadata> metadata_;
