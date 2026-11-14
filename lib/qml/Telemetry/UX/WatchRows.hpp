@@ -86,7 +86,9 @@ public:
 		NodeRole,       // "value", "group", "struct", "array", "element"
 		LeavesRole,     // the values at and under the row
 		NestedRole,     // in the tree, a row inside a Field (its member or element)
-		SelectedRole    // the row is in the selection
+		SelectedRole,   // the row is in the selection
+		ParentLabelRole // in the tree, what a nested row belongs to: "Config",
+		                // "Phase[2]" (an element by its array), "" elsewhere
 	};
 	Q_ENUM(Role)
 
@@ -242,6 +244,9 @@ private:
 	QString linesOf(const QVariantList& sources, bool paths) const;
 	// Whether the node's own step is an element, "[3]".
 	static bool element(const Node& node);
+	// What a nested row belongs to, for a screen reader: its parent's own
+	// step, an element with the array's name before it.
+	QString parentLabel(const Node& node) const;
 
 	QPointer<QAbstractItemModel> source_;
 	QVector<QMetaObject::Connection> connections_;

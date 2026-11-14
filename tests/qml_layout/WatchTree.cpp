@@ -277,6 +277,50 @@ int main(int argc, char** argv)
 					                                          rows.index(row - 1).data(telemetry::ux::WatchRows::NameRole).toString()));
 				click(window, header);
 				CHECK(!rows.sorted() && leaf(list, 1) == QStringLiteral("Enabled") && resets.isEmpty());
+				// A value being edited keeps its editor and its text through a
+				// sort: the row moves, it is not made again; the cursor follows.
+				int writable = -1;
+				for (int row = 0; row < rows.count() && writable < 0; ++row)
+					if (rowShown(list, row)->property("writable").toBool())
+						writable = row;
+				CHECK(writable >= 0);
+				list->setProperty("currentIndex", writable);
+				list->forceActiveFocus();
+				settle();
+				key(window, Qt::Key_F2);
+				auto* edited = rowShown(list, writable);
+				CHECK(edited->property("editing").toBool());
+				typeText(window, "7");
+				const auto typed = textOf(edited, "watchValueEditor");
+				click(window, header);
+				CHECK(rows.sorted() && edited->property("editing").toBool() && textOf(edited, "watchValueEditor") == typed);
+				CHECK(list->property("currentIndex").toInt() == edited->property("index").toInt());
+				key(window, Qt::Key_Escape);
+				// The menu's way to the same: checked as the list is sorted.
+				click(window, named(content, "watchMoreButton"));
+				auto* sortItem = shown(content, "watchSortByName");
+				CHECK(sortItem->property("checked").toBool());
+				click(window, sortItem);
+				CHECK(!rows.sorted());
+				// x says Delete does the same only on the cursor's row alone.
+				list->setProperty("currentIndex", 0);
+				list->forceActiveFocus();
+				rows.select(0);
+				settle();
+				const std::function<QQuickItem*(QQuickItem*)> xOf = [&](QQuickItem* root) -> QQuickItem* {
+					if (root->objectName() == QLatin1String("removeWatchButton"))
+						return root;
+					for (auto* child : root->childItems())
+						if (auto* found = xOf(child))
+							return found;
+					return nullptr;
+				};
+				CHECK(xOf(rowShown(list, 0))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				CHECK(!xOf(rowShown(list, 1))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				rows.selectAll();
+				settle();
+				CHECK(!xOf(rowShown(list, 0))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				rows.clearSelection();
 			}
 
 			// The tree: groups and nodes from the paths, descriptor order.

@@ -211,7 +211,39 @@ void listView()
 	CHECK(changed[0][0].toModelIndex().row() == 3 && changed[0][1].toModelIndex().row() == 3);
 	CHECK(changed[0][2].value<QList<int>>() == QList<int>({Rows::TextRole}));
 	rows.setSorted(false);
-	CHECK(names(rows).first() == QStringLiteral("device.Voltage"));
+	// Back to the order added, by moves too.
+	CHECK(resets.isEmpty() && names(rows) == QStringList({QStringLiteral("device.Voltage"),
+	                                                      QStringLiteral("data.Samples[10]"),
+	                                                      QStringLiteral("data.Samples[9]"),
+	                                                      QStringLiteral("data.Count")}));
+}
+
+// What a nested row belongs to, for a screen reader (WL-2c): its parent's
+// own step, an element named with its array.
+void parentLabels()
+{
+	auto source = sourceModel();
+	add(*source, 0, QStringLiteral("device.Calib.Phase[2].Offset"), key(1, 1));
+	add(*source, 1, QStringLiteral("data.M[3][2]"), key(2, 7));
+	add(*source, 2, QStringLiteral("device.Config.Gain"), key(3, 1));
+	Rows rows;
+	rows.setTree(true);
+	rows.setSource(source.get());
+	const auto labelOf = [&rows](const char* path) {
+		for (int row = 0; row < rows.count(); ++row)
+			if (rows.index(row).data(Qt::DisplayRole).toString() == QLatin1String(path))
+				return role(rows, row, Rows::ParentLabelRole).toString();
+		return QStringLiteral("?");
+	};
+	CHECK(labelOf("device.Calib.Phase[2].Offset") == QStringLiteral("Phase[2]"));
+	CHECK(labelOf("device.Calib.Phase[2]") == QStringLiteral("Phase"));
+	CHECK(labelOf("device.Calib.Phase") == QStringLiteral("Calib"));
+	CHECK(labelOf("data.M[3][2]") == QStringLiteral("M[3]"));
+	CHECK(labelOf("device.Config.Gain") == QStringLiteral("Config"));
+	CHECK(labelOf("device.Calib").isEmpty() && labelOf("device").isEmpty());
+	rows.setTree(false);
+	for (int row = 0; row < rows.count(); ++row)
+		CHECK(role(rows, row, Rows::ParentLabelRole).toString().isEmpty());
 }
 
 QStringList configTypesFor() { return {QStringLiteral("struct (3)"), QStringLiteral("f32")}; }
@@ -665,6 +697,21 @@ void randomSequences()
 			} else if (rows.count() > 0) {
 				rows.collapseAll();
 			}
+			// Now and then the list's sort switched: the rows move, what is
+			// selected and the anchor stay.
+			if (random->bounded(8) == 0) {
+				const auto asSet = [](const QVariantList& list) {
+					QSet<int> out;
+					for (const auto& value : list)
+						out.insert(value.toInt());
+					return out;
+				};
+				const auto before = asSet(rows.selectedSourceRows());
+				const auto anchor = rows.anchorRow() >= 0 ? name(rows, rows.anchorRow()) : QString{};
+				rows.setSorted(!rows.sorted());
+				CHECK(asSet(rows.selectedSourceRows()) == before);
+				CHECK(anchor.isEmpty() || (rows.anchorRow() >= 0 && name(rows, rows.anchorRow()) == anchor));
+			}
 			// A click, Ctrl+click, Shift+click, Ctrl+Shift+click or Ctrl+A.
 			if (rows.count() > 0) {
 				const auto row = random->bounded(rows.count());
@@ -719,6 +766,7 @@ int main(int argc, char** argv)
 	steps();
 	listView();
 	treeView();
+	parentLabels();
 	staticNames();
 	selection();
 	heldChanges();
