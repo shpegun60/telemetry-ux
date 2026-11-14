@@ -40,6 +40,8 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool watchPending READ watchPending NOTIFY stateChanged)
 	Q_PROPERTY(bool canAddWatch READ canAddWatch NOTIFY stateChanged)
 	Q_PROPERTY(int watchCount READ watchCount NOTIFY stateChanged)
+	// Some row is on this device; false when every row's path is one it lacks.
+	Q_PROPERTY(bool watchReadable READ watchReadable NOTIFY stateChanged)
 	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
 	Q_PROPERTY(bool canWriteWatch READ canWriteWatch NOTIFY stateChanged)
 	// How the Watchlist shows its numbers: "original", "dec" or "hex" (WL-3).
@@ -130,6 +132,7 @@ public:
 	bool watchPending() const;
 	bool canAddWatch() const;
 	int watchCount() const;
+	bool watchReadable() const;
 	QString watchStatus() const;
 	bool watchIndividual() const;
 	int watchIntervalMs() const;
@@ -167,6 +170,11 @@ public:
 	// {status: ok, capacity or refused, added, already, missing: [paths],
 	// refused: [{path, reason}]}.
 	Q_INVOKABLE QVariantMap addWatchPaths(const QStringList& lines);
+	// A saved Watchlist back in its order, as one change (WL-4c): every row
+	// this device has, and the rest as rows that say they are not on it,
+	// found again on a device that has them. {status, added, missing:
+	// [positions of the rows not on this device]}.
+	Q_INVOKABLE QVariantMap restoreWatchBindings(const QVariantList& bindings);
 	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
@@ -190,9 +198,10 @@ public:
 	Q_INVOKABLE QVariantMap watchTally(const QModelIndex& index) const;
 	// The Watchlist as a project saves it: each row in order as {group, name}
 	// (a whole Field) or {group, name, member} (a value inside one); empty
-	// when it cannot tell. addWatchBindings puts such rows back in one change:
-	// {status, added, duplicate, capacity, missing: [positions of entries no
-	// Field or value of this device matches, or it can't hold]}.
+	// when it cannot tell. addWatchBindings puts such rows after the others in
+	// one change: {status, added (values), duplicate, capacity, missing:
+	// [positions of entries this device has no value for]}; each of those is
+	// kept as a row by its path (WL-4c), saying why, once.
 	Q_INVOKABLE QVariantList watchBindings() const;
 	Q_INVOKABLE QVariantMap addWatchBindings(const QVariantList& bindings);
 	// Watches, or stops watching, every Field the Watchlist can hold at or
@@ -273,6 +282,8 @@ private:
 	void pollBatch();
 	bool canSetPresentation() const;
 	void setPresentationOverlay(const PresentationOverlay& overlay);
+	// restoreWatchBindings (replace) and addWatchBindings (after the rows).
+	QVariantMap putWatchBindings(const QVariantList& bindings, bool replace);
 	struct Impl;
 	// A model notification may delete the provider. In-flight methods retain the
 	// models until their structural notification returns; native leases are host-owned.

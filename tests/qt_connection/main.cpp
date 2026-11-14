@@ -659,11 +659,15 @@ void watchPaths()
 	auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.SignedZero32\t-0"),
 	                                      QStringLiteral("device.Nope"), QStringLiteral("control.Execute"),
 	                                      QStringLiteral(""), QStringLiteral("device.Config.Gain")});
-	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2 && provider->watchCount() == 2);
+	// The one not on this device is kept as a row that says so (WL-4c).
+	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2 && provider->watchCount() == 3);
 	CHECK(added.value("missing").toList() == QVariantList({QStringLiteral("device.Nope")}));
 	CHECK(added.value("refused").toList().size() == 1 && provider->canUndoWatch());
 	said = check("device.Config.Gain");
 	CHECK(said.value("status") == "watched" && said.value("row").toInt() >= 0);
+	said = check("device.Nope");
+	CHECK(said.value("status") == "watched" && said.value("row").toInt() == 2);
+	CHECK(provider->addWatchPaths({QStringLiteral("device.Nope")}).value("already").toInt() == 1 && provider->watchCount() == 3);
 	CHECK(provider->undoWatch().value("status") == "ok" && provider->watchCount() == 0);
 	CHECK(provider->addWatchPaths({QStringLiteral("device.Config")}).value("added").toInt() == 21 &&
 	      provider->watchCount() == 21);
@@ -729,9 +733,89 @@ void watchBindings()
 	const auto result = provider->addWatchBindings(entries);
 	CHECK(result.value("status") == "ok" && result.value("added").toInt() == 3);
 	CHECK(result.value("missing").toList() == QVariantList({3, 4, 5}));
-	CHECK(names() == before && provider->watchState(gain) == Qt::Checked);
+	// Each one this device has no value for is kept as a row that says why
+	// (WL-4c): an element past the end can't be watched, an absent Field is
+	// not on the device, and a struct kept whole becomes its other values.
+	const auto now = names();
+	CHECK(now.mid(0, 5) == before + QStringList({QStringLiteral("device.Config.Matrix[2][0]"), QStringLiteral("device.Absent")}));
+	CHECK(list->index(3, 0).data(ux::WatchlistModel::StatusRole) == "Unwatchable" &&
+	      !list->index(3, 0).data(ux::WatchlistModel::WriteRefusalRole).toString().isEmpty());
+	CHECK(list->index(4, 0).data(ux::WatchlistModel::StatusRole) == "Missing");
+	CHECK(now.size() > 6 && !now.contains(QStringLiteral("device.Config")) && now.count(QStringLiteral("device.Config.Gain")) == 1);
+	CHECK(provider->watchState(gain) == Qt::Checked);
+	// Added again, nothing more: values once, kept paths once.
+	const auto again = provider->addWatchBindings(entries);
+	CHECK(again.value("status") == "ok" && names() == now);
+	const auto kept = provider->watchBindings();
 	connection.disconnect();
-	CHECK(provider->watchBindings().isEmpty());
+	// The rows outlive the device, saved by the same paths (WL-4c).
+	CHECK(await([&] { return provider->watchBindings() == kept; }));
+}
+
+// The Watchlist outlives its device (WL-4c): a disconnect keeps every row by
+// its path with its last value, stale; the next device that has a path reads
+// it again in place, and a path it lacks stays a row that says so.
+void watchKeptAcrossReconnect()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	const auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Nope"),
+	                                            QStringLiteral("device.Config.Counter")});
+	CHECK(added.value("added").toInt() == 2 && added.value("missing").toList().size() == 1 && provider->watchCount() == 3);
+	auto* list = provider->watchlist();
+	const auto role = [list](int row, int which) { return list->index(row, 0).data(which).toString(); };
+	const auto bound = [list](int row) {
+		return list->index(row, 0).data(ux::WatchlistModel::WatchKeyRole).toULongLong() < (quint64{1} << 52);
+	};
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && role(0, ux::WatchlistModel::TextRole) == "1"; }));
+	const auto read = role(2, ux::WatchlistModel::TextRole);
+	CHECK(read == "18446744073709551615" && role(1, ux::WatchlistModel::StatusRole) == "Missing" && !bound(1));
+	const auto saved = provider->watchBindings();
+	CHECK(saved.size() == 3 && saved[1].toMap() == QVariantMap({{"group", "device"}, {"name", "Nope"}}));
+	// The device goes: the rows stay, with their last values, stale.
+	connection.disconnect();
+	CHECK(await([&] { return !bound(0) && !bound(2); }));
+	CHECK(provider->watchCount() == 3 && role(0, ux::WatchlistModel::NameRole) == "device.Config.Gain");
+	CHECK(role(0, ux::WatchlistModel::StatusRole) == "Stale" && role(0, ux::WatchlistModel::TextRole) == "1");
+	CHECK(role(2, ux::WatchlistModel::StatusRole) == "Stale" && role(2, ux::WatchlistModel::TextRole) == read);
+	CHECK(!list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool());
+	CHECK(provider->watchBindings() == saved);
+	// It comes back: found again in place, and read.
+	connect(connection, peer);
+	CHECK(await([&] { return bound(0) && bound(2); }));
+	CHECK(!bound(1) && role(1, ux::WatchlistModel::StatusRole) == "Missing" && provider->watchCount() == 3);
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && role(0, ux::WatchlistModel::StatusRole) == "Ok"; }));
+	CHECK(role(0, ux::WatchlistModel::TextRole) == "1" && role(2, ux::WatchlistModel::StatusRole) == "Ok");
+	// A saved Watchlist comes back in its own order, the absent path in its place.
+	const auto restored = provider->restoreWatchBindings(QVariantList{saved[2], saved[1], saved[0]});
+	CHECK(restored.value("status") == "ok" && restored.value("added").toInt() == 2 &&
+	      restored.value("missing").toList() == QVariantList{1});
+	CHECK(role(0, ux::WatchlistModel::NameRole) == "device.Config.Counter" && role(1, ux::WatchlistModel::NameRole) == "device.Nope" &&
+	      role(2, ux::WatchlistModel::NameRole) == "device.Config.Gain" && !provider->canUndoWatch());
+	// A saved path the device has but that names nothing to watch says why.
+	const auto command = provider->restoreWatchBindings({QVariantMap{{"group", "control"}, {"name", "Execute"}}});
+	CHECK(command.value("status") == "ok" && provider->watchCount() == 1 && !provider->watchReadable());
+	CHECK(role(0, ux::WatchlistModel::StatusRole) == "Unwatchable" &&
+	      role(0, ux::WatchlistModel::WriteRefusalRole).contains("Command"));
+	provider->refreshWatch();
+	CHECK(!provider->watchActive() && provider->watchStatus() == "Nothing to read: none of these paths is on this device.");
+	// A refused restore leaves the list as it was; a binding without a group
+	// is reported and kept nowhere, since it could not be saved back.
+	QVariantList tooMany;
+	for (int i = 0; i <= provider->watchLimit(); ++i)
+		tooMany.append(QVariantMap{{"group", "device"}, {"name", QStringLiteral("F%1").arg(i)}});
+	CHECK(provider->restoreWatchBindings(tooMany).value("status") == "refused" && provider->watchCount() == 1);
+	const auto odd = provider->restoreWatchBindings({QVariantMap{{"group", ""}, {"name", "Lonely"}}, saved[0]});
+	CHECK(odd.value("status") == "ok" && odd.value("missing").toList() == QVariantList{0} && provider->watchCount() == 1);
+	CHECK(provider->watchBindings() == QVariantList({saved[0]}));
+	connection.disconnect();
 }
 
 // A value inside a struct is written from its row by writing its whole Field:
@@ -1772,6 +1856,7 @@ int main(int argc, char** argv)
 	watchPaths();
 	memberRowWrite();
 	watchBindings();
+	watchKeptAcrossReconnect();
 	watchChangesWhilePolling();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();

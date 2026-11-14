@@ -385,6 +385,13 @@ void fill(ux::DynamicWatchlist& watch, int count)
 		CHECK(watch.add(quint32(id), QStringLiteral("catalog.Field%1").arg(id)));
 }
 
+// The device went and the rows stayed (WL-4c): count rows, none bound to it.
+bool unbound(ux::DynamicWatchlist& watch, int count)
+{
+	const auto* model = qobject_cast<ux::WatchlistModel*>(watch.model());
+	return model && watch.count() == count && !model->hasBound() && watch.held().isEmpty();
+}
+
 void bulkPublication()
 {
 	QObject owner;
@@ -436,7 +443,7 @@ void bulkPublication()
 	                 [&] { retiring.retire(); });
 	CHECK(retiring.addMany({{1, "one"}, {2, "two"}}).value("added").toInt() == 2);
 	events();
-	CHECK(retiring.count() == 0 && retirePeer.calls.empty());
+	CHECK(unbound(retiring, 2) && retirePeer.calls.empty());
 
 	QPointer<QObject> doomed = new QObject;
 	QObject observer;
@@ -794,7 +801,7 @@ void drainAndStale()
 	peer.current = false;
 	CHECK(text(watch, 0).isEmpty()); // Guard works before the owner publishes reset.
 	watch.retire();
-	CHECK(watch.count() == 0 && watch.pending() && watch.active());
+	CHECK(unbound(watch, 65) && watch.pending() && watch.active());
 	peer.lease.reset();
 	CHECK(!lease.expired());
 	peer.finish();
@@ -871,14 +878,17 @@ void schedulingAndReentrancy()
 	events();
 	CHECK(!watch.active());
 	CHECK(watch.begin(false));
+	bool retired = false;
 	QObject::connect(watch.model(), &QAbstractItemModel::dataChanged, &owner, [&] {
+		if (std::exchange(retired, true))
+			return;  // unbinding the kept rows publishes too (WL-4c)
 		peer.current = false;
 		watch.retire(); // Defer the structural reset until model publication returns.
 	});
 	peer.finish();
 	watch.poll();
 	events();
-	CHECK(watch.count() == 0 && !watch.active());
+	CHECK(retired && watch.count() > 0 && unbound(watch, watch.count()) && !watch.active());
 }
 
 void replaceSourceDuringPublication()
@@ -903,7 +913,8 @@ void replaceSourceDuringPublication()
 	CHECK(replaced && text(watch, 0).isEmpty() && text(watch, 1).isEmpty());
 	CHECK(fresh.calls.empty());
 	events();
-	CHECK(!watch.active() && watch.count() == 0);
+	CHECK(!watch.active() && unbound(watch, 2));
+	watch.clear();
 	fill(watch, 1);
 	CHECK(watch.begin(false));
 	fresh.finish();
@@ -971,8 +982,9 @@ void exactCompletionFrames()
 	CHECK(watch.begin(false));
 	watch.setSource(fresh.source());
 	old.finish(); watch.poll(); events();
-	CHECK(frames.size() == 10 && frames.back().phase == ux::WatchCompletionPhase::Drained && watch.count() == 0);
+	CHECK(frames.size() == 10 && frames.back().phase == ux::WatchCompletionPhase::Drained && unbound(watch, 6));
 	const auto oldBinding = frames.back().sourceBinding;
+	watch.clear();
 	fill(watch, 1);
 	CHECK(watch.begin(false));
 	fresh.finish(); watch.poll(); events();
@@ -1046,6 +1058,108 @@ QVector<ux::WatchEntry> configEntries(std::initializer_list<quint32> ordinals)
 
 // One cycle's reads: whole Fields together in ReadMany portions, every value
 // of one struct in one read, wherever its rows are, in ascending order.
+// Rows for paths a device lacks, and a Watchlist kept across a disconnect (WL-4c).
+void missingRows()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	auto* model = qobject_cast<ux::WatchlistModel*>(watch.model());
+	CHECK(model);
+	const auto nope = watch.missingEntry(QStringLiteral("device.Nope"));
+	CHECK(ux::watch_key::isUnresolved(nope.key) && nope.name == "device.Nope");
+	const auto enabled = watch.resolvePath(QStringLiteral("device.Config.enabled")).entries;
+	const auto gain = watch.resolvePath(QStringLiteral("device.Config.gain")).entries;
+	CHECK(enabled.size() == 1 && gain.size() == 1);
+	CHECK(watch.addEntries({enabled.first(), nope, gain.first()}).value("added").toInt() == 3);
+	CHECK(model->isUnbound(1) && model->data(model->index(1, 0), ux::WatchlistModel::StatusRole) == "Missing");
+	CHECK(model->data(model->index(1, 0), ux::WatchlistModel::AccessRole).toString().isEmpty());
+	// Never held, never read; saved by its path.
+	CHECK(!watch.held().contains(nope.key) && watch.held().size() == 2 && model->hasBound());
+	CHECK(watch.binding(1) == QVariantMap({{"group", "device"}, {"name", "Nope"}}));
+	CHECK(watch.begin(false));
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(!watch.active());
+	const auto read = model->data(model->index(2, 0), ux::WatchlistModel::TextRole).toString();
+	CHECK(!read.isEmpty());
+	// The device goes: every row stays, with its path and its last value, stale.
+	QSignalSpy changed(model, &QAbstractItemModel::dataChanged);
+	watch.retire(true);
+	events();
+	CHECK(unbound(watch, 3) && changed.count() == 1);
+	// With no device a row says nothing of devices, even one the last lacked.
+	CHECK(model->data(model->index(1, 0), ux::WatchlistModel::StatusRole).toString().isEmpty());
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::StatusRole) == "Stale");
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::TextRole) == read);
+	// While it is away, polling unbinds nothing again and says nothing.
+	watch.poll(); events();
+	watch.retire(true); events();
+	CHECK(changed.count() == 1);
+	// It comes back: the rows it has are found again in place; the other stays.
+	watch.setSource(peer.source());
+	events();
+	CHECK(model->count() == 3 && !model->isUnbound(0) && model->isUnbound(1) && !model->isUnbound(2));
+	CHECK(model->key(0) == enabled.first().key && model->key(2) == gain.first().key);
+	CHECK(model->data(model->index(1, 0), ux::WatchlistModel::StatusRole) == "Missing");
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::StatusRole) == "Stale");
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::TextRole) == read);
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::AccessRole).toString().size() == 2);
+	// A row typed for a whole struct becomes its values, in its place.
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Config"))}).value("added").toInt() == 1);
+	watch.retire(true);
+	events();
+	watch.setSource(peer.source());
+	events();
+	// enabled, Nope, gain, then Config's 300 samples (gain and enabled are watched).
+	CHECK(model->count() == int(members::leaves) + 1 && model->isUnbound(1) && !model->isUnbound(3));
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::NameRole) == "device.Config.samples[0]");
+	CHECK(model->data(model->index(model->count() - 1, 0), ux::WatchlistModel::NameRole) == "device.Config.samples[299]");
+	// Only rows not on this device: Start has nothing to read and says so.
+	watch.clear();
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Nope"))}).value("added").toInt() == 1);
+	const auto calls = peer.calls.size();
+	CHECK(!watch.begin(true) && !watch.begin(false));
+	events();
+	CHECK(peer.calls.size() == calls && !watch.pending() && !watch.active());
+	CHECK(watch.status() == "Nothing to read: none of these paths is on this device.");
+	// A stop invalidates readings, never what a row without a device says.
+	watch.retire(false);
+	events();
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::StatusRole) == "Missing");
+	// A struct kept whole above its own member takes every value, the member's
+	// too: the member's row goes, its value is in the struct's place.
+	const auto reattach = [&] {
+		watch.retire(true);
+		events();
+		watch.setSource(peer.source());
+		events();
+	};
+	watch.clear();
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Config")),
+	                        watch.missingEntry(QStringLiteral("device.Config.gain"))})
+	          .value("added").toInt() == 2);
+	reattach();
+	CHECK(model->count() == int(members::leaves) && !model->isUnbound(0) && model->hasBound());
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	// Not enough room for the struct's values: it claims none, says why, and the
+	// member below keeps its own value.
+	watch.clear();
+	QVector<ux::WatchEntry> crowd;
+	for (int i = 0; i < 750; ++i)
+		crowd.push_back(watch.missingEntry(QStringLiteral("pad.P%1").arg(i)));
+	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config")));
+	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config.gain")));
+	CHECK(watch.addEntries(crowd).value("added").toInt() == 752);
+	reattach();
+	CHECK(model->count() == 752 && model->isUnbound(750) && !model->isUnbound(751));
+	CHECK(model->data(model->index(750, 0), ux::WatchlistModel::StatusRole) == "Unwatchable");
+	CHECK(model->data(model->index(750, 0), ux::WatchlistModel::WriteRefusalRole).toString().contains("do not fit"));
+	CHECK(model->data(model->index(751, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+}
+
 // A typed path as the rows it adds, and what may come next (WL-4b).
 void pathResolution()
 {
@@ -1500,6 +1614,7 @@ int main(int argc, char** argv)
 	schedulingAndReentrancy();
 	replaceSourceDuringPublication();
 	pathResolution();
+	missingRows();
 	memberPlan();
 	memberFanOut();
 	memberUrgent();

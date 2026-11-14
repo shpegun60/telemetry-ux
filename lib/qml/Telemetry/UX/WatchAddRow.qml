@@ -98,16 +98,19 @@ FocusScope {
         if (!result)
             return
         const added = result.added || 0
+        const kept = result.missing ? result.missing.length : 0
         const parts = []
         const first = lines[0].split(" = ")[0].split("\t")[0].trim()
-        if (added > 0)
+        if (lines.length === 1 && kept === 1)
+            parts.push(qsTr("Added %1, not on this device").arg(first))
+        else if (added > 0)
             parts.push(lines.length === 1 && added === 1 ? qsTr("Added %1").arg(first)
                        : lines.length === 1 ? qsTr("Added %L1 values of %2").arg(added).arg(first)
                        : qsTr("Added %L1").arg(added))
         if (result.already > 0)
             parts.push(qsTr("%L1 already watched").arg(result.already))
-        if (result.missing && result.missing.length > 0)
-            parts.push(qsTr("%L1 not on this device").arg(result.missing.length))
+        if (kept > 0 && lines.length > 1)
+            parts.push(qsTr("%L1 not on this device").arg(kept))
         if (result.refused && result.refused.length > 0)
             parts.push(result.refused.length === 1 ? result.refused[0].reason
                                                    : qsTr("%L1 refused").arg(result.refused.length))
@@ -116,8 +119,8 @@ FocusScope {
         if (result.status !== "ok" && result.status !== "capacity")
             parts.push(result.message || qsTr("Not added: %1").arg(result.status))
         if (parts.length > 0)
-            addRow.added(parts.join(" · "), added > 0)
-        if (added > 0 || (result.already > 0 && parts.length === 1)) {
+            addRow.added(parts.join(" · "), added > 0 || kept > 0)
+        if (added > 0 || kept > 0 || (result.already > 0 && parts.length === 1)) {
             field.text = ""
             refresh()
         }
@@ -209,7 +212,13 @@ FocusScope {
                         addRow.refresh()
                         event.accepted = true
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        settleTimer.stop()
+                        // Typed since the suggestions were made: make them again,
+                        // so Enter never decides on the text before.
+                        if (settleTimer.running) {
+                            settleTimer.stop()
+                            addRow.candidates = provider.watchPathCandidates(text)
+                            addRow.highlighted = -1
+                        }
                         addRow.recheck()
                         if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
@@ -217,7 +226,11 @@ FocusScope {
                             addRow.reveal(addRow.check.row, addRow.check.message)
                             text = ""
                             addRow.refresh()
-                        } else if (addRow.check.status === "adds") {
+                        } else if (addRow.check.status === "missing" && checkLine.typing) {
+                            // A path the suggestions go on from is half typed, not
+                            // one a device lacks: Enter takes the first of them.
+                            addRow.choose(0)
+                        } else if (addRow.check.status === "adds" || addRow.check.status === "missing") {
                             addRow.add([text])
                         }
                         event.accepted = true
@@ -296,7 +309,7 @@ FocusScope {
                                 text: candidate.modelData.path
                             }
                             Text {
-                                visible: candidate.modelData.watched
+                                visible: candidate.modelData.watched === true
                                 text: qsTr("watched")
                                 font.pointSize: Type.caption
                                 color: candidate.index === addRow.highlighted ? Theme.selectedForeground : Theme.textMuted
@@ -312,7 +325,7 @@ FocusScope {
                         }
                         Accessible.role: Accessible.ListItem
                         Accessible.name: [candidate.modelData.path, candidate.modelData.typeText,
-                                          candidate.modelData.watched ? qsTr("watched") : ""].filter(part => part.length > 0).join(", ")
+                                          candidate.modelData.watched === true ? qsTr("watched") : ""].filter(part => (part || "").length > 0).join(", ")
                     }
                 }
             }
@@ -331,7 +344,8 @@ FocusScope {
             wrapMode: Text.Wrap
             text: addRow.check.message || ""
             font.pointSize: Type.caption
-            color: addRow.check.status === "adds" || addRow.check.status === "watched" ? Theme.textSecondary : Theme.error
+            color: addRow.check.status === "adds" || addRow.check.status === "watched" || addRow.check.status === "missing"
+                   ? Theme.textSecondary : Theme.error
         }
     }
 }

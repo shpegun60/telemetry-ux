@@ -27,6 +27,10 @@ const QString nodePrefix = QStringLiteral("p\x1f");
 // A watch key's order: its Field, then the value's place inside it.
 quint64 keyOrder(quint64 key) noexcept
 {
+	// A row without a device (bit 52, WL-4c) is numbered by its Watchlist in
+	// this same order when it loses one, so its siblings keep their places.
+	if (key >> 52)
+		return key & ((quint64{1} << 52) - 1);
 	return ((key & 0xffffffffULL) << 32) | (key >> 32);
 }
 
@@ -706,10 +710,18 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 		if (own.isEmpty() && !texts && !outcome && !formats)
 			return;
 	} else if (nameRole >= 0) {
-		// Every role at once may hide a new path.
+		// Every role at once may hide a new path, or in the tree a new place
+		// among its siblings: a row that found its device again (WL-4c).
+		const int keyRole = tree_ ? sourceRole_.value(WatchKeyRole, -1) : -1;
 		for (int source = topLeft.row(); source <= bottomRight.row(); ++source) {
 			const int node = shape_.nodeOfSource.value(source, -1);
-			if (node < 0 || source_->index(source, 0).data(nameRole).toString() != shape_.nodes.at(node).path) {
+			const auto index = source_->index(source, 0);
+			if (node < 0 || index.data(nameRole).toString() != shape_.nodes.at(node).path) {
+				refresh();
+				return;
+			}
+			const auto key = keyRole >= 0 ? index.data(keyRole).toULongLong() : 0;
+			if (key != 0 && keyOrder(key) != shape_.nodes.at(node).order) {
 				refresh();
 				return;
 			}
@@ -783,13 +795,25 @@ QVariant WatchRows::sourceData(int sourceRow, Role role) const
 
 int WatchRows::firstLeaf(const Node& node) const
 {
-	const Node* at = &node;
-	while (at->source < 0) {
-		if (at->children.isEmpty())
-			return -1;
-		at = &shape_.nodes.at(at->children.first());
+	// The first value a device holds speaks for the Field: one without a device
+	// (WL-4c) only when none does, so a member the device lacks never makes its
+	// Field say "Not on device" or lose its type and access.
+	const int keyRole = sourceRole_.value(WatchKeyRole, -1);
+	int first = -1;
+	QVector<const Node*> stack{&node};
+	while (!stack.isEmpty()) {
+		const Node* at = stack.takeLast();
+		if (at->source >= 0) {
+			if (first < 0)
+				first = at->source;
+			if (keyRole < 0 || !source_ || (source_->index(at->source, 0).data(keyRole).toULongLong() >> 52) == 0)
+				return at->source;
+			continue;
+		}
+		for (auto child = at->children.crbegin(); child != at->children.crend(); ++child)
+			stack.append(&shape_.nodes.at(*child));
 	}
-	return at->source;
+	return first;
 }
 
 QString WatchRows::summary(const Node& node) const

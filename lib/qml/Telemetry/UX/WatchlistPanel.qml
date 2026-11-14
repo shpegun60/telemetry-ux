@@ -68,7 +68,9 @@ Pane {
     readonly property bool changeLocked: provider.watchActive === true && provider.watchChangesWhilePolling !== true
     readonly property int count: provider.watchCount
     readonly property bool connected: provider.connected === true
-    readonly property bool canRead: connected && count > 0 && !active
+    // Some row is on this device (WL-4c); a provider that does not say is.
+    readonly property bool readable: provider.watchReadable !== false
+    readonly property bool canRead: connected && count > 0 && readable && !active
     readonly property string statusText: provider.watchPending ? qsTr("Reading…")
                                        : provider.watchStatus ? provider.watchStatus : ""
     // With watch boxes in the Device tree a Field is watched by ticking it;
@@ -203,6 +205,9 @@ Pane {
         // A row added while polling waits for the next read; that is not a problem.
         case "Not read": case "NotRead": return panel.provider.watchActive === true ? qsTr("Next read") : qsTr("Not read")
         case "Stale": return qsTr("Stale")
+        // A path this device does not have: a fact, not a failure (WL-4c).
+        case "Missing": return qsTr("Not on device")
+        case "Unwatchable": return qsTr("Can't watch")
         case "NotFound": return qsTr("Not found")
         case "Unsupported": case "UnsupportedType": return qsTr("Unsupported")
         case "Unavailable": return qsTr("Unavailable")
@@ -408,7 +413,7 @@ Pane {
                 Layout.preferredHeight: Type.controlHeight
                 verticalPadding: 0
                 text: panel.active ? qsTr("Stop") : qsTr("Start")
-                enabled: panel.active || (panel.connected && panel.count > 0)
+                enabled: panel.active || (panel.connected && panel.count > 0 && panel.readable)
                 onClicked: panel.active ? panel.requestStop() : panel.requestStart(true)
                 Accessible.name: panel.active ? qsTr("Stop polling") : qsTr("Start polling")
             }
@@ -1137,7 +1142,9 @@ Pane {
                 readonly property bool leftValue: !isValue || (editorKind === "enum" && formatName === "original")
                 // A word only for a problem or a stale value; waiting is "–" alone,
                 // its word in the value's tooltip and the row's description.
-                readonly property string statusText: ok || quiet || nested || isGroup ? "" : panel.statusWord(status)
+                // A value inside a Field shares its Field's word, but one its
+                // device lacks says so itself.
+                readonly property string statusText: ok || quiet || (nested && !missing) || isGroup ? "" : panel.statusWord(status)
                 readonly property string waitingText: waiting ? panel.statusWord(status === "" ? "Not read" : status) : ""
                 readonly property string accessText: !nested && typeof model.access === "string" ? model.access : ""
                 readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
@@ -1166,7 +1173,16 @@ Pane {
                 }
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
-                readonly property bool problem: !ok && !quiet
+                // A path this device lacks: said in a quiet word, never read or written.
+                readonly property bool missing: status === "Missing" || status === "Unwatchable"
+                // No device holds the row (WL-4c): its last value, stale, is
+                // the panel's one note, not a warning on every row.
+                readonly property bool unbound: Number(model.watchKey) >= 4503599627370496  // 2^52
+                readonly property bool problem: !ok && !quiet && !missing && !unbound
+                // The sentence a status word stands for, where there is one.
+                readonly property string statusDetail: status === "Missing"
+                    ? qsTr("%1 is not in this device's descriptor. Kept; read on any device that has it.").arg(name)
+                    : status === "Unwatchable" && typeof model.writeRefusal === "string" ? model.writeRefusal : ""
                 readonly property bool current: ListView.isCurrentItem && watchList.activeFocus
                 readonly property bool removeShown: compact || rowHover.hovered || current
                 readonly property color foreground: current ? Theme.selectedForeground : Theme.textPrimary
@@ -1187,6 +1203,7 @@ Pane {
                                   : watchRow.accessText === "r-" ? qsTr("read only") : ""]
                     .filter(part => part.length > 0).join(", ")
                 Accessible.description: [watchRow.statusText.length > 0 ? watchRow.statusText : watchRow.waitingText,
+                                         watchRow.statusDetail,
                                          watchRow.isValue && watchRow.ownFormat.length > 0
                                              ? qsTr("shown in %1").arg(panel.formatWord(watchRow.ownFormat)) : ""]
                     .filter(part => part.length > 0).join(", ")
@@ -1347,7 +1364,8 @@ Pane {
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         // Not read yet: a dash at the value's alignment, no word.
-                        text: !watchRow.isValue ? "" : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
+                        text: !watchRow.isValue ? "" : watchRow.missing ? "–"
+                            : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
                         font.family: Type.fixedFamily
                         font.italic: (watchRow.stale || watchRow.problem) && watchRow.text.length > 0
                         color: watchRow.current ? Theme.selectedForeground
@@ -1626,12 +1644,17 @@ Pane {
                         textFormat: Text.PlainText
                         text: watchRow.statusText
                         color: watchRow.current ? Theme.selectedForeground
-                             : watchRow.problem ? Theme.warning : Theme.textMuted
+                             : watchRow.problem ? Theme.warning
+                             : watchRow.missing ? Theme.textSecondary : Theme.textMuted
                         font.pointSize: Type.caption
                         elide: Text.ElideRight
-                        ToolTip.visible: statusRowHover.hovered && text.length > 0 && (truncated || text !== watchRow.status)
-                        ToolTip.text: watchRow.status
                         HoverHandler { id: statusRowHover }
+                        PlainToolTip {
+                            visible: statusRowHover.hovered && parent.text.length > 0
+                                     && (parent.truncated || parent.text !== watchRow.status || watchRow.statusDetail.length > 0)
+                            text: watchRow.statusDetail.length > 0 ? watchRow.statusDetail : watchRow.status
+                            delay: 700
+                        }
                     }
                     // Too little room: the word becomes a mark, the word in its tooltip.
                     Item {
@@ -1650,7 +1673,12 @@ Pane {
                                  : watchRow.problem ? Theme.warning : Theme.textSecondary
                         }
                         HoverHandler { id: glyphHover }
-                        PlainToolTip { visible: glyphHover.hovered && watchRow.statusText.length > 0; text: watchRow.statusText; delay: 700 }
+                        PlainToolTip {
+                            visible: glyphHover.hovered && watchRow.statusText.length > 0
+                            text: watchRow.statusDetail.length > 0 ? watchRow.statusText + "\n" + watchRow.statusDetail
+                                                                   : watchRow.statusText
+                            delay: 700
+                        }
                     }
                     // Measure the type and the word for their columns, shown or
                     // not: a hidden Text does not lay itself out, so a column

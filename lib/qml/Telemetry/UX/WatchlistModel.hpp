@@ -144,6 +144,24 @@ public:
 	[[nodiscard]] std::optional<WatchNumberFormat> rowFormat(int row) const;
 	// The type of the row's last reading; invalid before its first.
 	[[nodiscard]] WatchValueType valueType(int row) const;
+	// Rows for paths a device does not have, or not yet (WL-4c). A row whose
+	// key is watch_key::unresolved keeps its path and its last value; it is
+	// never read, written or recorded.
+	// Every row loses its device (a disconnect, another device): unresolved
+	// keys from next on, values kept and stale. Returns the next number.
+	quint64 unbindAll(quint64 next);
+	// row's path found on this device: the values it names, in place (several
+	// for a struct typed whole); none removes the row (watched already).
+	// path guards against a row that moved meanwhile: the row must still be it.
+	bool rebindRow(int row, const QString& path, const QVector<WatchEntry>& entries);
+	// row's path is not on this device: it says so ("Missing"); with a reason,
+	// the path is on it but names nothing to watch ("Unwatchable", the reason
+	// its refusal).
+	bool markMissing(int row, const QString& path, const QString& reason = {});
+	// No device holds the row: a disconnect's kept row or a path it lacks.
+	[[nodiscard]] bool isUnbound(int row) const;
+	// Some row is bound to the device attached.
+	[[nodiscard]] bool hasBound() const;
 	// Moves whenever the set of Fields held changes.
 	[[nodiscard]] quint64 membership() const noexcept;
 	void invalidateValues();
