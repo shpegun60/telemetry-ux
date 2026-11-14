@@ -340,13 +340,22 @@ void ProblemsModel::resolve(const QString& key)
 
 void ProblemsModel::resolveScope(const QString& scope)
 {
+	// The keys first: each removal is announced and logged, and a listener may
+	// resolve another problem meanwhile, so rows are found again one by one.
+	QStringList keys;
+	for (const auto& problem : problems_)
+		if (problem.scope == scope)
+			keys << problem.key;
 	bool any = false;
-	for (int row = count() - 1; row >= 0; --row)
-		if (problems_[static_cast<std::size_t>(row)].scope == scope) {
-			if (!remove(row, true))
-				return;
-			any = true;
-		}
+	for (const auto& key : keys) {
+		const int row = rowOf(key);
+		// Gone, or raised again meanwhile in another scope: not this one's.
+		if (row < 0 || problems_[static_cast<std::size_t>(row)].scope != scope)
+			continue;
+		if (!remove(row, true))
+			return;
+		any = true;
+	}
 	if (any)
 		Q_EMIT countsChanged();
 }

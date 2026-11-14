@@ -250,7 +250,7 @@ Pane {
     }
     // The keyboard goes back to the tree after a menu or the properties.
     function returnFocus() {
-        Qt.callLater(function() { if (fileTree.visible) fileTree.forceActiveFocus() })
+        Qt.callLater(function() { if (fileTree && fileTree.visible) fileTree.forceActiveFocus() })
     }
     // The menu for the row at index, or for empty space with an invalid index;
     // at x, y in `from`'s coordinates. Right-clicking makes that row current,

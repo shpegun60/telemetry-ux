@@ -154,7 +154,8 @@ invented payload. Details initially says **Not read**; Refresh performs the
 explicit Field read. Command/Service metadata selection does not execute or call
 the endpoint.
 
-`EndpointTreePanel.previewValues` defaults to `true`; its toggle is available
+`EndpointTreePanel.previewValues` defaults to `false` (the owner, 14 November
+2026: reading in the background is the user's choice); its toggle is available
 only when `previewsSupported`. The view calls
 `setPreviewDemand(QObject* view, QVariantList sourceIndexes)` with actual visible
 rows and `clearPreviewDemand(QObject* view)` when demand ends. Collapsed

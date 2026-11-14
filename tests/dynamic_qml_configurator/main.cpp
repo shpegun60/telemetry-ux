@@ -395,10 +395,14 @@ static QQuickItem* visibleItem(QQuickItem* root, const QString& name,
 static QQuickItem* control(QQuickItem* scope, const char* name, const char* scalarName = "")
 {
 	QQuickItem* result = nullptr;
-	CHECK(until([&] {
+	const bool found = until([&] {
 		result = visibleItem(scope, QString::fromLatin1(name), QString::fromLatin1(scalarName));
 		return result && result->width() > 0 && result->height() > 0;
-	}));
+	});
+	// Name what is missing: a check number alone does not say which control.
+	if (!found)
+		std::fprintf(stderr, "No visible control %s %s\n", name, scalarName);
+	CHECK(found);
 	return result;
 }
 
@@ -479,25 +483,6 @@ static void click(QQuickWindow& window, QQuickItem& item, QQuickItem* scope = nu
 	events();
 }
 
-static void placeholderGeometry(QQuickItem* scope, const char* name, const char* treeName)
-{
-	auto* label = control(scope, name);
-	auto* viewport = label->parentItem();
-	CHECK(viewport && viewport->objectName() == QString::fromLatin1(treeName));
-	CHECK(!label->property("text").toString().isEmpty());
-	QRectF bounds;
-	const bool within = until([&] {
-		bounds = label->mapRectToItem(viewport, QRectF{0, 0, label->width(), label->height()});
-		return viewport->width() > 0 && viewport->height() > 0 && bounds.left() >= -0.5 &&
-		       bounds.top() >= -0.5 && bounds.right() <= viewport->width() + 0.5 &&
-		       bounds.bottom() <= viewport->height() + 0.5;
-	});
-	std::fprintf(stderr, "Dynamic QML example %s: viewport=%.1fx%.1f label=%.1f,%.1f %.1fx%.1f\n",
-	             name, double(viewport->width()), double(viewport->height()), double(bounds.x()),
-	             double(bounds.y()), double(bounds.width()), double(bounds.height()));
-	CHECK(within);
-}
-
 static void actualExampleInputJourney()
 {
 	Harness h;
@@ -527,8 +512,13 @@ static void actualExampleInputJourney()
 	CHECK(!configPermission->property("checked").toBool() &&
 	      !valuePermission->property("checked").toBool());
 	CHECK(h.storage->owner.pending() == 0 && device.reads == 0);
-	placeholderGeometry(configPanel, "emptyValueLabel", "valueTree");
-	placeholderGeometry(valuePanel, "emptyValueLabel", "valueTree");
+	// Before any read Details shows the Field's definition from the schema,
+	// never an empty table: rows, and still no read.
+	for (auto* panel : {configPanel, valuePanel}) {
+		auto* definitions = control(panel, "metadataTree");
+		CHECK(until([&] { return definitions->property("rows").toInt() > 0; }));
+	}
+	CHECK(h.storage->owner.pending() == 0 && device.reads == 0);
 	click(*window, *configPermission);
 	CHECK(config.allowMutations() && !value.allowMutations());
 	CHECK(configPermission->property("checked").toBool() &&
@@ -578,8 +568,11 @@ static void actualExampleInputJourney()
 	CHECK(value.canEdit() && value.values()->rowCount() == 1);
 	select(config, "Ping");
 	events();
-	placeholderGeometry(configPanel, "emptyValueLabel", "valueTree");
-	placeholderGeometry(configPanel, "emptyResponseLabel", "responseTree");
+	// A Service that takes nothing says so in a caption, with no empty table.
+	CHECK(control(configPanel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("No arguments."));
+	// Before a call the Response heading says how to fill it, on its own line.
+	CHECK(control(configPanel, "emptyResponseLabel")->property("text").toString() ==
+	      QStringLiteral("Call to see the response."));
 	CHECK(!config.canCallService());
 	root.reset();
 	events();

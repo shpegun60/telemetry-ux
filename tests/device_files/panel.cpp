@@ -814,7 +814,9 @@ int main(int argc, char** argv)
 		return retry && retry->isVisible();
 	}));
 	auto* failedText = visualChild(failedRow, QStringLiteral("deviceFileTransferFigures"));
-	CHECK(failedText->property("text").toString().startsWith(QStringLiteral("! Could not write")));
+	CHECK(failedText->property("text").toString().startsWith(QStringLiteral("Could not write")));
+	auto* alarm = visualChild(failedRow, QStringLiteral("deviceFileTransferAlarm"));
+	CHECK(alarm && alarm->isVisible());
 	CHECK(QFile::remove(blocker));
 	CHECK(QMetaObject::invokeMethod(visualChild(failedRow, QStringLiteral("deviceFileTransferRetry")), "clicked"));
 	CHECK(await([&] {

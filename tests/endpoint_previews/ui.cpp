@@ -19,6 +19,7 @@
 #include <QtTest/QTest>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <functional>
 
@@ -295,17 +296,19 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
                        host::ConnectionSession& session, inspector_qml::TcpDemoServer& peer) {
 	ui.page("tree", 480, 820);
 	CHECK(ui.treePanel->setProperty("previewValues", true));
-	settle(750);
-	// The normal writable fixture contains only one aggregate Field. Its
-	// collapsed row is metadata, never a request for its getter.
-	CHECK(peer.fieldReads() == 0 && !session.busy());
+	// The normal writable fixture contains only one aggregate Field. Folded,
+	// it is read once for its one-line summary, as values.bin shows it.
 	auto* config = control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config"));
 	CHECK(config->property("previewAggregate").toBool());
-	CHECK(config->property("shownValue").toString().isEmpty());
-	CHECK(config->property("stateText").toString() == "Expand to preview");
+	CHECK(await([&] { return peer.fieldReads() == 1 && !session.busy(); }));
+	CHECK(await([&] {
+		auto* folded = control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config"));
+		return folded->property("shownValue").toString().startsWith(QLatin1Char('{'));
+	}));
 	auto* tree = control(ui.treePanel, "endpointTree");
 	CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, config->property("row").toInt())));
-	const bool firstPreview = await([&] { return peer.fieldReads() == 1 && !session.busy(); });
+	// Open, its members carry the values from that same read.
+	const bool firstPreview = await([&] { return peer.fieldReads() >= 1 && !session.busy(); });
 	if (!firstPreview) {
 		auto* currentConfig = control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config"));
 		std::fprintf(stderr, "Preview demand: reads=%llu busy=%d active=%d supported=%d rows=%d..%d config row=%d expanded=%d eligible=%d state=%s\n",
@@ -337,70 +340,62 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	ui.capture("tree-preview-320");
     for (const int width : {320,600,900}) {
         ui.page("tree", width, 820);
-        CHECK(tree->setProperty("contentX", 0)); settle();
+        settle();
         auto* header = control(ui.treePanel, "endpointColumnHeaders");
         geometry(*ui.window, header);
         auto* configRow = control(tree, "endpointRow", "name", QStringLiteral("Config"));
         auto* counterRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
         CHECK(configRow->property("accessMark").toString() == QStringLiteral("rw"));
-        CHECK(control(configRow, "endpointRowAccess")->property("text").toString() == QStringLiteral("rw"));
         CHECK(counterRow->property("accessMark").toString().isEmpty());
         CHECK(!counterRow->property("twoLines").toBool());
         CHECK(std::abs(counterRow->height() - configRow->height()) < 0.5);
-        for (const auto& name : {"endpointRowValue", "endpointRowType", "endpointRowAccess"}) {
-            auto* parentCell = control(configRow, name);
-            auto* childCell = control(counterRow, name);
-            CHECK(std::abs(parentCell->mapToScene({0,0}).x() - childCell->mapToScene({0,0}).x()) < 0.5);
+        // Each shown column: the Field's cell, its member's cell and the
+        // title start at one x. Access gives way first when names run short.
+        const std::pair<const char*, const char*> columns[] = {
+            {"endpointRowValue", "endpointColumnHeader_1"}, {"endpointRowType", "endpointColumnHeader_2"},
+            {"endpointRowAccess", "endpointColumnHeader_3"}};
+        for (const auto& [cell, title] : columns) {
+            auto* titleItem = visual(header, QString::fromLatin1(title), {}, {}, false);
+            CHECK(titleItem);
+            if (!titleItem || !titleItem->isVisible())
+                continue;
+            auto* childCell = control(counterRow, cell);
+            CHECK(std::abs(titleItem->mapToScene({0,0}).x() - childCell->mapToScene({0,0}).x()) < 0.5);
             CHECK(childCell->width() > 0 && childCell->height() <= counterRow->height());
+            if (std::strcmp(cell, "endpointRowValue") != 0) {
+                auto* parentCell = control(configRow, cell);
+                CHECK(std::abs(parentCell->mapToScene({0,0}).x() - childCell->mapToScene({0,0}).x()) < 0.5);
+            }
         }
-        auto* valueHeader = control(header, "endpointColumnHeader_1");
-        auto* valueCell = control(counterRow, "endpointRowValue");
-        CHECK(valueCell->mapToScene({0,0}).x() > valueHeader->mapToScene({0,0}).x());
-        if (width == 320) CHECK(tree->property("contentWidth").toDouble() > tree->width());
-        if (width == 900) {
-            auto* horizontal = visual(tree, QStringLiteral("endpointHorizontalScroll"), {}, {}, false);
-            CHECK(horizontal && horizontal->property("policy").toInt() == Qt::ScrollBarAlwaysOff && !horizontal->isVisible());
-        }
+        CHECK(control(header, "endpointColumnHeader_0") && control(header, "endpointColumnHeader_1"));
+        if (width == 900)
+            CHECK(control(header, "endpointColumnHeader_2") && control(header, "endpointColumnHeader_3"));
+        // Never sideways: every column fits the tree's width.
+        CHECK(tree->property("contentWidth").toDouble() <= tree->width() + 0.5);
+        CHECK(!visual(tree, QStringLiteral("endpointHorizontalScroll"), {}, {}, false));
+        CHECK(!visual(ui.treePanel, QStringLiteral("endpointColumnResize_1"), {}, {}, false));
         const auto capture = QStringLiteral("tree-table-%1").arg(width).toLatin1();
         ui.capture(capture.constData());
     }
-    // Resizing, keyboard navigation and horizontal scrolling only rearrange
-    // presentation. Stop the lease to distinguish them from normal TTL reads.
+    // Previews off: no Value column, its title gone, the names take the room,
+    // and laying the table out reads nothing.
     CHECK(ui.treePanel->setProperty("previewValues", false));
     CHECK(await([&] { return !session.busy(); }));
     const auto beforeLayoutReads = peer.fieldReads();
-    auto* valueHeader = control(ui.treePanel, "endpointColumnHeader_1");
-    const auto originalWidth = valueHeader->width();
-    valueHeader->forceActiveFocus(); QTest::keyClick(ui.window, Qt::Key_Right); settle();
-    CHECK(valueHeader->width() > originalWidth);
-    QTest::keyClick(ui.window, Qt::Key_Home); settle();
-    CHECK(std::abs(valueHeader->width() - originalWidth) < 0.5);
-    auto* resize = control(ui.treePanel, "endpointColumnResize_1");
-    const auto origin = resize->mapToScene({resize->width()/2,resize->height()/2}).toPoint();
-    QTest::mousePress(ui.window, Qt::LeftButton, Qt::NoModifier, origin);
-    QTest::mouseMove(ui.window, origin + QPoint(32,0));
-    QTest::mouseRelease(ui.window, Qt::LeftButton, Qt::NoModifier, origin + QPoint(32,0)); settle();
-    CHECK(valueHeader->width() >= originalWidth + 30);
-    QTest::keyClick(ui.window, Qt::Key_Home); settle();
-    auto* nameHeader = control(ui.treePanel, "endpointColumnHeader_0");
-    nameHeader->forceActiveFocus();
-    for (int n = 0; n < 40; ++n) QTest::keyClick(ui.window, Qt::Key_Left);
-    settle();
-    auto* narrowRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
-    auto* narrowName = control(narrowRow, "endpointRowName");
-    auto* narrowValue = control(narrowRow, "endpointRowValue");
-    CHECK(narrowName->width() >= narrowRow->height() * 2);
-    CHECK(narrowName->mapRectToScene(narrowName->boundingRect()).right() <= narrowValue->mapToScene({0,0}).x());
-    auto* matrix = control(tree, "endpointRow", "name", QStringLiteral("Matrix"));
-    auto* chevron = matrix->property("indicator").value<QQuickItem*>();
-    CHECK(chevron && chevron->mapRectToItem(matrix,chevron->boundingRect()).right() < matrix->property("nameColumnWidth").toDouble());
-    QTest::keyClick(ui.window, Qt::Key_Home); settle();
-    ui.page("tree", 320, 820);
-    auto* access = control(ui.treePanel, "endpointColumnHeader_3");
-    access->forceActiveFocus(Qt::TabFocusReason); settle();
-    CHECK(tree->property("contentX").toDouble() > 0);
-    geometry(*ui.window, access);
-    ui.capture("tree-table-320-scrolled");
+    for (const int width : {320, 600}) {
+        ui.page("tree", width, 820);
+        settle();
+        auto* header = control(ui.treePanel, "endpointColumnHeaders");
+        auto* valueTitle = visual(header, QStringLiteral("endpointColumnHeader_1"), {}, {}, false);
+        CHECK(valueTitle && !valueTitle->isVisible());
+        auto* counterRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
+        auto* value = visual(counterRow, QStringLiteral("endpointRowValue"), {}, {}, false);
+        CHECK(value && !value->isVisible());
+        auto* name = control(counterRow, "endpointRowName");
+        CHECK(name->width() >= counterRow->height() * 2);
+        const auto capture = QStringLiteral("tree-metadata-only-%1").arg(width).toLatin1();
+        ui.capture(capture.constData());
+    }
     CHECK(peer.fieldReads() == beforeLayoutReads && provider.values()->rowCount() == 0);
     CHECK(ui.treePanel->setProperty("previewValues", true));
 	ui.page("details", 480, 820);

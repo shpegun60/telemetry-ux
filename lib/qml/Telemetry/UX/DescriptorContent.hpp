@@ -35,17 +35,18 @@ public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
 		KindRole,   // "category", "group", "endpoint", "member"
-		TypeRole,   // the type in words: "u32", "f32[8]", "struct, 3 members"
-		AccessRole, // "read, write" for a Field; "request → response" for a call
+		TypeRole,   // the type in words: "u32", "f32[8]", "struct (3)", "(bool)"
+		AccessRole, // a Field's access in words, "read, write"; empty for a call
 		CountRole,    // endpoints below a category or group
 		CategoryRole, // 0 Fields, 1 Commands, 2 Services
-		PathRole      // the names below the category joined by "."
+		PathRole,     // the names below the category joined by "."
+		AccessMarkRole // a Field's access as the Device tree marks it: "rw", "r-", "-w", "--"
 	};
 	Q_ENUM(Role)
 
 	struct Node {
 		// path: the names below the category joined by "." ("measure.Voltage").
-		QString name, kind, type, access, path;
+		QString name, kind, type, access, path, mark;
 		int count = 0;
 		// 0 Fields, 1 Commands, 2 Services: the word a count is in.
 		int category = 0;

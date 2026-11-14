@@ -67,12 +67,13 @@ public:
 		PathRole,        // "group.Field.member[2]"
 		NumericRole,     // a number: shown right-aligned
 		FindRole,        // the name Find looks in: none for a range
-		ChangedFieldsRole // a group's Fields whose bytes the latest snapshot changed
+		ChangedFieldsRole, // a group's Fields whose bytes the latest snapshot changed
+		AccessRole        // a Field's access, "rw", "r-", "-w" or "--"; empty below it
 	};
 	Q_ENUM(Role)
 
 	struct Node {
-		QString name, kind, type, value, path;
+		QString name, kind, type, value, path, access;
 		int count = 0, row = 0, changedFields = 0;
 		bool unavailable = false, changed = false;
 		// How the value goes into JSON: 0 text, 1 number, 2 true/false; and

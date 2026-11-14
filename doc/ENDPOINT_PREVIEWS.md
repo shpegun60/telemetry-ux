@@ -12,8 +12,9 @@ endpoint, change an editor draft, change the Watchlist or enable a mutation.
 Only explicit endpoint activation follows the host's existing Details route.
 
 **One quiet toolbar.** Keep Find in its current place and put a compact
-**Preview values** toggle beside it. It starts on for a provider that supports
-previews and is absent for providers without that capability. Turning it off
+**Preview values** toggle beside it. It starts off (the owner, 14 November
+2026: reading in the background is the user's choice) and is absent for
+providers without that capability. Turning it off
 releases this tree's demand; metadata stays visible. The control's description
 says that it reads visible Fields slowly while this tree is shown. It is not a
 Watch polling control.
@@ -23,17 +24,26 @@ and selection/focus treatment. No additional cards, status badges or per-row
 buttons. Names and values are plain text. Values use `Type.fixedFamily`, arrive
 as exact strings and are never converted through a QML number.
 
-- Every width uses one compact row with **Name, Value, Type, Access**
-  columns, matching the Values viewer's table hierarchy. Only Name contains
-  depth indentation, the chevron and Watch checkbox. Deep indentation is
-  bounded within Name so it cannot cover Value or consume all label space.
-- Header separators resize columns with the mouse; a focused header supports
-  Left/Right to resize and Home to reset. Double-clicking a separator also
-  restores that column. Name absorbs spare space until explicitly resized.
-- Narrow panels scroll the same logical table horizontally instead of
-  wrapping every Field into multiple lines. Headers and rows scroll together.
-  A long name, type or value is elided, with its full plain text available in
-  the cell tooltip, accessible description and existing Details route.
+- Every width uses one compact row with **Name, Value, Type, rw** columns,
+  the row family the Values and Descriptor viewers share (14 November 2026).
+  Only Name contains depth indentation, the chevron and Watch checkbox.
+- Value is there only while previews are shown (they start off). Value and
+  Type are as wide as the widest text the rows have shown, growing only so a
+  refresh never moves them; the columns are placed from the right edge with a
+  12 px gap. Nothing is resized by hand and the header has no separators.
+- Nothing scrolls sideways. When the names of a second-level row run short,
+  Access gives way first, then Type narrows, then Type goes; Name and Value
+  stay. A long name is elided in its middle, a type or value at its end,
+  with the full plain text in the cell tooltip, the accessible description
+  and Details.
+- Categories and groups are DemiBold with their count at the right edge
+  (`EndpointModel::CountRole`); rows are striped. A folded struct shows its
+  summary, `{Gain 1, Enabled true, …}` (`schema_text::summaryText`, shared
+  with values.bin), and is read once for it; open, its members carry the
+  values.
+- A struct, its members, a write-only Field and a group with nothing the
+  Watchlist can hold keep a disabled watch box whose tooltip says why
+  (`DynamicConfiguratorProvider::watchRefusal`).
 - Type names use the same schema formatter as Values/Descriptor. Field access
   uses the two-letter marks `r-`, `rw`, `-w` or `--`, derived from descriptor
   permissions. The full words remain in the tooltip and accessible description;
@@ -54,14 +64,14 @@ counts, enum codes, limits and help belong in Details or the row description,
 not in a permanent column on every row.
 
 A Field beyond the preview byte/expansion budget still visibly says **Open
-Details**, even though it is not eligible for a preview request. That reason
-takes priority over **Expand to preview** on a collapsed aggregate. A bounded
+Details**, even though it is not eligible for a preview request. A bounded
 cache refusal says **Preview limit**. Neither state invents a value or silently
 turns the preview back on.
 
-**Structures and arrays.** A collapsed aggregate shows its type/member count
-without requesting its payload. Expanding it requests its owning Field once;
-all member and element rows share that owned snapshot. Nested rows are read-only
+**Structures and arrays.** A folded struct in view is read once for its
+one-line summary, `{Gain 1, Enabled true, …}`, as values.bin shows it (an
+array of plain values `[1, 2, …]`); expanding it reads nothing more: all
+member and element rows share that owned snapshot. Nested rows are read-only
 value rows, not new endpoints or Watch candidates. Long arrays use the existing
 Values-style bounded ranges, such as `[0 … 255]`, then materialize elements only
 when a range is opened. Neither child creation nor model-role access sends I/O.
