@@ -104,8 +104,48 @@ Pane {
         return found ? found.text : name
     }
     function setFormat(name) {
-        if (formatAvailable)
-            provider.watchFormat = name
+        if (!formatAvailable)
+            return
+        formatsBefore = null
+        provider.watchFormat = name
+    }
+    // Every value back to Original at once: the Watchlist's form and every
+    // row's own, those kept for paths the device lacks too. Undo puts them
+    // back while no form has been chosen since.
+    readonly property bool formatsResettable: formatAvailable && typeof provider.watchRowFormats === "function"
+                                              && typeof provider.setWatchRowFormats === "function"
+    property var formatsBefore: null
+    function formatsChosen() {
+        return formatsResettable && (format !== "original" || Object.keys(provider.watchRowFormats()).length > 0)
+    }
+    function resetFormats() {
+        if (!formatsChosen())
+            return false
+        const before = { format: format, rows: provider.watchRowFormats() }
+        provider.watchFormat = "original"
+        provider.setWatchRowFormats({})
+        forgetMeasured()
+        noticeText = qsTr("Every value shown as Original")
+        noticeUndo = false
+        formatsBefore = before
+        return true
+    }
+    function undoFormats() {
+        const before = formatsBefore
+        formatsBefore = null
+        if (!before)
+            return false
+        provider.watchFormat = before.format
+        const done = provider.setWatchRowFormats(before.rows)
+        forgetMeasured()
+        noticeText = done ? qsTr("Undone") : ""
+        return done
+    }
+    // Any other notice ends what Undo could take back of a reset.
+    onNoticeTextChanged: formatsBefore = null
+    readonly property bool canUndo: formatsBefore !== null || (noticeUndo && provider.canUndoWatch === true)
+    function undo() {
+        return formatsBefore !== null ? undoFormats() : undoRemoval()
     }
     // The Value column grows only, until a form is chosen: hex is wider.
     onFormatChanged: forgetMeasured()
@@ -115,6 +155,7 @@ Pane {
         if (typeof provider.setWatchRowFormat !== "function" || row < 0)
             return
         const sources = rows ? rows.sourceRows(row) : [row]
+        formatsBefore = null
         if (sources.length > 0 && provider.setWatchRowFormat(sources, name))
             forgetMeasured()
     }
@@ -706,6 +747,9 @@ Pane {
             // made, Fields are read one by one and there is nothing to choose.
             readonly property bool choosable: readManySupported || explicitIndividual
             readonly property bool individual: !choosable || panel.provider.watchIndividual === true
+            // Whether any value is shown other than as Original, as the menu opens.
+            property bool formatsChosen: false
+            onAboutToShow: formatsChosen = panel.formatsChosen()
             // As wide as its widest item, whatever the style's own width; the
             // plain items keep the check column, so every label lines up.
             readonly property real widestItem: {
@@ -787,6 +831,15 @@ Pane {
                 leftPadding: moreMenu.checkColumn
                 text: qsTr("Collapse all")
                 onTriggered: panel.rows.collapseAll()
+            }
+            MenuItem {
+                objectName: "watchResetFormats"
+                visible: panel.formatsResettable
+                height: panel.formatsResettable ? implicitHeight : 0
+                enabled: panel.formatsResettable && moreMenu.formatsChosen
+                leftPadding: moreMenu.checkColumn
+                text: qsTr("Show every value as Original")
+                onTriggered: panel.resetFormats()
             }
             MenuSeparator {}
             MenuItem {
@@ -881,10 +934,10 @@ Pane {
             LinkButton {
                 id: removedUndo
                 objectName: "watchUndo"
-                visible: panel.noticeUndo && panel.provider.canUndoWatch === true
+                visible: panel.canUndo
                 text: qsTr("Undo")
                 font.pointSize: Type.caption
-                onClicked: panel.undoRemoval()
+                onClicked: panel.undo()
             }
             Item { Layout.fillWidth: true }
         }
@@ -945,7 +998,8 @@ Pane {
             onActiveFocusChanged: if (activeFocus && currentIndex < 0 && count > 0) currentIndex = 0
             // Ctrl+Z is the Watchlist's own while it has the keys.
             Keys.onShortcutOverride: event => {
-                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && panel.provider.canUndoWatch === true)
+                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier
+                        && (panel.provider.canUndoWatch === true || panel.formatsBefore !== null))
                     event.accepted = true
                 if (event.key === Qt.Key_C && currentIndex >= 0 && (event.modifiers === Qt.ControlModifier
                         || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)))
@@ -953,7 +1007,7 @@ Pane {
             }
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier) {
-                    event.accepted = panel.undoRemoval()
+                    event.accepted = panel.undo()
                     return
                 }
                 // Insert from anywhere in the list, or Down past the last row: the "+" row.

@@ -321,6 +321,39 @@ int main(int argc, char** argv)
 				settle();
 			}
 			CHECK(!rowMenu->property("visible").toBool());
+			// Every value back to Original from the "…" menu: the Watchlist's
+			// form and every row's own; Undo puts both back.
+			{
+				auto* fixture = panel->property("provider").value<QObject*>();
+				const auto ownFormats = [fixture] { return fixture->property("rowFormats").toMap(); };
+				CHECK(ownFormats() == QVariantMap({{QStringLiteral("row3"), QStringLiteral("dec")},
+				                                   {QStringLiteral("row1"), QStringLiteral("dec")}}));
+				click(window, named(content, "watchFormat_hex"));
+				click(window, named(content, "watchMoreButton"));
+				auto* reset = shown(content, "watchResetFormats");
+				CHECK(reset->property("enabled").toBool() &&
+				      reset->property("text").toString() == QStringLiteral("Show every value as Original"));
+				click(window, reset);
+				CHECK(panel->property("format").toString() == QStringLiteral("original") && ownFormats().isEmpty());
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Every value shown as Original"));
+				click(window, shown(content, "watchUndo"));
+				CHECK(panel->property("format").toString() == QStringLiteral("hex") && ownFormats().size() == 2);
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone") && !named(content, "watchUndo"));
+				// Reset again, then a form chosen: Undo would take that back too, so it goes.
+				click(window, named(content, "watchMoreButton"));
+				click(window, shown(content, "watchResetFormats"));
+				CHECK(named(content, "watchUndo"));
+				click(window, named(content, "watchFormat_dec"));
+				CHECK(!named(content, "watchUndo"));
+				// With everything Original there is nothing to reset.
+				click(window, named(content, "watchFormat_original"));
+				click(window, named(content, "watchMoreButton"));
+				CHECK(!shown(content, "watchResetFormats")->property("enabled").toBool());
+				auto* moreMenu = window->findChild<QObject*>(QStringLiteral("watchMoreMenu"));
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle();
+				CHECK(moreMenu && !moreMenu->property("visible").toBool());
+			}
 			window->setWidth(480);
 			settle();
 
@@ -611,6 +644,11 @@ int main(int argc, char** argv)
 			const QPointF middle = list->mapToScene(QPointF(list->width() / 2, list->height() / 2));
 			QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
 			                  Qt::NoModifier, Qt::NoScrollPhase, false);
+			// Stamped after the clicks before it, as a real turn would be: QTest
+			// stamps its mouse events, and a turn stamped 0 reads as older than
+			// them and is ignored.
+			QTest::lastMouseTimestamp += 16;
+			wheel.setTimestamp(ulong(QTest::lastMouseTimestamp));
 			QCoreApplication::sendEvent(window, &wheel);
 			settle();
 			CHECK(list->property("contentY").toReal() > top);

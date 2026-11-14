@@ -39,8 +39,23 @@ ApplicationWindow {
             canUndoWatch = true
             return watchTreeCalls.addPaths(lines)
         }
+        // The rows' own formats by a stand-in path, as the provider keeps them by path.
+        property var rowFormats: ({})
         function setWatchRowFormat(rows, format) {
             watchTreeCalls.format(rows, format)
+            const next = Object.assign({}, rowFormats)
+            for (const row of rows) {
+                if (format === "")
+                    delete next["row" + row]
+                else
+                    next["row" + row] = format
+            }
+            rowFormats = next
+            return true
+        }
+        function watchRowFormats() { return Object.assign({}, rowFormats) }
+        function setWatchRowFormats(formats) {
+            rowFormats = Object.assign({}, formats)
             return true
         }
         function removeWatch(row) { watchTreeCalls.remove([row]) }
