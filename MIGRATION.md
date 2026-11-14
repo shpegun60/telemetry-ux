@@ -242,6 +242,32 @@ provider gains `checkWatchPath`, `watchPathCandidates` and `addWatchPaths`.
 invokables the Watchlist's list is as tall as its rows, the "+" row right under
 the last one; without them it fills its room as before.
 
+## Rows for paths a device lacks; the Watchlist kept across a disconnect (WL-4c, November 2026)
+
+One change of behaviour. `DynamicWatchlist::retire(true)`, and so a disconnect
+or a source replaced, no longer empties the Watchlist: every row stays with its
+path and its last value (as it was shown, in its format), status `Stale`, or
+`Missing` if it was never read. Such a row has an unresolved key
+(`watch_key::unresolved`, bit 52 set, never a real key): it is never read,
+written or recorded, has no access mark, type or editor, and `held()` leaves it
+out. When a device attaches, `rebindRows` finds every such row again by its
+path, in place - a struct typed whole becomes its values, minus those a row
+above already names - and a path the device lacks stays a row that says
+`Missing` ("Not on device" in the panel). A host test that expected
+`count() == 0` after a retire now finds the rows; `clear()` still empties.
+
+Additive: `watch_key::unresolved` and `isUnresolved`; `WatchlistModel`
+`unbindAll`, `rebindRow`, `markMissing`, `isMissing`, `hasBound`;
+`DynamicWatchlist` `missingEntry`, `missingRow`, `rebindRows`; the Dynamic
+provider's `restoreWatchBindings(bindings)` - a saved Watchlist back in its
+order as one change, every path a device lacks kept as such a row, `{status,
+added, missing: [positions]}`. `addWatchPaths` keeps a path the device lacks
+as a row too (`added` counts values only; `missing` names the kept paths, and a
+path kept already counts in `already`), and `checkWatchPath` says `missing`
+with Enter allowed. `watchBindings` answers without a device as well, from the
+rows' paths. A Start or Read once with only such rows is refused and says
+there is nothing on this device to read.
+
 ## The Watchlist's number format (WL-3, November 2026)
 
 `WatchlistModel` gains the roles `shownText` and `format`, `setFormat`,

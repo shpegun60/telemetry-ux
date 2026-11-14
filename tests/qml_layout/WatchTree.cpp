@@ -109,6 +109,10 @@ public:
 	Q_INVOKABLE QVariantMap addPaths(const QStringList& lines)
 	{
 		addedLines = lines;
+		// A path the device lacks is kept as a row that says so (WL-4c).
+		if (lines == QStringList{QStringLiteral("device.Nope")})
+			return {{"status", "ok"}, {"added", 0}, {"already", 0},
+			        {"missing", QVariantList{QStringLiteral("device.Nope")}}, {"refused", QVariantList{}}};
 		return {{"status", "ok"}, {"added", int(lines.size())}, {"already", 0},
 		        {"missing", QVariantList{}}, {"refused", QVariantList{}}};
 	}
@@ -471,6 +475,15 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.Voltage = 230")}));
 			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added 2"));
+			// A path this device lacks: said quietly, and Enter keeps it as a row.
+			typeText(window, "device.Nope");
+			settle();
+			auto* nopeCheck = named(content, "watchAddCheck");
+			CHECK(nopeCheck->property("text").toString() == QStringLiteral("device.Nope is not on this device."));
+			key(window, Qt::Key_Return);
+			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Nope")}));
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("device.Nope kept: not on this device"));
+			CHECK(addField->property("text").toString().isEmpty() && named(content, "watchUndo"));
 			key(window, Qt::Key_Escape);
 			CHECK(named(content, "watchAddRest"));
 			window->setWidth(480);
@@ -483,6 +496,20 @@ int main(int argc, char** argv)
 			CHECK(!rows.tree() && list->property("count").toInt() == 5);
 			const int current = list->property("currentIndex").toInt();
 			CHECK(current >= 0 && rowAt(list, current)->property("name").toString() == QStringLiteral("device.Config.Gain"));
+			// A row for a path this device lacks: a quiet word, no value, no access.
+			model.put(5, QStringLiteral("device.Nope"), 0, 0, QString{}, {QString{}}, false);
+			model.item(5)->setData(QStringLiteral("Missing"), Status);
+			model.item(5)->setData(QString{}, Access);
+			model.item(5)->setData(QString{}, TypeText);
+			model.item(5)->setData(qulonglong((quint64{1} << 52) | 1), Key);
+			settle();
+			auto* nope = rowAt(list, 5);
+			CHECK(nope && nope->property("missing").toBool() && !nope->property("problem").toBool());
+			CHECK(named(nope, "watchRowStatus")->property("text").toString() == QStringLiteral("Not on device"));
+			CHECK(value(list, 5) == QStringLiteral("–"));
+			shot(window, argc, argv, QStringLiteral("watch-missing-480"));
+			model.removeRow(5);
+			settle();
 			window->close();
 		}
 		settle();

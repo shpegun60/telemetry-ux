@@ -203,6 +203,8 @@ Pane {
         // A row added while polling waits for the next read; that is not a problem.
         case "Not read": case "NotRead": return panel.provider.watchActive === true ? qsTr("Next read") : qsTr("Not read")
         case "Stale": return qsTr("Stale")
+        // A path this device does not have: a fact, not a failure (WL-4c).
+        case "Missing": return qsTr("Not on device")
         case "NotFound": return qsTr("Not found")
         case "Unsupported": case "UnsupportedType": return qsTr("Unsupported")
         case "Unavailable": return qsTr("Unavailable")
@@ -1166,7 +1168,9 @@ Pane {
                 }
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
-                readonly property bool problem: !ok && !quiet
+                // A path this device lacks: said in a quiet word, never read or written.
+                readonly property bool missing: status === "Missing"
+                readonly property bool problem: !ok && !quiet && !missing
                 readonly property bool current: ListView.isCurrentItem && watchList.activeFocus
                 readonly property bool removeShown: compact || rowHover.hovered || current
                 readonly property color foreground: current ? Theme.selectedForeground : Theme.textPrimary
@@ -1347,7 +1351,8 @@ Pane {
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         // Not read yet: a dash at the value's alignment, no word.
-                        text: !watchRow.isValue ? "" : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
+                        text: !watchRow.isValue ? "" : watchRow.shownText.length > 0 ? watchRow.shownText
+                            : watchRow.waiting || watchRow.missing ? "–" : ""
                         font.family: Type.fixedFamily
                         font.italic: (watchRow.stale || watchRow.problem) && watchRow.text.length > 0
                         color: watchRow.current ? Theme.selectedForeground
@@ -1626,11 +1631,14 @@ Pane {
                         textFormat: Text.PlainText
                         text: watchRow.statusText
                         color: watchRow.current ? Theme.selectedForeground
-                             : watchRow.problem ? Theme.warning : Theme.textMuted
+                             : watchRow.problem ? Theme.warning
+                             : watchRow.missing ? Theme.textSecondary : Theme.textMuted
                         font.pointSize: Type.caption
                         elide: Text.ElideRight
                         ToolTip.visible: statusRowHover.hovered && text.length > 0 && (truncated || text !== watchRow.status)
-                        ToolTip.text: watchRow.status
+                        ToolTip.text: watchRow.missing
+                            ? qsTr("%1 is not in this device's descriptor. The row stays and is read on a device that has it.").arg(watchRow.name)
+                            : watchRow.status
                         HoverHandler { id: statusRowHover }
                     }
                     // Too little room: the word becomes a mark, the word in its tooltip.

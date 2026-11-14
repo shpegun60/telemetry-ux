@@ -183,6 +183,11 @@ WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
 	}
 	if (const auto remembered = pathFormats_.constFind(entry.name); remembered != pathFormats_.cend())
 		row.format = remembered.value();
+	if (watch_key::isUnresolved(entry.key)) {
+		row.status = QStringLiteral("Missing");
+		row.writable = false;
+		return row;
+	}
 	row.writable = writable_ && writable_(entry.key);
 	row.refusal = !row.writable && refusal_ ? refusal_(entry.key) : QString{};
 	return row;
@@ -442,6 +447,111 @@ bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
 	return true;
 }
 
+quint64 WatchlistModel::unbindAll(quint64 next)
+{
+	if (changing_ || !count_)
+		return next;
+	// Rows without a device already are left as they are, so a second call
+	// (every poll while disconnected) changes and says nothing.
+	int first = -1;
+	int last = -1;
+	for (int row = 0; row < count_; ++row) {
+		auto& r = rows_[row];
+		if (watch_key::isUnresolved(r.key))
+			continue;
+		// The last value stays as it was shown, in the row's format, marked
+		// stale; a row never read says nothing. Nothing of the descriptor stays:
+		// the next device may number its types differently.
+		if (r.status == QStringLiteral("Ok") && r.value.size) {
+			const auto* metadata = r.type ? metadata_->type(r.type) : metadata_->field(watch_key::field(r.key));
+			const auto shown = watch_format::text(r.value, r.format.value_or(format_),
+			                                      metadata ? &metadata->names : nullptr);
+			if (!shown.isEmpty())
+				r.text = shown;
+		}
+		r.key = watch_key::unresolved(next++);
+		r.status = r.text.isEmpty() ? QStringLiteral("Missing") : QStringLiteral("Stale");
+		r.writable = false;
+		r.refusal.clear();
+		r.scope.clear();
+		r.others = 0;
+		r.steps.clear();
+		r.type = 0;
+		r.value = {};
+		r.sample = {};
+		r.sampleText.clear();
+		first = first < 0 ? row : first;
+		last = row;
+	}
+	if (first < 0)
+		return next;
+	++membership_;
+	Q_EMIT dataChanged(index(first, 0), index(last, 0));
+	return next;
+}
+
+bool WatchlistModel::hasBound() const
+{
+	for (int row = 0; row < count_; ++row)
+		if (!watch_key::isUnresolved(rows_[row].key))
+			return true;
+	return false;
+}
+
+bool WatchlistModel::rebindRow(int row, const QVector<WatchEntry>& entries)
+{
+	if (changing_ || row < 0 || row >= count_ || !watch_key::isUnresolved(rows_[row].key) ||
+	    entries.size() > maxRows - count_ + 1)
+		return false;
+	QSet<WatchKey> held;
+	for (int at = 0; at < count_; ++at)
+		held.insert(rows_[at].key);
+	for (const auto& entry : entries)
+		if (held.contains(entry.key))
+			return false;
+	Mutation mutation{changing_};
+	if (entries.isEmpty()) {
+		beginRemoveRows({}, row, row);
+		rows_.removeAt(row);
+		--count_;
+		++membership_;
+		endRemoveRows();
+		return true;
+	}
+	// The first value takes the row's place, keeping its last text until read.
+	auto first = makeRow(entries.first());
+	first.token = rows_[row].token;
+	first.text = rows_[row].text;
+	first.status = first.text.isEmpty() ? QStringLiteral("Not read") : QStringLiteral("Stale");
+	if (!first.format)
+		first.format = rows_[row].format;
+	rows_[row] = std::move(first);
+	++membership_;
+	Q_EMIT dataChanged(index(row, 0), index(row, 0));
+	if (entries.size() > 1) {
+		beginInsertRows({}, row + 1, row + static_cast<int>(entries.size()) - 1);
+		for (qsizetype at = 1; at < entries.size(); ++at)
+			rows_.insert(row + at, makeRow(entries.at(at)));
+		count_ += static_cast<int>(entries.size()) - 1;
+		endInsertRows();
+	}
+	return true;
+}
+
+bool WatchlistModel::markMissing(int row)
+{
+	if (changing_ || row < 0 || row >= count_ || !watch_key::isUnresolved(rows_[row].key))
+		return false;
+	rows_[row].status = QStringLiteral("Missing");
+	Q_EMIT dataChanged(index(row, 0), index(row, 0));
+	return true;
+}
+
+bool WatchlistModel::isMissing(int row) const
+{
+	return row >= 0 && row < count_ && watch_key::isUnresolved(rows_[row].key);
+}
+
 std::optional<WatchNumberFormat> WatchlistModel::rowFormat(int row) const
 {
 	return row >= 0 && row < count_ ? rows_[row].format : std::nullopt;
@@ -515,9 +625,12 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 	    index.row() >= count_ || index.internalId() != rows_[index.row()].token)
 		return {};
 	const auto& row = rows_[index.row()];
-	if ((current_ && !current_()) ||
+	// A row without a device (WL-4c) belongs to no session: it shows its last
+	// value as it was, stale, and nothing of any descriptor.
+	const bool unbound = watch_key::isUnresolved(row.key);
+	if (!unbound && ((current_ && !current_()) ||
 	    (owner_ && (!owner_->isCurrent() || owner_->session() != session_ ||
-	                owner_->snapshotInfo().admission != admission_))) {
+	                owner_->snapshotInfo().admission != admission_)))) {
 		if (role == StatusRole)
 			return QStringLiteral("Stale");
 		if (role == StatusCodeRole)
@@ -531,14 +644,15 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		if (role >= EditorTextRole && role <= CategoricalRole)
 			return {};
 	}
-	const auto* metadata = row.type ? metadata_->type(row.type) : metadata_->field(watch_key::field(row.key));
+	const auto* metadata = unbound ? nullptr
+	                       : row.type ? metadata_->type(row.type) : metadata_->field(watch_key::field(row.key));
 	const auto kind = metadata ? metadata->kind
 	                  : row.value.type.enumeration ? QStringLiteral("enum")
 	                  : row.value.type.scalar == WatchScalar::Boolean ? QStringLiteral("bool")
 	                  : QStringLiteral("text");
 	switch (role) {
 		case EndpointIdRole:
-			return watch_key::field(row.key);
+			return unbound ? 0u : watch_key::field(row.key);
 		case WatchKeyRole:
 			return qulonglong(row.key);
 		case MemberRole:
@@ -565,10 +679,12 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return dot >= 0 ? int(dot + 1) : 0;
 		}
 		case AccessRole:
+			if (watch_key::isUnresolved(row.key))
+				return QString{};
 			return row.writable ? QStringLiteral("rw") : QStringLiteral("r-");
 		case PathTypesRole: {
 			QStringList types;
-			const auto* field = metadata_ ? metadata_->field(watch_key::field(row.key)) : nullptr;
+			const auto* field = metadata_ && !unbound ? metadata_->field(watch_key::field(row.key)) : nullptr;
 			if (!field)
 				return types;
 			types.append(field->label);

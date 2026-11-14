@@ -98,6 +98,7 @@ FocusScope {
         if (!result)
             return
         const added = result.added || 0
+        const kept = result.missing ? result.missing.length : 0
         const parts = []
         const first = lines[0].split(" = ")[0].split("\t")[0].trim()
         if (added > 0)
@@ -107,7 +108,8 @@ FocusScope {
         if (result.already > 0)
             parts.push(qsTr("%L1 already watched").arg(result.already))
         if (result.missing && result.missing.length > 0)
-            parts.push(qsTr("%L1 not on this device").arg(result.missing.length))
+            parts.push(lines.length === 1 ? qsTr("%1 kept: not on this device").arg(first)
+                                          : qsTr("%L1 kept, not on this device").arg(result.missing.length))
         if (result.refused && result.refused.length > 0)
             parts.push(result.refused.length === 1 ? result.refused[0].reason
                                                    : qsTr("%L1 refused").arg(result.refused.length))
@@ -116,8 +118,8 @@ FocusScope {
         if (result.status !== "ok" && result.status !== "capacity")
             parts.push(result.message || qsTr("Not added: %1").arg(result.status))
         if (parts.length > 0)
-            addRow.added(parts.join(" · "), added > 0)
-        if (added > 0 || (result.already > 0 && parts.length === 1)) {
+            addRow.added(parts.join(" · "), added > 0 || kept > 0)
+        if (added > 0 || kept > 0 || (result.already > 0 && parts.length === 1)) {
             field.text = ""
             refresh()
         }
@@ -217,7 +219,7 @@ FocusScope {
                             addRow.reveal(addRow.check.row, addRow.check.message)
                             text = ""
                             addRow.refresh()
-                        } else if (addRow.check.status === "adds") {
+                        } else if (addRow.check.status === "adds" || addRow.check.status === "missing") {
                             addRow.add([text])
                         }
                         event.accepted = true
@@ -331,7 +333,8 @@ FocusScope {
             wrapMode: Text.Wrap
             text: addRow.check.message || ""
             font.pointSize: Type.caption
-            color: addRow.check.status === "adds" || addRow.check.status === "watched" ? Theme.textSecondary : Theme.error
+            color: addRow.check.status === "adds" || addRow.check.status === "watched" || addRow.check.status === "missing"
+                   ? Theme.textSecondary : Theme.error
         }
     }
 }

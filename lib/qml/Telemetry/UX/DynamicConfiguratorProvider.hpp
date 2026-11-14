@@ -167,6 +167,11 @@ public:
 	// {status: ok, capacity or refused, added, already, missing: [paths],
 	// refused: [{path, reason}]}.
 	Q_INVOKABLE QVariantMap addWatchPaths(const QStringList& lines);
+	// A saved Watchlist back in its order, as one change (WL-4c): every row
+	// this device has, and the rest as rows that say they are not on it,
+	// found again on a device that has them. {status, added, missing:
+	// [positions of the rows not on this device]}.
+	Q_INVOKABLE QVariantMap restoreWatchBindings(const QVariantList& bindings);
 	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;

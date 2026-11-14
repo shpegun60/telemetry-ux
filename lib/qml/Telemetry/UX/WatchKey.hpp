@@ -50,6 +50,17 @@ namespace watch_key {
 {
 	return leaf(key) - 1;
 }
+// A row whose path this device does not have, or not yet (WL-4c): bit 52 set,
+// so it is never a real key (they stay below 2^51), and n numbers it. It is
+// never read, written or recorded; it is resolved again on every connection.
+[[nodiscard]] constexpr WatchKey unresolved(quint64 n) noexcept
+{
+	return (WatchKey{1} << 52) | (n & ((WatchKey{1} << 52) - 1));
+}
+[[nodiscard]] constexpr bool isUnresolved(WatchKey key) noexcept
+{
+	return (key >> 52) != 0;
+}
 } // namespace watch_key
 } // namespace telemetry::ux
 #endif
