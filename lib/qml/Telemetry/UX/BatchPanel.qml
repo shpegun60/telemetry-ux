@@ -40,13 +40,19 @@ Pane {
                 objectName: "executeBatchButton"
                 text: "Execute Batch"
                 enabled: panel.provider.canExecuteBatch
-                onClicked: panel.provider.executeBatch()
+                onClicked: {
+                    batchNotice.text = ""
+                    panel.provider.executeBatch()
+                }
             }
             Button {
                 objectName: "clearBatchButton"
                 text: "Clear"
                 enabled: panel.provider.batchCount > 0 && !panel.provider.batchPending && !panel.provider.busy
-                onClicked: panel.provider.clearBatch()
+                onClicked: {
+                    batchNotice.text = ""
+                    panel.provider.clearBatch()
+                }
             }
             Item { Layout.fillWidth: true }
         }
@@ -60,91 +66,123 @@ Pane {
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
-        // Adding by name or path (BA-1), where the provider can.
-        BatchAddRow {
-            id: batchAdd
-            visible: typeof panel.provider.addBatchPaths === "function"
-            provider: panel.provider
-            Layout.fillWidth: true
-            onAdded: notice => {
-                batchNotice.text = notice
-                expanded.checked = true
-            }
-        }
-        // What the row last did, in words.
-        Label {
-            id: batchNotice
-            objectName: "batchAddNotice"
-            visible: batchAdd.visible && text.length > 0
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            color: Theme.textSecondary
-            font.pointSize: Type.caption
-            Layout.fillWidth: true
-            Layout.leftMargin: Type.padding + Type.indent + Type.tight
-        }
         SplitView {
             visible: expanded.checked
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 220
             Layout.preferredHeight: 220
-            ListView {
-                id: items
-                objectName: "batchList"
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 320
-                model: panel.provider.batchItems
-                clip: true
-                delegate: Item {
-                    id: item
-                    objectName: "batchRow"
-                    required property int index
-                    required property string name
-                    required property string operation
-                    required property string status
-                    required property bool hasValue
-                    required property bool historical
-                    width: items.width
-                    height: 64
-                    RowLayout {
-                        anchors.fill: parent
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Label { textFormat: Text.PlainText; text: (item.index + 1) + ". " + item.operation + " - " + item.name; Layout.fillWidth: true; elide: Text.ElideMiddle }
-                            Label { textFormat: Text.PlainText; text: item.status + (item.historical ? " - previous session" : ""); color: "#99abbf"; Layout.fillWidth: true; elide: Text.ElideRight }
-                        }
-                        Button {
-                            objectName: "selectBatchButton"
-                            property int batchRowIndex: item.index
-                            text: item.hasValue ? "View result" : "Select"
-                            enabled: !panel.provider.batchPending
-                            onClicked: panel.provider.selectBatch(item.index)
-                        }
-                        Button {
-                            objectName: "moveBatchUpButton"
-                            property int batchRowIndex: item.index
-                            text: "Up"
-                            enabled: !panel.provider.busy && item.index > 0
-                            onClicked: panel.provider.moveBatch(item.index, -1)
-                        }
-                        Button {
-                            objectName: "moveBatchDownButton"
-                            property int batchRowIndex: item.index
-                            text: "Down"
-                            enabled: !panel.provider.busy && item.index + 1 < panel.provider.batchCount
-                            onClicked: panel.provider.moveBatch(item.index, 1)
-                        }
-                        Button {
-                            objectName: "removeBatchButton"
-                            property int batchRowIndex: item.index
-                            text: "Remove"
-                            enabled: !panel.provider.busy
-                            onClicked: panel.provider.removeBatch(item.index)
+            ColumnLayout {
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: 320
+                    spacing: 0
+                ListView {
+                    id: items
+                    objectName: "batchList"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    model: panel.provider.batchItems
+                    clip: true
+                    // Down from the last item, or Insert, goes to the "+" row.
+                    Keys.onDownPressed: event => {
+                        if (batchAdd.visible && items.currentIndex >= items.count - 1) {
+                            batchAdd.begin()
+                            event.accepted = true
+                        } else {
+                            event.accepted = false
                         }
                     }
+                    Keys.onPressed: event => {
+                        if (event.key === Qt.Key_Insert && batchAdd.visible) {
+                            batchAdd.begin()
+                            event.accepted = true
+                        }
+                    }
+                    delegate: Item {
+                        id: item
+                        objectName: "batchRow"
+                        required property int index
+                        required property string name
+                        required property string operation
+                        required property string status
+                        required property bool hasValue
+                        required property bool historical
+                        width: items.width
+                        height: 64
+                        RowLayout {
+                            anchors.fill: parent
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Label { textFormat: Text.PlainText; text: (item.index + 1) + ". " + item.operation + " - " + item.name; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                                Label { textFormat: Text.PlainText; text: item.status + (item.historical ? " - previous session" : ""); color: "#99abbf"; Layout.fillWidth: true; elide: Text.ElideRight }
+                            }
+                            Button {
+                                objectName: "selectBatchButton"
+                                property int batchRowIndex: item.index
+                                text: item.hasValue ? "View result" : "Select"
+                                enabled: !panel.provider.batchPending
+                                onClicked: panel.provider.selectBatch(item.index)
+                            }
+                            Button {
+                                objectName: "moveBatchUpButton"
+                                property int batchRowIndex: item.index
+                                text: "Up"
+                                enabled: !panel.provider.busy && item.index > 0
+                                onClicked: panel.provider.moveBatch(item.index, -1)
+                            }
+                            Button {
+                                objectName: "moveBatchDownButton"
+                                property int batchRowIndex: item.index
+                                text: "Down"
+                                enabled: !panel.provider.busy && item.index + 1 < panel.provider.batchCount
+                                onClicked: panel.provider.moveBatch(item.index, 1)
+                            }
+                            Button {
+                                objectName: "removeBatchButton"
+                                property int batchRowIndex: item.index
+                                text: "Remove"
+                                enabled: !panel.provider.busy
+                                onClicked: panel.provider.removeBatch(item.index)
+                            }
+                        }
+                    }
+                    ScrollBar.vertical: ScrollBar {}
                 }
-                ScrollBar.vertical: ScrollBar {}
+                // Adding by name or path (BA-1), where the provider can.
+                BatchAddRow {
+                    id: batchAdd
+                    visible: typeof panel.provider.addBatchPaths === "function"
+                    provider: panel.provider
+                    Layout.fillWidth: true
+                    onAdded: notice => {
+                        batchNotice.text = notice
+                        if (!batchAdd.lastRefused)
+                            Qt.callLater(items.positionViewAtEnd)
+                    }
+                    onSelected: kind => {
+                        const at = operation.find(kind)
+                        if (at >= 0)
+                            operation.currentIndex = at
+                    }
+                    onLeaveUp: {
+                        items.forceActiveFocus()
+                        if (items.count > 0)
+                            items.currentIndex = items.count - 1
+                    }
+                }
+                // What the row last did, in words: a refusal in the error colour.
+                Label {
+                    id: batchNotice
+                    objectName: "batchAddNotice"
+                    visible: batchAdd.visible && text.length > 0
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: batchAdd.lastRefused ? Theme.error : Theme.textSecondary
+                    font.pointSize: Type.caption
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Type.padding + Type.indent + Type.tight
+                    Layout.bottomMargin: Type.tight
+                }
             }
             ColumnLayout {
                 SplitView.preferredWidth: 400

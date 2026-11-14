@@ -100,7 +100,7 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	pick.path = text;
 	if (text.contains(QLatin1Char('='))) {
 		pick.status = QStringLiteral("error");
-		pick.message = tr("Writing a value from here comes later: select the Field, write its value in Details, then Add selected.");
+		pick.message = tr("A Batch item found by name reads. To write a value, select the Field, write it in Details, then Add selected draft.");
 		return pick;
 	}
 	const auto wanted = [category](const EndpointEntry& entry) {
@@ -141,18 +141,18 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	}
 	if (pick.matches.size() > 1) {
 		pick.status = QStringLiteral("choose");
-		pick.message = tr("%L1 endpoints are named %2: choose one below.").arg(pick.matches.size()).arg(text);
+		pick.message = tr("%L1 endpoints are named %2. Down to choose.").arg(pick.matches.size()).arg(text);
 		return pick;
 	}
 	const auto& entry = pick.matches.first();
 	if (entry.category == 1 && !entry.readable) {
 		pick.status = QStringLiteral("error");
-		pick.message = tr("%1 can't be read, so a Batch can't read it.").arg(entry.path);
+		pick.message = tr("%1 can only be written: select it, write its value in Details, then Add selected draft.").arg(entry.path);
 		return pick;
 	}
 	if (entry.category != 1 && entry.requestBytes > 0) {
 		pick.status = QStringLiteral("input");
-		pick.message = tr("%1 takes input. Enter selects it: fill it in Details, then Add selected.").arg(entry.path);
+		pick.message = tr("%1 takes input. Enter selects it: fill it in Details, then Add selected draft.").arg(entry.path);
 		return pick;
 	}
 	pick.status = QStringLiteral("adds");

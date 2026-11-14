@@ -28,8 +28,12 @@ FocusScope {
     property var quietStatuses: ["adds"]
     // Statuses on which Enter adds the typed line.
     property var addStatuses: ["adds"]
-    // Statuses still said while the suggestions go on from the text.
+    // Statuses still said while the suggestions go on from the text; with
+    // hideWhileTyping false every status is said at once.
     property var typingStatuses: ["adds"]
+    property bool hideWhileTyping: true
+    // The suggestions' widest; a full-width field need not make them so.
+    property real popupMaxWidth: Number.POSITIVE_INFINITY
     // Says what an addition did, on the panel's notice line.
     signal added(string notice, bool undoable)
     // Up from the field: back to the rows.
@@ -64,6 +68,25 @@ FocusScope {
     function clear() {
         field.text = ""
         refresh()
+        recheck()
+    }
+    // Turned off (a Batch runs): the suggestions close; turned on again, the
+    // field takes the keys back if it had them.
+    property bool resumeEditing: false
+    onEnabledChanged: {
+        if (!enabled) {
+            resumeEditing = editing && field.activeFocus
+            popup.close()
+        } else if (resumeEditing) {
+            resumeEditing = false
+            field.forceActiveFocus()
+        }
+    }
+    function candidateName(index) {
+        const c = candidates[index]
+        if (!c)
+            return ""
+        return [completionOf(c), c.kind || "", c.typeText || "", c.note || ""].filter(part => part.length > 0).join(", ")
     }
     function refresh() {
         candidates = editing ? adapter.candidates(field.text) : []
@@ -192,7 +215,10 @@ FocusScope {
                 placeholderText: addRow.placeholderText
                 inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                 Accessible.name: addRow.accessibleName
-                Accessible.description: addRow.check.message && addRow.check.message.length > 0
+                // The highlighted suggestion while arrowing through them,
+                // else what Enter would do.
+                Accessible.description: addRow.highlighted >= 0 ? addRow.candidateName(addRow.highlighted)
+                                        : addRow.check.message && addRow.check.message.length > 0
                                         ? addRow.check.message : addRow.accessibleDescription
                 onTextEdited: {
                     // Several lines pasted: added at once, not into the field.
@@ -223,6 +249,10 @@ FocusScope {
                             addRow.leaveUp()
                         }
                         event.accepted = true
+                    } else if (event.key === Qt.Key_Backtab) {
+                        // Leaving backwards: the suggestions go with the field.
+                        popup.close()
+                        event.accepted = false
                     } else if (event.key === Qt.Key_Tab && popup.visible) {
                         text = addRow.common()
                         cursorPosition = text.length
@@ -268,9 +298,10 @@ FocusScope {
                     const under = field.height + (checkLine.visible ? checkLine.height : 0)
                     y = below >= under + height + Type.tight ? under : -height
                 }
+                onAboutToShow: place()
                 margins: 0
                 x: field.x
-                width: Math.max(Type.bodyPixels * 18, field.width)
+                width: Math.min(addRow.popupMaxWidth, Math.max(Type.bodyPixels * 18, field.width))
                 height: Math.min(addRow.candidates.length, 8) * Type.rowHeight + topPadding + bottomPadding
                 padding: 1
                 focus: false
@@ -296,7 +327,7 @@ FocusScope {
                         required property int index
                         width: candidateList.width
                         height: Type.rowHeight
-                        readonly property bool group: modelData.path.endsWith(".") || modelData.kind === "group"
+                        readonly property bool group: modelData.path.endsWith(".") || modelData.kindCode === "group"
                         readonly property bool chosen: index === addRow.highlighted
                         // A word after the path: "watched", "in Batch".
                         readonly property string note: typeof modelData.note === "string" && modelData.note.length > 0
@@ -357,7 +388,10 @@ FocusScope {
             readonly property bool typing: addRow.candidates.some(c => addRow.completionOf(c).startsWith(field.text.trim())
                                                                   && addRow.completionOf(c) !== field.text.trim())
             visible: addRow.editing && text.length > 0
-                     && !(typing && addRow.typingStatuses.indexOf(addRow.check.status) < 0)
+                     && !(addRow.hideWhileTyping && typing && addRow.typingStatuses.indexOf(addRow.check.status) < 0)
+            // The suggestions sit under this line: they follow it.
+            onVisibleChanged: if (popup.visible) popup.place()
+            onHeightChanged: if (popup.visible) popup.place()
             Layout.fillWidth: true
             Layout.leftMargin: Type.padding + Type.indent + Type.tight
             textFormat: Text.PlainText

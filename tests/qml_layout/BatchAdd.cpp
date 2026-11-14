@@ -33,6 +33,7 @@ class Calls final : public QObject {
 public:
 	QList<QStringList> added;
 	QStringList selected;
+	int count = 0;
 	Q_INVOKABLE QVariantMap check(const QString& text) const
 	{
 		const auto typed = text.trimmed();
@@ -40,14 +41,16 @@ public:
 			return {{"status", "adds"}, {"message", "Adds a read of device.Voltage as item 1."},
 			        {"path", "device.Voltage"}, {"operation", "read"}};
 		if (typed.compare(QStringLiteral("Ping"), Qt::CaseInsensitive) == 0)
-			return {{"status", "choose"}, {"message", "2 endpoints are named Ping: choose one below."}, {"path", "Ping"}};
+			return {{"status", "choose"}, {"message", "2 endpoints are named Ping. Down to choose."}, {"path", "Ping"}};
 		if (typed == QStringLiteral("command control.Ping"))
 			return {{"status", "adds"}, {"message", "Adds Command control.Ping as item 2; it runs when the Batch is executed."},
 			        {"path", "control.Ping"}, {"operation", "command"}};
 		if (typed == QStringLiteral("control.Execute"))
 			return {{"status", "input"},
-			        {"message", "control.Execute takes input. Enter selects it: fill it in Details, then Add selected."},
-			        {"path", "control.Execute"}};
+			        {"message", "control.Execute takes input. Enter selects it: fill it in Details, then Add selected draft."},
+			        {"path", "control.Execute"}, {"operation", "command"}};
+		if (typed == QStringLiteral("Volt"))
+			return {{"status", "partial"}, {"message", "Enter takes measure.Voltage."}, {"path", "measure.Voltage"}};
 		if (typed.isEmpty())
 			return {{"status", "empty"}, {"message", ""}};
 		return {{"status", "missing"}, {"message", typed.contains('.') ? typed + " is not on this device."
@@ -64,6 +67,8 @@ public:
 		const auto typed = text.trimmed();
 		if (typed == QStringLiteral("device.Vo"))
 			return {entry("device.Voltage", "device.Voltage", "Field", "f32 r-")};
+		if (typed == QStringLiteral("Volt"))
+			return {entry("measure.Voltage", "measure.Voltage", "Field", "f32 r-")};
 		if (typed.compare(QStringLiteral("Ping"), Qt::CaseInsensitive) == 0 || typed == QStringLiteral("Pi"))
 			return {entry("control.Ping", "command control.Ping", "Command", "()"),
 			        entry("control.Ping", "service control.Ping", "Service", "() -> ()")};
@@ -72,10 +77,16 @@ public:
 	Q_INVOKABLE QVariantMap addPaths(const QStringList& lines)
 	{
 		added.append(lines);
+		for (int at = 0; at < lines.size(); ++at)
+			if (lines[at].trimmed() == QStringLiteral("Nope"))
+				return {{"status", "refused"}, {"added", 0},
+				        {"message", QStringLiteral("Nothing added: line %1, Nope: Nothing on this device is named Nope.").arg(at + 1)}};
+		QVariantList items;
 		for (const auto& line : lines)
-			if (line.trimmed() == QStringLiteral("Nope"))
-				return {{"status", "refused"}, {"added", 0}, {"message", "Nothing on this device is named Nope."}};
-		return {{"status", "ok"}, {"added", int(lines.size())}};
+			items.append(QVariantMap{{"path", line}, {"what", "a read of " + line}});
+		const int first = count + 1;
+		count += int(lines.size());
+		return {{"status", "ok"}, {"added", int(lines.size())}, {"items", items}, {"first", first}};
 	}
 	Q_INVOKABLE bool selectPath(const QString& text)
 	{
@@ -159,6 +170,10 @@ int main(int argc, char** argv)
 			CHECK(window && QTest::qWaitForWindowExposed(window));
 			settle();
 			auto* content = window->contentItem();
+			// Folded, the row is not there; unfolded, it sits under the list.
+			CHECK(!named(content, "batchAddRow"));
+			CHECK(shown(content, "batchToggle")->setProperty("checked", true));
+			settle();
 			auto* row = shown(content, "batchAddRow");
 			// Its own names, never the Watchlist's.
 			CHECK(textOf(content, "batchAddRest") == QStringLiteral("Add by name or path"));
@@ -179,14 +194,23 @@ int main(int argc, char** argv)
 			const auto quiet = line->property("color");
 			key(window, Qt::Key_Return);
 			CHECK(calls.added.size() == 1 && calls.added.first() == QStringList({QStringLiteral("device.Voltage")}));
-			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added device.Voltage as item 1"));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added a read of device.Voltage as item 1."));
 			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus());
-			CHECK(shown(content, "batchToggle")->property("checked").toBool());
+			const auto noticeQuiet = shown(content, "batchAddNotice")->property("color");
+
+			// A name half typed: said quietly, Enter takes the first suggestion.
+			typeText(window, "Volt");
+			CHECK(textOf(content, "batchAddCheck") == QStringLiteral("Enter takes measure.Voltage."));
+			CHECK(shown(content, "batchAddCheck")->property("color") == quiet);
+			key(window, Qt::Key_Return);
+			CHECK(field->property("text").toString() == QStringLiteral("measure.Voltage") && calls.added.size() == 1);
+			clearField(window);
 			shot(window, argc, argv, QStringLiteral("batch-add-added-760"));
 
 			// A name two endpoints share: the suggestions, kinds in words, Enter takes one.
 			typeText(window, "Ping");
-			CHECK(textOf(content, "batchAddCheck") == QStringLiteral("2 endpoints are named Ping: choose one below."));
+			CHECK(textOf(content, "batchAddCheck") == QStringLiteral("2 endpoints are named Ping. Down to choose."));
+			CHECK(shown(content, "batchAddCheck")->property("color") == quiet);
 			key(window, Qt::Key_Escape);  // the popup the suggestions opened
 			key(window, Qt::Key_Return);
 			auto* popup = window->findChild<QObject*>(QStringLiteral("batchAddPopup"));
@@ -202,6 +226,8 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_Return);
 			CHECK(calls.selected == QStringList({QStringLiteral("control.Execute")}) && calls.added.size() == 1);
 			CHECK(textOf(content, "batchAddNotice").startsWith(QStringLiteral("Selected control.Execute")));
+			// Ready to add it once filled: the operation box says what it is.
+			CHECK(shown(content, "batchOperation")->property("currentText") == QStringLiteral("command"));
 			clearField(window);
 
 			// A refusal in the error colour; Enter adds nothing.
@@ -218,13 +244,29 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_V, Qt::ControlModifier);
 			CHECK(calls.added.size() == 2 &&
 			      calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("command control.Ping")}));
-			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items, 2 to 3"));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 2 to 3."));
+			// A refused paste: nothing added, the line named, in the error colour.
+			QGuiApplication::clipboard()->setText(QStringLiteral("device.Voltage\nNope\n"));
+			key(window, Qt::Key_V, Qt::ControlModifier);
+			CHECK(textOf(content, "batchAddNotice") ==
+			      QStringLiteral("Nothing added: line 2, Nope: Nothing on this device is named Nope."));
+			CHECK(shown(content, "batchAddNotice")->property("color") != noticeQuiet);
+			// Escape on an empty field: back to the list, never a hidden field.
+			key(window, Qt::Key_Escape);
+			CHECK(!field->hasActiveFocus() && shown(content, "batchList")->hasActiveFocus());
+			// Down from the last item comes back to the row.
+			key(window, Qt::Key_Down);
+			CHECK(field->hasActiveFocus());
 
 			// While the Batch runs the row is off.
 			auto* fixture = window->findChild<QObject*>(QStringLiteral("batchAddFixture"));
 			CHECK(fixture && fixture->setProperty("batchPending", true));
 			settle();
 			CHECK(!row->isEnabled());
+			// The reply in: the field takes the keys back.
+			CHECK(fixture->setProperty("batchPending", false));
+			settle();
+			CHECK(row->isEnabled() && field->hasActiveFocus());
 			window->close();
 		}
 		settle();

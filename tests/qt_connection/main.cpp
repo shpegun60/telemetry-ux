@@ -753,8 +753,9 @@ void watchBindings()
 }
 
 // Finding what to add to the Batch by name or path (BA-1). This server has
-// no Batch, so the lines are read and refused in words; adding them is
-// checked against the Client's demo device, which has one.
+// no Batch, so the lines are read and refused in words; adding them, and
+// executing what was added, is checked against the Client's demo device,
+// which has one.
 void batchPaths()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -801,11 +802,19 @@ void batchPaths()
 	for (const auto& candidate : under)
 		if (candidate.toMap().value("path") == "control.Execute")
 			CHECK(candidate.toMap().value("input").toBool());
+	// A half-typed name: Enter takes the first suggestion, said quietly.
+	const auto partial = check("Setp");
+	CHECK(partial.value("status") == "partial" && partial.value("message") == "Enter takes device.Setpoint.");
+	// A value inside the Field must be one.
+	CHECK(check("device.Config.Gian").value("status") == "error" &&
+	      check("device.Config.Gian").value("message").toString().contains("Did you mean Gain?"));
 	// Every line or none, each refusal in words.
 	const auto added = provider->addBatchPaths({QStringLiteral("device.Setpoint"), QStringLiteral("Nope")});
 	CHECK(added.value("status") == "refused" && added.value("added").toInt() == 0 &&
-	      added.value("refused").toList().size() == 1 && provider->batchCount() == 0);
-	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("status") == "unsupported");
+	      added.value("refused").toList().size() == 2 && provider->batchCount() == 0);
+	CHECK(added.value("message") ==
+	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
+	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
 	connection.disconnect();
 }
 

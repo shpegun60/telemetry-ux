@@ -121,17 +121,21 @@ public:
 	Q_INVOKABLE bool executeBatch();
 	// Adding to the Batch by name or path (BA-1): a Field is read, a Command
 	// runs and a Service is called - those that take no input; one that does
-	// is selected for Details instead. checkBatchPath: {status: adds, choose,
-	// input, missing, error, unsupported (no Batch on this device), busy, full
-	// or empty; message; path; operation;
+	// is selected for Details instead. checkBatchPath: {status: adds; partial
+	// (half typed - Enter takes the first suggestion, path); choose; input;
+	// missing; error; unsupported (no Batch on this device); permission
+	// (changes are off); previous (items of an earlier connection held); busy;
+	// full; or empty; message; path; operation;
 	// item (the place it would take); also (an item that already has it, 0 if
 	// none)}.
 	Q_INVOKABLE QVariantMap checkBatchPath(const QString& text) const;
 	// What may follow typed text: [{path, completion (what to put in the
 	// field), kind, typeText, operation, input, note, container, next}].
 	Q_INVOKABLE QVariantList batchPathCandidates(const QString& text) const;
-	// Every line, in order, or none: {status: ok, refused, unsupported, busy or full;
-	// added; refused: [{path, reason}]; message}.
+	// Every line, in order, or none: {status: ok, refused, unsupported,
+	// permission, previous, busy or full; added; first (the first new item);
+	// items: [{path, operation, what}]; refused: [{line, path, reason}];
+	// message}.
 	Q_INVOKABLE QVariantMap addBatchPaths(const QStringList& lines);
 	// The endpoint one line names, selected in the Device tree (for one that
 	// takes input). False when the line names none, or several.

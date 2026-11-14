@@ -352,9 +352,7 @@ bool DynamicBatch::active() const
 
 bool DynamicBatch::canAdd(const BatchRow& row) const
 {
-	return d->editable() && d->budgets(&row) && d->source.session &&
-	       row.session == d->source.session() &&
-	       (row.operation == client::Operation::FieldRead || d->permitted());
+	return refusal({&row, 1}) == Refusal::None;
 }
 
 bool DynamicBatch::add(BatchRow row)
@@ -381,25 +379,37 @@ bool DynamicBatch::add(BatchRow row)
 	return true;
 }
 
-DynamicBatch::Refusal DynamicBatch::refusal(const QVector<BatchRow>& rows) const
+DynamicBatch::Refusal DynamicBatch::refusal(std::span<const BatchRow> rows) const
 {
 	if (!d->editable())
 		return Refusal::Busy;
 	if (!d->source.session)
 		return Refusal::Session;
-	for (const auto& row : rows) {
-		if (row.session != d->source.session())
+	const auto session = d->source.session();
+	for (const auto& row : rows)
+		if (row.session != session)
 			return Refusal::Session;
+	// Items of an earlier connection are never sent again; until they are
+	// cleared nothing joins them, or the Batch could not be executed.
+	for (const auto& row : d->model.rows())
+		if (row.session != session)
+			return Refusal::Previous;
+	for (const auto& row : rows)
 		if (row.operation != client::Operation::FieldRead && !d->permitted())
 			return Refusal::Permission;
-	}
-	return d->budget(rows.constData(), rows.size());
+	return d->budget(rows.data(), qsizetype(rows.size()));
 }
 
-bool DynamicBatch::add(QVector<BatchRow> rows)
+int DynamicBatch::itemLimit() const
+{
+	const auto limits = d->current() && d->source.capability ? d->source.capability() : std::nullopt;
+	return limits ? int(std::min(32u, limits->items)) : 0;
+}
+
+bool DynamicBatch::add(std::vector<BatchRow> rows)
 {
 	auto p = d;
-	if (rows.isEmpty() || refusal(rows) != Refusal::None)
+	if (rows.empty() || refusal(rows) != Refusal::None)
 		return false;
 	p->publishing = true;
 	auto all = p->model.rows();
