@@ -281,6 +281,23 @@ from takes the first suggestion instead. `watchBindings` answers without a
 device as well, from the rows' paths. With only such rows Start and Read once
 are off, and the status says there is nothing on this device to read.
 
+## Adding to the Batch by name or path (BA-1, November 2026)
+
+`WatchAddRow.qml` is now a thin adapter over `PathAddRow.qml`, a "+" row any
+panel gives its own words and rules; its names, signals and behaviour are
+unchanged. `BatchAddRow.qml` is the Batch's, under the Batch's list in
+`BatchPanel.qml` when the provider has the calls below.
+
+Additive: `EndpointModel::endpointList()` (every endpoint as an
+`EndpointEntry`, in the tree's order) and `endpointIndex(category, id)`;
+`DynamicBatch::refusal(rows)` (`Refusal`: None, Busy, Session, Previous,
+Permission, Items, Bytes), `add(std::vector<BatchRow>)` - all rows in one
+change or none - and `itemLimit()`; the Dynamic provider's `checkBatchPath`,
+`batchPathCandidates`, `addBatchPaths` and `selectBatchPath`. One change of
+behaviour: `DynamicBatch::canAdd(row)` is now `refusal` of that row alone, so
+a Batch that still holds items of an earlier connection, which are never sent
+again, takes no new item until it is cleared.
+
 ## The Watchlist's number format (WL-3, November 2026)
 
 `WatchlistModel` gains the roles `shownText` and `format`, `setFormat`,

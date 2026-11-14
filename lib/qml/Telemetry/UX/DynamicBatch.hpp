@@ -99,6 +99,15 @@ public:
 	bool active() const;
 	bool canAdd(const BatchRow& row) const;
 	bool add(BatchRow row);
+	// Why rows could not be added, the first thing to fix first (BA-1):
+	// Previous when the Batch still holds items of an earlier connection.
+	// canAdd(row) is refusal of that row alone being None.
+	enum class Refusal { None, Busy, Session, Previous, Permission, Items, Bytes };
+	[[nodiscard]] Refusal refusal(std::span<const BatchRow> rows) const;
+	// All of rows after the others, in order, as one change; none if any is refused.
+	bool add(std::vector<BatchRow> rows);
+	// The most items this device takes in one Batch (at most 32); 0 when it has no Batch.
+	[[nodiscard]] int itemLimit() const;
 	bool remove(int row);
 	bool move(int row, int delta);
 	bool clear();

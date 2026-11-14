@@ -264,6 +264,15 @@ def main():
             executable_sha256=digest(watch_tree_executable),
             screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
                                 for image in watch_tree_images})
+        batch_add_executable = build / ('telemetry_qml_batch_add.exe' if os.name == 'nt' else 'telemetry_qml_batch_add')
+        batch_add_output = output / 'batch-add'
+        batch_add_output.mkdir()
+        batch_add_log = run('batch-add-runtime', [batch_add_executable, batch_add_output])
+        batch_add_checks = re.search(r'Batch add checks=(\d+) warnings=0', batch_add_log)
+        if not batch_add_checks or int(batch_add_checks[1]) < 25:
+            raise RuntimeError('The Batch add row did not reach its warning-free assertion floor')
+        report['batch_add'] = dict(checks=int(batch_add_checks[1]), warnings=0,
+                                   executable_sha256=digest(batch_add_executable))
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]

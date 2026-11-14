@@ -7,6 +7,7 @@
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
+#include <QtGui/QWheelEvent>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickItem>
@@ -15,6 +16,7 @@
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 #include <cstdio>
+#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -97,6 +99,12 @@ public:
 			return QVariantMap{{"path", QString::fromUtf8(path)}, {"typeText", QString::fromUtf8(type)},
 			                   {"values", values}, {"container", container}, {"watched", watched}};
 		};
+		// The top-level groups, as the provider gives them: the path ends in
+		// "." already and there is no "next".
+		if (text == QStringLiteral("d") || text == QStringLiteral("de"))
+			return {entry("device.", "", 3, true, false)};
+		if (text == QStringLiteral("s"))
+			return {entry("device.", "", 3, true, false), entry("signals.", "", 2, true, false)};
 		if (text == QStringLiteral("device."))
 		{
 			auto config = entry("device.Config", "struct (3)", 3, true, false);
@@ -462,6 +470,42 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_Down);
 			auto* addField = named(content, "watchAddField");
 			CHECK(addField && addField->hasActiveFocus() && !named(content, "watchAddRest"));
+			// A top-level group, whose path ends in "." already, goes in with
+			// one dot: by Enter, by Tab, and by a click.
+			typeText(window, "d");
+			settle();
+			key(window, Qt::Key_Down);
+			key(window, Qt::Key_Return);
+			CHECK(addField->property("text").toString() == QStringLiteral("device."));
+			addField->setProperty("text", QString());
+			typeText(window, "de");
+			settle();
+			key(window, Qt::Key_Tab);
+			CHECK(addField->property("text").toString() == QStringLiteral("device."));
+			addField->setProperty("text", QString());
+			typeText(window, "s");
+			settle();
+			{
+				// The popup's rows live in the window's overlay, under its content item.
+				QQuickItem* second = nullptr;
+				const std::function<void(QQuickItem*)> find = [&](QQuickItem* item) {
+					if (item->objectName() == QLatin1String("watchAddCandidate") && item->isVisible() &&
+					    item->property("index").toInt() == 1)
+						second = item;
+					for (auto* child : item->childItems())
+						find(child);
+				};
+				find(window->contentItem());
+				CHECK(second != nullptr);
+				if (second) {
+					const auto at = second->mapToScene(QPointF(second->width() / 2, second->height() / 2)).toPoint();
+					QTest::mouseClick(window, Qt::LeftButton, {}, at);
+					settle();
+				}
+				CHECK(addField->property("text").toString() == QStringLiteral("signals."));
+			}
+			addField->setProperty("text", QString());
+			settle();
 			typeText(window, "device.");
 			settle();
 			auto* addPopup = window->findChild<QObject*>(QStringLiteral("watchAddPopup"));
@@ -540,6 +584,28 @@ int main(int argc, char** argv)
 			CHECK(value(list, 5) == QStringLiteral("–"));
 			shot(window, argc, argv, QStringLiteral("watch-missing-480"));
 			model.removeRow(5);
+			settle();
+			// Many rows in a short panel: the list takes the room and scrolls,
+			// the "+" row stays in view under it.
+			for (int at = 0; at < 40; ++at)
+				model.put(model.rowCount(), QStringLiteral("data.Samples[%1]").arg(100 + at), 7, quint32(101 + at),
+				          QStringLiteral("1"), {QStringLiteral("u16[64]"), QStringLiteral("u16")}, false);
+			settle();
+			CHECK(list->height() + 1 < list->property("contentHeight").toReal());
+			auto* plusRow = shown(content, "watchAddRow");
+			CHECK(plusRow->mapToItem(content, QPointF(0, plusRow->height())).y() <= content->height() + 0.5);
+			const auto top = list->property("contentY").toReal();
+			const QPointF middle = list->mapToScene(QPointF(list->width() / 2, list->height() / 2));
+			QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
+			                  Qt::NoModifier, Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(window, &wheel);
+			settle();
+			CHECK(list->property("contentY").toReal() > top);
+			// Back to the top and settled before the rows go, as a user would be.
+			list->setProperty("contentY", top);
+			QTest::qWait(200);
+			settle();
+			model.removeRows(5, 40);
 			settle();
 			window->close();
 		}

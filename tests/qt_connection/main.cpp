@@ -752,6 +752,72 @@ void watchBindings()
 	CHECK(await([&] { return provider->watchBindings() == kept; }));
 }
 
+// Finding what to add to the Batch by name or path (BA-1). This server has
+// no Batch, so the lines are read and refused in words; adding them, and
+// executing what was added, is checked against the Client's demo device,
+// which has one.
+void batchPaths()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	CHECK(provider->checkBatchPath(QStringLiteral("  ")).value("status") == "empty");
+	connect(connection, peer);
+	const auto check = [provider](const char* text) { return provider->checkBatchPath(QString::fromUtf8(text)); };
+	// A name two endpoints share asks for a choice; a kind word makes it.
+	CHECK(check("Ping").value("status") == "choose" && check("ping").value("message").toString().contains("2 endpoints"));
+	const auto command = check("command control.Ping");
+	CHECK(command.value("status") == "unsupported" && command.value("operation") == "command" &&
+	      command.value("path") == "control.Ping" && command.value("message") == "This device has no Batch.");
+	CHECK(check("service Ping").value("operation") == "service");
+	// A value inside a Field names the Field, read whole.
+	const auto member = check("device.Config.Gain");
+	CHECK(member.value("path") == "device.Config" && member.value("operation") == "read");
+	CHECK(check("Setpoint").value("path") == "device.Setpoint");
+	// One that takes input is selected for Details instead.
+	const auto input = check("control.Execute");
+	CHECK(input.value("status") == "input" && input.value("message").toString().contains("takes input"));
+	CHECK(provider->selectBatchPath(QStringLiteral("control.Execute")) &&
+	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Execute");
+	CHECK(!provider->selectBatchPath(QStringLiteral("Ping")) && !provider->selectBatchPath(QStringLiteral("Nope")));
+	CHECK(check("Nope").value("status") == "missing" && check("Nope").value("message") == "Nothing on this device is named Nope.");
+	CHECK(check("device.Nope").value("message") == "device.Nope is not on this device.");
+	CHECK(check("device.Setpoint = 3").value("status") == "error");
+	// Suggestions: groups to go into first, then names word by word.
+	const auto groups = provider->batchPathCandidates(QStringLiteral("dev"));
+	CHECK(!groups.isEmpty() && groups.first().toMap().value("path") == "device" &&
+	      groups.first().toMap().value("container").toBool());
+	QStringList pings;
+	for (const auto& candidate : provider->batchPathCandidates(QStringLiteral("Pi")))
+		pings << candidate.toMap().value("completion").toString() + QLatin1Char('/') + candidate.toMap().value("kind").toString();
+	CHECK(pings.contains("command control.Ping/Command") && pings.contains("service control.Ping/Service"));
+	const auto words = provider->batchPathCandidates(QStringLiteral("dev set"));
+	CHECK(words.size() == 1 && words.first().toMap().value("path") == "device.Setpoint" &&
+	      words.first().toMap().value("typeText").toString().endsWith("rw"));
+	const auto under = provider->batchPathCandidates(QStringLiteral("control."));
+	CHECK(under.size() == 8);
+	for (const auto& candidate : under)
+		if (candidate.toMap().value("path") == "control.Execute")
+			CHECK(candidate.toMap().value("input").toBool());
+	// A half-typed name: Enter takes the first suggestion, said quietly.
+	const auto partial = check("Setp");
+	CHECK(partial.value("status") == "partial" && partial.value("message") == "Enter takes device.Setpoint.");
+	// A value inside the Field must be one.
+	CHECK(check("device.Config.Gian").value("status") == "error" &&
+	      check("device.Config.Gian").value("message").toString().contains("Did you mean Gain?"));
+	// Every line or none, each refusal in words.
+	const auto added = provider->addBatchPaths({QStringLiteral("device.Setpoint"), QStringLiteral("Nope")});
+	CHECK(added.value("status") == "refused" && added.value("added").toInt() == 0 &&
+	      added.value("refused").toList().size() == 2 && provider->batchCount() == 0);
+	CHECK(added.value("message") ==
+	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
+	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
+	connection.disconnect();
+}
+
 // The Watchlist outlives its device (WL-4c): a disconnect keeps every row by
 // its path with its last value, stale; the next device that has a path reads
 // it again in place, and a path it lacks stays a row that says so.
@@ -1857,6 +1923,7 @@ int main(int argc, char** argv)
 	memberRowWrite();
 	watchBindings();
 	watchKeptAcrossReconnect();
+	batchPaths();
 	watchChangesWhilePolling();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
