@@ -3,6 +3,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
+#include <QtCore/QScopedValueRollback>
 #include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
@@ -427,10 +428,21 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			return p && p->current();
 		});
 		if (!copySchemaMetadata()) return;
-		status =
-		    current() ? QStringLiteral("ReadMany; not started") : QStringLiteral("Not connected");
+		status = current()           ? QStringLiteral("ReadMany; not started")
+		         : model.count() > 0 ? keptWithoutDevice()
+		                             : QStringLiteral("Not connected");
 		if (owner && current())
 			owner->rebindRows();
+		// Start is off then; the status says why.
+		if (current() && model.count() > 0 && !model.hasBound())
+			status = QStringLiteral("Nothing to read: none of these paths is on this device.");
+	}
+
+	// One line for the whole Watchlist while it has no device (WL-4c), rather
+	// than a warning on every row.
+	static QString keptWithoutDevice()
+	{
+		return QStringLiteral("No device. The values are the last read; each row is read again on a device that has it.");
 	}
 
 	void retire(bool clearRows)
@@ -450,8 +462,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		publishing = false;
 		if (clearRows && !request)
 			source = {};
-		status = request ? QStringLiteral("Stopping - draining accepted read")
-		                 : QStringLiteral("Stopped - values invalidated");
+		status = request                           ? QStringLiteral("Stopping - draining accepted read")
+		         : clearRows && model.count() > 0 ? keptWithoutDevice()
+		                                          : QStringLiteral("Stopped - values invalidated");
 	}
 
 	void defer()
@@ -665,7 +678,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			status = model.count() == 0
 			             ? QStringLiteral("Nothing to read. Add a value, or Stop.")
 			             : !readable
-			             ? QStringLiteral("Nothing to read: no value here is on this device.")
+			             ? QStringLiteral("Nothing to read: none of these paths is on this device.")
 			             : QStringLiteral("%1 complete - %2 %3")
 			                   .arg(individual ? QStringLiteral("Individual FieldRead")
 			                                   : QStringLiteral("ReadMany"))
@@ -973,7 +986,12 @@ WatchEntry DynamicWatchlist::missingEntry(const QString& path) const
 	return WatchEntry::of(watch_key::unresolved(d->nextUnresolved++), path.trimmed());
 }
 
-int DynamicWatchlist::missingRow(const QString& path) const
+bool DynamicWatchlist::readable() const
+{
+	return d->model.hasBound();
+}
+
+int DynamicWatchlist::unboundRow(const QString& path) const
 {
 	const auto wanted = path.trimmed();
 	for (int row = 0; row < d->model.count(); ++row)
@@ -989,33 +1007,54 @@ void DynamicWatchlist::rebindRows()
 	if (p->guarded() || !canTellHoldable())
 		return;
 	// Every row's values first, from the top: a value two rows name goes to the
-	// upper one, so a struct typed whole below its own members takes the rest.
+	// upper one, so a struct typed whole below its own members takes the rest;
+	// a row whose values do not fit in the room left claims none of them.
 	struct Found {
 		int row = 0;
+		QString path;
 		bool missing = false;
+		QString reason;  // on the device, but nothing to watch
 		QVector<WatchEntry> entries;
 	};
 	QVector<Found> found;
 	auto claimed = held();
+	int room = WatchlistModel::maxRows - p->model.count();
 	for (int row = 0; row < p->model.count(); ++row) {
 		if (!watch_key::isUnresolved(p->model.key(row)))
 			continue;
 		const auto path = p->model.data(p->model.index(row, 0), WatchlistModel::NameRole).toString();
 		const auto resolved = resolvePath(path);
-		Found next{row, resolved.missing || !resolved.error.isEmpty(), {}};
-		for (const auto& entry : resolved.entries)
-			if (!next.missing && !claimed.contains(entry.key)) {
-				claimed.insert(entry.key);
-				next.entries.push_back(entry);
+		Found next{row, path, resolved.missing || !resolved.error.isEmpty(),
+		           resolved.missing ? QString{} : resolved.error, {}};
+		if (!next.missing) {
+			QVector<WatchEntry> mine;
+			for (const auto& entry : resolved.entries)
+				if (!claimed.contains(entry.key))
+					mine.push_back(entry);
+			// The row itself becomes the first value.
+			const int grows = static_cast<int>(mine.size()) - 1;
+			if (grows > room) {
+				next.missing = true;
+				next.reason = QStringLiteral("Its %L1 values do not fit: the Watchlist holds %L2.")
+				                  .arg(mine.size())
+				                  .arg(WatchlistModel::maxRows);
+			} else {
+				room -= grows;
+				for (const auto& entry : std::as_const(mine))
+					claimed.insert(entry.key);
+				next.entries = std::move(mine);
 			}
+		}
 		found.push_back(std::move(next));
 	}
-	// Then from the last row up, so a row that becomes several moves none above it.
+	// Then from the last row up, so a row that becomes several moves none above
+	// it; publishing meanwhile, so a slot can only ask for a change afterwards.
+	QScopedValueRollback<bool> publishing(p->publishing, true);
 	for (auto at = found.crbegin(); at != found.crend(); ++at) {
 		if (at->missing)
-			p->model.markMissing(at->row);
+			p->model.markMissing(at->row, at->path, at->reason);
 		else
-			p->model.rebindRow(at->row, at->entries);
+			p->model.rebindRow(at->row, at->path, at->entries);
 	}
 }
 
@@ -1690,7 +1729,8 @@ quint64 DynamicWatchlist::membership() const
 QVector<WatchlistModel::Removed> DynamicWatchlist::removeMany(const QSet<WatchKey>& keys)
 {
 	auto p = d;
-	if (p->guarded() || p->reportingCompletion || !p->current())
+	// No device is needed: rows kept across a disconnect go as well (WL-4c).
+	if (p->guarded() || p->reportingCompletion)
 		return {};
 	const auto removed = p->model.removeIds(keys);
 	if (!removed.isEmpty())
@@ -1773,7 +1813,7 @@ bool DynamicWatchlist::begin(bool polling)
 		return false;
 	if (!p->model.hasBound()) {
 		// Only rows for paths this device lacks (WL-4c): nothing would be read.
-		p->status = QStringLiteral("Nothing to read: no value here is on this device.");
+		p->status = QStringLiteral("Nothing to read: none of these paths is on this device.");
 		p->changed();
 		return false;
 	}

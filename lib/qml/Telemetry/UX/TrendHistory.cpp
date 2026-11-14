@@ -162,7 +162,7 @@ void TrendHistory::inspect()
     const QVariant codeValue = source_->data(selected_, codeRole);
     bool codeOk = false;
     const int codeNumber = codeValue.toInt(&codeOk);
-    const auto code = codeOk && codeNumber >= int(WatchStatus::NotRead) && codeNumber <= int(WatchStatus::Failed)
+    const auto code = codeOk && codeNumber >= int(WatchStatus::NotRead) && codeNumber <= int(WatchStatus::Missing)
                           ? static_cast<WatchStatus>(codeNumber) : WatchStatus::Failed;
     if (code != WatchStatus::Ok) {
         if (code != WatchStatus::Pending && code != WatchStatus::NotRead) gap_ = true;

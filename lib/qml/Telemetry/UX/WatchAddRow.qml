@@ -101,15 +101,16 @@ FocusScope {
         const kept = result.missing ? result.missing.length : 0
         const parts = []
         const first = lines[0].split(" = ")[0].split("\t")[0].trim()
-        if (added > 0)
+        if (lines.length === 1 && kept === 1)
+            parts.push(qsTr("Added %1, not on this device").arg(first))
+        else if (added > 0)
             parts.push(lines.length === 1 && added === 1 ? qsTr("Added %1").arg(first)
                        : lines.length === 1 ? qsTr("Added %L1 values of %2").arg(added).arg(first)
                        : qsTr("Added %L1").arg(added))
         if (result.already > 0)
             parts.push(qsTr("%L1 already watched").arg(result.already))
-        if (result.missing && result.missing.length > 0)
-            parts.push(lines.length === 1 ? qsTr("%1 kept: not on this device").arg(first)
-                                          : qsTr("%L1 kept, not on this device").arg(result.missing.length))
+        if (kept > 0 && lines.length > 1)
+            parts.push(qsTr("%L1 not on this device").arg(kept))
         if (result.refused && result.refused.length > 0)
             parts.push(result.refused.length === 1 ? result.refused[0].reason
                                                    : qsTr("%L1 refused").arg(result.refused.length))
@@ -219,6 +220,10 @@ FocusScope {
                             addRow.reveal(addRow.check.row, addRow.check.message)
                             text = ""
                             addRow.refresh()
+                        } else if (addRow.check.status === "missing" && checkLine.typing) {
+                            // A path the suggestions go on from is half typed, not
+                            // one a device lacks: Enter takes the first of them.
+                            addRow.choose(0)
                         } else if (addRow.check.status === "adds" || addRow.check.status === "missing") {
                             addRow.add([text])
                         }

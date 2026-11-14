@@ -482,8 +482,17 @@ int main(int argc, char** argv)
 			CHECK(nopeCheck->property("text").toString() == QStringLiteral("device.Nope is not on this device."));
 			key(window, Qt::Key_Return);
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Nope")}));
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("device.Nope kept: not on this device"));
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added device.Nope, not on this device"));
 			CHECK(addField->property("text").toString().isEmpty() && named(content, "watchUndo"));
+			// Half typed, the suggestions going on from it: Enter takes the first,
+			// never keeps the half as a row the device lacks.
+			typeText(window, "device.Config.G");
+			settle();
+			calls.addedLines.clear();
+			key(window, Qt::Key_Return);
+			CHECK(calls.addedLines.isEmpty() && addField->property("text").toString() == QStringLiteral("device.Config.Gain"));
+			key(window, Qt::Key_Return);
+			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain")}));
 			key(window, Qt::Key_Escape);
 			CHECK(named(content, "watchAddRest"));
 			window->setWidth(480);

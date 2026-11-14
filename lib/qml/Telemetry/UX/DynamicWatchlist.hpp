@@ -137,8 +137,8 @@ public:
 	// found again on every connection. missingEntry makes one for path;
 	// rebindRows resolves every such row against the device now attached.
 	WatchEntry missingEntry(const QString& path) const;
-	// The row kept for path without a device, or -1.
-	[[nodiscard]] int missingRow(const QString& path) const;
+	// The row kept for path without a device (none, or one that lacks it), or -1.
+	[[nodiscard]] int unboundRow(const QString& path) const;
 	void rebindRows();
 	// What may come next in a typed path, for its completion: groups, a
 	// group's Fields, a struct's members, an array's elements, then paths
@@ -169,6 +169,8 @@ public:
 	QVector<WatchlistModel::Removed> removeMany(const QSet<WatchKey>& keys);
 	bool restore(const QVector<WatchlistModel::Removed>& rows);
 	int count() const;
+	// Some row is on the device attached: a read would read something.
+	bool readable() const;
 	QString status() const;
 	bool individual() const;
 	void setIndividual(bool value);

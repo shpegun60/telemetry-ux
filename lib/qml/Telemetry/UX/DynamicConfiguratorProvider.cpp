@@ -1278,6 +1278,11 @@ int DynamicConfiguratorProvider::watchCount() const
 	return d->watch.count();
 }
 
+bool DynamicConfiguratorProvider::watchReadable() const
+{
+	return d->watch.readable();
+}
+
 QString DynamicConfiguratorProvider::watchStatus() const
 {
 	return d->watch.status();
@@ -1438,13 +1443,13 @@ QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) con
 		return out;
 	};
 	const auto resolved = p->watch.resolvePath(typed, false);
-	if (resolved.missing && p->watch.missingRow(typed) >= 0) {
-		out[QStringLiteral("row")] = p->watch.missingRow(typed);
-		return say(QStringLiteral("watched"), words("%1 is in the Watchlist already; it is not on this device.").arg(typed));
+	if (resolved.missing && p->watch.unboundRow(typed) >= 0) {
+		out[QStringLiteral("row")] = p->watch.unboundRow(typed);
+		return say(QStringLiteral("watched"), words("%1 is already in the Watchlist; it is not on this device.").arg(typed));
 	}
 	if (resolved.missing)
 		return say(QStringLiteral("missing"),
-		           words("%1 is not on this device. Enter keeps it as a row, read on a device that has it.").arg(typed));
+		           words("Not on this device. Enter adds it anyway; it is read on a device that has it."));
 	if (!resolved.error.isEmpty())
 		return say(QStringLiteral("error"), resolved.error);
 	out[QStringLiteral("adds")] = static_cast<int>(resolved.adds);
@@ -1505,7 +1510,7 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 		const auto resolved = p->watch.resolvePath(path);
 		if (resolved.missing) {
 			// Kept as a row, once: a row for it already is enough.
-			if (seenMissing.contains(path) || p->watch.missingRow(path) >= 0) {
+			if (seenMissing.contains(path) || p->watch.unboundRow(path) >= 0) {
 				++already;
 				continue;
 			}
@@ -1564,48 +1569,82 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 
 QVariantMap DynamicConfiguratorProvider::restoreWatchBindings(const QVariantList& bindings)
 {
+	return putWatchBindings(bindings, true);
+}
+
+QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bindings, bool replace)
+{
 	auto p = d;
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")}, {QStringLiteral("added"), 0},
+	                   {QStringLiteral("duplicate"), 0}, {QStringLiteral("capacity"), 0},
 	                   {QStringLiteral("missing"), QVariantList{}}};
-	if (!p->current() || p->updating || p->endpoints.changing() || bindings.size() > watchLimit())
+	// Everything addEntries checks first, so a replacement never empties the
+	// list and then fails.
+	if (!p->current() || p->updating || p->endpoints.changing() || !p->watch.canTellHoldable() ||
+	    (replace && bindings.size() > watchLimit()))
 		return result;
 	QVector<WatchEntry> entries;
 	QVariantList missing;
 	QSet<WatchKey> seen;
+	QSet<QString> seenPaths;
+	int duplicate = 0;
 	for (qsizetype at = 0; at < bindings.size(); ++at) {
 		const auto binding = bindings.at(at).toMap();
 		const auto group = binding.value(QStringLiteral("group")).toString();
 		const auto name = binding.value(QStringLiteral("name")).toString();
 		const auto member = binding.value(QStringLiteral("member")).toString();
-		auto path = group + QLatin1Char('.') + name;
-		if (!member.isEmpty())
-			path += (member.startsWith(QLatin1Char('[')) ? QString{} : QStringLiteral(".")) + member;
 		const auto [resolution, entry] = p->watch.resolve(group, name, member);
-		if (resolution == DynamicWatchlist::Resolution::Ok && !seen.contains(entry.key)) {
+		if (resolution == DynamicWatchlist::Resolution::Ok) {
+			if (seen.contains(entry.key)) {
+				++duplicate;  // the same value twice: once is enough
+				continue;
+			}
 			auto named = entry;
 			if (named.name.isEmpty())
-				named.name = path;
+				named.name = group + QLatin1Char('.') + name;
 			seen.insert(named.key);
 			entries.push_back(named);
 			continue;
 		}
-		if (resolution == DynamicWatchlist::Resolution::Ok)
-			continue;  // the same value twice: once is enough
 		missing.append(static_cast<int>(at));
+		// Kept as a row by its path, once - only a path that can be written
+		// back the same way: a group and a name.
+		if (group.isEmpty() || name.isEmpty())
+			continue;
+		auto path = group + QLatin1Char('.') + name;
+		if (!member.isEmpty())
+			path += (member.startsWith(QLatin1Char('[')) ? QString{} : QStringLiteral(".")) + member;
+		if (seenPaths.contains(path) || (!replace && p->watch.unboundRow(path) >= 0)) {
+			++duplicate;
+			continue;
+		}
+		seenPaths.insert(path);
 		entries.push_back(p->watch.missingEntry(path));
 	}
-	p->watch.clear();
+	result[QStringLiteral("duplicate")] = duplicate;
+	result[QStringLiteral("missing")] = missing;
+	if (replace)
+		p->watch.clear();
 	if (!entries.isEmpty()) {
 		const auto added = p->watch.addEntries(entries);
+		result[QStringLiteral("capacity")] = added.value(QStringLiteral("capacity"));
 		if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 			result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+			p->notify();
 			return result;
 		}
-		result[QStringLiteral("added")] = added.value(QStringLiteral("added")).toInt() - static_cast<int>(missing.size());
+		int kept = 0;
+		for (const auto& entry : std::as_const(entries))
+			kept += watch_key::isUnresolved(entry.key) ? 1 : 0;
+		result[QStringLiteral("added")] = added.value(QStringLiteral("added")).toInt() - kept;
+		// A path this device has but cannot watch (a Command now, a name two
+		// Fields share) says why, rather than "Not on device"; a struct kept
+		// whole becomes its values.
+		p->watch.rebindRows();
 	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
-	result[QStringLiteral("missing")] = missing;
-	p->undo = {};
+	if (replace)
+		p->undo = {};
 	p->notify();
 	return result;
 }
@@ -1733,36 +1772,7 @@ QVariantList DynamicConfiguratorProvider::watchBindings() const
 
 QVariantMap DynamicConfiguratorProvider::addWatchBindings(const QVariantList& bindings)
 {
-	auto p = d;
-	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
-	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
-	                   {QStringLiteral("capacity"), 0}, {QStringLiteral("missing"), QVariantList{}}};
-	if (!p->current() || p->updating || !p->watch.canTellHoldable())
-		return result;
-	QVector<WatchEntry> entries;
-	QVariantList missing;
-	for (int at = 0; at < bindings.size(); ++at) {
-		const auto saved = bindings[at].toMap();
-		const auto [found, entry] = p->watch.resolve(saved.value(QStringLiteral("group")).toString(),
-		                                             saved.value(QStringLiteral("name")).toString(),
-		                                             saved.value(QStringLiteral("member")).toString());
-		if (found == DynamicWatchlist::Resolution::Ok)
-			entries.push_back(entry);
-		else
-			missing.push_back(at);
-	}
-	if (!entries.isEmpty()) {
-		const auto added = p->watch.addEntries(entries);
-		if (added.value(QStringLiteral("added")).toInt() > 0)
-			p->notify();
-		for (const auto& name : {QStringLiteral("status"), QStringLiteral("added"), QStringLiteral("duplicate"),
-		                         QStringLiteral("capacity")})
-			result[name] = added.value(name);
-	} else {
-		result[QStringLiteral("status")] = QStringLiteral("ok");
-	}
-	result[QStringLiteral("missing")] = missing;
-	return result;
+	return putWatchBindings(bindings, false);
 }
 
 QVariantMap DynamicConfiguratorProvider::watchTally(const QModelIndex& index) const

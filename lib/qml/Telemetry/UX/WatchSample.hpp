@@ -48,7 +48,9 @@ inline constexpr int watchlistRowLimit = 1024;
 
 // Stable codes beside a row's display status. Providers word their statuses
 // differently ("NotRead", "Not read", refusal texts); the codes do not differ.
-enum class WatchStatus : int { NotRead = 0, Pending = 1, Ok = 2, Stale = 3, Failed = 4 };
+// Missing: a path the device attached lacks, or names nothing to watch on it
+// (WL-4c); never read, so never recorded.
+enum class WatchStatus : int { NotRead = 0, Pending = 1, Ok = 2, Stale = 3, Failed = 4, Missing = 5 };
 
 inline WatchStatus watchStatusCode(const QString& status) noexcept
 {
@@ -61,6 +63,8 @@ inline WatchStatus watchStatusCode(const QString& status) noexcept
 		return WatchStatus::NotRead;
 	if (status == QLatin1String("Stale"))
 		return WatchStatus::Stale;
+	if (status == QLatin1String("Missing") || status == QLatin1String("Unwatchable"))
+		return WatchStatus::Missing;
 	return WatchStatus::Failed;
 }
 } // namespace telemetry::ux

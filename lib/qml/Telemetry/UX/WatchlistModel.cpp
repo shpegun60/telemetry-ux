@@ -369,6 +369,9 @@ void WatchlistModel::invalidateValues()
 		return;
 	Mutation mutation{changing_};
 	for (int row = 0; row < count_; ++row) {
+		// A row without a device keeps what it says (WL-4c).
+		if (watch_key::isUnresolved(rows_[row].key))
+			continue;
 		rows_[row].status = QStringLiteral("Stale");
 		rows_[row].text.clear();
 	}
@@ -451,41 +454,64 @@ quint64 WatchlistModel::unbindAll(quint64 next)
 {
 	if (changing_ || !count_)
 		return next;
-	// Rows without a device already are left as they are, so a second call
-	// (every poll while disconnected) changes and says nothing.
+	Mutation mutation{changing_};
+	// The bound rows are numbered in the order the tree shows them - Field,
+	// then value - so siblings keep their order while there is no device; a
+	// row unbound before keeps its smaller number, and its place before them.
+	QVector<int> bound;
+	for (int row = 0; row < count_; ++row)
+		if (!watch_key::isUnresolved(rows_[row].key))
+			bound.append(row);
+	const auto treeOrder = [](WatchKey key) { return ((key & 0xffffffffULL) << 32) | (key >> 32); };
+	std::stable_sort(bound.begin(), bound.end(),
+	                 [&](int a, int b) { return treeOrder(rows_[a].key) < treeOrder(rows_[b].key); });
+	// A second call (every poll while disconnected) changes and says nothing.
 	int first = -1;
 	int last = -1;
+	const auto changed = [&](int row) {
+		first = first < 0 ? row : std::min(first, row);
+		last = std::max(last, row);
+	};
+	// With no device a row says nothing of devices: its last value, stale, or
+	// nothing if it was never read - even one a device lacked before.
 	for (int row = 0; row < count_; ++row) {
 		auto& r = rows_[row];
-		if (watch_key::isUnresolved(r.key))
-			continue;
-		// The last value stays as it was shown, in the row's format, marked
-		// stale; a row never read says nothing. Nothing of the descriptor stays:
-		// the next device may number its types differently.
-		if (r.status == QStringLiteral("Ok") && r.value.size) {
+		const auto status = r.text.isEmpty() ? QString{} : QStringLiteral("Stale");
+		if (watch_key::isUnresolved(r.key) && r.status != status) {
+			r.status = status;
+			r.refusal.clear();
+			changed(row);
+		}
+	}
+	for (qsizetype at = 0; at < bound.size(); ++at) {
+		const int row = bound.at(at);
+		auto& r = rows_[row];
+		// The last value stays as it was shown, in the row's format. Nothing of
+		// the descriptor stays: the next device may number its types differently.
+		if (r.value.size) {
 			const auto* metadata = r.type ? metadata_->type(r.type) : metadata_->field(watch_key::field(r.key));
 			const auto shown = watch_format::text(r.value, r.format.value_or(format_),
 			                                      metadata ? &metadata->names : nullptr);
 			if (!shown.isEmpty())
 				r.text = shown;
 		}
-		r.key = watch_key::unresolved(next++);
-		r.status = r.text.isEmpty() ? QStringLiteral("Missing") : QStringLiteral("Stale");
+		r.key = watch_key::unresolved(next + static_cast<quint64>(at));
+		r.status = r.text.isEmpty() ? QString{} : QStringLiteral("Stale");
 		r.writable = false;
 		r.refusal.clear();
 		r.scope.clear();
 		r.others = 0;
 		r.steps.clear();
 		r.type = 0;
-		r.value = {};
 		r.sample = {};
 		r.sampleText.clear();
-		first = first < 0 ? row : first;
-		last = row;
+		changed(row);
 	}
+	next += static_cast<quint64>(bound.size());
 	if (first < 0)
 		return next;
-	++membership_;
+	if (!bound.isEmpty())
+		++membership_;
 	Q_EMIT dataChanged(index(first, 0), index(last, 0));
 	return next;
 }
@@ -498,10 +524,10 @@ bool WatchlistModel::hasBound() const
 	return false;
 }
 
-bool WatchlistModel::rebindRow(int row, const QVector<WatchEntry>& entries)
+bool WatchlistModel::rebindRow(int row, const QString& path, const QVector<WatchEntry>& entries)
 {
 	if (changing_ || row < 0 || row >= count_ || !watch_key::isUnresolved(rows_[row].key) ||
-	    entries.size() > maxRows - count_ + 1)
+	    rows_[row].name != path || entries.size() > maxRows - count_ + 1)
 		return false;
 	QSet<WatchKey> held;
 	for (int at = 0; at < count_; ++at)
@@ -538,16 +564,20 @@ bool WatchlistModel::rebindRow(int row, const QVector<WatchEntry>& entries)
 	return true;
 }
 
-bool WatchlistModel::markMissing(int row)
+bool WatchlistModel::markMissing(int row, const QString& path, const QString& reason)
 {
-	if (changing_ || row < 0 || row >= count_ || !watch_key::isUnresolved(rows_[row].key))
+	if (changing_ || row < 0 || row >= count_ || !watch_key::isUnresolved(rows_[row].key) || rows_[row].name != path)
 		return false;
-	rows_[row].status = QStringLiteral("Missing");
+	Mutation mutation{changing_};
+	// Not on the device, or on it but not a value to watch (a Command, a name
+	// two Fields share, no room): the reason is the row's refusal.
+	rows_[row].status = reason.isEmpty() ? QStringLiteral("Missing") : QStringLiteral("Unwatchable");
+	rows_[row].refusal = reason;
 	Q_EMIT dataChanged(index(row, 0), index(row, 0));
 	return true;
 }
 
-bool WatchlistModel::isMissing(int row) const
+bool WatchlistModel::isUnbound(int row) const
 {
 	return row >= 0 && row < count_ && watch_key::isUnresolved(rows_[row].key);
 }
@@ -725,6 +755,13 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return canonicalText(row.value);
 		case ShownTextRole: {
 			// Not read, or a failure's text: as the row has it.
+			if (unbound && row.value.size && row.status == QStringLiteral("Stale")) {
+				const auto form = row.format.value_or(format_);
+				if (form == WatchNumberFormat::Original)
+					return row.text;
+				const auto shown = watch_format::text(row.value, form, nullptr);
+				return shown.isEmpty() ? row.text : shown;
+			}
 			if (!row.value.size || row.status != QStringLiteral("Ok"))
 				return row.text;
 			const auto shown = watch_format::text(row.value, row.format.value_or(format_),

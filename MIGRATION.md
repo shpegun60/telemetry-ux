@@ -246,27 +246,40 @@ the last one; without them it fills its room as before.
 
 One change of behaviour. `DynamicWatchlist::retire(true)`, and so a disconnect
 or a source replaced, no longer empties the Watchlist: every row stays with its
-path and its last value (as it was shown, in its format), status `Stale`, or
-`Missing` if it was never read. Such a row has an unresolved key
-(`watch_key::unresolved`, bit 52 set, never a real key): it is never read,
-written or recorded, has no access mark, type or editor, and `held()` leaves it
-out. When a device attaches, `rebindRows` finds every such row again by its
-path, in place - a struct typed whole becomes its values, minus those a row
-above already names - and a path the device lacks stays a row that says
-`Missing` ("Not on device" in the panel). A host test that expected
-`count() == 0` after a retire now finds the rows; `clear()` still empties.
+path and its last value (as it was shown, in its format), status `Stale`, or no
+status if it was never read - with no device a row says nothing of devices.
+Such a row has an unresolved key (`watch_key::unresolved`, bit 52 set, never a
+real key): it is never read, written or recorded, has no access mark, type or
+editor, and `held()` leaves it out. Code that reads `WatchlistModel::key(row)`
+skips `watch_key::isUnresolved` keys; the low word of one is not an endpoint
+id. When a device attaches, every such row is found again by its path, in
+place: a struct kept whole becomes its values, minus those a row above already
+names, or claims none of them when they do not fit in the 1024 rows. A path the
+device lacks stays a row with status `Missing` ("Not on device" in the panel);
+one on it that names nothing to watch (a Command, a name two Fields share, no
+room) has status `Unwatchable` ("Can't watch"), the reason in `writeRefusal`.
+Both map to the new `WatchStatus::Missing` (5). A host test that expected
+`count() == 0` after a retire now finds the rows; `clear()` still empties, and
+removing rows needs no device any more. `WatchRows` places a row again when its
+key changes in place (a dataChanged with no roles listed), so the tree keeps
+descriptor order through a disconnect.
+
+`addWatchBindings` keeps a binding this device has no value for as such a row
+too (once; `added` counts values, `missing` gives the positions, and a binding
+with no group is reported and kept nowhere, since it could not be saved back).
 
 Additive: `watch_key::unresolved` and `isUnresolved`; `WatchlistModel`
-`unbindAll`, `rebindRow`, `markMissing`, `isMissing`, `hasBound`;
-`DynamicWatchlist` `missingEntry`, `missingRow`, `rebindRows`; the Dynamic
-provider's `restoreWatchBindings(bindings)` - a saved Watchlist back in its
-order as one change, every path a device lacks kept as such a row, `{status,
-added, missing: [positions]}`. `addWatchPaths` keeps a path the device lacks
-as a row too (`added` counts values only; `missing` names the kept paths, and a
-path kept already counts in `already`), and `checkWatchPath` says `missing`
-with Enter allowed. `watchBindings` answers without a device as well, from the
-rows' paths. A Start or Read once with only such rows is refused and says
-there is nothing on this device to read.
+`unbindAll`, `rebindRow`, `markMissing`, `isUnbound`, `hasBound`;
+`DynamicWatchlist` `missingEntry`, `unboundRow`, `rebindRows`, `readable`; the
+Dynamic provider's `watchReadable` property and `restoreWatchBindings(bindings)`
+- a saved Watchlist back in its order as one change, refused before anything
+is cleared when it could not be done. `addWatchPaths` keeps a path the device
+lacks as a row too (`added` counts values only; `missing` names the kept paths,
+and a path kept already counts in `already`), and `checkWatchPath` says
+`missing` with Enter allowed; Enter on a half-typed path the suggestions go on
+from takes the first suggestion instead. `watchBindings` answers without a
+device as well, from the rows' paths. With only such rows Start and Read once
+are off, and the status says there is nothing on this device to read.
 
 ## The Watchlist's number format (WL-3, November 2026)
 

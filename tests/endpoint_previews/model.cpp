@@ -451,6 +451,10 @@ void schemaSourceReplacement() {
 		return first->schema;
 	};
 	watch.setSource(std::move(original));
+	// The first source's row is kept, without a device (WL-4c); this check is
+	// about the metadata of the row added next, alone.
+	CHECK(watch.count() == 1);
+	watch.clear();
 	CHECK(watch.add(1, "Mode"));
 	CHECK(watch.model()->index(0, 0).data(ux::WatchlistModel::EditorKindRole) == "enum");
 	replaceOnClear = true;
