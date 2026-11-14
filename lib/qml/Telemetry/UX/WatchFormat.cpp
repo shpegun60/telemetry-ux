@@ -10,6 +10,9 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QStringList>
+#include <array>
+#include <bit>
+#include <cstdint>
 
 namespace telemetry::ux::watch_format {
 namespace {
@@ -43,6 +46,60 @@ QString typeName(const WatchValueType& type)
 QString tr(const char* text)
 {
 	return QCoreApplication::translate("WatchFormat", text);
+}
+
+QString hexAt(std::uint64_t bits, unsigned width)
+{
+	return QStringLiteral("0x") + QString::number(bits, 16).toUpper().rightJustified(2 * int(width), QLatin1Char('0'));
+}
+
+bool isFloat(ScalarCode code)
+{
+	return code == ScalarCode::F32 || code == ScalarCode::F64;
+}
+
+struct Bounds {
+	std::uint64_t low = 0, high = 0, all = 0;
+	bool isSigned = false;
+};
+
+std::optional<Bounds> boundsOf(const WatchValueType& type, ScalarCode code)
+{
+	if (isFloat(code) || code == ScalarCode::Bool || type.width == 0 || type.width > 8)
+		return std::nullopt;
+	Bounds out;
+	const unsigned bitsWide = 8 * type.width;
+	out.all = bitsWide == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bitsWide) - 1;
+	out.isSigned = code == ScalarCode::S8 || code == ScalarCode::S16 || code == ScalarCode::S32 || code == ScalarCode::S64;
+	out.low = out.isSigned ? std::uint64_t{1} << (bitsWide - 1) : 0;
+	out.high = out.isSigned ? out.low - 1 : out.all;
+	return out;
+}
+
+// "“65536” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF)." -
+// whole sentences, so a translation can order them as it needs.
+QString outOfRangeText(const QString& typed, const WatchValueType& type, ScalarCode code)
+{
+	const auto bounds = boundsOf(type, code);
+	if (!bounds)
+		return tr("“%1” is out of range for %2.").arg(typed, typeName(type));
+	const auto low = detail::scalarEditorBits(bounds->low, code);
+	const auto high = detail::scalarEditorBits(bounds->high, code);
+	return bounds->isSigned
+	           ? tr("“%1” is out of range for %2: enter %3 to %4, or %5 to %6 as bits.")
+	                 .arg(typed, typeName(type), low, high, hexAt(0, type.width), hexAt(bounds->all, type.width))
+	           : tr("“%1” is out of range for %2: enter %3 to %4 (%5 to %6).")
+	                 .arg(typed, typeName(type), low, high, hexAt(0, type.width), hexAt(bounds->all, type.width));
+}
+
+bool asciiDigits(QStringView text)
+{
+	if (text.isEmpty())
+		return false;
+	for (const auto c : text)
+		if (c < u'0' || c > u'9')
+			return false;
+	return true;
 }
 
 } // namespace
@@ -140,7 +197,9 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 		return parsed;
 	}
 	if (digits.size() > width) {
-		parsed.error = tr("%1 has more digits than a %2 holds (%3).").arg(trimmed.toString(), typeName(type)).arg(width);
+		parsed.error = isFloat(*code) || *code == ScalarCode::Bool
+		    ? tr("“%1”: %2 takes at most %3 hex digits.").arg(trimmed.toString(), typeName(type)).arg(width)
+		    : outOfRangeText(trimmed.toString(), type, *code);
 		return parsed;
 	}
 	bool ok = false;
@@ -172,6 +231,97 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 		parsed.canonical.clear();
 	}
 	return parsed;
+}
+
+
+QString range(const WatchValueType& type)
+{
+	const auto code = codeOf(type.scalar);
+	const auto bounds = type.valid() && code ? boundsOf(type, *code) : std::nullopt;
+	if (!bounds)
+		return {};
+	const auto low = detail::scalarEditorBits(bounds->low, *code);
+	const auto high = detail::scalarEditorBits(bounds->high, *code);
+	return bounds->isSigned ? tr("%1 to %2, or %3 to %4 as bits").arg(low, high, hexAt(0, type.width), hexAt(bounds->all, type.width))
+	                        : tr("%1 to %2 (%3 to %4)").arg(low, high, hexAt(0, type.width), hexAt(bounds->all, type.width));
+}
+
+Encoded encode(QStringView text, const WatchValueType& type)
+{
+	Encoded out;
+	const auto code = codeOf(type.scalar);
+	const auto trimmed = text.trimmed().toString();
+	if (trimmed.isEmpty())
+		return out;
+	if (!type.valid() || !code) {
+		out.error = tr("This value's type is not known yet; read it once first.");
+		return out;
+	}
+	auto typed = trimmed;
+	if (isHex(trimmed)) {
+		const auto parsed = fromHex(trimmed, type);
+		if (!parsed.error.isEmpty()) {
+			out.error = parsed.error;
+			return out;
+		}
+		typed = parsed.canonical;
+	}
+	std::uint64_t bits = 0;
+	const auto as = [&]<class T, class B>() {
+		T number{};
+		if (!detail::parseScalar(typed, number))
+			return false;
+		bits = static_cast<std::uint64_t>(std::bit_cast<B>(number));
+		return true;
+	};
+	bool ok = false;
+	switch (*code) {
+		case ScalarCode::Bool: {
+			bool value = false;
+			ok = detail::parseScalar(typed, value);
+			bits = value ? 1 : 0;
+			break;
+		}
+		case ScalarCode::U8: ok = as.template operator()<std::uint8_t, std::uint8_t>(); break;
+		case ScalarCode::S8: ok = as.template operator()<std::int8_t, std::uint8_t>(); break;
+		case ScalarCode::U16: ok = as.template operator()<std::uint16_t, std::uint16_t>(); break;
+		case ScalarCode::S16: ok = as.template operator()<std::int16_t, std::uint16_t>(); break;
+		case ScalarCode::U32: ok = as.template operator()<std::uint32_t, std::uint32_t>(); break;
+		case ScalarCode::S32: ok = as.template operator()<std::int32_t, std::uint32_t>(); break;
+		case ScalarCode::U64: ok = as.template operator()<std::uint64_t, std::uint64_t>(); break;
+		case ScalarCode::S64: ok = as.template operator()<std::int64_t, std::uint64_t>(); break;
+		case ScalarCode::F32: ok = as.template operator()<float, std::uint32_t>(); break;
+		case ScalarCode::F64: ok = as.template operator()<double, std::uint64_t>(); break;
+		default: break;
+	}
+	if (!ok) {
+		// Why, in the words that help: a sign written that a value can't take,
+		// a fraction where only whole numbers go, a number past the type.
+		const bool negative = typed.startsWith(u'-');
+		const auto digits = QStringView(typed).mid(negative || typed.startsWith(u'+') ? 1 : 0);
+		double asDouble = 0;
+		if (*code == ScalarCode::Bool)
+			out.error = tr("Enter true or false (1 or 0).");
+		else if (typed.startsWith(u'+'))
+			out.error = tr("“%1”: write it without the + sign.").arg(trimmed);
+		else if (isFloat(*code))
+			out.error = detail::parseScalar(typed, asDouble) ? tr("“%1” is out of range for %2.").arg(trimmed, typeName(type))
+			                                                 : tr("“%1” is not a number for %2.").arg(trimmed, typeName(type));
+		else if (asciiDigits(digits))
+			out.error = outOfRangeText(trimmed, type, *code);
+		else if (detail::parseScalar(typed, asDouble))
+			out.error = tr("“%1”: %2 takes whole numbers only.").arg(trimmed, typeName(type));
+		else
+			out.error = tr("“%1” is not a number for %2.").arg(trimmed, typeName(type));
+		return out;
+	}
+	std::array<std::byte, 8> bytes{};
+	for (unsigned i = 0; i < type.width && i < bytes.size(); ++i)
+		bytes[i] = std::byte((bits >> (8 * i)) & 0xff);
+	out.value.type = type;
+	if (!out.value.assign(bytes.data(), type.width))
+		out.error = tr("This value's type is not known yet; read it once first.");
+	return out;
 }
 
 } // namespace telemetry::ux::watch_format

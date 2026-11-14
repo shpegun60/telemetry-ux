@@ -11,6 +11,7 @@
 #include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QSortFilterProxyModel>
@@ -296,6 +297,8 @@ struct DynamicConfiguratorProvider::Impl {
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
 	QString writeText, writeName, watchWrite;
+	// The written row's type, to say why a text is not a value of it.
+	WatchValueType writeType;
 	// A value inside a struct or array Field: where it is, so the write walks
 	// to it in the Field just read; and the value as it will be written.
 	std::optional<WatchLeaves::Leaf> writeLeaf;
@@ -315,6 +318,28 @@ struct DynamicConfiguratorProvider::Impl {
 	// Until the Watchlist has a model: its format and the rows' own.
 	WatchNumberFormat watchFormat = WatchNumberFormat::Original;
 	QHash<QString, WatchNumberFormat> rowFormats;
+	// Moves with every change of a format, from wherever it comes (a panel, a
+	// project loaded): a reset's Undo holds only while it has not moved.
+	quint64 formatRevision = 0;
+	QHash<QString, WatchNumberFormat> pathFormats() const
+	{
+		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
+		return model ? model->pathFormats() : rowFormats;
+	}
+	// false, and nothing changed, while the model refuses (it is changing).
+	bool putPathFormats(QHash<QString, WatchNumberFormat> formats)
+	{
+		if (auto* model = qobject_cast<WatchlistModel*>(watch.model()))
+			return model->setPathFormats(std::move(formats));
+		rowFormats = std::move(formats);
+		return true;
+	}
+	void putFormat(WatchNumberFormat format)
+	{
+		watchFormat = format;
+		if (auto* model = qobject_cast<WatchlistModel*>(watch.model()))
+			model->setFormat(format);
+	}
 	DynamicBatch batch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
@@ -338,11 +363,15 @@ struct DynamicConfiguratorProvider::Impl {
 	bool available = false;
 	QSet<quint64> heldKeys;
 	quint64 heldMembership = ~quint64{0};
+	// The one change Undo takes back: rows added or removed, or (formats) a
+	// reset of the number formats, with what they were.
 	struct WatchUndo {
-		bool valid = false, added = false;
+		bool valid = false, added = false, formats = false;
 		QSet<WatchKey> addedIds;
 		QVector<WatchlistModel::Removed> removed;
-		quint64 membership = 0, treeEpoch = 0;
+		quint64 membership = 0, treeEpoch = 0, formatRevision = 0;
+		WatchNumberFormat format = WatchNumberFormat::Original;
+		QHash<QString, WatchNumberFormat> pathFormats;
 	} undo;
 
 	const QSet<quint64>& held()
@@ -848,8 +877,10 @@ struct DynamicConfiguratorProvider::Impl {
 			writeIntended = parsed ? canonicalScalarText(info.value.code, writeText) : QString{};
 		}
 		if (!parsed || set != rt::Status::Ok) {
-			failWatchWrite(writeName + QStringLiteral(" not written: \"") + writeText +
-			               QStringLiteral("\" is not a valid value"));
+			// Why, in words: the type's range for a number past it (WL-3b).
+			const auto why = writeType.valid() ? watch_format::encode(writeText, writeType).error : QString{};
+			failWatchWrite(writeName + QStringLiteral(" not written: ") +
+			               (why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why));
 			return;
 		}
 		auto target = writer;
@@ -2024,6 +2055,41 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 	return result;
 }
 
+QVariantMap DynamicConfiguratorProvider::watchEditPreview(int row, const QString& text) const
+{
+	auto p = d;
+	QVariantMap out{{QStringLiteral("preview"), QString{}}, {QStringLiteral("error"), QString{}}};
+	const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
+	if (!model || row < 0 || row >= model->count() || text.trimmed().isEmpty())
+		return out;
+	const auto type = model->valueType(row);
+	const auto typed = text.trimmed();
+	// A row never read has no type to say yet; a row without a device writes
+	// nothing; an enum is chosen by name, its code only in numbers.
+	static const QRegularExpression number(QStringLiteral("^(-?[0-9]+|0[xX][0-9A-Fa-f_]+)$"));
+	if (!type.valid() || model->isUnbound(row) || (type.enumeration && !number.match(typed).hasMatch()))
+		return out;
+	// A start not yet a number ("-", "0x", "1e") is judged on Enter, not on the key.
+	static const QRegularExpression unfinished(QStringLiteral("^([-+]|0[xX]|.*[eE][-+]?|.*\\.)$"));
+	if (unfinished.match(typed).hasMatch())
+		return out;
+	const auto encoded = watch_format::encode(typed, type);
+	if (!encoded.error.isEmpty()) {
+		out[QStringLiteral("error")] = encoded.error;
+		return out;
+	}
+	const bool hex = watch_format::isHex(typed);
+	const auto shown = watch_format::text(encoded.value, hex ? WatchNumberFormat::Dec : WatchNumberFormat::Hex);
+	if (shown.isEmpty())
+		return out;
+	// A float's hex is its bits, not its number: said so.
+	const bool real = type.scalar == WatchScalar::F32 || type.scalar == WatchScalar::F64;
+	out[QStringLiteral("preview")] = !hex && real
+	    ? QStringLiteral("= %1 (%2 bits)").arg(shown, type.scalar == WatchScalar::F32 ? QStringLiteral("f32") : QStringLiteral("f64"))
+	    : QStringLiteral("= ") + shown;
+	return out;
+}
+
 QString DynamicConfiguratorProvider::watchFormat() const
 {
 	return watch_format::name(d->watchFormat);
@@ -2035,9 +2101,8 @@ void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
 	const auto parsed = watch_format::parse(format);
 	if (!parsed || *parsed == p->watchFormat)
 		return;
-	p->watchFormat = *parsed;
-	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model()))
-		model->setFormat(*parsed);
+	p->putFormat(*parsed);
+	++p->formatRevision;
 	p->notify();
 }
 
@@ -2056,11 +2121,55 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 			return false;
 		chosen.push_back(at);
 	}
+	const auto target = format.isEmpty() ? std::nullopt : parsed;
+	const auto before = model->pathFormats();
 	bool done = true;
 	for (const int row : std::as_const(chosen))
-		done = model->setRowFormat(row, format.isEmpty() ? std::nullopt : parsed) && done;
+		done = model->setRowFormat(row, target) && done;
+	if (model->pathFormats() != before)
+		++p->formatRevision;
 	p->notify();
 	return done;
+}
+
+bool DynamicConfiguratorProvider::watchFormatsDiffer() const
+{
+	if (d->watchFormat != WatchNumberFormat::Original)
+		return true;
+	const auto* model = qobject_cast<const WatchlistModel*>(d->watch.model());
+	for (int row = 0; model && row < model->count(); ++row)
+		if (const auto own = model->rowFormat(row); own && *own != WatchNumberFormat::Original)
+			return true;
+	return false;
+}
+
+QVariantMap DynamicConfiguratorProvider::resetWatchFormats()
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("unchanged")}, {QStringLiteral("rows"), 0}};
+	auto before = p->pathFormats();
+	if (p->watchFormat == WatchNumberFormat::Original && before.isEmpty())
+		return result;
+	int rows = 0;
+	if (const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model()))
+		for (int row = 0; row < model->count(); ++row)
+			rows += model->rowFormat(row) ? 1 : 0;
+	if (!p->putPathFormats({})) {
+		result[QStringLiteral("status")] = QStringLiteral("refused");
+		return result;
+	}
+	Impl::WatchUndo undo;
+	undo.valid = true;
+	undo.formats = true;
+	undo.format = p->watchFormat;
+	undo.pathFormats = std::move(before);
+	p->putFormat(WatchNumberFormat::Original);
+	undo.formatRevision = ++p->formatRevision;
+	p->undo = std::move(undo);
+	p->notify();
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	result[QStringLiteral("rows")] = rows;
+	return result;
 }
 
 QVariantMap DynamicConfiguratorProvider::watchRowFormats() const
@@ -2083,14 +2192,9 @@ bool DynamicConfiguratorProvider::setWatchRowFormats(const QVariantMap& formats)
 			return false;
 		parsed.insert(at.key(), *format);
 	}
-	if (parsed.size() > WatchlistModel::formatLimit)
+	if (parsed.size() > WatchlistModel::formatLimit || !p->putPathFormats(std::move(parsed)))
 		return false;
-	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model())) {
-		if (!model->setPathFormats(std::move(parsed)))
-			return false;
-	} else {
-		p->rowFormats = std::move(parsed);
-	}
+	++p->formatRevision;
 	p->notify();
 	return true;
 }
@@ -2103,12 +2207,15 @@ void DynamicConfiguratorProvider::clearWatch()
 
 int DynamicConfiguratorProvider::watchRevision() const
 {
-	return static_cast<int>((d->watch.membership() + d->treeEpoch + d->availability) & 0x7fffffffU);
+	return static_cast<int>((d->watch.membership() + d->treeEpoch + d->availability + d->formatRevision) & 0x7fffffffU);
 }
 
 bool DynamicConfiguratorProvider::canUndoWatch() const
 {
 	const auto& undo = d->undo;
+	// A reset of the formats needs no device: only that no format changed since.
+	if (undo.formats)
+		return undo.valid && undo.formatRevision == d->formatRevision;
 	return undo.valid && undo.membership == d->watch.membership() &&
 	       undo.treeEpoch == d->treeEpoch && d->current() && !d->updating;
 }
@@ -2405,6 +2512,21 @@ QVariantMap DynamicConfiguratorProvider::undoWatch()
 	                   {QStringLiteral("changed"), 0}};
 	if (!canUndoWatch())
 		return result;
+	if (p->undo.formats) {
+		// The rows' formats first: if the model refuses, nothing changed and
+		// Undo stays.
+		const auto& undo = p->undo;
+		const int changed = static_cast<int>(undo.pathFormats.size()) + (undo.format != WatchNumberFormat::Original ? 1 : 0);
+		if (!p->putPathFormats(undo.pathFormats))
+			return result;
+		p->putFormat(undo.format);
+		p->undo = {};
+		++p->formatRevision;
+		result[QStringLiteral("status")] = QStringLiteral("ok");
+		result[QStringLiteral("changed")] = changed;
+		p->notify();
+		return result;
+	}
 	const auto undo = std::exchange(p->undo, {});
 	int changed = 0;
 	if (undo.added)
@@ -2463,7 +2585,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		const auto* watched = qobject_cast<const WatchlistModel*>(model);
 		const auto parsed = watch_format::fromHex(typed, watched ? watched->valueType(row) : WatchValueType{});
 		if (!parsed.error.isEmpty()) {
-			p->watchWrite = parsed.error;
+			p->watchWrite = model->data(index, WatchlistModel::NameRole).toString() + QStringLiteral(" not written: ") +
+			                parsed.error;
 			p->notify();
 			return false;
 		}
@@ -2507,6 +2630,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeIntended = typed;
 	p->writeText = typed;
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
+	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
+	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->notify();
 	return true;

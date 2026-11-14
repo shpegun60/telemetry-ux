@@ -321,6 +321,62 @@ int main(int argc, char** argv)
 				settle();
 			}
 			CHECK(!rowMenu->property("visible").toBool());
+			// Every value back to Original (WL-3b): the Watchlist's form and every
+			// row's own, from the "…" menu or a row's Number format menu, as one
+			// change Undo and Ctrl+Z take back from anywhere in the panel; the
+			// notice and its Undo go once a form is chosen again.
+			{
+				auto* fixture = panel->property("provider").value<QObject*>();
+				const auto ownFormats = [fixture] { return fixture->property("rowFormats").toMap(); };
+				const QVariantMap chosen{{QStringLiteral("row3"), QStringLiteral("dec")},
+				                         {QStringLiteral("row1"), QStringLiteral("dec")}};
+				const auto formatIs = [panel](const char* name) {
+					return panel->property("format").toString() == QLatin1String(name);
+				};
+				CHECK(ownFormats() == chosen);
+				click(window, named(content, "watchFormat_hex"));
+				auto* more = named(content, "watchMoreButton");
+				click(window, more);
+				auto* reset = shown(content, "watchResetFormats");
+				CHECK(reset->property("enabled").toBool() &&
+				      reset->property("text").toString() == QStringLiteral("Reset number formats to Original"));
+				click(window, reset);
+				CHECK(formatIs("original") && ownFormats().isEmpty());
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Number formats reset to Original; 2 rows had their own"));
+				CHECK(named(content, "watchUndo"));
+				// Ctrl+Z with the keys on the ⋯ button, not in the list.
+				more->forceActiveFocus(Qt::TabFocusReason);
+				settle();
+				QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
+				settle();
+				CHECK(formatIs("hex") && ownFormats() == chosen);
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone") && !named(content, "watchUndo"));
+				// From the row's Number format menu, by keys: Down to it, Right
+				// into it, past "Like the Watchlist", Original, Dec and Hex to
+				// the reset under them.
+				list->setProperty("currentIndex", 2);
+				list->forceActiveFocus();
+				key(window, Qt::Key_Menu);
+				for (const auto k : {Qt::Key_Down, Qt::Key_Right, Qt::Key_Down, Qt::Key_Down, Qt::Key_Down, Qt::Key_Down})
+					key(window, k);
+				auto* rowReset = shown(content, "watchRowFormatReset");
+				CHECK(rowReset->property("enabled").toBool() && rowReset->property("highlighted").toBool());
+				key(window, Qt::Key_Return);
+				CHECK(formatIs("original") && ownFormats().isEmpty() && named(content, "watchUndo"));
+				// A form chosen: the notice no longer says how things are, and
+				// Undo would take back more than it says; both go.
+				click(window, named(content, "watchFormat_dec"));
+				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
+				CHECK(!fixture->property("canUndoWatch").toBool());
+				// With everything Original there is nothing to reset.
+				click(window, named(content, "watchFormat_original"));
+				click(window, more);
+				CHECK(!shown(content, "watchResetFormats")->property("enabled").toBool());
+				auto* moreMenu = window->findChild<QObject*>(QStringLiteral("watchMoreMenu"));
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle();
+				CHECK(moreMenu && !moreMenu->property("visible").toBool());
+			}
 			window->setWidth(480);
 			settle();
 
@@ -383,8 +439,21 @@ int main(int argc, char** argv)
 			auto* gain = rowAt(list, 3);
 			CHECK(gain && gain->property("editing").toBool());
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			QTest::keyClick(window, 'x');
+			settle();
+			// Why not, on its own line; Enter keeps the text in the editor.
+			CHECK(textOf(gain, "watchValueErrorText") == QStringLiteral("x is not a number a f32 holds."));
+			CHECK(!named(gain, "watchValuePreview"));
+			key(window, Qt::Key_Return);
+			CHECK(gain->property("editing").toBool() && calls.writes == 0);
+			shot(window, argc, argv, QStringLiteral("watch-edit-refused-480"));
+			// What Enter would write, in the other form, beside the field.
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, '2');
 			settle();
+			CHECK(textOf(gain, "watchValuePreview") == QStringLiteral("= 0x40000000"));
+			CHECK(!named(gain, "watchValueErrorText"));
+			shot(window, argc, argv, QStringLiteral("watch-edit-preview-480"));
 			// A row in above it: the list hands its current row the focus
 			// again, and the row keeps it in its editor.
 			QSignalSpy resets(&rows, &QAbstractItemModel::modelReset);
@@ -596,10 +665,19 @@ int main(int argc, char** argv)
 			CHECK(plusRow->mapToItem(content, QPointF(0, plusRow->height())).y() <= content->height() + 0.5);
 			const auto top = list->property("contentY").toReal();
 			const QPointF middle = list->mapToScene(QPointF(list->width() / 2, list->height() / 2));
-			QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
-			                  Qt::NoModifier, Qt::NoScrollPhase, false);
-			QCoreApplication::sendEvent(window, &wheel);
-			settle();
+			// A turn of the wheel, as a stream of real ones arrives: a Flickable
+			// drops a turn stamped no later than the last event it saw (it
+			// cannot tell a speed), and that may be a clock reading as well as
+			// QTest's stamps, depending on how fast the run went - so the turn
+			// comes again, stamped well after either, until it lands.
+			for (int attempt = 0; attempt < 3 && list->property("contentY").toReal() <= top; ++attempt) {
+				QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
+				                  Qt::NoModifier, Qt::NoScrollPhase, false);
+				QTest::lastMouseTimestamp += attempt == 0 ? 16 : 600000;
+				wheel.setTimestamp(ulong(QTest::lastMouseTimestamp));
+				QCoreApplication::sendEvent(window, &wheel);
+				settle();
+			}
 			CHECK(list->property("contentY").toReal() > top);
 			// Back to the top and settled before the rows go, as a user would be.
 			list->setProperty("contentY", top);

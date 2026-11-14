@@ -942,8 +942,9 @@ void memberRowWrite()
 	const auto before = peer.nativeWrites();
 	CHECK(provider->writeWatch(0, QStringLiteral("gain")));
 	CHECK(await([&] { return finished.count() == 3; }));
+	// Said in words: what the text is not, for the row's type (WL-3b).
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
-	      provider->watchWriteOutcome().contains(QStringLiteral("is not a valid value")));
+	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32."));
 	connection.disconnect();
 }
 
@@ -1279,7 +1280,7 @@ void watchRowWrite()
 		return finished.count() == 2;
 	}));
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == writes);
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("is not a valid value")));
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("not written: “twelve” is not a number for ")));
 	// The device refuses a value above its limit; the row keeps the old one.
 	CHECK(provider->writeWatch(0, QStringLiteral("200000")));
 	CHECK(await([&] {
@@ -1469,10 +1470,60 @@ ApplicationWindow {
 	provider->setWatchFormat(QStringLiteral("hex"));
 	CHECK(rows->data(rows->index(1, 0), ux::WatchlistModel::ShownTextRole).toString().startsWith(QStringLiteral("0x")));
 	provider->setWatchFormat(QStringLiteral("original"));
+	// Every value back to Original (WL-3b): the Watchlist's format and every
+	// row's own, one for a path not watched now included, as one change Undo
+	// takes back while no format has changed since; the revision moves.
+	{
+		const auto gain = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
+		const QVariantMap own{{gain, QStringLiteral("hex")}, {QStringLiteral("device.Gone"), QStringLiteral("dec")}};
+		CHECK(provider->setWatchRowFormats(own));
+		provider->setWatchFormat(QStringLiteral("dec"));
+		CHECK(provider->watchFormatsDiffer());
+		QSignalSpy changed(provider, &ux::DynamicConfiguratorProvider::stateChanged);
+		const auto revision = provider->watchRevision();
+		const auto reset = provider->resetWatchFormats();
+		CHECK(reset.value("status") == "ok" && reset.value("rows").toInt() == 1 && changed.count() == 1);
+		CHECK(provider->watchFormat() == QStringLiteral("original") && provider->watchRowFormats().isEmpty() &&
+		      !provider->watchFormatsDiffer());
+		CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::FormatRole).toString().isEmpty());
+		CHECK(provider->watchRevision() != revision && provider->canUndoWatch());
+		CHECK(provider->resetWatchFormats().value("status") == "unchanged");
+		CHECK(provider->undoWatch().value("status") == "ok");
+		CHECK(provider->watchFormat() == QStringLiteral("dec") && provider->watchRowFormats() == own);
+		CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::FormatRole).toString() == QStringLiteral("hex"));
+		CHECK(!provider->canUndoWatch());
+		// A format chosen after it - here, in another panel, by a project
+		// loaded - ends the reset's Undo.
+		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
+		provider->setWatchFormat(QStringLiteral("hex"));
+		CHECK(!provider->canUndoWatch() && provider->undoWatch().value("status") == "refused");
+		CHECK(provider->watchFormat() == QStringLiteral("hex") && provider->watchRowFormats().isEmpty());
+		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
+		CHECK(provider->setWatchRowFormats(own) && !provider->canUndoWatch());
+		// A pin to Original shows nothing different, yet a reset clears it.
+		CHECK(provider->setWatchRowFormats({}) && provider->setWatchRowFormat({0}, QStringLiteral("original")));
+		CHECK(!provider->watchFormatsDiffer() && provider->resetWatchFormats().value("status") == "ok" &&
+		      provider->watchRowFormats().isEmpty());
+		// Past the limit: refused, nothing changed.
+		QVariantMap many;
+		for (int at = 0; at <= ux::WatchlistModel::formatLimit; ++at)
+			many.insert(QStringLiteral("device.X%1").arg(at), QStringLiteral("hex"));
+		CHECK(!provider->setWatchRowFormats(many) && provider->watchRowFormats().isEmpty());
+		CHECK(provider->setWatchRowFormat({0}, QStringLiteral("hex")));
+	}
 	// Too wide for the type: refused in words, nothing written.
 	const auto writesBefore = peer.nativeWrites();
+	// While typing: the other form of what would be written, or why not (WL-3b).
+	CHECK(provider->watchEditPreview(0, QStringLiteral("2")).value("preview") == "= 0x40000000 (f32 bits)");
+	CHECK(provider->watchEditPreview(0, QStringLiteral("0x3FC00000")).value("preview") == "= 1.5");
+	CHECK(provider->watchEditPreview(0, QStringLiteral("abc")).value("error") == "“abc” is not a number for f32.");
+	CHECK(provider->watchEditPreview(0, QString{}).value("preview").toString().isEmpty());
+	// A start not yet a number is judged on Enter, not on the key.
+	for (const auto* start : {"-", "0x", "1e", "2."})
+		CHECK(provider->watchEditPreview(0, QString::fromLatin1(start)).value("error").toString().isEmpty());
 	CHECK(!provider->writeWatch(0, QStringLiteral("0x1FFFFFFFF")));
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("more digits")) && peer.nativeWrites() == writesBefore);
+	CHECK(provider->watchWriteOutcome().endsWith(QStringLiteral(" not written: “0x1FFFFFFFF”: f32 takes at most 8 hex digits.")) &&
+	      peer.nativeWrites() == writesBefore);
 	connection.disconnect();
 }
 
@@ -1485,6 +1536,12 @@ void presentationPanels()
 	ux::QtConnectionBinding presentation{&connection};
 	auto* first = presentation.createProvider();
 	auto* second = presentation.createProvider();
+	// Before any device the formats wait for the rows, and a reset and its
+	// Undo work on them all the same (WL-3b).
+	CHECK(second->setWatchRowFormats({{QStringLiteral("device.Config.Gain"), QStringLiteral("hex")}}));
+	CHECK(second->resetWatchFormats().value("status") == "ok" && second->watchRowFormats().isEmpty());
+	CHECK(second->undoWatch().value("status") == "ok" && second->watchRowFormats().size() == 1);
+	CHECK(second->setWatchRowFormats({}) && !second->canUndoWatch());
 	connect(connection, peer);
 	const auto fingerprint = QStringLiteral("0x%1").arg(connection.storage()->schema.fingerprint(),
 	                                                    16, 16, QLatin1Char('0'));

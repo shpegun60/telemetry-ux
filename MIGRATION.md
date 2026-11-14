@@ -309,3 +309,24 @@ itself is unchanged, so recordings and Trend read what they read before.
 `DynamicConfiguratorProvider::writeWatch` now accepts `0x…` and writes its
 exact bits, or refuses in words (a digit past the type's width, a NaN whose
 payload a write cannot keep); any other text is taken as before.
+
+WL-3b adds `watch_format::encode(text, type)`, which returns the bits a typed
+value would write or the reason it cannot (out of range with the type's
+bounds, not a number, a sign or exponent the type does not take), and
+`watch_format::range(type)`. `DynamicConfiguratorProvider::watchEditPreview(row,
+text)` returns `{preview, error}` for the row being edited: the panel shows
+`= 0x40000000` under the field while the text is a value, the reason in place
+of it while it is not, and Write stays off until it is.
+
+*Reset number formats to Original* - in the "…" menu, a row's *Number
+format* menu and the narrow format menu - calls the new
+`DynamicConfiguratorProvider::resetWatchFormats()`: the Watchlist's format
+back to Original and every row's own cleared, those kept for paths not
+watched now included, as one change in the provider's undo slot, which
+`undoWatch()` takes back while no format has changed since (from any
+panel, or a project loaded). `watchFormatsDiffer()` says whether anything
+is shown other than as Original, for the items' enabled state.
+`watchRevision()` now also moves with every format change. In the panel,
+the notice line goes, Undo with it, once the revision moves, as the
+Device tree's does, and Ctrl+Z works from anywhere in the panel but a text
+field. A provider without `resetWatchFormats` does not get the items.
