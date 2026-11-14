@@ -79,7 +79,12 @@ public:
 		WriteScopeRole,
 		// Why the row is not written from the Watchlist, in words; empty when
 		// it is writable or there is nothing to say.
-		WriteRefusalRole
+		WriteRefusalRole,
+		// Where the name's last segment starts: "device.Config." is drawn
+		// muted before "Gain", "data.Samples" before "[3]".
+		LeafStartRole,
+		// The row's access as the row family marks it: "rw" or "r-".
+		AccessRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;

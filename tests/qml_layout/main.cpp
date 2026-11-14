@@ -690,8 +690,9 @@ int main(int argc, char** argv)
         CHECK(rectangle(toolbar) == barBefore);
         inBar("startWatchButton");
         CHECK(narrowProvider->property("starts").toInt() == 1 && narrowProvider->property("reads").toInt() == 1);
-        // Narrow rows take two lines: the name, then the value and the status,
-        // which wrap rather than run out of the list; × is always there.
+        // Narrow rows stay one line (WL-2a): the columns give way in the row
+        // family's order and the status word becomes a mark with the word in
+        // its tooltip; × is always there.
         std::function<QQuickItem*(QQuickItem*, int)> rowAt = [&](QQuickItem* root, int index) -> QQuickItem* {
             if (root->objectName() == QStringLiteral("watchlistRow") && root->property("index").toInt() == index)
                 return root;
@@ -701,24 +702,28 @@ int main(int argc, char** argv)
             return nullptr;
         };
         {
-            CHECK(!narrowPanel->property("tableRows").toBool());
             CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtEnd"));
             settle();
-            // Two lines, each a row high: the name and ×, then the value and
-            // the status in a word, the provider's own word kept for the tooltip.
+            // One line a row high: the name, the value, the status as a mark
+            // (its word, and the provider's own, in tooltips), and ×.
             const qreal lineHeight = std::round(std::max<qreal>(10.0, QGuiApplication::font().pointSizeF()) *
                                                 QGuiApplication::primaryScreen()->logicalDotsPerInch() / 72.0 * 1.65);
             auto* lastRow = rowAt(narrowList, 64);
-            CHECK(lastRow != nullptr && qAbs(lastRow->height() - 2 * lineHeight) < 0.5);
+            CHECK(lastRow != nullptr && qAbs(lastRow->height() - lineHeight) < 0.5);
             CHECK(lastRow->property("status").toString() ==
                   QStringLiteral("SubmissionRefusedBecauseTheDeviceIsTemporarilyUnavailable"));
-            auto* longStatus = item(lastRow, QStringLiteral("watchRowStatus"));
-            CHECK(longStatus && longStatus->property("text").toString() == QStringLiteral("Refused"));
-            CHECK(longStatus->property("paintedHeight").toReal() <= lineHeight);
+            CHECK(narrowPanel->property("statusGlyph").toBool() &&
+                  lastRow->property("statusText").toString() == QStringLiteral("Refused"));
+            CHECK(!item(lastRow, QStringLiteral("watchRowStatus"))->isVisible());
             auto* lastRemove = item(lastRow, QStringLiteral("removeWatchButton"));
             auto* lastValue = item(lastRow, QStringLiteral("watchValueText"));
-            CHECK(lastRemove && lastValue && rectangle(lastRemove).bottom() <= rectangle(lastValue).top() + 1);
-            for (const auto* name : {"watchValueText", "watchRowStatus", "removeWatchButton"}) {
+            CHECK(lastRemove && lastValue && rectangle(lastRemove).left() >= rectangle(lastValue).right() - 1 &&
+                  qAbs(rectangle(lastRemove).center().y() - rectangle(lastValue).center().y()) <= 1);
+            // A number is never cut: the value column is as wide as it.
+            CHECK(!lastValue->property("truncated").toBool());
+            // × shows on the row under the pointer or the current one (A1).
+            CHECK(!lastRemove->isVisible());
+            for (const auto* name : {"watchValueText", "watchRowStatusGlyph"}) {
                 auto* control = item(lastRow, QString::fromLatin1(name));
                 CHECK(control && control->isVisible());
                 CHECK(control->property("paintedWidth").isValid() == false ||
@@ -747,14 +752,13 @@ int main(int argc, char** argv)
             CHECK(QMetaObject::invokeMethod(narrowProvider, "populate", Q_ARG(QVariant, 65)));
             settle();
         }
-        // A wide dock shows one row per Field under column titles: the value
-        // right-aligned, a good reading as a dot, a problem as its status
-        // word cut to one line, and × on the row under the pointer or the
-        // current one.
+        // A wide dock shows every column under its title: the value
+        // right-aligned, a good reading as the value alone, a problem as its
+        // status word, and × on the row under the pointer or the current one.
         {
             narrowWindow->resize(720, 360);
             settle();
-            CHECK(narrowPanel->property("tableRows").toBool());
+            CHECK(!narrowPanel->property("statusGlyph").toBool());
             CHECK(QMetaObject::invokeMethod(narrowList, "positionViewAtBeginning"));
             settle();
             auto* model = narrowProvider->property("watchlist").value<QObject*>();
@@ -798,7 +802,7 @@ int main(int argc, char** argv)
             CHECK(!item(failedRow, QStringLiteral("removeWatchButton"))->isVisible());
             auto* okStatus = item(okRow, QStringLiteral("watchRowStatus"));
             auto* failedStatus = item(failedRow, QStringLiteral("watchRowStatus"));
-            CHECK(okStatus && !okStatus->isVisible());
+            CHECK(okStatus && okStatus->property("text").toString().isEmpty());
             CHECK(failedStatus && failedStatus->isVisible());
             // A writable row is written in place: double-click the value or
             // press F2, type, Enter writes; Esc or clicking elsewhere cancels;
@@ -855,9 +859,8 @@ int main(int argc, char** argv)
                 CHECK(narrowProvider->setProperty("watchWriteOutcome", QString()));
                 settle();
             }
-            auto* okDot = item(okRow, QStringLiteral("watchOkDot"));
-            auto* failedDot = item(failedRow, QStringLiteral("watchOkDot"));
-            CHECK(okDot && okDot->isVisible() && failedDot && !failedDot->isVisible());
+            // No dot for a good reading (family A6): the value is the OK state.
+            CHECK(!item(okRow, QStringLiteral("watchOkDot")) && !item(failedRow, QStringLiteral("watchOkDot")));
             CHECK(failedStatus->property("text").toString() == QStringLiteral("Refused"));
             CHECK(qAbs(rectangle(failedStatus).left() - rectangle(statusTitle).left()) <= 1);
             CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/wide-watchlist.png")));
