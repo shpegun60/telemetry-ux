@@ -100,6 +100,23 @@ Actions retain the existing provider signatures:
   - The provider makes it, so a host needs no registered type for it. A
     provider without `watchRows` shows its `watchlist` in a list, with no
     List | Tree switch.
+- **The number format (WL-3), Dynamic.** `watchFormat` (`"original"`, `"dec"`
+  or `"hex"`) is how the Watchlist shows its numbers; a row may have its own
+  (`setWatchRowFormat(QVariantList of rows, format) -> bool`, `""` to follow
+  the Watchlist's). Formats are made from each reading's exact bits, never a
+  new read: Original as the type means it (an enum by its name, `true`, f32
+  `1.5`), Dec integers and codes in decimal (a bool `1`), Hex `0x`, uppercase,
+  padded to the type's width, floats as their raw bits (`0x3FC00000`). Rows
+  carry `shownText` (the value in the row's form) and `format` (the row's own,
+  or `""`); `text` keeps its fixed form for recording and Trend. A row's own
+  format is remembered by path, so a value removed and added again, after a
+  reconnect or from a project, comes back in it: `watchRowFormats() ->
+  QVariantMap` (`{"device.Config.Gain": "hex"}`) and `setWatchRowFormats(map)`
+  are what a project saves. `writeWatch` takes hex whatever is shown
+  (`0x4000_0000` writes 2.0 to an f32; leading zeros and `_` are allowed, a
+  digit past the type's width is refused in words); a number's editor opens in
+  hex on a row shown in hex. A provider without `watchFormat` shows its rows'
+  `text` and no format controls.
 - `removeWatchRows(QVariantList of rows) -> QVariantMap` (Dynamic) stops
   watching several rows as one change that `undoWatch()` takes back; the panel
   uses it for a node's × and Delete. `{status: ok, invalid or refused,

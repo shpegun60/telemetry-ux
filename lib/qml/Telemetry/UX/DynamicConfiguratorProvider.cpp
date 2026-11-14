@@ -7,6 +7,7 @@
 #include "ScalarEditorMetadata.hpp"
 #include "WatchCoverage.hpp"
 #include "WatchRows.hpp"
+#include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
@@ -310,6 +311,9 @@ struct DynamicConfiguratorProvider::Impl {
 	DynamicWatchlist watch;
 	// After watch: it goes first, while the rows it shows still exist.
 	WatchRows rows;
+	// Until the Watchlist has a model: its format and the rows' own.
+	WatchNumberFormat watchFormat = WatchNumberFormat::Original;
+	QHash<QString, WatchNumberFormat> rowFormats;
 	DynamicBatch batch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
@@ -1224,6 +1228,11 @@ void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 	p->watch.setSource(std::move(source));
 	// The Watchlist's model exists from its first source on.
 	p->rows.setSource(p->watch.model());
+	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model())) {
+		model->setFormat(p->watchFormat);
+		if (!p->rowFormats.isEmpty())
+			model->setPathFormats(std::exchange(p->rowFormats, {}));
+	}
 	p->notify();
 }
 
@@ -1394,6 +1403,77 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 	p->undo.treeEpoch = p->treeEpoch;
 	p->notify();
 	return result;
+}
+
+QString DynamicConfiguratorProvider::watchFormat() const
+{
+	return watch_format::name(d->watchFormat);
+}
+
+void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
+{
+	auto p = d;
+	const auto parsed = watch_format::parse(format);
+	if (!parsed || *parsed == p->watchFormat)
+		return;
+	p->watchFormat = *parsed;
+	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model()))
+		model->setFormat(*parsed);
+	p->notify();
+}
+
+bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, const QString& format)
+{
+	auto p = d;
+	auto* model = qobject_cast<WatchlistModel*>(p->watch.model());
+	const auto parsed = watch_format::parse(format);
+	if (!model || (!format.isEmpty() && !parsed))
+		return false;
+	QVector<int> chosen;
+	for (const auto& row : rows) {
+		bool ok = false;
+		const int at = row.toInt(&ok);
+		if (!ok || at < 0 || at >= model->count())
+			return false;
+		chosen.push_back(at);
+	}
+	bool done = true;
+	for (const int row : std::as_const(chosen))
+		done = model->setRowFormat(row, format.isEmpty() ? std::nullopt : parsed) && done;
+	p->notify();
+	return done;
+}
+
+QVariantMap DynamicConfiguratorProvider::watchRowFormats() const
+{
+	const auto* model = qobject_cast<const WatchlistModel*>(d->watch.model());
+	const auto formats = model ? model->pathFormats() : d->rowFormats;
+	QVariantMap saved;
+	for (auto at = formats.cbegin(); at != formats.cend(); ++at)
+		saved.insert(at.key(), watch_format::name(at.value()));
+	return saved;
+}
+
+bool DynamicConfiguratorProvider::setWatchRowFormats(const QVariantMap& formats)
+{
+	auto p = d;
+	QHash<QString, WatchNumberFormat> parsed;
+	for (auto at = formats.cbegin(); at != formats.cend(); ++at) {
+		const auto format = watch_format::parse(at.value().toString());
+		if (at.key().isEmpty() || !format)
+			return false;
+		parsed.insert(at.key(), *format);
+	}
+	if (parsed.size() > WatchlistModel::formatLimit)
+		return false;
+	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model())) {
+		if (!model->setPathFormats(std::move(parsed)))
+			return false;
+	} else {
+		p->rowFormats = std::move(parsed);
+	}
+	p->notify();
+	return true;
 }
 
 void DynamicConfiguratorProvider::clearWatch()
@@ -1785,6 +1865,19 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto index = model->index(row, 0);
 	if (!model->data(index, WatchlistModel::WritableRole).toBool())
 		return false;
+	p->watchWriteSession = p->writer->view.session();
+	// Hex is taken whatever the row shows: as the value's exact text.
+	auto typed = text.trimmed();
+	if (watch_format::isHex(typed)) {
+		const auto* watched = qobject_cast<const WatchlistModel*>(model);
+		const auto parsed = watch_format::fromHex(typed, watched ? watched->valueType(row) : WatchValueType{});
+		if (!parsed.error.isEmpty()) {
+			p->watchWrite = parsed.error;
+			p->notify();
+			return false;
+		}
+		typed = parsed.canonical;
+	}
 	const auto key = WatchKey(model->data(index, WatchlistModel::WatchKeyRole).toULongLong());
 	const auto id = watch_key::field(key);
 	std::optional<WatchLeaves::Leaf> leaf;
@@ -1794,7 +1887,6 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		return false;
 	}
 	auto& view = p->writer->view;
-	p->watchWriteSession = view.session();
 	if (view.editing())
 		view.cancelEdit();
 	const auto field = view.bindField(id);
@@ -1821,8 +1913,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writer->eventReported = false;
 	p->writeId = id;
 	p->writeLeaf = std::move(leaf);
-	p->writeIntended = text.trimmed();
-	p->writeText = text.trimmed();
+	p->writeIntended = typed;
+	p->writeText = typed;
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->notify();

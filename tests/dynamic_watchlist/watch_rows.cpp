@@ -25,7 +25,7 @@ unsigned checks = 0;
 		}                                                                                          \
 	} while (false)
 
-enum SourceRole { Name = Qt::UserRole + 1, Status, Text, Key, PathTypes, Access, LeafStart };
+enum SourceRole { Name = Qt::UserRole + 1, Status, Text, Key, PathTypes, Access, LeafStart, Format };
 
 // A Watchlist model as a host might have one: roles by name, no watch keys
 // unless asked for.
@@ -33,7 +33,8 @@ std::unique_ptr<QStandardItemModel> sourceModel(bool keys = true)
 {
 	auto model = std::make_unique<QStandardItemModel>();
 	QHash<int, QByteArray> names{{Name, "name"}, {Status, "status"}, {Text, "text"},
-	                             {PathTypes, "pathTypes"}, {Access, "access"}, {LeafStart, "leafStart"}};
+	                             {PathTypes, "pathTypes"}, {Access, "access"}, {LeafStart, "leafStart"},
+	                             {Format, "format"}};
 	if (keys)
 		names.insert(Key, "watchKey");
 	model->setItemRoleNames(names);
@@ -261,6 +262,28 @@ void treeView()
 	CHECK(rows.parentRow(3) == 2 && rows.parentRow(2) == 0 && rows.parentRow(0) == -1);
 	CHECK(rows.sourceRows(0) == QVariantList({2, 3, 1}));
 	CHECK(rows.sourceRows(5) == QVariantList({4, 0}));
+	// A node's format is the one its values share, "mixed" when they differ;
+	// the node is told when one of them changes.
+	{
+		CHECK(role(rows, 2, Rows::FormatRole).toString().isEmpty());
+		QSignalSpy told(&rows, &QAbstractItemModel::dataChanged);
+		source->item(3)->setData(QStringLiteral("hex"), Format);  // Gain
+		QTest::qWait(1);
+		QCoreApplication::processEvents();
+		CHECK(role(rows, 2, Rows::FormatRole).toString() == QStringLiteral("mixed"));
+		CHECK(role(rows, 0, Rows::FormatRole).toString() == QStringLiteral("mixed"));
+		bool configTold = false;
+		for (const auto& signal : told)
+			configTold = configTold || (signal[0].toModelIndex().row() <= 2 && signal[1].toModelIndex().row() >= 2 &&
+			                            signal[2].value<QList<int>>().contains(Rows::FormatRole));
+		CHECK(configTold);
+		source->item(1)->setData(QStringLiteral("hex"), Format);  // Enabled
+		CHECK(role(rows, 2, Rows::FormatRole).toString() == QStringLiteral("hex"));
+		CHECK(role(rows, 3, Rows::FormatRole).toString() == QStringLiteral("hex"));
+		source->item(3)->setData(QString{}, Format);
+		source->item(1)->setData(QString{}, Format);
+		CHECK(role(rows, 2, Rows::FormatRole).toString().isEmpty());
+	}
 
 	// Folding removes the rows under it, row by row, and the folded node
 	// shows its values in brief.

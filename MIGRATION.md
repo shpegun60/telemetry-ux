@@ -232,3 +232,15 @@ the list as added, the same as before.
 
 The panel's row is a `FocusScope` (it was an `Item`), so an open editor keeps
 the focus when the list gives the row the focus again.
+
+## The Watchlist's number format (WL-3, November 2026)
+
+`WatchlistModel` gains the roles `shownText` and `format`, `setFormat`,
+`setRowFormat`, `pathFormats`, `setPathFormats` (at most `formatLimit` paths)
+and `valueType`; a row's own format is kept by path, so `WatchEntry` is
+unchanged. `WatchFormat.hpp` is new in the dynamic
+target. The panel shows `shownText` where a row has it, else `text`; `text`
+itself is unchanged, so recordings and Trend read what they read before.
+`DynamicConfiguratorProvider::writeWatch` now accepts `0x…` and writes its
+exact bits, or refuses in words (a digit past the type's width, a NaN whose
+payload a write cannot keep); any other text is taken as before.

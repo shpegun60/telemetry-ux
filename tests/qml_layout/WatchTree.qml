@@ -27,6 +27,11 @@ ApplicationWindow {
         readonly property string watchWriteOutcome: ""
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         property bool canUndoWatch: false
+        property string watchFormat: "original"
+        function setWatchRowFormat(rows, format) {
+            watchTreeCalls.format(rows, format)
+            return true
+        }
         function removeWatch(row) { watchTreeCalls.remove([row]) }
         function removeWatchRows(rows) {
             watchTreeCalls.remove(rows)

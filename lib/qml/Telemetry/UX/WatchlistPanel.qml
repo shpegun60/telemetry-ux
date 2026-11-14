@@ -84,6 +84,40 @@ Pane {
     readonly property var rows: provider.watchRows ?? null
     readonly property bool treeAvailable: rows !== null
     readonly property bool treeView: rows !== null && rows.tree === true
+    // How the numbers are shown (WL-3): the Watchlist's form, and a row's
+    // own. The view's only; a write takes any form whatever is shown.
+    readonly property bool formatAvailable: typeof provider.watchFormat === "string"
+    readonly property string format: formatAvailable ? provider.watchFormat : "original"
+    readonly property var formats: [
+        { name: "original", text: qsTr("Original"), tip: qsTr("Original: as the type means it (1.5, High, true)") },
+        { name: "dec", text: qsTr("Dec"), tip: qsTr("Dec: integers and codes in decimal (2, 1)") },
+        { name: "hex", text: qsTr("Hex"), tip: qsTr("Hex: the value's bits, floats included (0x3FC00000)") }
+    ]
+    function formatWord(name) {
+        const found = formats.find(item => item.name === name)
+        return found ? found.text : name
+    }
+    function setFormat(name) {
+        if (formatAvailable)
+            provider.watchFormat = name
+    }
+    // The Value column grows only, until a form is chosen: hex is wider.
+    onFormatChanged: forgetMeasured()
+    // Gives what row shows - a value, or every value under a node - a format
+    // of its own, or "" to follow the Watchlist's.
+    function formatRows(row, name) {
+        if (typeof provider.setWatchRowFormat !== "function" || row < 0)
+            return
+        const sources = rows ? rows.sourceRows(row) : [row]
+        if (sources.length > 0 && provider.setWatchRowFormat(sources, name))
+            forgetMeasured()
+    }
+    // The row a menu was opened for.
+    property int menuRow: -1
+    function openRowMenu(row, item, x, y) {
+        menuRow = row
+        rowMenu.popup(item, x, y)
+    }
     // Switches the view; the current value stays current, its parents opened.
     function showTree(tree) {
         if (!rows || tree === treeView)
@@ -155,12 +189,18 @@ Pane {
     readonly property real barBase: (fold.visible ? fold.implicitWidth + barGap : 0)
                                     + start.barWidth + barGap + interval.barWidth
                                     + 2 * barGap + more.implicitWidth
-    readonly property bool viewInBar: treeAvailable && availableWidth >= barBase + viewSegments.implicitWidth + barGap
-    readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0)
+    readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap : 0
+    readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap : 0
+    readonly property bool viewInBar: treeAvailable
+                                      && availableWidth >= barBase + formatButtonWidth + viewSegments.implicitWidth + barGap
+    readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0) + formatButtonWidth
     readonly property bool readOnceInBar: (viewInBar || !treeAvailable)
                                           && availableWidth >= barCore + readOnce.barWidth + barGap
-    readonly property bool everyShown: readOnceInBar
-                                       && availableWidth >= barCore + readOnce.barWidth + every.implicitWidth + 2 * barGap
+    readonly property bool formatInBar: formatAvailable && readOnceInBar
+        && availableWidth >= barCore - formatButtonWidth + formatSegmentsWidth + readOnce.barWidth + barGap
+    readonly property bool everyShown: readOnceInBar && (formatInBar || !formatAvailable)
+        && availableWidth >= barCore - formatButtonWidth + formatSegmentsWidth + readOnce.barWidth
+                             + every.implicitWidth + 2 * barGap
     // The row family's columns (family A1-A3): Name fills; Value, Type and
     // Status are as wide as the widest text they have shown, growing only
     // until the list is cleared or the zoom changes, so a reading never makes
@@ -482,6 +522,87 @@ Pane {
                     }
                 }
             }
+            // Original | Dec | Hex, as List | Tree.
+            Row {
+                id: formatSegments
+                objectName: "watchFormatSegments"
+                visible: panel.formatInBar
+                // A gap from List | Tree: two choices, not one of five.
+                Layout.leftMargin: panel.barGap
+                Layout.preferredHeight: Type.controlHeight
+                spacing: 0
+                ButtonGroup { id: formatModes }
+                Repeater {
+                    id: formatButtons
+                    model: panel.formats
+                    delegate: Button {
+                        required property var modelData
+                        required property int index
+                        objectName: "watchFormat_" + modelData.name
+                        width: implicitContentWidth + leftPadding + rightPadding
+                        height: Type.controlHeight
+                        verticalPadding: 0
+                        font.pointSize: Type.caption
+                        text: modelData.text
+                        checkable: true
+                        checked: panel.format === modelData.name
+                        flat: !checked
+                        ButtonGroup.group: formatModes
+                        onClicked: panel.setFormat(modelData.name)
+                        Keys.onLeftPressed: if (index > 0) {
+                            panel.setFormat(panel.formats[index - 1].name)
+                            formatButtons.itemAt(index - 1).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        Keys.onRightPressed: if (index < panel.formats.length - 1) {
+                            panel.setFormat(panel.formats[index + 1].name)
+                            formatButtons.itemAt(index + 1).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        Accessible.name: qsTr("%1 format").arg(modelData.text)
+                        Accessible.description: modelData.tip
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 700
+                        ToolTip.text: modelData.tip
+                    }
+                }
+            }
+            // Too narrow for three: one button showing the form, "Hex ▾", as
+            // wide as its widest word.
+            Button {
+                id: formatButton
+                objectName: "watchFormatButton"
+                visible: panel.formatAvailable && !panel.formatInBar
+                Layout.leftMargin: panel.barGap
+                TextMetrics { id: widestFormat; font: formatButton.font; text: qsTr("Original") + " ▾" }
+                implicitWidth: Math.ceil(widestFormat.advanceWidth) + leftPadding + rightPadding
+                Layout.preferredHeight: Type.controlHeight
+                verticalPadding: 0
+                flat: true
+                font.pointSize: Type.caption
+                text: panel.formatWord(panel.format) + " ▾"
+                onClicked: formatMenu.popup(formatButton, 0, formatButton.height)
+                Accessible.role: Accessible.ButtonMenu
+                Accessible.name: qsTr("Number format: %1").arg(panel.formatWord(panel.format))
+                ToolTip.visible: hovered && !formatMenu.visible
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("How the Watchlist shows its numbers")
+                Menu {
+                    id: formatMenu
+                    objectName: "watchFormatMenu"
+                    ButtonGroup { id: formatItems; exclusive: true }
+                    Repeater {
+                        model: panel.formats
+                        MenuItem {
+                            required property var modelData
+                            objectName: "watchFormatItem_" + modelData.name
+                            text: modelData.text
+                            checkable: true
+                            checked: panel.format === modelData.name
+                            ButtonGroup.group: formatItems
+                            onTriggered: panel.setFormat(modelData.name)
+                        }
+                    }
+                }
+            }
             Basic.ToolButton {
                 id: more
                 objectName: "watchMoreButton"
@@ -770,6 +891,12 @@ Pane {
                 }
                 if (currentIndex < 0)
                     return
+                if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers === Qt.ShiftModifier)) {
+                    if (currentItem)
+                        panel.openRowMenu(currentIndex, currentItem, Type.padding, currentItem.height)
+                    event.accepted = true
+                    return
+                }
                 if (event.key === Qt.Key_Delete && !panel.changeLocked) {
                     panel.removeAt(currentIndex)
                     event.accepted = true
@@ -940,7 +1067,14 @@ Pane {
                 readonly property bool stale: status === "Stale"
                 // Numbers, hex and bools line up on the right; enum names and a
                 // folded node's summary on the left.
-                readonly property bool leftValue: !isValue || editorKind === "enum"
+                // The form the row shows: its own, else the Watchlist's. A
+                // node's own is the one its values share, "mixed" when not.
+                readonly property string ownFormat: typeof model.format === "string" && model.format !== "mixed"
+                                                    ? model.format : ""
+                readonly property string formatName: ownFormat.length > 0 ? ownFormat : panel.format
+                readonly property string shownText: typeof model.shownText === "string" && model.shownText.length > 0
+                                                    ? model.shownText : text
+                readonly property bool leftValue: !isValue || (editorKind === "enum" && formatName === "original")
                 // A word only for a problem or a stale value; waiting is "–" alone,
                 // its word in the value's tooltip and the row's description.
                 readonly property string statusText: ok || quiet || nested || isGroup ? "" : panel.statusWord(status)
@@ -987,12 +1121,15 @@ Pane {
                                   : watchRow.node === "element" ? qsTr("element, %L1 watched").arg(watchRow.leaves)
                                   : qsTr("struct, %L1 watched").arg(watchRow.leaves),
                                   watchRow.branch ? (watchRow.expanded ? qsTr("expanded") : qsTr("collapsed")) : "",
-                                  watchRow.text.length > 0 ? watchRow.text : watchRow.isValue ? "–" : "",
+                                  watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.isValue ? "–" : "",
                                   watchRow.typeText,
                                   watchRow.accessText === "rw" ? qsTr("read and write")
                                   : watchRow.accessText === "r-" ? qsTr("read only") : ""]
                     .filter(part => part.length > 0).join(", ")
-                Accessible.description: watchRow.statusText.length > 0 ? watchRow.statusText : watchRow.waitingText
+                Accessible.description: [watchRow.statusText.length > 0 ? watchRow.statusText : watchRow.waitingText,
+                                         watchRow.isValue && watchRow.ownFormat.length > 0
+                                             ? qsTr("shown in %1").arg(panel.formatWord(watchRow.ownFormat)) : ""]
+                    .filter(part => part.length > 0).join(", ")
                 height: compact ? Type.rowHeight + valueHeight : valueHeight
                 Rectangle {
                     anchors.fill: parent
@@ -1009,6 +1146,13 @@ Pane {
                             watchList.forceActiveFocus(Qt.MouseFocusReason)
                     }
                     onDoubleTapped: if (watchRow.branch) panel.rows.setExpanded(watchRow.index, !watchRow.expanded)
+                }
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: eventPoint => {
+                        watchList.currentIndex = watchRow.index
+                        panel.openRowMenu(watchRow.index, watchRow, eventPoint.position.x, eventPoint.position.y)
+                    }
                 }
                 // A folded node's values in brief, in the name's spare room up
                 // to the numbers' edge, so no column moves when a row folds.
@@ -1143,7 +1287,7 @@ Pane {
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         // Not read yet: a dash at the value's alignment, no word.
-                        text: !watchRow.isValue ? "" : watchRow.text.length > 0 ? watchRow.text : watchRow.waiting ? "–" : ""
+                        text: !watchRow.isValue ? "" : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
                         font.family: Type.fixedFamily
                         font.italic: (watchRow.stale || watchRow.problem) && watchRow.text.length > 0
                         color: watchRow.current ? Theme.selectedForeground
@@ -1153,8 +1297,14 @@ Pane {
                         elide: Text.ElideRight
                         onImplicitWidthChanged: watchRow.reportValue()
                         Component.onCompleted: watchRow.reportValue()
-                        ToolTip.visible: valueHover.hovered && (truncated || watchRow.waitingText.length > 0)
-                        ToolTip.text: watchRow.waitingText.length > 0 ? watchRow.waitingText : watchRow.text
+                        ToolTip.visible: valueHover.hovered && (truncated || watchRow.waitingText.length > 0
+                                                                || watchRow.ownFormat.length > 0)
+                        ToolTip.text: watchRow.waitingText.length > 0 ? watchRow.waitingText
+                                    : watchRow.ownFormat.length === 0 ? watchRow.shownText
+                                    : watchRow.ownFormat === panel.format
+                                      ? qsTr("%1 · shown in %2").arg(watchRow.shownText).arg(panel.formatWord(watchRow.ownFormat))
+                                    : qsTr("%1 · shown in %2 (the Watchlist shows %3)").arg(watchRow.shownText)
+                                          .arg(panel.formatWord(watchRow.ownFormat)).arg(panel.formatWord(panel.format))
                         HoverHandler { id: valueHover }
                         TapHandler {
                             enabled: watchRow.writable || watchRow.writeRefusal.length > 0
@@ -1531,6 +1681,49 @@ Pane {
     ButtonGroup { id: modes; exclusive: true }
     // So are the two views, in the menu.
     ButtonGroup { id: viewItems; exclusive: true }
+
+    // A row's menu (right-click, the Menu key or Shift+F10): its number
+    // format, which a node gives every value under it, and removing it.
+    Menu {
+        id: rowMenu
+        objectName: "watchRowMenu"
+        readonly property var item: panel.menuRow >= 0 ? watchList.itemAtIndex(panel.menuRow) : null
+        readonly property string own: item && typeof item.model.format === "string" ? item.model.format : ""
+        Menu {
+            id: rowFormatMenu
+            objectName: "watchRowFormatMenu"
+            title: qsTr("Number format")
+            enabled: panel.formatAvailable && typeof panel.provider.setWatchRowFormat === "function"
+            ButtonGroup { id: rowFormatItems; exclusive: true }
+            MenuItem {
+                objectName: "watchRowFormat_inherit"
+                text: qsTr("Like the Watchlist (%1)").arg(panel.formatWord(panel.format))
+                checkable: true
+                checked: rowMenu.own.length === 0
+                ButtonGroup.group: rowFormatItems
+                onTriggered: panel.formatRows(panel.menuRow, "")
+            }
+            Repeater {
+                model: panel.formats
+                MenuItem {
+                    required property var modelData
+                    objectName: "watchRowFormat_" + modelData.name
+                    text: modelData.text
+                    checkable: true
+                    checked: rowMenu.own === modelData.name
+                    ButtonGroup.group: rowFormatItems
+                    onTriggered: panel.formatRows(panel.menuRow, modelData.name)
+                }
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "watchRowRemove"
+            text: qsTr("Remove") + "\t" + qsTr("Delete")
+            enabled: !panel.changeLocked
+            onTriggered: panel.removeAt(panel.menuRow)
+        }
+    }
 
     // Clearing asks first. Cancel has the focus, so Enter keeps the list;
     // Remove all is drawn in the danger colour, not the accent.

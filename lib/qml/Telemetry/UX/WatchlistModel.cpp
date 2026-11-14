@@ -131,7 +131,7 @@ void WatchlistModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& 
 	if (count_)
 		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
 		                   {EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
-		                    TypeTextRole, CategoricalRole});
+		                    TypeTextRole, CategoricalRole, ShownTextRole, EditorTextRole});
 }
 
 void WatchlistModel::bind(const Workbench& owner) noexcept
@@ -181,6 +181,8 @@ WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
 		row.kind = entry.kind;
 		row.steps = entry.steps;
 	}
+	if (const auto remembered = pathFormats_.constFind(entry.name); remembered != pathFormats_.cend())
+		row.format = remembered.value();
 	row.writable = writable_ && writable_(entry.key);
 	row.refusal = !row.writable && refusal_ ? refusal_(entry.key) : QString{};
 	return row;
@@ -366,7 +368,7 @@ void WatchlistModel::invalidateValues()
 		rows_[row].text.clear();
 	}
 	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
-	                   {StatusRole, TextRole, SampleTextRole, SampleValueRole, SampleExactRole,
+	                   {StatusRole, TextRole, ShownTextRole, SampleTextRole, SampleValueRole, SampleExactRole,
 	                    StatusCodeRole, EditorTextRole});
 }
 
@@ -386,11 +388,68 @@ bool WatchlistModel::setResult(int row, QString status, QString text, WatchSampl
 		++rows_[row].sampleRevision;
 	}
 	Q_EMIT dataChanged(index(row, 0), index(row, 0),
-	                   {StatusRole, TextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
+	                   {StatusRole, TextRole, ShownTextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
 	                    SampleValueRole, SampleExactRole, StatusCodeRole, EditorTextRole,
 	                    EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
 	                    TypeTextRole, CategoricalRole});
 	return true;
+}
+
+void WatchlistModel::setFormat(WatchNumberFormat format)
+{
+	if (changing_ || format_ == format)
+		return;
+	format_ = format;
+	if (count_)
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole});
+}
+
+bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> format)
+{
+	if (changing_ || row < 0 || row >= count_)
+		return false;
+	if (format) {
+		pathFormats_.insert(rows_[row].name, *format);
+		// Bounded: the oldest unwatched paths give way first.
+		if (pathFormats_.size() > formatLimit) {
+			QSet<QString> watched;
+			for (int at = 0; at < count_; ++at)
+				watched.insert(rows_[at].name);
+			for (auto it = pathFormats_.begin(); it != pathFormats_.end() && pathFormats_.size() > formatLimit;)
+				it = watched.contains(it.key()) ? std::next(it) : pathFormats_.erase(it);
+		}
+	} else {
+		pathFormats_.remove(rows_[row].name);
+	}
+	if (rows_[row].format == format)
+		return true;
+	rows_[row].format = format;
+	Q_EMIT dataChanged(index(row, 0), index(row, 0), {ShownTextRole, EditorTextRole, FormatRole});
+	return true;
+}
+
+bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
+{
+	if (changing_ || formats.size() > formatLimit)
+		return false;
+	pathFormats_ = std::move(formats);
+	for (int row = 0; row < count_; ++row) {
+		const auto remembered = pathFormats_.constFind(rows_[row].name);
+		rows_[row].format = remembered != pathFormats_.cend() ? std::optional(remembered.value()) : std::nullopt;
+	}
+	if (count_)
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, FormatRole});
+	return true;
+}
+
+std::optional<WatchNumberFormat> WatchlistModel::rowFormat(int row) const
+{
+	return row >= 0 && row < count_ ? rows_[row].format : std::nullopt;
+}
+
+WatchValueType WatchlistModel::valueType(int row) const
+{
+	return row >= 0 && row < count_ ? rows_[row].value.type : WatchValueType{};
 }
 
 quint32 WatchlistModel::id(int row) const noexcept
@@ -463,7 +522,7 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return QStringLiteral("Stale");
 		if (role == StatusCodeRole)
 			return static_cast<int>(WatchStatus::Stale);
-		if (role == TextRole)
+		if (role == TextRole || role == ShownTextRole)
 			return QString{};
 		if (role == SampleTextRole || role == SampleValueRole)
 			return role == SampleTextRole ? QVariant(QString{}) : QVariant();
@@ -541,7 +600,23 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		case WritableRole:
 			return row.writable;
 		case EditorTextRole:
-			return row.status == QStringLiteral("Ok") ? canonicalText(row.value) : QString{};
+			// A number's editor opens in hex when the row shows hex; choices
+			// (a bool, an enum) match their canonical codes.
+			if (row.status != QStringLiteral("Ok"))
+				return QString{};
+			if (kind == QStringLiteral("text") && row.format.value_or(format_) == WatchNumberFormat::Hex)
+				return watch_format::text(row.value, WatchNumberFormat::Hex);
+			return canonicalText(row.value);
+		case ShownTextRole: {
+			// Not read, or a failure's text: as the row has it.
+			if (!row.value.size || row.status != QStringLiteral("Ok"))
+				return row.text;
+			const auto shown = watch_format::text(row.value, row.format.value_or(format_),
+			                                      metadata ? &metadata->names : nullptr);
+			return shown.isEmpty() ? row.text : shown;
+		}
+		case FormatRole:
+			return row.format ? watch_format::name(*row.format) : QString{};
 		case EditorKindRole:
 			return kind;
 		case EditorChoicesRole:
@@ -583,7 +658,9 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {WriteRefusalRole, "writeRefusal"},
 	        {LeafStartRole, "leafStart"},
 	        {AccessRole, "access"},
-	        {PathTypesRole, "pathTypes"}};
+	        {PathTypesRole, "pathTypes"},
+	        {ShownTextRole, "shownText"},
+	        {FormatRole, "format"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

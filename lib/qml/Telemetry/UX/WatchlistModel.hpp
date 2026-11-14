@@ -12,6 +12,7 @@
 #include "WatchSample.hpp"
 #include "WatchFrame.hpp"
 #include "WatchKey.hpp"
+#include "WatchFormat.hpp"
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QSet>
@@ -90,7 +91,13 @@ public:
 		AccessRole,
 		// The type of each step of the path below its group, as words: the
 		// Field's first, the value's last ({"struct (3)", "u16[64]", "u16"}).
-		PathTypesRole
+		PathTypesRole,
+		// The value in the row's format (its own, else the Watchlist's):
+		// "High", "2" or "0x02". text keeps its fixed form for recording.
+		ShownTextRole,
+		// The row's own format, "original", "dec" or "hex"; "" when it
+		// follows the Watchlist's.
+		FormatRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
@@ -123,6 +130,20 @@ public:
 	// Puts rows back where removeIds took them from, in its order; false, and
 	// nothing changed, when that no longer fits (a key already held, no room).
 	bool restore(const QVector<Removed>& rows);
+	// The Watchlist's number format, and a row's own (none follows it).
+	void setFormat(WatchNumberFormat format);
+	[[nodiscard]] WatchNumberFormat format() const noexcept { return format_; }
+	bool setRowFormat(int row, std::optional<WatchNumberFormat> format);
+	// The formats rows have of their own, by path. Kept for a path while it is
+	// not watched, so a value added again (or after a reconnect, or from a
+	// saved project) comes back in its format.
+	[[nodiscard]] QHash<QString, WatchNumberFormat> pathFormats() const { return pathFormats_; }
+	// false, and nothing changed, for more than formatLimit paths.
+	bool setPathFormats(QHash<QString, WatchNumberFormat> formats);
+	static constexpr int formatLimit = 4 * maxRows;
+	[[nodiscard]] std::optional<WatchNumberFormat> rowFormat(int row) const;
+	// The type of the row's last reading; invalid before its first.
+	[[nodiscard]] WatchValueType valueType(int row) const;
 	// Moves whenever the set of Fields held changes.
 	[[nodiscard]] quint64 membership() const noexcept;
 	void invalidateValues();
@@ -157,6 +178,7 @@ private:
 		quint32 others = 0;
 		WatchEntry::Kind kind = WatchEntry::Kind::Members;
 		QVector<TypeId> steps;
+		std::optional<WatchNumberFormat> format;
 		quint64 sampleRevision = 0;
 		WatchSample sample;
 		bool writable = false;
@@ -179,6 +201,8 @@ private:
 	std::uint32_t session_ = 0;
 	std::uint64_t admission_ = 0;
 	quint64 sampleEpoch_ = 0;
+	WatchNumberFormat format_ = WatchNumberFormat::Original;
+	QHash<QString, WatchNumberFormat> pathFormats_;
 	quint64 membership_ = 0;
 };
 } // namespace telemetry::ux
