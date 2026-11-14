@@ -214,3 +214,7 @@ New: `WatchKey.hpp`, `WatchLeaves.hpp`, `WatchlistSource::readMembers`,
 `watchLeafFirst`, `watchLeafCount`, `watchLeafKind` and `pathOf`;
 `WatchlistModel` roles `watchKey`, `member`, `writeScope`, `writeRefusal`.
 A FieldRead `WatchFrame` may now hold up to 32 values of one Field.
+
+The Watchlist's rows in the row family's columns (WL-2a) add only the
+`WatchlistModel` roles `leafStart` and `access`; a host's own Watchlist model
+without them shows the whole name in one colour and no rw column.
