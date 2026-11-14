@@ -1631,7 +1631,10 @@ void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 	auto p = d;
 	// Which Fields can be held may differ with the new source.
 	p->treeChanged();
-	p->watch.setSource(std::move(source));
+	{
+		WatchRows::Changes held{p->rows};
+		p->watch.setSource(std::move(source));
+	}
 	// The Watchlist's model exists from its first source on.
 	p->rows.setSource(p->watch.model());
 	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model())) {
@@ -1765,7 +1768,10 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
-	result = p->watch.addMany(fields);
+	{
+		WatchRows::Changes held{p->rows};
+		result = p->watch.addMany(fields);
+	}
 	if (result.value(QStringLiteral("added")).toInt() > 0)
 		p->notify();
 	if (result.value(QStringLiteral("status")) == QStringLiteral("ok"))
@@ -1802,7 +1808,11 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 		return result;
 	}
 	// Every key is a row's, so nothing removed means the Watchlist refused.
-	const auto removed = p->watch.removeMany(keys);
+	QVector<WatchlistModel::Removed> removed;
+	{
+		WatchRows::Changes held{p->rows};
+		removed = p->watch.removeMany(keys);
+	}
 	if (removed.isEmpty())
 		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");
@@ -1952,7 +1962,11 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 		        .arg(watchLimit());
 		return result;
 	}
-	const auto added = p->watch.addEntries(add);
+	QVariantMap added;
+	{
+		WatchRows::Changes held{p->rows};
+		added = p->watch.addEntries(add);
+	}
 	if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 		result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
 		return result;
@@ -2029,6 +2043,7 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 	}
 	result[QStringLiteral("duplicate")] = duplicate;
 	result[QStringLiteral("missing")] = missing;
+	WatchRows::Changes held{p->rows};
 	if (replace)
 		p->watch.clear();
 	if (!entries.isEmpty()) {
@@ -2106,6 +2121,28 @@ void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
 	p->notify();
 }
 
+bool DynamicConfiguratorProvider::chooseWatchFormat(const QString& format)
+{
+	auto p = d;
+	const auto parsed = watch_format::parse(format);
+	if (!parsed)
+		return false;
+	if (*parsed == p->watchFormat)
+		return true;
+	// A format chosen is one change Undo takes back (WL-2c): Ctrl+Z after it
+	// returns the format, never an older change under it.
+	Impl::WatchUndo undo;
+	undo.valid = true;
+	undo.formats = true;
+	undo.format = p->watchFormat;
+	undo.pathFormats = p->pathFormats();
+	p->putFormat(*parsed);
+	undo.formatRevision = ++p->formatRevision;
+	p->undo = std::move(undo);
+	p->notify();
+	return true;
+}
+
 bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, const QString& format)
 {
 	auto p = d;
@@ -2124,10 +2161,21 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 	const auto target = format.isEmpty() ? std::nullopt : parsed;
 	const auto before = model->pathFormats();
 	bool done = true;
-	for (const int row : std::as_const(chosen))
-		done = model->setRowFormat(row, target) && done;
-	if (model->pathFormats() != before)
-		++p->formatRevision;
+	{
+		WatchRows::Changes held{p->rows};
+		for (const int row : std::as_const(chosen))
+			done = model->setRowFormat(row, target) && done;
+	}
+	if (model->pathFormats() != before) {
+		// One change for all the rows given, which Undo takes back.
+		Impl::WatchUndo undo;
+		undo.valid = true;
+		undo.formats = true;
+		undo.format = p->watchFormat;
+		undo.pathFormats = before;
+		undo.formatRevision = ++p->formatRevision;
+		p->undo = std::move(undo);
+	}
 	p->notify();
 	return done;
 }
@@ -2461,7 +2509,11 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 			}
 		}
 		if (!add.isEmpty()) {
-			const auto added = p->watch.addEntries(add);
+			QVariantMap added;
+			{
+				WatchRows::Changes held{p->rows};
+				added = p->watch.addEntries(add);
+			}
 			if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 				result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
 				return result;
@@ -2489,7 +2541,11 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 					keys.insert(watch_key::member(field, ordinal));
 		result[QStringLiteral("unchanged")] = total - keys.size();
 		if (!keys.isEmpty()) {
-			const auto removed = p->watch.removeMany(keys);
+			QVector<WatchlistModel::Removed> removed;
+			{
+				WatchRows::Changes held{p->rows};
+				removed = p->watch.removeMany(keys);
+			}
 			if (removed.isEmpty())
 				return result;
 			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
@@ -2516,7 +2572,12 @@ QVariantMap DynamicConfiguratorProvider::undoWatch()
 		// The rows' formats first: if the model refuses, nothing changed and
 		// Undo stays.
 		const auto& undo = p->undo;
-		const int changed = static_cast<int>(undo.pathFormats.size()) + (undo.format != WatchNumberFormat::Original ? 1 : 0);
+		const auto now = p->pathFormats();
+		int changed = undo.format != p->watchFormat ? 1 : 0;
+		for (auto at = undo.pathFormats.cbegin(); at != undo.pathFormats.cend(); ++at)
+			changed += now.value(at.key()) != at.value() || !now.contains(at.key()) ? 1 : 0;
+		for (auto at = now.cbegin(); at != now.cend(); ++at)
+			changed += undo.pathFormats.contains(at.key()) ? 0 : 1;
 		if (!p->putPathFormats(undo.pathFormats))
 			return result;
 		p->putFormat(undo.format);
@@ -2529,10 +2590,13 @@ QVariantMap DynamicConfiguratorProvider::undoWatch()
 	}
 	const auto undo = std::exchange(p->undo, {});
 	int changed = 0;
-	if (undo.added)
-		changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
-	else if (p->watch.restore(undo.removed))
-		changed = static_cast<int>(undo.removed.size());
+	{
+		WatchRows::Changes held{p->rows};
+		if (undo.added)
+			changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
+		else if (p->watch.restore(undo.removed))
+			changed = static_cast<int>(undo.removed.size());
+	}
 	if (changed == 0)
 		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");

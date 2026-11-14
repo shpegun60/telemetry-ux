@@ -169,10 +169,14 @@ public:
 	// changed}.
 	Q_INVOKABLE QVariantMap removeWatchRows(const QVariantList& rows);
 	QString watchFormat() const;
+	// The Watchlist's format as a project or host sets it: no Undo.
 	void setWatchFormat(const QString& format);
+	// The Watchlist's format as the panel's user chooses it (WL-2c): one
+	// change undoWatch takes back. false for an unknown format.
+	Q_INVOKABLE bool chooseWatchFormat(const QString& format);
 	// Gives rows a format of their own ("original", "dec", "hex"), or "" to
-	// follow the Watchlist's; false, and nothing changed, for an unknown
-	// format or a row that is not one.
+	// follow the Watchlist's, as one change undoWatch takes back; false, and
+	// nothing changed, for an unknown format or a row that is not one.
 	Q_INVOKABLE bool setWatchRowFormat(const QVariantList& rows, const QString& format);
 	// The formats rows have of their own by path, {"device.Config.Gain":
 	// "hex"}, as a project saves them; setWatchRowFormats puts them back, for
@@ -244,9 +248,11 @@ public:
 	// invalid, stale or capacity, changed, unchanged, fields, room}. At
 	// capacity nothing changes; room says how many more fit.
 	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
-	// Undoes the last change setWatchMany made, while nothing else has changed
-	// the Watchlist or the tree since, or the last resetWatchFormats while no
-	// format has changed since: {status, changed}.
+	// Undoes the provider's last change: rows added or removed (setWatchMany,
+	// add by path, removeWatchRows) while nothing else has changed the
+	// Watchlist or the tree since; or formats (resetWatchFormats,
+	// chooseWatchFormat, setWatchRowFormat) while no format has changed
+	// since: {status, changed}.
 	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();

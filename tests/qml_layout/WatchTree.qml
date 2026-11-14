@@ -13,7 +13,7 @@ ApplicationWindow {
         readonly property var watchlist: watchTreeModel
         readonly property var watchRows: watchTreeRows
         readonly property int watchCount: 5
-        readonly property bool connected: true
+        property bool connected: true
         readonly property bool watchActive: false
         readonly property bool watchPending: false
         readonly property bool canWriteWatch: true
@@ -97,7 +97,8 @@ ApplicationWindow {
         function removeWatchRows(rows) {
             watchTreeCalls.remove(rows)
             formatUndo = null
-            canUndoWatch = true
+            // As the provider's: no Undo without a device to put them back against.
+            canUndoWatch = connected
             ++watchRevision
             return { status: "ok", changed: rows.length }
         }

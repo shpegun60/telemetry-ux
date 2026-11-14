@@ -128,11 +128,17 @@ void WatchRows::setSource(QAbstractItemModel* source)
 	source_ = source;
 	findRoles();
 	if (source_) {
+		const auto rowsChanged = [this] {
+			if (held_ > 0)
+				heldRows_ = true;
+			else
+				refresh();
+		};
 		connections_ << connect(source_, &QAbstractItemModel::dataChanged, this, &WatchRows::sourceDataChanged)
 		             << connect(source_, &QAbstractItemModel::rowsInserted, this, &WatchRows::sourceRowsInserted)
-		             << connect(source_, &QAbstractItemModel::rowsRemoved, this, [this] { refresh(); })
-		             << connect(source_, &QAbstractItemModel::rowsMoved, this, [this] { refresh(); })
-		             << connect(source_, &QAbstractItemModel::layoutChanged, this, [this] { refresh(); })
+		             << connect(source_, &QAbstractItemModel::rowsRemoved, this, rowsChanged)
+		             << connect(source_, &QAbstractItemModel::rowsMoved, this, rowsChanged)
+		             << connect(source_, &QAbstractItemModel::layoutChanged, this, rowsChanged)
 		             << connect(source_, &QAbstractItemModel::modelReset, this, [this] {
 			                // Every value may be another: shown again, from scratch.
 			                findRoles();
@@ -165,8 +171,26 @@ void WatchRows::setTree(bool tree)
 {
 	if (tree_ == tree)
 		return;
+	// What is selected stays: a node by its values, which in the tree are
+	// shown, the nodes above them opened.
+	const auto values = selectedValues();
+	const auto before = selected_;
 	tree_ = tree;
+	bool unfolded = false;
+	if (tree_ && values.size() <= unfoldForSelection)
+		for (const auto& id : values) {
+			const auto folds = folded_.size();
+			unfoldAbove(id.mid(valuePrefix.size()));
+			unfolded = unfolded || folded_.size() != folds;
+		}
+	selected_ = values;
+	if (anchor_.startsWith(nodePrefix))
+		anchor_.clear();
 	reset();
+	if (unfolded)
+		Q_EMIT foldedChanged();
+	if (selected_ != before)
+		Q_EMIT selectionChanged();
 	Q_EMIT treeChanged();
 }
 
@@ -260,6 +284,8 @@ void WatchRows::unfoldAbove(const QString& path)
 
 int WatchRows::reveal(int sourceRow)
 {
+	if (!settled())
+		return -1;
 	const int node = shape_.nodeOfSource.value(sourceRow, -1);
 	if (node < 0)
 		return -1;
@@ -277,6 +303,8 @@ int WatchRows::reveal(int sourceRow)
 
 int WatchRows::revealPath(const QString& path)
 {
+	if (!settled())
+		return -1;
 	int found = -1;
 	for (qsizetype i = 1; i < shape_.nodes.size(); ++i) {
 		const auto& node = shape_.nodes.at(i);
@@ -307,7 +335,7 @@ int WatchRows::revealPath(const QString& path)
 QVariantList WatchRows::sourceRows(int row) const
 {
 	QVariantList out;
-	if (row < 0 || row >= count())
+	if (!settled() || row < 0 || row >= count())
 		return out;
 	QVector<int> stack{shape_.rows.at(row)};
 	while (!stack.isEmpty()) {
@@ -322,8 +350,13 @@ QVariantList WatchRows::sourceRows(int row) const
 
 QString WatchRows::lines(int row, bool paths) const
 {
+	return linesOf(sourceRows(row), paths);
+}
+
+QString WatchRows::linesOf(const QVariantList& sources, bool paths) const
+{
 	QStringList out;
-	for (const auto& source : sourceRows(row)) {
+	for (const auto& source : sources) {
 		const auto path = sourceData(source.toInt(), NameRole).toString();
 		if (paths) {
 			out << path;
@@ -335,6 +368,176 @@ QString WatchRows::lines(int row, bool paths) const
 		out << (value.isEmpty() ? path : path + QStringLiteral(" = ") + value);
 	}
 	return out.join(QLatin1Char('\n'));
+}
+
+bool WatchRows::isSelected(int row) const
+{
+	return settled() && row >= 0 && row < identities_.size() && selected_.contains(identities_.at(row));
+}
+
+void WatchRows::select(int row, bool toggle)
+{
+	if (!settled() || row < 0 || row >= identities_.size())
+		return;
+	const auto id = identities_.at(row);
+	auto next = toggle ? selected_ : QSet<QString>{};
+	if (toggle && next.contains(id))
+		next.remove(id);
+	else
+		next.insert(id);
+	setSelection(std::move(next), id);
+}
+
+void WatchRows::selectRange(int row, bool add)
+{
+	if (!settled() || row < 0 || row >= identities_.size())
+		return;
+	int from = anchorRow();
+	auto anchor = anchor_;
+	if (from < 0) {
+		from = row;
+		anchor = identities_.at(row);
+	}
+	auto next = add ? selected_ : QSet<QString>{};
+	for (int at = std::min(from, row); at <= std::max(from, row); ++at)
+		next.insert(identities_.at(at));
+	setSelection(std::move(next), anchor);
+}
+
+void WatchRows::selectAll()
+{
+	if (!settled())
+		return;
+	QSet<QString> next(identities_.cbegin(), identities_.cend());
+	setSelection(std::move(next), anchorRow() >= 0 || identities_.isEmpty() ? anchor_ : identities_.first());
+}
+
+void WatchRows::clearSelection()
+{
+	setSelection({}, anchor_);
+}
+
+int WatchRows::anchorRow() const
+{
+	return !settled() || anchor_.isEmpty() ? -1 : static_cast<int>(identities_.indexOf(anchor_));
+}
+
+QVariantList WatchRows::selectedRows() const
+{
+	QVariantList out;
+	if (!settled())
+		return out;
+	for (qsizetype row = 0; row < identities_.size(); ++row)
+		if (selected_.contains(identities_.at(row)))
+			out.append(static_cast<int>(row));
+	return out;
+}
+
+QVariantList WatchRows::selectedSourceRows() const
+{
+	QVariantList out;
+	if (!settled() || selected_.isEmpty())
+		return out;
+	QVector<bool> seen(source_ ? source_->rowCount() : 0, false);
+	for (qsizetype row = 0; row < identities_.size(); ++row) {
+		if (!selected_.contains(identities_.at(row)))
+			continue;
+		for (const auto& source : sourceRows(static_cast<int>(row))) {
+			const int at = source.toInt();
+			if (at >= 0 && at < seen.size() && !seen.at(at)) {
+				seen[at] = true;
+				out.append(at);
+			}
+		}
+	}
+	return out;
+}
+
+QString WatchRows::selectedLines(bool paths) const
+{
+	return linesOf(selectedSourceRows(), paths);
+}
+
+void WatchRows::setSelection(QSet<QString> next, const QString& anchor)
+{
+	anchor_ = anchor;
+	if (next == selected_)
+		return;
+	std::swap(selected_, next);  // next holds what was selected
+	for (qsizetype row = 0; row < identities_.size();) {
+		const auto flipped = [&](qsizetype at) {
+			const auto& id = identities_.at(at);
+			return selected_.contains(id) != next.contains(id);
+		};
+		if (!flipped(row)) {
+			++row;
+			continue;
+		}
+		const auto first = row;
+		while (row < identities_.size() && flipped(row))
+			++row;
+		Q_EMIT dataChanged(index(static_cast<int>(first)), index(static_cast<int>(row - 1)), {SelectedRole});
+	}
+	Q_EMIT selectionChanged();
+}
+
+void WatchRows::pruneSelection()
+{
+	if (selected_.isEmpty())
+		return;
+	const QSet<QString> shown(identities_.cbegin(), identities_.cend());
+	QSet<QString> kept, hidden;
+	for (const auto& id : std::as_const(selected_))
+		(shown.contains(id) ? kept : hidden).insert(id);
+	if (hidden.isEmpty())
+		return;
+	// Folds that hid everything selected select the nodes they fold: what
+	// is still in the tree but not shown, by its nearest node shown.
+	QVector<int> marked;
+	if (kept.isEmpty()) {
+		for (qsizetype i = 1; i < shape_.nodes.size(); ++i) {
+			const auto& node = shape_.nodes.at(i);
+			if (!hidden.contains(node.identity))
+				continue;
+			for (int up = node.parent; up > 0; up = shape_.nodes.at(up).parent) {
+				const int row = rowOfNode_.value(up, -1);
+				if (row < 0)
+					continue;
+				if (!kept.contains(shape_.nodes.at(up).identity)) {
+					kept.insert(shape_.nodes.at(up).identity);
+					marked << row;
+				}
+				break;
+			}
+		}
+		if (!marked.isEmpty() && !shown.contains(anchor_))
+			anchor_ = identities_.at(*std::min_element(marked.cbegin(), marked.cend()));
+	}
+	selected_ = std::move(kept);
+	for (const int row : std::as_const(marked))
+		Q_EMIT dataChanged(index(row), index(row), {SelectedRole});
+	if (refreshing_)
+		selectionMoved_ = true;
+	else
+		Q_EMIT selectionChanged();
+}
+
+void WatchRows::valuesUnder(const Shape& shape, int node, QSet<QString>& out) const
+{
+	const auto& at = shape.nodes.at(node);
+	if (at.source >= 0)
+		out.insert(at.identity);
+	for (const int child : at.children)
+		valuesUnder(shape, child, out);
+}
+
+QSet<QString> WatchRows::selectedValues() const
+{
+	QSet<QString> out;
+	for (qsizetype row = 0; row < identities_.size(); ++row)
+		if (selected_.contains(identities_.at(row)))
+			valuesUnder(shape_, shape_.rows.at(row), out);
+	return out;
 }
 
 void WatchRows::findRoles()
@@ -482,6 +685,7 @@ void WatchRows::reset()
 	for (qsizetype row = 0; row < shape_.rows.size(); ++row)
 		rowOfNode_[shape_.rows.at(row)] = static_cast<int>(row);
 	setCount(before);
+	pruneSelection();
 }
 
 void WatchRows::refresh()
@@ -496,6 +700,8 @@ void WatchRows::refresh()
 		apply(build());
 	} while (again_);
 	refreshing_ = false;
+	if (std::exchange(selectionMoved_, false))
+		Q_EMIT selectionChanged();
 }
 
 namespace {
@@ -584,6 +790,8 @@ void WatchRows::apply(Shape next)
 		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole,
 		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole});
 	setCount(before);
+	// A row that went, or that a fold hid, leaves the selection.
+	pruneSelection();
 }
 
 void WatchRows::place(QVector<int>& to)
@@ -653,23 +861,50 @@ void WatchRows::sourceRowsInserted(const QModelIndex& parent, int first, int las
 	findRoles();
 	// What is added is shown: the nodes above it open.
 	const int nameRole = sourceRole_.value(NameRole, -1);
+	bool unfolded = false;
 	if (tree_ && nameRole >= 0 && !folded_.isEmpty()) {
 		const auto before = folded_.size();
 		for (int row = first; row <= last; ++row)
 			unfoldAbove(source_->index(row, 0).data(nameRole).toString());
-		if (folded_.size() != before) {
-			refresh();
-			Q_EMIT foldedChanged();
-			return;
-		}
+		unfolded = folded_.size() != before;
+	}
+	if (held_ > 0) {
+		heldRows_ = true;
+		heldFolds_ = heldFolds_ || unfolded;
+		return;
 	}
 	refresh();
+	if (unfolded)
+		Q_EMIT foldedChanged();
+}
+
+void WatchRows::endChanges()
+{
+	if (held_ == 0 || --held_ > 0)
+		return;
+	const bool rows = std::exchange(heldRows_, false);
+	const bool data = std::exchange(heldData_, false);
+	const bool folds = std::exchange(heldFolds_, false);
+	// A held reading may have renamed or renumbered a row (a reconnect
+	// rebinds them): the rows are rebuilt whatever came, then every role of
+	// every row is told, for what a provider said about them while held.
+	if (rows || data) {
+		refresh();
+		if (count() > 0)
+			Q_EMIT dataChanged(index(0), index(count() - 1));
+	}
+	if (folds)
+		Q_EMIT foldedChanged();
 }
 
 void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight, const QList<int>& roles)
 {
 	if (topLeft.parent().isValid() || !source_)
 		return;
+	if (held_ > 0) {
+		heldData_ = true;
+		return;
+	}
 	if (refreshing_) {
 		again_ = true;
 		return;
@@ -935,6 +1170,8 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 			return node.leaves;
 		case NestedRole:
 			return tree_ && node.depth >= 2;
+		case SelectedRole:
+			return selected_.contains(node.identity);
 		default:
 			break;
 	}
@@ -962,6 +1199,7 @@ QHash<int, QByteArray> WatchRows::roleNames() const
 	names.insert(NodeRole, "node");
 	names.insert(LeavesRole, "leaves");
 	names.insert(NestedRole, "nested");
+	names.insert(SelectedRole, "selected");
 	return names;
 }
 

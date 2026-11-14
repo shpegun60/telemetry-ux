@@ -330,3 +330,28 @@ is shown other than as Original, for the items' enabled state.
 the notice line goes, Undo with it, once the revision moves, as the
 Device tree's does, and Ctrl+Z works from anywhere in the panel but a text
 field. A provider without `resetWatchFormats` does not get the items.
+
+## Several Watchlist rows selected (WL-2c, November 2026)
+
+`WatchRows` keeps a selection by path: `selectedCount`, the `selected` role,
+`select(row, toggle)`, `selectRange(row, add)`, `selectAll()`,
+`clearSelection()`, `anchorRow()`, `selectedRows()`, `selectedSourceRows()`
+(every value at and under the selected rows, once, in the order shown) and
+`selectedLines(paths)`. A row that goes, or that a fold hides, leaves the
+selection; folds that hide all of it select the nodes they fold.
+`beginChanges()`/`endChanges()` (and `WatchRows::Changes`) hold the rows while
+one call changes many source rows and bring them up to date once; in between
+the rows answer nothing. The dynamic provider holds them around its bulk
+changes, a reconnect and a project's Watchlist put back.
+
+`DynamicConfiguratorProvider::chooseWatchFormat(format)` is the Watchlist's
+format as the panel's user chooses it, one change `undoWatch()` takes back;
+the `watchFormat` property stays a project's or host's, with no Undo of its
+own. `setWatchRowFormat` is one undoable change for all the rows given.
+
+In the panel the keys move and select (Shift extends, Ctrl moves the cursor
+alone, Ctrl+Space, Ctrl+A, Escape), clicks select with Ctrl and Shift, and
+Delete, Ctrl+C and Number format act on the selection when the current row
+is in a selection of two or more. Removing several values with no Undo to
+bring them back (no device, or a provider without `removeWatchRows`) asks
+first. A provider without `WatchRows` keeps the one current row.

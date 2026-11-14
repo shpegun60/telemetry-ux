@@ -53,6 +53,8 @@ class WatchRows : public QAbstractListModel {
 	// The paths of the tree's folded nodes.
 	Q_PROPERTY(QStringList folded READ folded WRITE setFolded NOTIFY foldedChanged)
 	Q_PROPERTY(int count READ count NOTIFY countChanged)
+	// The rows selected (WL-2c), nodes and values alike.
+	Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
 
 public:
 	enum Role {
@@ -83,7 +85,8 @@ public:
 		ExpandedRole,   // a branch shown open
 		NodeRole,       // "value", "group", "struct", "array", "element"
 		LeavesRole,     // the values at and under the row
-		NestedRole      // in the tree, a row inside a Field (its member or element)
+		NestedRole,     // in the tree, a row inside a Field (its member or element)
+		SelectedRole    // the row is in the selection
 	};
 	Q_ENUM(Role)
 
@@ -119,6 +122,52 @@ public:
 	// gives its path alone), or with paths only the paths.
 	Q_INVOKABLE QString lines(int row, bool paths) const;
 
+	// The selection (WL-2c): rows kept by path, so it outlives readings, rows
+	// added or removed around it, a switch of view or sort and a reconnect. A
+	// row that goes - removed, or hidden by a fold - leaves it; a fold that
+	// would leave nothing selected selects the folded node. In the list a
+	// node of the tree is its values; going to the tree opens the nodes above
+	// what is selected. The anchor is where a range starts.
+	int selectedCount() const noexcept { return static_cast<int>(selected_.size()); }
+	Q_INVOKABLE bool isSelected(int row) const;
+	// row alone, or (toggle) row in or out; either way the anchor.
+	Q_INVOKABLE void select(int row, bool toggle = false);
+	// The rows from the anchor to row in the order shown, alone or (add)
+	// with what is selected; the anchor stays. Without an anchor shown, row
+	// becomes it.
+	Q_INVOKABLE void selectRange(int row, bool add = false);
+	Q_INVOKABLE void selectAll();
+	Q_INVOKABLE void clearSelection();
+	// The row of the anchor, -1 when it is not shown.
+	Q_INVOKABLE int anchorRow() const;
+	// The selected rows, in the order shown.
+	Q_INVOKABLE QVariantList selectedRows() const;
+	// The source rows at and under the selected rows, each once, in the order
+	// shown: what Delete, Copy and a format act on.
+	Q_INVOKABLE QVariantList selectedSourceRows() const;
+	// lines() over the selection, each value once.
+	Q_INVOKABLE QString selectedLines(bool paths) const;
+
+	// Holds the rows back while one call changes many source rows - a
+	// scattered removal comes as a signal for every run of rows - and brings
+	// them up to date once, at the last end, then tells every role of every
+	// row. In between the rows tell nothing and answer nothing (no source
+	// rows, no selection, -1), whatever a provider says meanwhile. Nested
+	// pairs count. (WL-2c)
+	void beginChanges() noexcept { ++held_; }
+	void endChanges();
+	// One pair around a scope.
+	class Changes {
+	public:
+		explicit Changes(WatchRows& rows) : rows_(rows) { rows_.beginChanges(); }
+		~Changes() { rows_.endChanges(); }
+		Changes(const Changes&) = delete;
+		Changes& operator=(const Changes&) = delete;
+
+	private:
+		WatchRows& rows_;
+	};
+
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 	QHash<int, QByteArray> roleNames() const override;
@@ -140,6 +189,7 @@ Q_SIGNALS:
 	void sortedChanged();
 	void foldedChanged();
 	void countChanged();
+	void selectionChanged();
 
 private:
 	struct Node {
@@ -179,6 +229,17 @@ private:
 	void unfoldAbove(const QString& path);
 	void setCount(int before);
 	void dropSource();
+	// The selection made next: the rows whose state flips are told, in runs.
+	void setSelection(QSet<QString> next, const QString& anchor);
+	// What is selected and no longer shown leaves the selection.
+	void pruneSelection();
+	// The selected values as identities, a node by the values under it: what
+	// a switch of view keeps.
+	QSet<QString> selectedValues() const;
+	// The identities of the values at and under node.
+	void valuesUnder(const Shape& shape, int node, QSet<QString>& out) const;
+	// "path = value" lines, or the paths, of the source rows given.
+	QString linesOf(const QVariantList& sources, bool paths) const;
 	// Whether the node's own step is an element, "[3]".
 	static bool element(const Node& node);
 
@@ -191,12 +252,22 @@ private:
 	QList<int> lastSource_, lastOwn_;
 	bool lastTexts_ = false, lastOutcome_ = false, lastFormat_ = false;
 	bool refreshing_ = false, again_ = false;
+	int held_ = 0;                          // beginChanges without their end
+	bool heldRows_ = false, heldData_ = false, heldFolds_ = false;  // what came while held
+	bool selectionMoved_ = false;  // pruned in a refresh, told after it
+	// Neither refreshing nor held: the rows are what the source holds.
+	bool settled() const noexcept { return !refreshing_ && held_ == 0; }
+	// Going to the tree opens the nodes above at most this many selected
+	// values; a selection of more (Ctrl+A) keeps the folds.
+	static constexpr int unfoldForSelection = 64;
 	bool tree_ = false;
 	bool sorted_ = false;
 	QSet<QString> folded_;
 	Shape shape_;
 	QVector<int> rowOfNode_;
 	QVector<QString> identities_;  // of the rows shown
+	QSet<QString> selected_;       // identities of the selected rows, all shown
+	QString anchor_;               // identity where a range starts
 	QSet<int> dirtyParents_;       // nodes whose summary or status moved
 	QTimer tell_;
 };

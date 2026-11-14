@@ -1495,9 +1495,21 @@ ApplicationWindow {
 		// A format chosen after it - here, in another panel, by a project
 		// loaded - ends the reset's Undo.
 		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
-		provider->setWatchFormat(QStringLiteral("hex"));
+		CHECK(provider->chooseWatchFormat(QStringLiteral("hex")) && !provider->chooseWatchFormat(QStringLiteral("binary")));
+		// A format chosen is a change of its own (WL-2c): Undo takes it back,
+		// and the reset under it is gone.
+		CHECK(provider->canUndoWatch() && provider->undoWatch().value("status") == "ok");
+		CHECK(provider->watchFormat() == QStringLiteral("original") && provider->watchRowFormats().isEmpty());
 		CHECK(!provider->canUndoWatch() && provider->undoWatch().value("status") == "refused");
-		CHECK(provider->watchFormat() == QStringLiteral("hex") && provider->watchRowFormats().isEmpty());
+		// A format given to many rows: one change.
+		CHECK(provider->setWatchRowFormat({0, 1}, QStringLiteral("dec")) && provider->canUndoWatch());
+		CHECK(provider->watchRowFormats().size() == 2 && provider->undoWatch().value("status") == "ok");
+		CHECK(provider->watchRowFormats().isEmpty());
+		// The property is a project's or a host's: no Undo of its own, and
+		// the format Undo before it is gone.
+		CHECK(provider->chooseWatchFormat(QStringLiteral("dec")) && provider->canUndoWatch());
+		provider->setWatchFormat(QStringLiteral("hex"));
+		CHECK(!provider->canUndoWatch());
 		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
 		CHECK(provider->setWatchRowFormats(own) && !provider->canUndoWatch());
 		// A pin to Original shows nothing different, yet a reset clears it.
