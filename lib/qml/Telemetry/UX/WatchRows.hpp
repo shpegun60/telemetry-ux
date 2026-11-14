@@ -114,6 +114,10 @@ public:
 	Q_INVOKABLE int revealPath(const QString& path);
 	// The source rows at and under row, in the order shown.
 	Q_INVOKABLE QVariantList sourceRows(int row) const;
+	// What a copy of row takes, one line per value at and under it in the
+	// order shown: "path = value" as the row shows it (a value not read yet
+	// gives its path alone), or with paths only the paths.
+	Q_INVOKABLE QString lines(int row, bool paths) const;
 
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
