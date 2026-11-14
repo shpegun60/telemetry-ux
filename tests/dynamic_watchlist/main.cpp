@@ -2,6 +2,7 @@
 #include <Telemetry/UX/DynamicWatchlist.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/WatchKey.hpp>
+#include <Telemetry/UX/WatchFormat.hpp>
 #include <telemetry/Telemetry.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
 #include <algorithm>
@@ -88,6 +89,86 @@ ux::WatchValueBits bits(ux::WatchScalar scalar, quint8 width, quint64 number, bo
 	CHECK(result.assign(bytes.data(), width));
 	bytes.fill(std::byte{0x55}); // The model must own the exact payload, including unplottable values.
 	return result;
+}
+
+// Original, Dec and Hex from a value's exact bits (WL-3), and hex typed for
+// a write turned into the value's own text.
+void numberFormats()
+{
+	using ux::WatchNumberFormat;
+	namespace wf = ux::watch_format;
+	const auto all = [](const ux::WatchValueBits& value, const QHash<quint64, QString>* names = nullptr) {
+		return QStringList{wf::text(value, WatchNumberFormat::Original, names),
+		                   wf::text(value, WatchNumberFormat::Dec, names), wf::text(value, WatchNumberFormat::Hex, names)};
+	};
+	CHECK(all(bits(ux::WatchScalar::U16, 2, 230)) == QStringList({"230", "230", "0x00E6"}));
+	CHECK(all(bits(ux::WatchScalar::S16, 2, 0xffff)) == QStringList({"-1", "-1", "0xFFFF"}));
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x3fc00000)) == QStringList({"1.5", "1.5", "0x3FC00000"}));
+	CHECK(all(bits(ux::WatchScalar::F64, 8, 0x3ff8000000000000ULL)) == QStringList({"1.5", "1.5", "0x3FF8000000000000"}));
+	CHECK(all(bits(ux::WatchScalar::Boolean, 1, 1)) == QStringList({"true", "1", "0x01"}));
+	const QHash<quint64, QString> names{{2, "High"}, {0xff, "Off"}};
+	CHECK(all(bits(ux::WatchScalar::U8, 1, 2, true), &names) == QStringList({"High", "2", "0x02"}));
+	CHECK(all(bits(ux::WatchScalar::S8, 1, 0xff, true), &names) == QStringList({"Off", "-1", "0xFF"}));
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 5, true), WatchNumberFormat::Original, &names) == "5 (unknown)");
+	// Without the type's names, Original has nothing to add: the row keeps its text.
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Original).isEmpty());
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Hex) == "0x02");
+	CHECK(wf::text({}, WatchNumberFormat::Hex).isEmpty());
+	CHECK(wf::parse(u"hex") == WatchNumberFormat::Hex && !wf::parse(u"bin") && wf::name(WatchNumberFormat::Dec) == "dec");
+
+	const auto type = [](ux::WatchScalar scalar, quint8 width, bool enumeration = false) {
+		return ux::WatchValueType{1, scalar, width, enumeration};
+	};
+	const auto hex = [](const char* text, const ux::WatchValueType& of) { return wf::fromHex(QString::fromLatin1(text), of); };
+	CHECK(hex("0x40000000", type(ux::WatchScalar::F32, 4)).canonical == "2");
+	CHECK(hex("0X3ff8000000000000", type(ux::WatchScalar::F64, 8)).canonical == "1.5");
+	CHECK(hex("0xFFFF", type(ux::WatchScalar::S16, 2)).canonical == "-1");
+	CHECK(hex(" 0x0001 ", type(ux::WatchScalar::U8, 1)).canonical == "1");  // leading zeros are allowed
+	CHECK(hex("0x1_F", type(ux::WatchScalar::U8, 1)).canonical == "31");
+	CHECK(hex("0x02", type(ux::WatchScalar::U8, 1, true)).canonical == "2");
+	CHECK(hex("0x01", type(ux::WatchScalar::Boolean, 1)).canonical == "true");
+	CHECK(!hex("0x100", type(ux::WatchScalar::U8, 1)).error.isEmpty() && hex("0x100", type(ux::WatchScalar::U8, 1)).canonical.isEmpty());
+	CHECK(hex("0x100", type(ux::WatchScalar::U8, 1)).error.contains("u8"));
+	CHECK(!hex("0x02", type(ux::WatchScalar::Boolean, 1)).error.isEmpty());
+	CHECK(!hex("0xZZ", type(ux::WatchScalar::U8, 1)).error.isEmpty());
+	CHECK(!hex("0x", type(ux::WatchScalar::U8, 1)).error.isEmpty());
+	CHECK(!hex("0x1", {}).error.isEmpty());
+	CHECK(wf::isHex(u" 0x1") && !wf::isHex(u"12") && !wf::isHex(u"0"));
+	// A float's bits come back exactly through the write's text; a NaN's
+	// payload would not, so it is refused rather than changed.
+	CHECK(hex("0x80000000", type(ux::WatchScalar::F32, 4)).canonical == "-0");
+	CHECK(hex("0xFF800000", type(ux::WatchScalar::F32, 4)).canonical == "-inf");
+	CHECK(!hex("0x7FC00001", type(ux::WatchScalar::F32, 4)).error.isEmpty() &&
+	      hex("0x7FC00001", type(ux::WatchScalar::F32, 4)).canonical.isEmpty());
+	CHECK(!hex("0x7FF0000000000001", type(ux::WatchScalar::F64, 8)).error.isEmpty());
+
+	// The model: the Watchlist's form, a row's own, remembered by path.
+	ux::WatchlistModel model;
+	CHECK(model.add(ux::WatchEntry::of(1, "device.Gain")));
+	CHECK(model.add(ux::WatchEntry::of(2, "device.Mode")));
+	CHECK(model.setResult(0, "Ok", "1.5", ux::WatchSample::ofUnsigned(1), bits(ux::WatchScalar::F32, 4, 0x3fc00000)));
+	CHECK(model.setResult(1, "Ok", "7", ux::WatchSample::ofUnsigned(7), bits(ux::WatchScalar::U16, 2, 7)));
+	const auto shown = [&](int row) { return model.data(model.index(row, 0), ux::WatchlistModel::ShownTextRole).toString(); };
+	const auto role = [&](int row, int r) { return model.data(model.index(row, 0), r); };
+	CHECK(shown(0) == "1.5" && shown(1) == "7" && role(0, ux::WatchlistModel::FormatRole).toString().isEmpty());
+	QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+	model.setFormat(WatchNumberFormat::Hex);
+	CHECK(changed.count() == 1 && shown(0) == "0x3FC00000" && shown(1) == "0x0007");
+	CHECK(role(0, ux::WatchlistModel::TextRole) == "1.5");  // the recording's text stays
+	CHECK(role(1, ux::WatchlistModel::EditorTextRole) == "0x0007");  // a number's editor opens in hex
+	CHECK(model.setRowFormat(0, WatchNumberFormat::Original) && shown(0) == "1.5" && shown(1) == "0x0007");
+	CHECK(role(0, ux::WatchlistModel::FormatRole) == "original" && role(0, ux::WatchlistModel::EditorTextRole) == "1.5");
+	CHECK(model.pathFormats().value("device.Gain") == WatchNumberFormat::Original && model.pathFormats().size() == 1);
+	CHECK(model.valueType(0).scalar == ux::WatchScalar::F32 && !model.valueType(9).valid());
+	// Removed and added again, the value comes back in its own form.
+	const auto removed = model.removeIds({1});
+	CHECK(removed.size() == 1);
+	CHECK(model.add(ux::WatchEntry::of(1, "device.Gain")) && model.rowFormat(1) == WatchNumberFormat::Original);
+	CHECK(model.setRowFormat(1, std::nullopt) && model.pathFormats().isEmpty());
+	CHECK(model.setPathFormats({{"device.Mode", WatchNumberFormat::Dec}}));
+	CHECK(shown(0) == "7" && model.rowFormat(0) == WatchNumberFormat::Dec && !model.rowFormat(1));
+	// Not read yet: no form to show.
+	CHECK(shown(1).isEmpty());
 }
 
 void typedEditors()
@@ -1347,6 +1428,7 @@ void changeInsideCompletion()
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	numberFormats();
 	typedEditors();
 	exactCompletionFrames();
 	bulkPublication();

@@ -74,6 +74,8 @@ public:
 		WriteRefusalRole,
 		WatchKeyRole,
 		MemberRole,
+		ShownTextRole,  // the value in its row's format
+		FormatRole,     // the row's own format, "" when it follows the Watchlist's
 		// This model's own.
 		SourceRowRole,  // the source row, -1 for a node above values
 		DepthRole,      // 0 in the list; the tree's depth
@@ -183,7 +185,7 @@ private:
 	int pathTypesRole_ = -1;
 	// The last roles a reading came with, translated: a poll repeats them.
 	QList<int> lastSource_, lastOwn_;
-	bool lastTexts_ = false, lastOutcome_ = false;
+	bool lastTexts_ = false, lastOutcome_ = false, lastFormat_ = false;
 	bool refreshing_ = false, again_ = false;
 	bool tree_ = false;
 	bool sorted_ = false;

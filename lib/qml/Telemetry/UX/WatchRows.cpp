@@ -16,10 +16,10 @@ namespace telemetry::ux {
 namespace {
 
 // The source's roles this model passes on, by name, in Role order from NameRole.
-constexpr std::array<const char*, 17> forwarded{
+constexpr std::array<const char*, 19> forwarded{
     "name", "status", "text", "writable", "sampleValue", "sampleExact", "editorText", "editorKind",
     "editorChoices", "editorChoicesTruncated", "typeText", "access", "leafStart", "writeScope",
-    "writeRefusal", "watchKey", "member"};
+    "writeRefusal", "watchKey", "member", "shownText", "format"};
 
 const QString valuePrefix = QStringLiteral("v\x1f");
 const QString nodePrefix = QStringLiteral("p\x1f");
@@ -561,7 +561,7 @@ void WatchRows::apply(Shape next)
 	if (count() > 0)
 		Q_EMIT dataChanged(index(0), index(count() - 1),
 		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole,
-		                    TextRole, StatusRole, TypeTextRole, AccessRole});
+		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole});
 	setCount(before);
 }
 
@@ -658,12 +658,13 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 	// and a Field's outcome (status, access, type).
 	bool texts = roles.isEmpty();
 	bool outcome = roles.isEmpty();
+	bool formats = roles.isEmpty();
 	QList<int> own;
 	if (!roles.isEmpty()) {
 		if (roles != lastSource_) {
 			lastSource_ = roles;
 			lastOwn_.clear();
-			lastTexts_ = lastOutcome_ = false;
+			lastTexts_ = lastOutcome_ = lastFormat_ = false;
 			for (const int role : roles) {
 				if (role == nameRole) {
 					lastSource_.clear();
@@ -675,15 +676,17 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 				if (found == ownRole_.cend())
 					continue;
 				lastOwn_.append(found.value());
-				lastTexts_ = lastTexts_ || found.value() == TextRole;
+				lastTexts_ = lastTexts_ || found.value() == TextRole || found.value() == ShownTextRole;
 				lastOutcome_ = lastOutcome_ || found.value() == StatusRole || found.value() == AccessRole ||
 				               found.value() == TypeTextRole;
+				lastFormat_ = lastFormat_ || found.value() == FormatRole;
 			}
 		}
 		own = lastOwn_;
 		texts = lastTexts_;
 		outcome = lastOutcome_;
-		if (own.isEmpty() && !texts && !outcome)
+		formats = lastFormat_;
+		if (own.isEmpty() && !texts && !outcome && !formats)
 			return;
 	} else if (nameRole >= 0) {
 		// Every role at once may hide a new path.
@@ -715,6 +718,10 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 			for (int p = parent; p > 0 && shape_.nodes.at(p).depth > 0 && firstLeaf(shape_.nodes.at(p)) == source;
 			     p = shape_.nodes.at(p).parent)
 				dirtyParents_.insert(p);
+		// Every node above shows the format its values share.
+		if (formats)
+			for (int p = parent; p > 0; p = shape_.nodes.at(p).parent)
+				dirtyParents_.insert(p);
 	}
 	if (!own.isEmpty() || roles.isEmpty()) {
 		std::sort(shown.begin(), shown.end());
@@ -736,7 +743,8 @@ void WatchRows::tellParents()
 	for (const int node : dirty) {
 		const int row = rowOfNode_.value(node, -1);
 		if (row >= 0)
-			Q_EMIT dataChanged(index(row), index(row), {TextRole, StatusRole, TypeTextRole, AccessRole});
+			Q_EMIT dataChanged(index(row), index(row),
+			                   {TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, FormatRole});
 	}
 }
 
@@ -778,7 +786,8 @@ QString WatchRows::summary(const Node& node) const
 		const auto& at = shape_.nodes.at(child);
 		QString value;
 		if (at.source >= 0) {
-			value = sourceData(at.source, TextRole).toString();
+			const auto shown = sourceData(at.source, ShownTextRole);
+			value = shown.isValid() ? shown.toString() : sourceData(at.source, TextRole).toString();
 			if (value.isEmpty())
 				value = QStringLiteral("–");
 		} else {
@@ -829,6 +838,26 @@ QVariant WatchRows::nodeData(const Node& node, Role role) const
 		case MemberRole:
 		case WriteRefusalRole:
 			return QString{};
+		case FormatRole: {
+			QString shared;
+			bool first = true;
+			QVector<int> stack{static_cast<int>(&node - shape_.nodes.constData())};
+			while (!stack.isEmpty()) {
+				const auto& at = shape_.nodes.at(stack.takeLast());
+				if (at.source >= 0) {
+					const auto own = sourceData(at.source, FormatRole).toString();
+					if (!first && own != shared)
+						return QStringLiteral("mixed");
+					shared = own;
+					first = false;
+				}
+				for (const int child : at.children)
+					stack.append(child);
+			}
+			return shared;
+		}
+		case ShownTextRole:
+			return nodeData(node, TextRole);
 		default:
 			return {};
 	}
@@ -868,7 +897,7 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 		default:
 			break;
 	}
-	if (role < NameRole || role > MemberRole)
+	if (role < NameRole || role > FormatRole)
 		return {};
 	if (node.source < 0)
 		return nodeData(node, static_cast<Role>(role));

@@ -1247,6 +1247,25 @@ ApplicationWindow {
 		CHECK(peer.lastWritePayload() == expected);
 		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
 	}
+	// Hex is taken whatever the row shows (WL-3): a float's bits are written
+	// exactly, and a row in hex shows them back.
+	CHECK(provider->property("watchFormat").toString() == QStringLiteral("original"));
+	CHECK(provider->writeWatch(0, QStringLiteral("0x4000_0000")));
+	CHECK(await([&] { return finished.count() == 7 && !provider->watchActive(); }));
+	CHECK(finished.last().at(0).toBool() && peer.lastWritePayload() == QByteArray::fromHex("00000040"));
+	CHECK(provider->setWatchRowFormat({0}, QStringLiteral("hex")));
+	CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::ShownTextRole).toString() == QStringLiteral("0x40000000"));
+	CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::TextRole).toString() == QStringLiteral("2"));
+	CHECK(provider->watchRowFormats() == QVariantMap({{rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString(),
+	                                                   QStringLiteral("hex")}}));
+	CHECK(!provider->setWatchRowFormat({0}, QStringLiteral("binary")) && !provider->setWatchRowFormat({9}, QString{}));
+	provider->setWatchFormat(QStringLiteral("hex"));
+	CHECK(rows->data(rows->index(1, 0), ux::WatchlistModel::ShownTextRole).toString().startsWith(QStringLiteral("0x")));
+	provider->setWatchFormat(QStringLiteral("original"));
+	// Too wide for the type: refused in words, nothing written.
+	const auto writesBefore = peer.nativeWrites();
+	CHECK(!provider->writeWatch(0, QStringLiteral("0x1FFFFFFFF")));
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("more digits")) && peer.nativeWrites() == writesBefore);
 	connection.disconnect();
 }
 

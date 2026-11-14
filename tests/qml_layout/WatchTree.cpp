@@ -79,6 +79,15 @@ public:
 		writeText = text;
 	}
 	Q_INVOKABLE void undo() { ++undos; }
+	QList<int> formatted;
+	QString formatName = QStringLiteral("unset");
+	Q_INVOKABLE void format(const QVariantList& rows, const QString& name)
+	{
+		formatted.clear();
+		for (const auto& row : rows)
+			formatted.append(row.toInt());
+		formatName = name;
+	}
 	Q_INVOKABLE void remove(const QVariantList& rows)
 	{
 		removed.clear();
@@ -212,6 +221,38 @@ int main(int argc, char** argv)
 			CHECK(rowAt(list, 2)->property("typeText").toString() == QStringLiteral("struct (3)"));
 			shot(window, argc, argv, QStringLiteral("watch-tree-480"));
 
+			// The number format (WL-3): the Watchlist's from its segments, a
+			// row's own from its menu, which a node gives every value under it.
+			window->setWidth(720);  // room for every control, whatever the fonts
+			settle();
+			auto* formats = named(content, "watchFormatSegments");
+			CHECK(formats && named(content, "watchFormat_original")->property("checked").toBool());
+			click(window, named(content, "watchFormat_hex"));
+			CHECK(panel->property("format").toString() == QStringLiteral("hex"));
+			CHECK(named(content, "watchFormat_hex")->property("checked").toBool());
+			click(window, named(content, "watchFormat_original"));
+			list->setProperty("currentIndex", 2);  // Config
+			list->forceActiveFocus();
+			key(window, Qt::Key_Menu);
+			auto* rowMenu = window->findChild<QObject*>(QStringLiteral("watchRowMenu"));
+			CHECK(rowMenu && rowMenu->property("visible").toBool() && panel->property("menuRow").toInt() == 2);
+			// By keys: Down to "Number format", Right into it, Down twice past
+			// "Like the Watchlist" and Original to Dec, Enter.
+			for (const auto k : {Qt::Key_Down, Qt::Key_Right, Qt::Key_Down, Qt::Key_Down, Qt::Key_Return})
+				key(window, k);
+			CHECK(calls.formatted == QList<int>({3, 1}) && calls.formatName == QStringLiteral("dec"));
+			auto* inherit = window->findChild<QObject*>(QStringLiteral("watchRowFormat_inherit"));
+			CHECK(inherit && inherit->property("text").toString() == QStringLiteral("Like the Watchlist (Original)"));
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle();
+			if (rowMenu->property("visible").toBool()) {
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle();
+			}
+			CHECK(!rowMenu->property("visible").toBool());
+			window->setWidth(480);
+			settle();
+
 			// The Device tree's keys: Left folds, then steps out; Right opens,
 			// then steps in. Folded, a node shows its values in brief.
 			list->setProperty("currentIndex", 2);
@@ -313,6 +354,11 @@ int main(int argc, char** argv)
 				CHECK(inBar || !panel->property("readOnceInBar").toBool());
 				if (!inBar)
 					CHECK(treeItem->property("checked").toBool());
+				// The format's segments give way to one button before Read once goes.
+				CHECK(panel->property("formatInBar").toBool() == bool(named(content, "watchFormatSegments")));
+				CHECK(panel->property("formatInBar").toBool() || named(content, "watchFormatButton"));
+				CHECK(!panel->property("readOnceInBar").toBool() || panel->property("formatInBar").toBool() ||
+				      !panel->property("everyShown").toBool());
 				if (width == 320)
 					shot(window, argc, argv, QStringLiteral("watch-tree-320"));
 				else

@@ -42,6 +42,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchCount READ watchCount NOTIFY stateChanged)
 	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
 	Q_PROPERTY(bool canWriteWatch READ canWriteWatch NOTIFY stateChanged)
+	// How the Watchlist shows its numbers: "original", "dec" or "hex" (WL-3).
+	// The view's only: the recording, Trend and a write are the same in all.
+	Q_PROPERTY(QString watchFormat READ watchFormat WRITE setWatchFormat NOTIFY stateChanged)
 	Q_PROPERTY(bool watchWriting READ watchWriting NOTIFY stateChanged)
 	Q_PROPERTY(QString watchWriteOutcome READ watchWriteOutcome NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -141,6 +144,17 @@ public:
 	// change, which undoWatch takes back: {status: ok, invalid or refused,
 	// changed}.
 	Q_INVOKABLE QVariantMap removeWatchRows(const QVariantList& rows);
+	QString watchFormat() const;
+	void setWatchFormat(const QString& format);
+	// Gives rows a format of their own ("original", "dec", "hex"), or "" to
+	// follow the Watchlist's; false, and nothing changed, for an unknown
+	// format or a row that is not one.
+	Q_INVOKABLE bool setWatchRowFormat(const QVariantList& rows, const QString& format);
+	// The formats rows have of their own by path, {"device.Config.Gain":
+	// "hex"}, as a project saves them; setWatchRowFormats puts them back, for
+	// rows watched now and rows added later.
+	Q_INVOKABLE QVariantMap watchRowFormats() const;
+	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
 	bool canUndoWatch() const;

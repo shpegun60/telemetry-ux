@@ -79,6 +79,8 @@ public:
 		QString kind = QStringLiteral("text");
 		QVariantList choices;
 		bool truncated = false;
+		// Every entry's name by its code bits, choices or not.
+		QHash<quint64, QString> names;
 	};
 	using EndpointIdentity = std::array<std::pair<quintptr, std::size_t>, 3>;
 	static constexpr std::size_t choiceLimit = 256;
@@ -106,6 +108,8 @@ public:
 					copied.kind = QStringLiteral("enum");
 					const auto entries = schema.enumEntries(id);
 					copied.truncated = entries.size() > choiceLimit;
+					for (const auto& entry : entries)
+						copied.names.insert(entry.codeBits, schema_text::text(entry.name));
 					for (const auto& entry : entries.first((std::min)(entries.size(), choiceLimit))) {
 						const auto code = scalarEditorBits(entry.codeBits, underlying->scalarCode);
 						if (code.isEmpty()) continue;
