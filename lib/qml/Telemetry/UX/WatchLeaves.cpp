@@ -5,7 +5,11 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchLeaves.hpp"
+#include "SchemaText.hpp"
 #include <QtCore/QByteArray>
+#include <QtCore/QCoreApplication>
+#include <QtCore/QVector>
+#include <algorithm>
 #include <limits>
 #include <string_view>
 
@@ -185,6 +189,181 @@ std::optional<quint32> WatchLeaves::ordinal(TypeId root, QStringView member) con
 	if (!isLeaf(schema_.type(current)) || at >= count(root))
 		return std::nullopt;
 	return static_cast<quint32>(at);
+}
+
+namespace {
+// Edit distance, for "Did you mean": short names, so the plain table.
+int distance(QStringView a, QStringView b)
+{
+	QVector<int> row(b.size() + 1);
+	for (qsizetype j = 0; j <= b.size(); ++j)
+		row[j] = static_cast<int>(j);
+	for (qsizetype i = 1; i <= a.size(); ++i) {
+		int diagonal = row[0];
+		row[0] = static_cast<int>(i);
+		for (qsizetype j = 1; j <= b.size(); ++j) {
+			const int above = row[j];
+			row[j] = std::min({row[j] + 1, row[j - 1] + 1,
+			                   diagonal + (a.at(i - 1).toCaseFolded() == b.at(j - 1).toCaseFolded() ? 0 : 1)});
+			diagonal = above;
+		}
+	}
+	return row[b.size()];
+}
+
+QString tr(const char* text)
+{
+	return QCoreApplication::translate("WatchLeaves", text);
+}
+} // namespace
+
+WatchLeaves::Range WatchLeaves::range(TypeId root, QStringView member, const QString& path) const
+{
+	Range out;
+	const auto syntax = [&] {
+		out = {};
+		out.error = tr("Write a path such as device.Config.Gain or data.Samples[3].");
+		return out;
+	};
+	if (!schema_.valid() || !schema_.type(root)) {
+		out.error = tr("%1 is not on this device.").arg(path);
+		return out;
+	}
+	TypeId current = root;
+	std::uint64_t at = 0;
+	QString here = path;
+	qsizetype pos = 0;
+	while (pos < member.size()) {
+		const auto* type = schema_.type(current);
+		if (!type)
+			return syntax();
+		if (member.at(pos) == u'[') {
+			const auto close = member.indexOf(u']', pos);
+			if (close < 0)
+				return syntax();
+			bool ok = false;
+			const auto index = member.mid(pos + 1, close - pos - 1).toULongLong(&ok);
+			if (!ok)
+				return syntax();
+			if (type->kind != TypeKind::Array) {
+				out.error = tr("%1 is not an array.").arg(here);
+				return out;
+			}
+			if (index >= type->elementCount) {
+				out.error = tr("%1 has %L2 elements, [0] to [%3].").arg(here).arg(type->elementCount).arg(type->elementCount - 1);
+				return out;
+			}
+			at += index * count(type->relatedTypeId);
+			current = type->relatedTypeId;
+			here += QLatin1Char('[') + QString::number(index) + QLatin1Char(']');
+			pos = close + 1;
+		} else {
+			auto end = pos;
+			while (end < member.size() && member.at(end) != u'.' && member.at(end) != u'[' && member.at(end) != u']')
+				++end;
+			if (end == pos)
+				return syntax();
+			const auto name = member.mid(pos, end - pos);
+			if (type->kind != TypeKind::Struct) {
+				out.error = tr("%1 is not a struct, so it has no member %2.").arg(here, name.toString());
+				return out;
+			}
+			bool found = false;
+			QString nearest;
+			int best = 3;
+			std::uint64_t skipped = 0;
+			for (const auto& m : schema_.members(current)) {
+				const auto text = QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size()));
+				if (text == name) {
+					current = m.typeId;
+					found = true;
+					break;
+				}
+				skipped += count(m.typeId);
+				const int d = distance(name, text);
+				if (d < best) {
+					best = d;
+					nearest = text;
+				}
+			}
+			if (!found) {
+				out.error = nearest.isEmpty()
+				                ? tr("%1 has no member %2.").arg(here, name.toString())
+				                : tr("%1 has no member %2. Did you mean %3?").arg(here, name.toString(), nearest);
+				return out;
+			}
+			at += skipped;
+			here += QLatin1Char('.') + name.toString();
+			pos = end;
+		}
+		if (pos < member.size() && member.at(pos) != u'[') {
+			if (member.at(pos) != u'.' || pos + 1 == member.size() || member.at(pos + 1) == u'[')
+				return syntax();
+			++pos;
+		}
+	}
+	const auto values = count(current);
+	if (values == 0) {
+		out.error = tr("%1 has no values to watch.").arg(here);
+		return out;
+	}
+	if (at + values > count(root))
+		return syntax();
+	out.first = static_cast<quint32>(at);
+	out.count = values;
+	return out;
+}
+
+QVector<WatchLeaves::Child> WatchLeaves::children(TypeId root, QStringView member) const
+{
+	QVector<Child> out;
+	if (!schema_.valid())
+		return out;
+	// The container's type: the first value under member, walked to member's depth.
+	TypeId type = root;
+	if (!member.isEmpty()) {
+		const auto at = range(root, member, QString{});
+		if (!at.error.isEmpty())
+			return out;
+		int depth = 0;
+		for (qsizetype i = 0; i < member.size();) {
+			if (member.at(i) == u'[') {
+				const auto close = member.indexOf(u']', i);
+				i = close < 0 ? member.size() : close + 1;
+				++depth;
+			} else if (member.at(i) == u'.') {
+				++i;
+			} else {
+				while (i < member.size() && member.at(i) != u'.' && member.at(i) != u'[')
+					++i;
+				++depth;
+			}
+		}
+		const auto first = locate(root, at.first);
+		if (!first || depth < 1 || depth > first->depth)
+			return out;
+		type = first->types[static_cast<std::size_t>(depth - 1)];
+	}
+	const auto* shape = schema_.type(type);
+	if (!shape)
+		return out;
+	if (shape->kind == TypeKind::Struct) {
+		for (const auto& m : schema_.members(type)) {
+			const auto* inner = schema_.type(m.typeId);
+			out.append({QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size())),
+			            QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size())), m.typeId,
+			            count(m.typeId), !isLeaf(inner)});
+		}
+	} else if (shape->kind == TypeKind::Array && shape->elementCount > 0) {
+		out.append({QStringLiteral("[0 … %1]").arg(shape->elementCount - 1), QStringLiteral("["), shape->relatedTypeId,
+		            count(shape->relatedTypeId), true});
+	}
+	return out;
+}
+
+QString WatchLeaves::typeText(TypeId type) const
+{
+	return schema_.valid() ? schema_text::typeText(schema_, type) : QString{};
 }
 
 WatchLeaves::Kind WatchLeaves::kind(TypeId root) const noexcept

@@ -55,6 +55,33 @@ public:
 	[[nodiscard]] std::optional<Leaf> locate(TypeId root, quint32 ordinal) const;
 	// nullopt unless the text names a leaf under root.
 	[[nodiscard]] std::optional<quint32> ordinal(TypeId root, QStringView member) const;
+	// The values a member text names under root - a leaf, or every leaf of a
+	// struct or array inside it ("Config", "Samples[3]", "Phase[2]") - as
+	// ordinals [first, first + count); an empty member names all of root.
+	// Otherwise error says why in words, naming the path so far after
+	// `path` (the Field's: "device.Config has no member Gainn. Did you mean
+	// Gain?", "data.Samples has 64 elements, [0] to [63].").
+	struct Range {
+		quint32 first = 0;
+		quint32 count = 0;
+		QString error;
+	};
+	[[nodiscard]] Range range(TypeId root, QStringView member, const QString& path) const;
+
+	// The steps one level below member inside root ("" for root itself), for
+	// completing a typed path: a struct's members in declaration order, or one
+	// entry for an array's elements ("[0 … 63]", appended as "["); empty for a
+	// leaf or a path that names nothing.
+	struct Child {
+		QString label;
+		QString append;
+		TypeId type = 0;
+		quint32 leaves = 0;
+		bool container = false;
+	};
+	[[nodiscard]] QVector<Child> children(TypeId root, QStringView member) const;
+	// The type's words, as the tree shows them: "f32", "struct (3)", "u16[64]".
+	[[nodiscard]] QString typeText(TypeId type) const;
 
 	// What a Field's values are, for the words a box speaks: a struct of
 	// scalars has members, an array of scalars elements, anything deeper values.

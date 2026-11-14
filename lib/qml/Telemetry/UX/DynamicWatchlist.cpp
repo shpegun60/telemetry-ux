@@ -1,5 +1,6 @@
 // One pending read, bounded wire chunks, Qt-owned scalar rows. MIT.
 #include "DynamicWatchlist.hpp"
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
@@ -1270,6 +1271,270 @@ DynamicWatchlist::resolve(const QString& group, const QString& name, const QStri
 	const auto leaf = p->leaves.locate(shape.type, *ordinal);
 	entry.name = path + (leaf ? leaf->suffix : QString{});
 	return {Resolution::Ok, entry};
+}
+
+namespace {
+QString words(const char* text)
+{
+	return QCoreApplication::translate("DynamicWatchlist", text);
+}
+// "device.Config.Gain" as group, Field and member text; nullopt for text
+// that is not a path.
+struct PathParts {
+	QString group, name, member;
+};
+std::optional<PathParts> splitPath(const QString& text)
+{
+	const auto dot = text.indexOf(QLatin1Char('.'));
+	if (dot <= 0 || dot + 1 >= text.size())
+		return std::nullopt;
+	PathParts parts;
+	parts.group = text.left(dot);
+	auto end = dot + 1;
+	while (end < text.size() && text.at(end) != QLatin1Char('.') && text.at(end) != QLatin1Char('['))
+		++end;
+	parts.name = text.mid(dot + 1, end - dot - 1);
+	if (parts.name.isEmpty())
+		return std::nullopt;
+	parts.member = end < text.size() && text.at(end) == QLatin1Char('.') ? text.mid(end + 1) : text.mid(end);
+	if (end < text.size() && text.at(end) == QLatin1Char('.') && parts.member.isEmpty())
+		return std::nullopt;
+	return parts;
+}
+} // namespace
+
+DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& text) const
+{
+	auto p = d;
+	PathResolution out;
+	const auto typed = text.trimmed();
+	const auto parts = splitPath(typed);
+	if (!parts) {
+		out.error = words("Write a path such as device.Config.Gain or data.Samples[3].");
+		return out;
+	}
+	if (!canTellHoldable()) {
+		out.error = words("Connect to a device to watch %1.").arg(typed);
+		return out;
+	}
+	quint32 found = 0;
+	int matches = 0;
+	for (auto it = p->fields.cbegin(); it != p->fields.cend(); ++it)
+		if (it->group == parts->group && it->name == parts->name) {
+			found = it.key();
+			++matches;
+		}
+	if (matches == 0) {
+		out.missing = true;
+		out.error = words("%1 is not on this device.").arg(typed);
+		return out;
+	}
+	if (matches > 1) {
+		out.error = words("This device has two Fields named %1.%2.").arg(parts->group, parts->name);
+		return out;
+	}
+	const auto& shape = p->fields[found];
+	const auto fieldPath = parts->group + QLatin1Char('.') + parts->name;
+	const auto whole = watch_key::whole(found);
+	if (!shape.aggregate) {
+		if (!parts->member.isEmpty()) {
+			out.error = words("%1 is not a struct or an array, so it has no %2.").arg(fieldPath, parts->member);
+			return out;
+		}
+		const auto bytes = p->source.fieldBytes ? p->source.fieldBytes(found) : std::nullopt;
+		if (!bytes || !*bytes || *bytes > 8) {
+			out.error = words("%1 can't be watched on this device.").arg(fieldPath);
+			return out;
+		}
+		if (p->model.rowOf(whole) >= 0) {
+			out.already = 1;
+			out.firstWatched = whole;
+		} else {
+			out.entries.push_back(WatchEntry::of(whole, fieldPath));
+		}
+		return out;
+	}
+	if (!p->source.readMembers) {
+		out.error = words("This connection can't read the values inside %1.").arg(fieldPath);
+		return out;
+	}
+	if (shape.bytes > workbenchSnapshotBytes) {
+		out.error = words("%1 is larger than the Watchlist reads at once (64 KiB), so it can't be watched.").arg(fieldPath);
+		return out;
+	}
+	const auto range = p->leaves.range(shape.type, parts->member, fieldPath);
+	if (!range.error.isEmpty()) {
+		out.error = range.error;
+		return out;
+	}
+	const auto added = entries(found, range.first, range.count, fieldPath);
+	if (!added) {
+		out.error = words("%1 can't be watched on this device.").arg(typed);
+		return out;
+	}
+	out.entries = *added;
+	out.already = range.count - static_cast<quint32>(added->size());
+	for (quint32 n = range.first; out.already && n < range.first + range.count; ++n)
+		if (p->model.rowOf(watch_key::member(found, n)) >= 0) {
+			out.firstWatched = watch_key::member(found, n);
+			break;
+		}
+	return out;
+}
+
+QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const QString& text, int limit) const
+{
+	auto p = d;
+	QVector<PathCandidate> out;
+	if (!canTellHoldable() || limit <= 0)
+		return out;
+	const auto typed = text.trimmed();
+	const auto starts = [](const QString& name, QStringView word) {
+		return name.startsWith(word, Qt::CaseInsensitive);
+	};
+	// The Fields in descriptor order.
+	QList<quint32> ids = p->fields.keys();
+	std::sort(ids.begin(), ids.end());
+	const auto heldAll = [&](quint32 id, quint32 first, quint32 count) {
+		if (count == 0)
+			return false;
+		for (quint32 n = first; n < first + count; ++n)
+			if (p->model.rowOf(watch_key::member(id, n)) < 0)
+				return false;
+		return true;
+	};
+	const auto fieldCandidate = [&](quint32 id) {
+		const auto& shape = p->fields[id];
+		PathCandidate c;
+		c.path = shape.group + QLatin1Char('.') + shape.name;
+		c.typeText = p->leaves.typeText(shape.type);
+		c.container = shape.aggregate;
+		c.values = shape.aggregate ? p->leaves.count(shape.type) : 1;
+		c.watched = shape.aggregate ? heldAll(id, 0, c.values) : p->model.rowOf(watch_key::whole(id)) >= 0;
+		return c;
+	};
+	const auto dot = typed.indexOf(QLatin1Char('.'));
+	if (dot < 0) {
+		// The groups, then the Fields whose name holds the word.
+		QStringList groups;
+		for (const auto id : std::as_const(ids)) {
+			const auto& group = p->fields[id].group;
+			if (!groups.contains(group) && starts(group, typed))
+				groups.append(group);
+		}
+		for (const auto& group : std::as_const(groups)) {
+			PathCandidate c;
+			c.path = group + QLatin1Char('.');
+			c.container = true;
+			for (const auto id : std::as_const(ids))
+				if (p->fields[id].group == group)
+					++c.values;
+			out.append(c);
+			if (out.size() >= limit)
+				return out;
+		}
+	} else {
+		const auto group = typed.left(dot);
+		const auto rest = typed.mid(dot + 1);
+		auto end = 0;
+		while (end < rest.size() && rest.at(end) != QLatin1Char('.') && rest.at(end) != QLatin1Char('['))
+			++end;
+		if (end == rest.size()) {
+			// A group's Fields.
+			for (const auto id : std::as_const(ids))
+				if (p->fields[id].group == group && starts(p->fields[id].name, rest)) {
+					out.append(fieldCandidate(id));
+					if (out.size() >= limit)
+						return out;
+				}
+		} else {
+			// Inside a Field: the next step below what is typed in full.
+			const auto name = rest.left(end);
+			quint32 found = 0;
+			for (const auto id : std::as_const(ids))
+				if (p->fields[id].group == group && p->fields[id].name == name)
+					found = id;
+			const auto shape = p->fields.constFind(found);
+			if (shape != p->fields.cend() && shape->aggregate) {
+				auto member = rest.mid(end);
+				if (member.startsWith(QLatin1Char('.')))
+					member.remove(0, 1);
+				// What is typed in full, and the word after it.
+				qsizetype cut = member.size();
+				while (cut > 0 && member.at(cut - 1) != QLatin1Char('.') && member.at(cut - 1) != QLatin1Char('['))
+					--cut;
+				auto complete = member.left(cut);
+				const auto word = member.mid(cut);
+				// "[" typed: the elements; "." or the Field itself: the members.
+				const bool index = complete.endsWith(QLatin1Char('['));
+				if (complete.endsWith(QLatin1Char('.')) || index)
+					complete.chop(1);
+				// The path of what is typed in full: "device.Config", "device.Calib.Phase[2]".
+				auto base = group + QLatin1Char('.') + name;
+				if (!complete.isEmpty())
+					base += (complete.startsWith(QLatin1Char('[')) ? QString{} : QStringLiteral(".")) + complete;
+				for (const auto& child : p->leaves.children(shape->type, complete)) {
+					const bool elements = child.append == QLatin1String("[");
+					if (index != elements || (!index && !starts(child.label, word)))
+						continue;
+					PathCandidate c;
+					c.path = elements ? base + child.label : base + QLatin1Char('.') + child.label;
+					c.typeText = p->leaves.typeText(child.type);
+					c.container = child.container;
+					c.values = child.leaves;
+					out.append(c);
+					if (out.size() >= limit)
+						return out;
+				}
+			}
+		}
+	}
+	// Then the paths whose last step holds the word: Fields and the members
+	// of struct Fields, arrays not opened, at most 4096 steps walked.
+	const auto last = typed.mid(std::max(typed.lastIndexOf(QLatin1Char('.')), typed.lastIndexOf(QLatin1Char('['))) + 1);
+	if (last.size() < 2)
+		return out;
+	int walked = 0;
+	QSet<QString> shown;
+	for (const auto& c : std::as_const(out))
+		shown.insert(c.path);
+	for (const auto id : std::as_const(ids)) {
+		const auto& shape = p->fields[id];
+		if (shape.name.contains(last, Qt::CaseInsensitive)) {
+			const auto c = fieldCandidate(id);
+			if (!shown.contains(c.path)) {
+				out.append(c);
+				shown.insert(c.path);
+			}
+		}
+		if (!shape.aggregate)
+			continue;
+		// Members, breadth first, struct inside struct only.
+		QVector<std::pair<QString, QString>> queue{{QString{}, shape.group + QLatin1Char('.') + shape.name}};
+		while (!queue.isEmpty() && walked < 4096 && out.size() < limit) {
+			const auto [member, path] = queue.takeFirst();
+			for (const auto& child : p->leaves.children(shape.type, member)) {
+				if (++walked > 4096 || child.append == QLatin1String("["))
+					break;
+				const auto childMember = member.isEmpty() ? child.label : member + QLatin1Char('.') + child.label;
+				const auto childPath = path + QLatin1Char('.') + child.label;
+				if (child.label.contains(last, Qt::CaseInsensitive) && !shown.contains(childPath)) {
+					PathCandidate c;
+					c.path = childPath;
+					c.typeText = p->leaves.typeText(child.type);
+					c.container = child.container;
+					c.values = child.leaves;
+					out.append(c);
+					shown.insert(childPath);
+				}
+				if (child.container)
+					queue.append({childMember, childPath});
+			}
+		}
+		if (out.size() >= limit)
+			break;
+	}
+	return out;
 }
 
 QVariantMap DynamicWatchlist::binding(int row) const
