@@ -1405,6 +1405,130 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 	return result;
 }
 
+namespace {
+// A line as typed or pasted: its path, without a copied value after it.
+QString pathOfLine(const QString& line)
+{
+	auto path = line;
+	const auto equals = path.indexOf(QStringLiteral(" = "));
+	if (equals >= 0)
+		path = path.left(equals);
+	const auto tab = path.indexOf(QLatin1Char('\t'));
+	if (tab >= 0)
+		path = path.left(tab);
+	return path.trimmed();
+}
+QString words(const char* text)
+{
+	return QCoreApplication::translate("DynamicConfiguratorProvider", text);
+}
+} // namespace
+
+QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) const
+{
+	auto p = d;
+	QVariantMap out{{QStringLiteral("status"), QStringLiteral("empty")}, {QStringLiteral("message"), QString{}},
+	                {QStringLiteral("adds"), 0}, {QStringLiteral("already"), 0}, {QStringLiteral("row"), -1}};
+	const auto typed = pathOfLine(text);
+	if (typed.isEmpty())
+		return out;
+	const auto say = [&](const QString& status, const QString& message) {
+		out[QStringLiteral("status")] = status;
+		out[QStringLiteral("message")] = message;
+		return out;
+	};
+	const auto resolved = p->watch.resolvePath(typed);
+	if (resolved.missing)
+		return say(QStringLiteral("missing"), resolved.error);
+	if (!resolved.error.isEmpty())
+		return say(QStringLiteral("error"), resolved.error);
+	out[QStringLiteral("adds")] = static_cast<int>(resolved.entries.size());
+	out[QStringLiteral("already")] = static_cast<int>(resolved.already);
+	if (resolved.entries.isEmpty()) {
+		const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
+		out[QStringLiteral("row")] = model ? model->rowOf(resolved.firstWatched) : -1;
+		return say(QStringLiteral("watched"), resolved.already == 1
+		                                          ? words("%1 is already watched.").arg(typed)
+		                                          : words("Every value of %1 is already watched.").arg(typed));
+	}
+	if (resolved.entries.size() == 1 && resolved.already == 0)
+		return say(QStringLiteral("adds"), words("Adds %1").arg(resolved.entries.first().name));
+	return say(QStringLiteral("adds"), resolved.already == 0
+	                                       ? words("Adds %L1 values of %2").arg(resolved.entries.size()).arg(typed)
+	                                       : words("Adds %L1 values of %2; %L3 are watched already.")
+	                                             .arg(resolved.entries.size())
+	                                             .arg(typed)
+	                                             .arg(resolved.already));
+}
+
+QVariantList DynamicConfiguratorProvider::watchPathCandidates(const QString& text) const
+{
+	QVariantList out;
+	for (const auto& c : d->watch.pathCandidates(text, 50))
+		out.append(QVariantMap{{QStringLiteral("path"), c.path},       {QStringLiteral("typeText"), c.typeText},
+		                       {QStringLiteral("values"), c.values},   {QStringLiteral("container"), c.container},
+		                       {QStringLiteral("watched"), c.watched}});
+	return out;
+}
+
+QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("added"), 0},
+	                   {QStringLiteral("already"), 0}, {QStringLiteral("missing"), QVariantList{}},
+	                   {QStringLiteral("refused"), QVariantList{}}};
+	QVector<WatchEntry> add;
+	QSet<WatchKey> seen;
+	QVariantList missing, refused;
+	int already = 0;
+	for (const auto& line : lines) {
+		const auto path = pathOfLine(line);
+		if (path.isEmpty())
+			continue;
+		const auto checked = checkWatchPath(path);
+		const auto status = checked.value(QStringLiteral("status")).toString();
+		if (status == QStringLiteral("missing")) {
+			missing.append(path);
+			continue;
+		}
+		if (status == QStringLiteral("error")) {
+			refused.append(QVariantMap{{QStringLiteral("path"), path},
+			                           {QStringLiteral("reason"), checked.value(QStringLiteral("message"))}});
+			continue;
+		}
+		const auto resolved = p->watch.resolvePath(path);
+		already += static_cast<int>(resolved.already);
+		for (const auto& entry : resolved.entries)
+			if (!seen.contains(entry.key)) {
+				seen.insert(entry.key);
+				add.push_back(entry);
+			}
+	}
+	result[QStringLiteral("missing")] = missing;
+	result[QStringLiteral("refused")] = refused;
+	result[QStringLiteral("already")] = already;
+	if (add.isEmpty())
+		return result;
+	const auto added = p->watch.addEntries(add);
+	if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
+		result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+		return result;
+	}
+	const int count = added.value(QStringLiteral("added")).toInt();
+	result[QStringLiteral("added")] = count;
+	if (count > 0) {
+		p->undo = {};
+		p->undo.valid = true;
+		p->undo.added = true;
+		for (const auto& entry : std::as_const(add))
+			p->undo.addedIds.insert(entry.key);
+		p->undo.membership = p->watch.membership();
+		p->undo.treeEpoch = p->treeEpoch;
+	}
+	p->notify();
+	return result;
+}
+
 QString DynamicConfiguratorProvider::watchFormat() const
 {
 	return watch_format::name(d->watchFormat);

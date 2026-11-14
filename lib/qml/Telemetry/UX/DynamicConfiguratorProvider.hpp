@@ -154,6 +154,19 @@ public:
 	// "hex"}, as a project saves them; setWatchRowFormats puts them back, for
 	// rows watched now and rows added later.
 	Q_INVOKABLE QVariantMap watchRowFormats() const;
+	// The Watchlist's "+" row (WL-4b). What a typed path would add, in words
+	// for the line under it: {status: "adds", "watched", "missing", "error"
+	// or "empty", message, adds, already, row (a watched value's row, or -1)}.
+	Q_INVOKABLE QVariantMap checkWatchPath(const QString& text) const;
+	// What may come next in a typed path, at most 50:
+	// [{path, typeText, values, container, watched}], descriptor order.
+	Q_INVOKABLE QVariantList watchPathCandidates(const QString& text) const;
+	// Adds what each line names - a path ("device.Config.Gain", or a struct or
+	// array for all its values) or a line copied from the Watchlist
+	// ("path = value", "path<Tab>value") - as one change Undo takes back:
+	// {status: ok, capacity or refused, added, already, missing: [paths],
+	// refused: [{path, reason}]}.
+	Q_INVOKABLE QVariantMap addWatchPaths(const QStringList& lines);
 	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;

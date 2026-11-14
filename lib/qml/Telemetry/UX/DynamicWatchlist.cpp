@@ -82,8 +82,11 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		bool aggregate = false; // a struct or an array: watched value by value
 		QString name;           // the Field's own name: "Config"
 		QString group;          // its catalog's name: "device"
+		bool readable = true;   // a write-only Field can't be watched
 	};
 	QHash<quint32, FieldShape> fields;
+	// The Commands and Services by path, for a typed path's words.
+	QHash<QString, descriptor::Category> others;
 	bool enabled = false, attached = false, running = false, cycle = false, individual = false;
 	bool publishing = false, queued = false, retiring = false, clearRetiredRows = false;
 	bool deferredQueued = false;
@@ -322,7 +325,18 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		if (!context || binding != sourceBinding || epoch != revision) return false;
 		leaves.reset(metadata);
 		fields.clear();
+		others.clear();
 		if (metadata.valid()) {
+			for (const auto category : {descriptor::Category::Command, descriptor::Category::Service}) {
+				const auto groups = metadata.catalogs(category);
+				for (const auto& endpoint : metadata.endpoints(category))
+					if (endpoint.catalogIndex < groups.size())
+						others.insert(QString::fromUtf8(groups[endpoint.catalogIndex].name.data(),
+						                                qsizetype(groups[endpoint.catalogIndex].name.size())) +
+						                  QLatin1Char('.') +
+						                  QString::fromUtf8(endpoint.name.data(), qsizetype(endpoint.name.size())),
+						              category);
+			}
 			const auto catalogs = metadata.catalogs(descriptor::Category::Field);
 			for (const auto& endpoint : metadata.endpoints(descriptor::Category::Field)) {
 				const auto* type = metadata.type(endpoint.typeId);
@@ -333,7 +347,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				fields.insert(endpoint.id, {endpoint.typeId, type ? type->wireBytes : 0u,
 				                            type && (type->kind == TypeKind::Struct || type->kind == TypeKind::Array),
 				                            QString::fromUtf8(endpoint.name.data(), qsizetype(endpoint.name.size())),
-				                            group});
+				                            group,
+				                            (endpoint.capabilities &
+				                             static_cast<std::uint8_t>(descriptor::Capability::Readable)) != 0});
 			}
 		}
 		model.setSchemaMetadata(metadata);
@@ -1325,6 +1341,14 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 			++matches;
 		}
 	if (matches == 0) {
+		const auto head = parts->group + QLatin1Char('.') + parts->name;
+		const auto other = p->others.constFind(head);
+		if (other != p->others.cend()) {
+			out.error = other.value() == descriptor::Category::Command
+			                ? words("%1 is a Command. Only Fields can be watched.").arg(head)
+			                : words("%1 is a Service. Only Fields can be watched.").arg(head);
+			return out;
+		}
 		out.missing = true;
 		out.error = words("%1 is not on this device.").arg(typed);
 		return out;
@@ -1336,6 +1360,10 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 	const auto& shape = p->fields[found];
 	const auto fieldPath = parts->group + QLatin1Char('.') + parts->name;
 	const auto whole = watch_key::whole(found);
+	if (!shape.readable) {
+		out.error = words("%1 is write only, so it can't be watched.").arg(fieldPath);
+		return out;
+	}
 	if (!shape.aggregate) {
 		if (!parts->member.isEmpty()) {
 			out.error = words("%1 is not a struct or an array, so it has no %2.").arg(fieldPath, parts->member);
