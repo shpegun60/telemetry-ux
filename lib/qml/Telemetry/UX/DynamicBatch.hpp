@@ -99,6 +99,11 @@ public:
 	bool active() const;
 	bool canAdd(const BatchRow& row) const;
 	bool add(BatchRow row);
+	// Why rows could not be added, the first thing to fix first (BA-1).
+	enum class Refusal { None, Busy, Session, Permission, Items, Bytes };
+	[[nodiscard]] Refusal refusal(const QVector<BatchRow>& rows) const;
+	// All of rows after the others, in order, as one change; none if any is refused.
+	bool add(QVector<BatchRow> rows);
 	bool remove(int row);
 	bool move(int row, int delta);
 	bool clear();

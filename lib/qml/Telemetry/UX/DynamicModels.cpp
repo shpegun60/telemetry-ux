@@ -814,6 +814,53 @@ QString EndpointModel::fieldPath(std::uint32_t id) const
 	return {};
 }
 
+QVector<EndpointEntry> EndpointModel::endpointList() const
+{
+	QVector<EndpointEntry> list;
+	if (!impl_->current() || impl_->tree.changing)
+		return list;
+	// Depth first from the roots: the tree's own order. Endpoints sit under
+	// their group; a value row below one is not an endpoint and is skipped.
+	std::vector<const Row*> stack;
+	for (auto at = impl_->tree.roots.crbegin(); at != impl_->tree.roots.crend(); ++at)
+		stack.push_back(at->get());
+	while (!stack.empty()) {
+		const auto* row = stack.back();
+		stack.pop_back();
+		if (!row)
+			continue;
+		if (!row->endpoint) {
+			for (auto at = row->children.crbegin(); at != row->children.crend(); ++at)
+				stack.push_back(at->get());
+			continue;
+		}
+		EndpointEntry entry;
+		entry.category = row->category;
+		entry.id = row->endpointId;
+		entry.group = row->parent ? row->parent->name : QString{};
+		entry.name = row->name;
+		entry.path = row->path;
+		entry.typeText = row->category == static_cast<int>(Category::Field) || row->signature.isEmpty()
+		                     ? row->type : row->signature;
+		entry.requestBytes = row->category == static_cast<int>(Category::Field) ? 0 : row->wireBytes;
+		entry.readable = row->readable;
+		entry.writable = row->writable;
+		entry.aggregate = row->aggregate;
+		list.push_back(std::move(entry));
+	}
+	return list;
+}
+
+QModelIndex EndpointModel::endpointIndex(int category, std::uint32_t id) const
+{
+	if (!impl_->current() || impl_->tree.changing)
+		return {};
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row && row->endpoint && row->category == category && row->endpointId == id)
+			return createIndex(row->row, 0, row->token);
+	return {};
+}
+
 bool EndpointModel::matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const
 {
 	if (!impl_->current() || impl_->tree.changing)

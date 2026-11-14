@@ -342,6 +342,34 @@ void busySessionKeepsBatch()
 	CHECK(!batch.pending());
 }
 
+// Several rows at once (BA-1): all in one publication or none, and why not.
+void severalRows()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	const auto row = readRow(peer);
+	QSignalSpy resets(batch.model(), &QAbstractItemModel::modelReset);
+	CHECK(batch.refusal({row, row}) == ux::DynamicBatch::Refusal::None);
+	CHECK(batch.add(QVector<ux::BatchRow>{row, row}) && batch.count() == 2 && batch.selection() == 1);
+	CHECK(resets.count() == 1);  // one change for both
+	peer.limits = {32, 18, 42}; // Two repeated U64 reads fit; a third does not.
+	CHECK(batch.refusal({row}) == ux::DynamicBatch::Refusal::Bytes && !batch.add(QVector<ux::BatchRow>{row}) &&
+	      batch.count() == 2);
+	CHECK(batch.clear());
+	peer.limits = {2, 4096, 65536};
+	CHECK(batch.refusal({row, row, row}) == ux::DynamicBatch::Refusal::Items &&
+	      !batch.add(QVector<ux::BatchRow>{row, row, row}) && batch.count() == 0);
+	auto stranger = row;
+	stranger.session = peer.session + 1;
+	CHECK(batch.refusal({row, stranger}) == ux::DynamicBatch::Refusal::Session);
+	CHECK(batch.add(QVector<ux::BatchRow>{row}) && batch.execute());
+	CHECK(batch.refusal({row}) == ux::DynamicBatch::Refusal::Busy && !batch.add(QVector<ux::BatchRow>{row}));
+	peer.finish();
+	batch.poll();
+	CHECK(batch.refusal({}) == ux::DynamicBatch::Refusal::None && !batch.add(QVector<ux::BatchRow>{}));
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -351,6 +379,7 @@ int main(int argc, char** argv)
 	reentrantInvalidation();
 	externalModelInvalidation();
 	busySessionKeepsBatch();
+	severalRows();
 	std::printf("Dynamic Batch checks=%u no_native_callback_signals=1 bounded_items=32\n",
 	            f::checks);
 }

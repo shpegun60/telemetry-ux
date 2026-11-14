@@ -23,6 +23,19 @@ namespace telemetry::ux {
 
 class EndpointPreviews;
 
+// One endpoint of the device as the tree holds it, for finding it by name or
+// path (BA-1). category: 1 Field, 2 Command, 3 Service.
+struct EndpointEntry {
+	int category = 0;
+	std::uint32_t id = 0;
+	QString group, name, path;
+	// A Field's type; a Command's or Service's signature, "(u16)", "() -> f32".
+	QString typeText;
+	// A Command's or Service's request bytes; 0 takes no input.
+	std::uint32_t requestBytes = 0;
+	bool readable = false, writable = false, aggregate = false;
+};
+
 // The largest Field value the GUI reads whole (a struct read for its
 // members included) and the largest it writes back.
 inline constexpr std::size_t workbenchPayloadBytes = 4096;
@@ -109,6 +122,10 @@ public:
 	// The Field's value size in bytes, and its path; 0 and empty when unknown.
 	[[nodiscard]] std::uint32_t fieldWireBytes(std::uint32_t id) const;
 	[[nodiscard]] QString fieldPath(std::uint32_t id) const;
+	// Every endpoint, in the tree's order; empty while the tree changes.
+	[[nodiscard]] QVector<EndpointEntry> endpointList() const;
+	// The endpoint row with this category and id, or an invalid index.
+	[[nodiscard]] QModelIndex endpointIndex(int category, std::uint32_t id) const;
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& index) const override;
 	int rowCount(const QModelIndex& parent = {}) const override;

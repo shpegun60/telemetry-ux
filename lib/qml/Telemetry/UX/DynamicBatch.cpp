@@ -187,9 +187,16 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 
 	bool budgets(const BatchRow* candidate = nullptr) const
 	{
+		return budget(candidate, candidate ? 1 : 0) == DynamicBatch::Refusal::None;
+	}
+
+	// The item and byte budgets with candidates added: None, Items or Bytes;
+	// Session when the device says nothing of its limits.
+	DynamicBatch::Refusal budget(const BatchRow* candidates, qsizetype count) const
+	{
 		const auto limits = current() && source.capability ? source.capability() : std::nullopt;
 		if (!limits)
-			return false;
+			return DynamicBatch::Refusal::Session;
 		quint64 tx = 2, rx = 2;
 		const auto add = [&](const BatchRow& row) {
 			tx += 8 + quint64(row.request.size());
@@ -197,11 +204,14 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		};
 		for (const auto& row : model.rows())
 			add(row);
-		if (candidate)
-			add(*candidate);
-		const auto count = model.rows().size() + (candidate ? 1 : 0);
-		return count <= 32 && count <= limits->items && tx <= 4096 && tx <= limits->requestBytes &&
-		       rx <= responseMemory.size() && rx <= limits->replyBytes;
+		for (qsizetype at = 0; at < count; ++at)
+			add(candidates[at]);
+		const auto items = model.rows().size() + std::size_t(count);
+		if (items > 32 || items > limits->items)
+			return DynamicBatch::Refusal::Items;
+		if (tx > 4096 || tx > limits->requestBytes || rx > responseMemory.size() || rx > limits->replyBytes)
+			return DynamicBatch::Refusal::Bytes;
+		return DynamicBatch::Refusal::None;
 	}
 
 	void showResponse()
@@ -366,6 +376,42 @@ bool DynamicBatch::add(BatchRow row)
 	        ? QStringLiteral(
 	              "Field draft captured. Cancel closes the current editor; the Batch keeps its copy. Execute sends one ordered request.")
 	        : QStringLiteral("Draft - Execute sends one ordered Batch");
+	p->finishPublication();
+	p->signal();
+	return true;
+}
+
+DynamicBatch::Refusal DynamicBatch::refusal(const QVector<BatchRow>& rows) const
+{
+	if (!d->editable())
+		return Refusal::Busy;
+	if (!d->source.session)
+		return Refusal::Session;
+	for (const auto& row : rows) {
+		if (row.session != d->source.session())
+			return Refusal::Session;
+		if (row.operation != client::Operation::FieldRead && !d->permitted())
+			return Refusal::Permission;
+	}
+	return d->budget(rows.constData(), rows.size());
+}
+
+bool DynamicBatch::add(QVector<BatchRow> rows)
+{
+	auto p = d;
+	if (rows.isEmpty() || refusal(rows) != Refusal::None)
+		return false;
+	p->publishing = true;
+	auto all = p->model.rows();
+	for (auto& row : rows) {
+		row.request = QByteArray(row.request.constData(), row.request.size());
+		all.push_back(std::move(row));
+	}
+	p->selected = int(all.size()) - 1;
+	p->responses.clear();
+	p->snapshot.invalidate();
+	p->model.replace(std::move(all));
+	p->status = QStringLiteral("Draft - Execute sends one ordered Batch");
 	p->finishPublication();
 	p->signal();
 	return true;

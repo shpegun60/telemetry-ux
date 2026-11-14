@@ -72,7 +72,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
         DynamicModels.cpp DynamicModels.hpp DynamicConfiguratorProvider.cpp
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
         WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp
-        DynamicBatch.cpp DynamicBatch.hpp EndpointPreviews.cpp EndpointPreviews.hpp
+        DynamicBatch.cpp DynamicBatch.hpp EndpointPaths.cpp EndpointPaths.hpp EndpointPreviews.cpp EndpointPreviews.hpp
         SchemaText.cpp SchemaText.hpp ScalarEditorMetadata.hpp WatchLeaves.cpp WatchLeaves.hpp
         WatchFormat.cpp WatchFormat.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
