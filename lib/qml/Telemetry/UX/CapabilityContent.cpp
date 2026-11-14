@@ -109,9 +109,9 @@ CapabilityContent::CapabilityContent(const QByteArray& bytes, bool hasConnected,
 	    field(tr("Session"),
 	          QStringLiteral("0x") + QStringLiteral("%1").arg(record.session, 8, 16, QLatin1Char('0')).toUpper(),
 	          tr("new each time the device starts: the record holds for this run only")),
-	    field(tr("Descriptor"), fingerprintGroups_,
-	          binding_ == QStringLiteral("connected") ? tr("the connected device's")
-	          : binding_ == QStringLiteral("other")   ? tr("not the connected device's: these limits are another firmware's")
+	    field(tr("Fingerprint"), fingerprintGroups_,
+	          binding_ == QStringLiteral("connected") ? tr("matches the connected device")
+	          : binding_ == QStringLiteral("other")   ? tr("another firmware's: not the connected device")
 	                                                  : tr("the descriptor these limits apply to"),
 	          binding_ == QStringLiteral("other")),
 	};

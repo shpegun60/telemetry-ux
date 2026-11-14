@@ -105,24 +105,31 @@ QtObject {
 		auto* expanded = window->findChild<QObject*>("watchlistExpanded");
 		check(expanded && expanded->setProperty("checked", true));
 		drain();
-		QList<QQuickItem*> items;
-		collect(*window->contentItem(), items);
-		QSet<QString> names;
-		for (auto* item : items) {
-			const auto text = item->property("text").toString();
-			if (!text.contains(QStringLiteral("marker-")) ||
-			    !item->property("textFormat").isValid())
-				continue;
-			check(item->property("textFormat").toInt() == Qt::PlainText);
-			const auto begin = text.indexOf(QStringLiteral("marker-")) + 7;
-			names.insert(text.mid(begin, text.indexOf(QStringLiteral("</b>"), begin) - begin));
-		}
-		for (const auto* tag :
-		     {"selection", "endpoint", "member", "enum", "responseHeader", "responseMember",
-		      "responseEnum", "watchName", "watchStatus", "watchValue", "watchSummary",
-		      "writeOutcome", "commandOutcome", "serviceOutcome", "status"})
-			check(names.contains(QString::fromLatin1(tag)));
-		for (const auto* name : {"endpointToolTip", "valueToolTip", "responseToolTip"}) {
+		// Every literal marker on screen, each checked to be shown as plain text.
+		const auto shownMarkers = [&](QList<QQuickItem*>& items) {
+			items.clear();
+			collect(*window->contentItem(), items);
+			QSet<QString> names;
+			for (auto* item : items) {
+				const auto text = item->property("text").toString();
+				if (!text.contains(QStringLiteral("marker-")) ||
+				    !item->property("textFormat").isValid())
+					continue;
+				check(item->property("textFormat").toInt() == Qt::PlainText);
+				const auto begin = text.indexOf(QStringLiteral("marker-")) + 7;
+				names.insert(text.mid(begin, text.indexOf(QStringLiteral("</b>"), begin) - begin));
+			}
+			return names;
+		};
+		const auto expectMarkers = [&](const QSet<QString>& names, std::initializer_list<const char*> tags) {
+			for (const auto* tag : tags) {
+				if (!names.contains(QString::fromLatin1(tag)))
+					std::fprintf(stderr, "No plain-text marker for %s\n", tag);
+				check(names.contains(QString::fromLatin1(tag)));
+			}
+		};
+		// A row's tooltip on screen opens with its literal text.
+		const auto expectToolTip = [&](const QList<QQuickItem*>& items, const char* name) {
 			// A row on screen: a pooled, hidden delegate's tooltip does not open.
 			QObject* tip = nullptr;
 			for (auto* item : items) {
@@ -132,8 +139,10 @@ QtObject {
 				if (tip)
 					break;
 			}
-			if (!check(tip != nullptr))
-				continue;
+			if (!check(tip != nullptr)) {
+				std::fprintf(stderr, "Literal view: no %s on a visible row\n", name);
+				return;
+			}
 			check(tip->property("text").toString().contains(QStringLiteral("<img")));
 			check(QMetaObject::invokeMethod(tip, "open"));
 			drain();
@@ -152,6 +161,29 @@ QtObject {
 			check(content &&
 			      content->property("text").toString() == tip->property("text").toString());
 			check(QMetaObject::invokeMethod(tip, "close"));
+		};
+
+		// Disconnected with a Field selected: the tree, the values, the
+		// Watchlist and every outcome.
+		QList<QQuickItem*> items;
+		expectMarkers(shownMarkers(items),
+		              {"selection", "endpoint", "member", "enum", "watchName", "watchStatus", "watchValue",
+		               "watchSummary", "writeOutcome", "commandOutcome", "serviceOutcome", "status"});
+		for (const auto* name : {"endpointToolTip", "valueToolTip"})
+			expectToolTip(items, name);
+
+		// A Service's response belongs to that Service's Details: connected,
+		// with the Service that answered selected.
+		if (owner) {
+			const auto selection = owner->property("selection");
+			check(owner->setProperty("connected", true) && owner->setProperty("serviceSelected", true) &&
+			      owner->setProperty("selection", owner->property("serviceResponseEndpoint")));
+			drain();
+			expectMarkers(shownMarkers(items), {"responseHeader", "responseMember", "responseEnum"});
+			expectToolTip(items, "responseToolTip");
+			check(owner->setProperty("serviceSelected", false) && owner->setProperty("connected", false) &&
+			      owner->setProperty("selection", selection));
+			drain();
 		}
 		// A schema-supplied enum string reaches TrendHistory through the
 		// Watchlist. Its error status must remain literal, even when it looks

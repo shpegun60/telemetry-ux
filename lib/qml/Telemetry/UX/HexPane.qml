@@ -657,7 +657,8 @@ FocusScope {
                 Layout.maximumWidth: pane.width / 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
-                color: pane.saveProblem.length > 0 ? Theme.error : editState ? Theme.warning : Theme.info
+                // Editing is routine, not a warning; a failed save is an error.
+                color: pane.saveProblem.length > 0 ? Theme.error : editState ? Theme.textSecondary : Theme.info
                 text: {
                     if (pane.saveProblem.length > 0)
                         return pane.saveProblem
@@ -669,8 +670,8 @@ FocusScope {
                         // Short, so it fits beside the cursor's place; when the
                         // device's bytes were read is in the tooltip.
                         return pane.content.referenceDiffers === 1
-                               ? qsTr("Saved here · 1 byte differs from the device")
-                               : qsTr("Saved here · %L1 bytes differ from the device").arg(pane.content.referenceDiffers)
+                               ? qsTr("Saved locally · 1 byte differs from device")
+                               : qsTr("Saved locally · %L1 bytes differ from device").arg(pane.content.referenceDiffers)
                     const edited = pane.content.editedBytes
                     const state = pane.content.editing ? qsTr("Editing") : qsTr("Not saved")
                     return edited === 0 ? state

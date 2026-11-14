@@ -15,6 +15,7 @@
 #include <QtCore/QLocale>
 #include <QtCore/QSaveFile>
 #include <QtCore/QTimer>
+#include <optional>
 #include <algorithm>
 #include <cmath>
 
@@ -950,6 +951,10 @@ void DeviceFileTransfers::poll()
 				(void)job.writer->poll();
 			// A step may end and start the next at once: go on while it does.
 			const auto stepBefore = job.step;
+			// Ending an upload refreshes the copy's reference, and a receiver
+			// of that may clear finished rows: deferred until this row has
+			// been completed and announced.
+			std::optional<Notification> held(std::in_place, this);
 			const bool ended = advanceUpload(job);
 			if (!aliveModel)
 				return;
@@ -966,6 +971,9 @@ void DeviceFileTransfers::poll()
 			}
 			if (!complete(static_cast<int>(row)))
 				return;
+			// Completed and announced: a deferred clear may run now, and a
+			// receiver of what follows may retry.
+			held.reset();
 			const QPointer<DeviceFileTransfers> alive(this);
 			startNext();
 			if (alive)

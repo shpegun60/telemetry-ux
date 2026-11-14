@@ -23,9 +23,12 @@ FocusScope {
     // The file it shows; a descriptor does not change, so it is not read again.
     property var content: null
 
-    readonly property real typeWidth: Math.min(220, Math.max(120, width * 0.3))
-    readonly property real accessWidth: 120
-    readonly property bool accessShown: width >= 480
+    // The row family's widths (family_spec A3): Type as its words need, the
+    // access two letters under "rw"; it gives way first when names run short.
+    readonly property real typeWidth: Math.min(Math.round(Type.bodyPixels * 13), Math.max(Math.round(Type.bodyPixels * 6), width * 0.3))
+    readonly property real accessWidth: Math.ceil(accessMetrics.advanceWidth) + 2
+    readonly property bool accessShown: width >= Type.bodyPixels * 24
+    TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
     // For enabling the menu only; actions read current() when they run.
     readonly property bool hasCurrent: tree.currentRow >= 0
 
@@ -237,7 +240,9 @@ FocusScope {
             Label {
                 visible: view.accessShown
                 Layout.preferredWidth: view.accessWidth
-                text: qsTr("Access")
+                font.family: Type.fixedFamily
+                text: qsTr("rw")
+                Accessible.name: qsTr("Access")
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
             }

@@ -139,6 +139,13 @@ Pane {
                 width: transferList.width
                 // A row high, as every list's: the progress runs along its foot.
                 height: Type.rowHeight
+                HoverHandler { id: rowHover }
+                Rectangle {
+                    anchors.fill: parent
+                    color: rowHover.hovered ? Theme.stateHover : "transparent"
+                }
+                // A failure, or a write stopped part way.
+                readonly property bool alarming: !active && (failed || (upload && outcome === transfersPane.outcomePartial))
 
                 RowLayout {
                     anchors.fill: parent
@@ -146,33 +153,49 @@ Pane {
                     anchors.rightMargin: Type.padding
                     spacing: Type.padding
 
+                    // Which way it goes: up to the device, or down from it.
+                    ToolIcon {
+                        objectName: "deviceFileTransferDirection"
+                        Layout.preferredWidth: Type.iconSize
+                        Layout.preferredHeight: Type.iconSize
+                        name: transferRow.upload ? "upload" : "download"
+                        color: Theme.textSecondary
+                        Accessible.ignored: true
+                    }
                     Label {
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle
                         Layout.maximumWidth: transferList.width / 3
                         color: Theme.textPrimary
-                        text: transferRow.upload ? qsTr("↑ %1").arg(transferRow.name) : transferRow.name
+                        text: transferRow.name
                         Accessible.name: transferRow.upload ? qsTr("%1, written to the device").arg(transferRow.name)
                                                             : transferRow.name
                     }
+                    Item { Layout.fillWidth: true }
+                    // A failure's glyph in the error colour; its words stay readable.
+                    ToolIcon {
+                        objectName: "deviceFileTransferAlarm"
+                        visible: transferRow.alarming
+                        Layout.preferredWidth: Type.iconSize
+                        Layout.preferredHeight: Type.iconSize
+                        name: "error"
+                        color: Theme.error
+                        Accessible.ignored: true
+                    }
                     Label {
                         objectName: "deviceFileTransferFigures"
-                        Layout.fillWidth: true
+                        Layout.maximumWidth: transferList.width / 2
+                        horizontalAlignment: Text.AlignRight
                         elide: Text.ElideRight
                         font.pointSize: Type.caption
-                        // A failure, or a write stopped part way: in the error
-                        // colour and marked, however it begins.
-                        readonly property bool alarming: !transferRow.active && (transferRow.failed
-                            || (transferRow.upload && transferRow.outcome === transfersPane.outcomePartial))
                         color: transferRow.active ? Theme.textSecondary
-                             : alarming ? Theme.error
+                             : transferRow.alarming ? Theme.textPrimary
                              : transferRow.warned ? Theme.warning
                              : transferRow.saved || transferRow.state === transfersPane.stateWritten ? Theme.textSecondary
                              : Theme.textMuted
                         text: transferRow.active && transferRow.opening
                                   ? qsTr("Opening · %1").arg(transferRow.figures)
                             : transferRow.active ? transferRow.figures
-                            : alarming ? qsTr("! %1").arg(transferRow.result)
                             : transferRow.result
                         // Cut by a narrow panel: the whole of it on hover.
                         HoverHandler { id: figuresHover }
@@ -204,12 +227,17 @@ Pane {
                                          : qsTr("Write %1 to the device anyway").arg(transferRow.name)
                         onClicked: transfersPane.transfers.retry(transferRow.index, true)
                     }
-                    LinkButton {
+                    // A pictogram on the row under the pointer, its place kept
+                    // on every saved row so nothing moves.
+                    IconToolButton {
                         objectName: "deviceFileTransferShow"
                         // A copy read for the Viewer lives in the temporary folder.
                         visible: transferRow.saved && !transferRow.opening && !transferRow.upload
-                        text: qsTr("Show in folder")
-                        Accessible.name: qsTr("Show %1 in its folder").arg(transferRow.name)
+                        opacity: rowHover.hovered || visualFocus ? 1 : 0
+                        implicitHeight: Type.rowHeight
+                        implicitWidth: Type.rowHeight
+                        iconName: "folder"
+                        text: qsTr("Show %1 in its folder").arg(transferRow.name)
                         onClicked: transfersPane.showInFolderRequested(transferRow.localPath)
                     }
                 }

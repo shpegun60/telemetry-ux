@@ -951,9 +951,20 @@ void OpenFiles::close(int row)
 	QPointer<FileContent> content(files_[static_cast<std::size_t>(row)].get());
 	if (!content->retire())
 		return;
-	// Retirement is a public notification; a host may close the row itself.
-	if (!alive || !content || row >= count() || files_[static_cast<std::size_t>(row)].get() != content)
+	// Retirement is a public notification; a host may close the row itself,
+	// or another, which moves this one: it is found again by its content.
+	if (!alive || !content)
 		return;
+	if (row >= count() || files_[static_cast<std::size_t>(row)].get() != content) {
+		row = -1;
+		for (std::size_t at = 0; at < files_.size(); ++at)
+			if (files_[at].get() == content) {
+				row = static_cast<int>(at);
+				break;
+			}
+		if (row < 0)
+			return;
+	}
 	beginRemoveRows({}, row, row);
 	auto* closing = files_[static_cast<std::size_t>(row)].release();
 	files_.erase(files_.begin() + row);

@@ -56,7 +56,9 @@ public:
 		PreviewValueRole,
 		PreviewStateRole,
 		PreviewAgeMsRole,
-		PreviewReasonRole
+		PreviewReasonRole,
+		// A category's or group's number of endpoints; 0 on other rows.
+		CountRole
 	};
 	Q_ENUM(Role)
 

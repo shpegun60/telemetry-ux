@@ -419,7 +419,7 @@ Pane {
             Layout.bottomMargin: Type.tight
             wrapMode: Text.Wrap
             color: Theme.warning
-            text: visible ? qsTr("! %1").arg(viewer.content.codecError) : ""
+            text: visible ? viewer.content.codecError : ""
         }
 
         StackLayout {

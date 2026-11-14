@@ -197,7 +197,7 @@ def main():
             'details-unread-320.png', 'details-unread-480.png',
             'tree-preview-480.png', 'tree-preview-320.png',
             'tree-table-320.png', 'tree-table-600.png', 'tree-table-900.png',
-            'tree-table-320-scrolled.png',
+            'tree-metadata-only-320.png', 'tree-metadata-only-600.png',
             'details-edit-480.png', 'details-edit-320.png',
             'service-request-response-880.png')]
         report['endpoint_preview_ui'] = dict(checks=int(preview_ui_checks[1]), warnings=0,

@@ -106,6 +106,7 @@ Pane {
                                                      Math.max(Type.bodyPixels * 10.5, watchList.width * 0.38))
     // As wide as the widest status word, or its title.
     TextMetrics { id: widestStatus; font.family: panel.font.family; font.pointSize: Type.caption; text: qsTr("Unsupported") }
+    readonly property real columnGap: Math.round(Type.bodyPixels * 0.9)
     readonly property real statusColumnWidth: Math.ceil(widestStatus.advanceWidth) + Type.spacing
     readonly property real removeColumnWidth: Type.rowHeight
     // Rows end left of the overlay scrollbar, so × never sits under it.
@@ -452,10 +453,11 @@ Pane {
             Layout.fillWidth: true
             Layout.rightMargin: panel.scrollReserve
             Layout.topMargin: Type.tight
-            spacing: Type.padding
-            Label { objectName: "watchColumnName"; text: qsTr("Name"); color: Theme.textMuted; font.pointSize: Type.caption; Layout.leftMargin: Type.padding; Layout.preferredWidth: panel.nameColumnWidth - Type.padding }
-            Label { objectName: "watchColumnValue"; text: qsTr("Value"); color: Theme.textMuted; font.pointSize: Type.caption; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
-            Label { objectName: "watchColumnStatus"; text: qsTr("Status"); color: Theme.textMuted; font.pointSize: Type.caption; Layout.preferredWidth: panel.statusColumnWidth }
+            // The row family's gap: "230" and "OK" read as two things.
+            spacing: panel.columnGap
+            Label { objectName: "watchColumnName"; text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.leftMargin: Type.padding; Layout.preferredWidth: panel.nameColumnWidth - Type.padding }
+            Label { objectName: "watchColumnValue"; text: qsTr("Value"); color: Theme.textSecondary; font.pointSize: Type.caption; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true }
+            Label { objectName: "watchColumnStatus"; text: qsTr("Status"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.statusColumnWidth }
             Item { Layout.preferredWidth: panel.removeColumnWidth }
         }
 
@@ -605,7 +607,7 @@ Pane {
                     anchors.verticalCenter: parent.verticalCenter
                     columns: watchRow.compact ? 2 : 4
                     rowSpacing: 0
-                    columnSpacing: watchRow.compact ? Type.spacing : Type.padding
+                    columnSpacing: watchRow.compact ? Type.spacing : panel.columnGap
                     Label {
                         Layout.row: 0
                         Layout.column: 0

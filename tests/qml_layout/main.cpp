@@ -1071,7 +1071,7 @@ int main(int argc, char** argv)
         CHECK(query->setProperty("text", QStringLiteral("alpha.voltage")));
         QTest::qWait(250);
         resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
-        CHECK(resultRow);
+        CHECK(resultRow && "a result row for alpha.voltage");
         resultRow->forceActiveFocus();
         QTest::keyClick(searchWindow, Qt::Key_Return);
         settle();
@@ -1084,7 +1084,7 @@ int main(int argc, char** argv)
         QTest::qWait(250);
         CHECK(results->property("count").toInt() == 1 && fake->property("calls").toInt() == 2);
         resultRow = item(searchPanel, QStringLiteral("endpointSearchResult"));
-        CHECK(resultRow);
+        CHECK(resultRow && "a result row after the model's reset");
         click(searchWindow, resultRow);
         CHECK(fake->property("calls").toInt() == 3);
         CHECK(fake->property("selectedEndpointIndex").value<QModelIndex>() == alphaVoltage->index());

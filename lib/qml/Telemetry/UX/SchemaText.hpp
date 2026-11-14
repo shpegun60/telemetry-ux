@@ -4,8 +4,8 @@
  * @author Ruslan Kovtun (shpegun60)
  * SPDX-License-Identifier: MIT
  *
- * Shared by the Descriptor and Values views so a type reads the same in both
- * ("f32[3]", "enum Idle, Run, Fault", "struct, 4 members") and a value is
+ * Shared by the Descriptor and Values views and the Device tree so a type
+ * reads the same in each ("f32[3]", "enum Idle, Run", "struct (4)") and a value is
  * written one way everywhere: integers in decimal, floats as the shortest
  * text that reads back to the same number, enums by name. Internal to the
  * module; not installed.
@@ -22,8 +22,14 @@
 
 namespace telemetry::ux::schema_text {
 QString text(std::string_view view);
-// The type in words, short enough for one column.
+// The type in words, short enough for one column: "f32", "struct (3)",
+// "u8[16]", "enum Idle, Run".
 QString typeText(const runtime::RuntimeSchema& schema, TypeId id);
+// A Command's arguments as a signature: "()", "(bool)", "(f32, f32)".
+QString argumentsText(const runtime::RuntimeSchema& schema, TypeId id);
+// A Command's (returns false) or a Service's whole signature:
+// "(f32, f32) -> f32".
+QString signatureText(const runtime::RuntimeSchema& schema, TypeId request, TypeId response, bool returns);
 
 // How a value is written into JSON.
 enum class Json { Text, Number, Boolean };
@@ -37,6 +43,11 @@ struct Value {
 
 // A scalar or an enum, read through the view; "?" for anything else.
 Value valueText(const runtime::RuntimeSchema& schema, const runtime::DynamicValueView& view);
+
+// A struct or an array folded onto one line: a struct's first four members by
+// name, "{Gain 1, Enabled true, …}", nested ones as "{…}" and "[…]"; an array of
+// plain values, its first eight, "[1, 2, …]". Empty for anything else.
+QString summaryText(const runtime::RuntimeSchema& schema, const runtime::DynamicValueView& view);
 
 // A bound on the rows a copy or a find goes through: a large file stays quick.
 // cut says the bound was reached and the rest was left out.

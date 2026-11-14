@@ -186,7 +186,10 @@ int main(int argc, char** argv)
 					    auto* apply = window ? findVisual(window->contentItem(),
 					                                      QStringLiteral("applyButton"))
 					                         : nullptr;
+					    // Typed, as a person types: the editor commits on finishing
+					    // only what was edited, so the smoke marks it edited too.
 					    if (!editor || !editor->setProperty("text", QStringLiteral("25")) ||
+					        !editor->setProperty("inputDirty", true) ||
 					        !QMetaObject::invokeMethod(editor, "editingFinished") || !apply ||
 					        !apply->isEnabled() || !QMetaObject::invokeMethod(apply, "clicked"))
 						    app.exit(22);

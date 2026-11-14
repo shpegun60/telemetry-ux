@@ -599,7 +599,10 @@ struct DynamicConfiguratorProvider::Impl {
 				                       : operationText(result.operation);
 			}
 			if (!current()) {
-				if (!releasePreviewLeases()) {
+				// Only a provider that is gone stops here: one rebound while
+				// its leases were released still retires, and still announces
+				// the outcomes it has already taken off the queue.
+				if (!releasePreviewLeases() && !q) {
 					updating = false;
 					return;
 				}
@@ -1265,6 +1268,43 @@ int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
 		return -1;
 	p->ensureCoverage();
 	return p->coverage.state(index, p->held(), p->watch.membership());
+}
+
+QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) const
+{
+	auto p = d;
+	// Until the Watchlist can tell what it holds, a box is not refused yet.
+	if (!p->current() || p->updating || p->endpoints.changing() || !index.isValid() ||
+	    index.model() != &p->endpoints || !p->watch.canTellHoldable() || watchState(index) >= 0)
+		return {};
+	using Role = EndpointModel::Role;
+	if (index.data(Role::CategoryRole).toInt() != static_cast<int>(telemetry::descriptor::Category::Field))
+		return {};
+	// The Field a row belongs to, by its path: the row itself or the nearest
+	// endpoint above a member.
+	auto field = index;
+	while (field.isValid() && !field.data(Role::IsEndpointRole).toBool())
+		field = field.parent();
+	const auto path = [](const QModelIndex& at) {
+		const auto group = at.parent().data(Role::NameRole).toString();
+		const auto name = at.data(Role::NameRole).toString();
+		return group.isEmpty() ? name : group + QLatin1Char('.') + name;
+	};
+	if (index.data(Role::PreviewChildRole).toBool())
+		return field.isValid()
+		    ? tr("The Watchlist can't hold a struct's member yet: read %1 in Details.").arg(path(field))
+		    : QString{};
+	if (index.data(Role::IsEndpointRole).toBool()) {
+		if (!index.data(Role::ReadableRole).toBool())
+			return tr("A write-only Field can't be read, so it can't be watched.");
+		if (index.data(Role::PreviewAggregateRole).toBool() || index.data(Role::WireBytesRole).toUInt() > 8)
+			return tr("The Watchlist can't hold a struct yet: read %1 in Details.").arg(path(index));
+		return {};
+	}
+	// A group or the Fields themselves, with nothing the Watchlist can hold.
+	return p->endpoints.rowCount(index) > 0
+	    ? tr("Nothing in %1 can be watched yet.").arg(index.data(Role::NameRole).toString())
+	    : QString{};
 }
 
 QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexes, bool watched)
