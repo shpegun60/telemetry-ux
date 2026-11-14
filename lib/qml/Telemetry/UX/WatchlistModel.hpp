@@ -18,6 +18,7 @@
 #include <QtCore/QVector>
 #include <limits>
 #include <functional>
+#include <utility>
 
 namespace telemetry::ux {
 namespace detail { class ScalarEditorMetadata; }
@@ -31,6 +32,22 @@ struct WatchEntry {
 	QString name;   // the row's path: "device.Config.Gain"
 	QString member;
 	TypeId type = 0;
+	// A value's write covers its whole Field: the Field's own name
+	// ("Config"), how many other values it holds, and what they are.
+	QString scope;
+	quint32 others = 0;
+	enum class Kind : quint8 { Members, Elements, Values } kind = Kind::Members;
+
+	// An entry for key; its write scope is the Watchlist's to fill in.
+	static WatchEntry of(WatchKey key, QString name, QString member = {}, TypeId type = 0)
+	{
+		WatchEntry entry;
+		entry.key = key;
+		entry.name = std::move(name);
+		entry.member = std::move(member);
+		entry.type = type;
+		return entry;
+	}
 };
 
 class WatchlistModel final : public QAbstractListModel {
@@ -55,7 +72,13 @@ public:
 		TypeTextRole,
 		CategoricalRole, // Boolean/enum observations use step presentation
 		WatchKeyRole,    // qulonglong WatchKey: the Field id, or a value inside it
-		MemberRole       // the value's member text; empty for a whole Field
+		MemberRole,      // the value's member text; empty for a whole Field
+		// A value's write: {field: "Config", others: 20, kind: "members" |
+		// "elements" | "values"}; empty for a whole Field.
+		WriteScopeRole,
+		// Why the row is not written from the Watchlist, in words; empty when
+		// it is writable or there is nothing to say.
+		WriteRefusalRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
@@ -65,8 +88,10 @@ public:
 	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
 	void bind(const Workbench& owner) noexcept;
 	void bind(std::function<bool()> current);
-	// Asked once per row as it is added: whether the row accepts writes.
+	// Asked once per row as it is added: whether the row accepts writes, and
+	// why not in words.
 	void setWritable(std::function<bool(WatchKey)> writable);
+	void setWriteRefusal(std::function<QString(WatchKey)> refusal);
 	bool add(quint32 id, QString name);
 	bool add(const WatchEntry& entry);
 	bool addMany(const QVector<QPair<quint32, QString>>& entries);
@@ -115,8 +140,10 @@ private:
 	struct Row {
 		WatchKey key = 0;
 		quintptr token = 0;
-		QString name, member, status, text, sampleText;
+		QString name, member, status, text, sampleText, scope, refusal;
 		TypeId type = 0;
+		quint32 others = 0;
+		WatchEntry::Kind kind = WatchEntry::Kind::Members;
 		quint64 sampleRevision = 0;
 		WatchSample sample;
 		bool writable = false;
@@ -133,6 +160,7 @@ private:
 	const Workbench* owner_ = nullptr;
 	std::function<bool()> current_;
 	std::function<bool(WatchKey)> writable_;
+	std::function<QString(WatchKey)> refusal_;
 	mutable QHash<WatchKey, int> rowOf_;
 	mutable quint64 rowOfMembership_ = ~quint64{0};
 	std::uint32_t session_ = 0;

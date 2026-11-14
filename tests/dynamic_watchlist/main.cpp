@@ -938,13 +938,24 @@ void exactCompletionFrames()
 }
 } // namespace
 
+// A Watchlist entry as a host names it; its type and write scope are the
+// Watchlist's to fill in.
+ux::WatchEntry entryOf(ux::WatchKey key, const QString& name, const QString& member = {})
+{
+	ux::WatchEntry entry;
+	entry.key = key;
+	entry.name = name;
+	entry.member = member;
+	return entry;
+}
+
 // The Config values of the members fixture, as the Device tree would name them.
 QVector<ux::WatchEntry> configEntries(std::initializer_list<quint32> ordinals)
 {
 	QVector<ux::WatchEntry> entries;
 	for (const auto ordinal : ordinals)
-		entries.push_back({ux::watch_key::member(members::config, ordinal),
-		                   QStringLiteral("device.Config #%1").arg(ordinal), {}, 0});
+		entries.push_back(entryOf(ux::watch_key::member(members::config, ordinal),
+		                          QStringLiteral("device.Config #%1").arg(ordinal)));
 	return entries;
 }
 
@@ -958,15 +969,15 @@ void memberPlan()
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
 	auto* model = watch.model();
-	QVector<ux::WatchEntry> rows{{ux::watch_key::whole(2), "device.Two", {}, 0}};
+	QVector<ux::WatchEntry> rows{entryOf(ux::watch_key::whole(2), "device.Two")};
 	rows += configEntries({5});
-	rows.push_back({ux::watch_key::whole(3), "device.Three", {}, 0});
+	rows.push_back(entryOf(ux::watch_key::whole(3), "device.Three"));
 	rows += configEntries({0});
-	rows.push_back({ux::watch_key::whole(4), "device.Four", {}, 0});
+	rows.push_back(entryOf(ux::watch_key::whole(4), "device.Four"));
 	// Refused: past the last value, a scalar Field's "member", a wrong member text.
 	rows += configEntries({members::leaves});
-	rows.push_back({ux::watch_key::member(0, 0), "device.Counter", {}, 0});
-	rows.push_back({ux::watch_key::member(members::config, 1), "device.Config.enabled", "gain", 0});
+	rows.push_back(entryOf(ux::watch_key::member(0, 0), "device.Counter"));
+	rows.push_back(entryOf(ux::watch_key::member(members::config, 1), "device.Config.enabled", "gain"));
 	rows += configEntries({5});
 	const auto added = watch.addEntries(rows);
 	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 5);
@@ -1075,7 +1086,7 @@ void memberUrgent()
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
 	auto rows = configEntries({1, 0});
-	rows.push_back({ux::watch_key::whole(2), "device.Two", {}, 0});
+	rows.push_back(entryOf(ux::watch_key::whole(2), "device.Two"));
 	CHECK(watch.addEntries(rows).value("added").toInt() == 3);
 	std::vector<ux::WatchFrame> frames;
 	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
@@ -1121,7 +1132,7 @@ void memberFailure()
 		ux::DynamicWatchlist watch(&owner);
 		watch.setSource(peer.source());
 		auto rows = configEntries({0, 1});
-		rows.push_back({ux::watch_key::whole(2), "device.Two", {}, 0});
+		rows.push_back(entryOf(ux::watch_key::whole(2), "device.Two"));
 		CHECK(watch.addEntries(rows).value("added").toInt() == 3);
 		std::vector<ux::WatchFrame> frames;
 		watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });

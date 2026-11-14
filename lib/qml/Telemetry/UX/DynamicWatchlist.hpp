@@ -15,11 +15,11 @@ namespace telemetry::ux {
 struct WatchlistCompletion {
 	struct Row {
 		quint32 id = 0;
-		quint32 leaf = 0; // 0 for a whole Field, else 1 + the value's leaf ordinal
 		QString status, text;
 		WatchSample sample; // WatchlistModel::sampleOf() of the same value as text
 		qint32 itemStatus = -1, valueStatus = -1;
 		WatchValueBits value;
+		quint32 leaf = 0; // 0 for a whole Field, else 1 + the value's leaf ordinal
 	};
 
 	client::Status status = client::Status::Ok;
@@ -76,6 +76,7 @@ public:
 	void setCompletionObserver(std::function<void(const WatchFrame&)> observer);
 	void setSource(WatchlistSource source);
 	void setWritable(std::function<bool(WatchKey)> writable);
+	void setWriteRefusal(std::function<QString(WatchKey)> refusal);
 	void retire(bool clearRows = true);
 	void poll(); // Only after native callback/progress has returned.
 	void tick(); // Local scheduler tick, also usable with a controlled test clock.
@@ -106,6 +107,19 @@ public:
 	                                           const QString& fieldPath) const;
 	// Whether this connection reads struct members (readMembers).
 	bool readsMembers() const;
+	// Where a value is in its Field (the steps a write walks); nullopt for a
+	// whole Field or a key not of this device.
+	std::optional<WatchLeaves::Leaf> leaf(WatchKey key) const;
+	// A saved row back to an entry: the Field by its group and name (exactly
+	// one), a value inside it by its member text. Missing: no such Field or
+	// value; Ambiguous: two Fields of that name; Unwatchable: the Watchlist
+	// cannot hold it on this device.
+	enum class Resolution { Ok, Missing, Ambiguous, Unwatchable };
+	std::pair<Resolution, WatchEntry> resolve(const QString& group, const QString& name,
+	                                          const QString& member) const;
+	// A row as it is saved: {group, name} or {group, name, member}; empty
+	// when the row or its Field is not known.
+	QVariantMap binding(int row) const;
 	// Whether holdable can answer now; cheap.
 	bool canTellHoldable() const;
 	// The keys held, and a counter that moves whenever they change.

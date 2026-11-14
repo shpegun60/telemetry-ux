@@ -106,6 +106,9 @@ public:
 	bool matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const;
 	// Whether the current device's Field with this id accepts writes.
 	[[nodiscard]] bool fieldWritable(std::uint32_t id) const;
+	// The Field's value size in bytes, and its path; 0 and empty when unknown.
+	[[nodiscard]] std::uint32_t fieldWireBytes(std::uint32_t id) const;
+	[[nodiscard]] QString fieldPath(std::uint32_t id) const;
 	QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
 	QModelIndex parent(const QModelIndex& index) const override;
 	int rowCount(const QModelIndex& parent = {}) const override;

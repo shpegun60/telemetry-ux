@@ -147,6 +147,13 @@ public:
 	// "members", "elements", "values" (a struct or an array, or a group with
 	// one below) or "fields"; empty where there is no box.
 	Q_INVOKABLE QVariantMap watchTally(const QModelIndex& index) const;
+	// The Watchlist as a project saves it: each row in order as {group, name}
+	// (a whole Field) or {group, name, member} (a value inside one); empty
+	// when it cannot tell. addWatchBindings puts such rows back in one change:
+	// {status, added, duplicate, capacity, missing: [positions of entries no
+	// Field or value of this device matches, or it can't hold]}.
+	Q_INVOKABLE QVariantList watchBindings() const;
+	Q_INVOKABLE QVariantMap addWatchBindings(const QVariantList& bindings);
 	// Watches, or stops watching, every Field the Watchlist can hold at or
 	// under each index, in tree order, as one change: {status: ok, refused,
 	// invalid, stale or capacity, changed, unchanged, fields, room}. At

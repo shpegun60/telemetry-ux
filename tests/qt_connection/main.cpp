@@ -556,12 +556,13 @@ void memberWatchBoxes()
 	      provider->watchState(matrix) == Qt::PartiallyChecked && provider->watchState(gain) == Qt::Checked);
 	tally = provider->watchTally(config);
 	CHECK(tally.value("watched").toInt() == 2 && tally.value("total").toInt() == 21);
-	// Rows are named by path and keep their member text; not written from the row yet.
+	// Rows are named by path and keep their member text; written from the row
+	// by writing Config, a writable struct within one write.
 	auto* list = provider->watchlist();
 	CHECK(list->rowCount() == 2 && list->index(0, 0).data(Qt::DisplayRole).toString() == "device.Config.Gain" &&
 	      list->index(1, 0).data(Qt::DisplayRole).toString() == "device.Config.Matrix[1][0]" &&
 	      list->index(1, 0).data(ux::WatchlistModel::MemberRole).toString() == "Matrix[1][0]" &&
-	      !list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool());
+	      list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool());
 	// One read of Config answers both, as one frame.
 	std::vector<ux::WatchFrame> frames;
 	QObject observer;
@@ -617,6 +618,126 @@ void memberWatchBoxes()
 	CHECK(dataList->index(3, 0).data(Qt::DisplayRole).toString() == "data.Samples[259]" &&
 	      dataList->index(3, 0).data(ux::WatchlistModel::MemberRole).toString() == "[259]");
 	dataConnection.disconnect();
+}
+
+// A project saves the Watchlist as paths: {group, name} for a whole Field,
+// {group, name, member} for a value inside one. Saved rows come back in their
+// order; a path this device does not have is reported by its position.
+void watchBindings()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	CHECK(provider->watchBindings().isEmpty() && provider->addWatchBindings({}).value("status") == "refused");
+	connect(connection, peer);
+	auto* model = provider->endpoints();
+	const auto child = [model](const QModelIndex& parent, const QString& name) {
+		while (model->canFetchMore(parent))
+			model->fetchMore(parent);
+		for (int row = 0; row < model->rowCount(parent); ++row) {
+			const auto index = model->index(row, 0, parent);
+			if (index.data(ux::EndpointModel::NameRole).toString() == name)
+				return index;
+		}
+		return QModelIndex{};
+	};
+	const auto config = endpoint(model, QStringLiteral("Config"), {}, 1);
+	const auto setpoint = endpoint(model, QStringLiteral("Setpoint"), {}, 1);
+	const auto gain = child(config, QStringLiteral("Gain"));
+	const auto cell = child(child(child(config, QStringLiteral("Matrix")), QStringLiteral("[1]")), QStringLiteral("[0]"));
+	CHECK(provider->setWatchMany({QVariant::fromValue(setpoint)}, true).value("changed").toInt() == 1);
+	CHECK(provider->setWatchMany({QVariant::fromValue(gain), QVariant::fromValue(cell)}, true).value("changed").toInt() == 2);
+	auto* list = provider->watchlist();
+	const auto names = [list] {
+		QStringList all;
+		for (int row = 0; row < list->rowCount(); ++row)
+			all << list->index(row, 0).data(Qt::DisplayRole).toString();
+		return all;
+	};
+	const auto before = names();
+	const auto saved = provider->watchBindings();
+	CHECK(saved.size() == 3);
+	CHECK(saved[0].toMap() == QVariantMap({{"group", "device"}, {"name", "Setpoint"}}));
+	CHECK(saved[1].toMap() == QVariantMap({{"group", "device"}, {"name", "Config"}, {"member", "Gain"}}));
+	CHECK(saved[2].toMap() == QVariantMap({{"group", "device"}, {"name", "Config"}, {"member", "Matrix[1][0]"}}));
+	provider->clearWatch();
+	CHECK(provider->watchCount() == 0);
+	auto entries = saved;
+	entries << QVariantMap({{"group", "device"}, {"name", "Config"}, {"member", "Matrix[2][0]"}})
+	        << QVariantMap({{"group", "device"}, {"name", "Absent"}})
+	        << QVariantMap({{"group", "device"}, {"name", "Config"}});
+	const auto result = provider->addWatchBindings(entries);
+	CHECK(result.value("status") == "ok" && result.value("added").toInt() == 3);
+	CHECK(result.value("missing").toList() == QVariantList({3, 4, 5}));
+	CHECK(names() == before && provider->watchState(gain) == Qt::Checked);
+	connection.disconnect();
+	CHECK(provider->watchBindings().isEmpty());
+}
+
+// A value inside a struct is written from its row by writing its whole Field:
+// the Field is read, the value changed in it, the whole Field written and read
+// back. The other values keep what was read. The row says what Write all covers.
+void memberRowWrite()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	auto* model = provider->endpoints();
+	const auto child = [model](const QModelIndex& parent, const QString& name) {
+		while (model->canFetchMore(parent))
+			model->fetchMore(parent);
+		for (int row = 0; row < model->rowCount(parent); ++row) {
+			const auto index = model->index(row, 0, parent);
+			if (index.data(ux::EndpointModel::NameRole).toString() == name)
+				return index;
+		}
+		return QModelIndex{};
+	};
+	const auto config = endpoint(model, QStringLiteral("Config"), {}, 1);
+	const auto gain = child(config, QStringLiteral("Gain"));
+	const auto counter = child(config, QStringLiteral("Counter"));
+	const auto cell = child(child(child(config, QStringLiteral("Matrix")), QStringLiteral("[1]")), QStringLiteral("[0]"));
+	CHECK(provider->setWatchMany({QVariant::fromValue(gain), QVariant::fromValue(counter), QVariant::fromValue(cell)}, true)
+	          .value("changed").toInt() == 3);
+	auto* list = provider->watchlist();
+	const auto scope = list->index(0, 0).data(ux::WatchlistModel::WriteScopeRole).toMap();
+	CHECK(scope.value("field") == "Config" && scope.value("others").toInt() == 20 && scope.value("kind") == "values");
+	CHECK(list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool() &&
+	      list->index(0, 0).data(ux::WatchlistModel::WriteRefusalRole).toString().isEmpty());
+	const auto text = [list](int row) { return list->index(row, 0).data(ux::WatchlistModel::TextRole).toString(); };
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && text(0) == "1"; }));
+	CHECK(text(1) == "18446744073709551615" && text(2) == "3");
+	QSignalSpy finished(provider, &ux::DynamicConfiguratorProvider::watchWriteFinished);
+	const auto writes = peer.nativeWrites();
+	CHECK(provider->writeWatch(0, QStringLiteral("2.0")));
+	CHECK(await([&] { return finished.count() == 1; }));
+	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
+	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2."));
+	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));
+	CHECK(text(1) == "18446744073709551615" && text(2) == "3");
+	// The element of a nested array, the same way.
+	CHECK(provider->writeWatch(2, QStringLiteral("-7")));
+	CHECK(await([&] { return finished.count() == 2; }));
+	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Matrix[1][0] = -7 · read back -7."));
+	CHECK(await([&] { return !provider->watchActive() && text(2) == "-7"; }));
+	CHECK(text(0) == "2" && text(1) == "18446744073709551615");
+	// An invalid text is refused locally and nothing is written.
+	const auto before = peer.nativeWrites();
+	CHECK(provider->writeWatch(0, QStringLiteral("gain")));
+	CHECK(await([&] { return finished.count() == 3; }));
+	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
+	      provider->watchWriteOutcome().contains(QStringLiteral("is not a valid value")));
+	connection.disconnect();
 }
 
 // The Watchlist and the rest of the panel work together. Selecting a Command or
@@ -880,7 +1001,7 @@ void watchRowWrite()
 		return finished.count() == 1;
 	}));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("confirmed")));
+	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Setpoint = 1234 · read back 1234."));
 	CHECK(await([&] {
 		return text(0) == QStringLiteral("1234");
 	}));
@@ -1516,6 +1637,8 @@ int main(int argc, char** argv)
 	bulkSessionWatch();
 	groupWatchBoxes();
 	memberWatchBoxes();
+	memberRowWrite();
+	watchBindings();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();

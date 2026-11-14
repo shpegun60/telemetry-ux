@@ -74,6 +74,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		TypeId type = 0;
 		quint32 bytes = 0;
 		bool aggregate = false; // a struct or an array: watched value by value
+		QString name;           // the Field's own name: "Config"
+		QString group;          // its catalog's name: "device"
 	};
 	QHash<quint32, FieldShape> fields;
 	bool enabled = false, attached = false, running = false, cycle = false, individual = false;
@@ -289,14 +291,30 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		if (!context || binding != sourceBinding || epoch != revision) return false;
 		leaves.reset(metadata);
 		fields.clear();
-		if (metadata.valid())
+		if (metadata.valid()) {
+			const auto catalogs = metadata.catalogs(descriptor::Category::Field);
 			for (const auto& endpoint : metadata.endpoints(descriptor::Category::Field)) {
 				const auto* type = metadata.type(endpoint.typeId);
+				const auto group = endpoint.catalogIndex < catalogs.size()
+				                       ? QString::fromUtf8(catalogs[endpoint.catalogIndex].name.data(),
+				                                           qsizetype(catalogs[endpoint.catalogIndex].name.size()))
+				                       : QString{};
 				fields.insert(endpoint.id, {endpoint.typeId, type ? type->wireBytes : 0u,
-				                            type && (type->kind == TypeKind::Struct || type->kind == TypeKind::Array)});
+				                            type && (type->kind == TypeKind::Struct || type->kind == TypeKind::Array),
+				                            QString::fromUtf8(endpoint.name.data(), qsizetype(endpoint.name.size())),
+				                            group});
 			}
+		}
 		model.setSchemaMetadata(metadata);
 		return context && binding == sourceBinding && epoch == revision;
+	}
+
+	// Whether the schema says this Field is a struct or an array: watched by
+	// its values only, never whole, whatever fieldBytes says of its size.
+	bool aggregateField(quint32 id) const
+	{
+		const auto shape = fields.constFind(id);
+		return shape != fields.cend() && shape->aggregate;
 	}
 
 	// A value inside a struct or array Field this source can read: its member
@@ -315,7 +333,27 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		entry.type = leaf->type;
 		if (entry.member.isEmpty())
 			entry.member = leaf->member();
+		scope(entry, *shape);
 		return entry.member == leaf->member();
+	}
+
+	// What a write of this value covers: the whole Field and its other values.
+	void scope(WatchEntry& entry, const FieldShape& shape) const
+	{
+		entry.scope = shape.name;
+		const auto leaves = this->leaves.count(shape.type);
+		entry.others = leaves ? leaves - 1 : 0;
+		switch (this->leaves.kind(shape.type)) {
+			case WatchLeaves::Kind::Members:
+				entry.kind = WatchEntry::Kind::Members;
+				break;
+			case WatchLeaves::Kind::Elements:
+				entry.kind = WatchEntry::Kind::Elements;
+				break;
+			case WatchLeaves::Kind::Values:
+				entry.kind = WatchEntry::Kind::Values;
+				break;
+		}
 	}
 
 	void attach(WatchlistSource value)
@@ -940,7 +978,7 @@ bool DynamicWatchlist::canAdd(quint32 id) const
 	    p->model.count() == WatchlistModel::maxRows)
 		return false;
 	const auto bytes = p->source.fieldBytes(id);
-	if (!bytes || !*bytes || *bytes > 8)
+	if (!bytes || !*bytes || *bytes > 8 || p->aggregateField(id))
 		return false;
 	return p->model.rowOf(watch_key::whole(id)) < 0;
 }
@@ -963,7 +1001,7 @@ QVariantMap DynamicWatchlist::addMany(const QVector<QPair<quint32, QString>>& en
 	QVector<WatchEntry> whole;
 	whole.reserve(entries.size());
 	for (const auto& entry : entries)
-		whole.push_back({watch_key::whole(entry.first), entry.second, {}, 0});
+		whole.push_back(WatchEntry::of(watch_key::whole(entry.first), entry.second));
 	return addEntries(whole);
 }
 
@@ -1006,7 +1044,7 @@ QVariantMap DynamicWatchlist::addEntries(const QVector<WatchEntry>& entries)
 				result[QStringLiteral("status")] = QStringLiteral("stale");
 				return result;
 			}
-			holdable = bytes && *bytes && *bytes <= 8;
+			holdable = bytes && *bytes && *bytes <= 8 && !p->aggregateField(watch_key::field(entry.key));
 			entry.member.clear();
 			entry.type = 0;
 		} else {
@@ -1088,12 +1126,12 @@ std::optional<QHash<quint32, WatchHolding>> DynamicWatchlist::holdable(const QSe
 	if (p->source.holdable) {
 		const auto all = p->source.holdable();
 		for (const auto id : ids)
-			if (all.contains(id))
+			if (all.contains(id) && !p->aggregateField(id))
 				found.insert(id, {});
 	} else {
 		for (const auto id : ids) {
 			const auto bytes = p->source.fieldBytes(id);
-			if (bytes && *bytes && *bytes <= 8)
+			if (bytes && *bytes && *bytes <= 8 && !p->aggregateField(id))
 				found.insert(id, {});
 		}
 	}
@@ -1128,14 +1166,76 @@ std::optional<QVector<WatchEntry>> DynamicWatchlist::entries(quint32 field, quin
 		const auto leaf = p->leaves.locate(shape->type, quint32(ordinal));
 		if (!leaf)
 			return std::nullopt;
-		found.push_back({key, fieldPath + leaf->suffix, leaf->member(), leaf->type});
+		auto entry = WatchEntry::of(key, fieldPath + leaf->suffix, leaf->member(), leaf->type);
+		p->scope(entry, *shape);
+		found.push_back(std::move(entry));
 	}
 	return found;
+}
+
+std::optional<WatchLeaves::Leaf> DynamicWatchlist::leaf(WatchKey key) const
+{
+	auto p = d;
+	if (watch_key::isWhole(key) || !p->current())
+		return std::nullopt;
+	const auto shape = p->fields.constFind(watch_key::field(key));
+	if (shape == p->fields.cend() || !shape->aggregate)
+		return std::nullopt;
+	return p->leaves.locate(shape->type, watch_key::ordinal(key));
 }
 
 bool DynamicWatchlist::readsMembers() const
 {
 	return bool(d->source.readMembers);
+}
+
+std::pair<DynamicWatchlist::Resolution, WatchEntry>
+DynamicWatchlist::resolve(const QString& group, const QString& name, const QString& member) const
+{
+	auto p = d;
+	if (!canTellHoldable())
+		return {Resolution::Missing, {}};
+	quint32 found = 0;
+	int matches = 0;
+	for (auto it = p->fields.cbegin(); it != p->fields.cend(); ++it)
+		if (it->group == group && it->name == name) {
+			found = it.key();
+			++matches;
+		}
+	if (matches == 0)
+		return {Resolution::Missing, {}};
+	if (matches > 1)
+		return {Resolution::Ambiguous, {}};
+	const auto& shape = p->fields[found];
+	const auto path = group.isEmpty() ? name : group + QLatin1Char('.') + name;
+	if (member.isEmpty()) {
+		const auto bytes = p->source.fieldBytes(found);
+		if (!bytes || !*bytes || *bytes > 8)
+			return {Resolution::Unwatchable, {}};
+		return {Resolution::Ok, WatchEntry::of(watch_key::whole(found), path)};
+	}
+	const auto ordinal = shape.aggregate ? p->leaves.ordinal(shape.type, member) : std::nullopt;
+	if (!ordinal)
+		return {Resolution::Missing, {}};
+	auto entry = WatchEntry::of(watch_key::member(found, *ordinal), {}, member);
+	if (!p->memberEntry(entry))
+		return {Resolution::Unwatchable, {}};
+	const auto leaf = p->leaves.locate(shape.type, *ordinal);
+	entry.name = path + (leaf ? leaf->suffix : QString{});
+	return {Resolution::Ok, entry};
+}
+
+QVariantMap DynamicWatchlist::binding(int row) const
+{
+	auto p = d;
+	const auto key = p->model.key(row);
+	const auto shape = p->fields.constFind(watch_key::field(key));
+	if (row < 0 || row >= p->model.count() || shape == p->fields.cend())
+		return {};
+	QVariantMap saved{{QStringLiteral("group"), shape->group}, {QStringLiteral("name"), shape->name}};
+	if (!watch_key::isWhole(key))
+		saved.insert(QStringLiteral("member"), p->model.member(row));
+	return saved;
 }
 
 QSet<WatchKey> DynamicWatchlist::held() const
@@ -1177,6 +1277,11 @@ bool DynamicWatchlist::restore(const QVector<WatchlistModel::Removed>& rows)
 void DynamicWatchlist::setWritable(std::function<bool(WatchKey)> writable)
 {
 	d->model.setWritable(std::move(writable));
+}
+
+void DynamicWatchlist::setWriteRefusal(std::function<QString(WatchKey)> refusal)
+{
+	d->model.setWriteRefusal(std::move(refusal));
 }
 
 int DynamicWatchlist::count() const

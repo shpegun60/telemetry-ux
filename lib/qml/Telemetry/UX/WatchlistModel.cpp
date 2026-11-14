@@ -161,6 +161,11 @@ void WatchlistModel::setWritable(std::function<bool(WatchKey)> writable)
 	writable_ = std::move(writable);
 }
 
+void WatchlistModel::setWriteRefusal(std::function<QString(WatchKey)> refusal)
+{
+	refusal_ = std::move(refusal);
+}
+
 WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
 {
 	Row row;
@@ -170,7 +175,13 @@ WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
 	row.member = watch_key::isWhole(entry.key) ? QString{} : entry.member;
 	row.type = watch_key::isWhole(entry.key) ? TypeId{0} : entry.type;
 	row.status = QStringLiteral("Not read");
+	if (!watch_key::isWhole(entry.key)) {
+		row.scope = entry.scope;
+		row.others = entry.others;
+		row.kind = entry.kind;
+	}
 	row.writable = writable_ && writable_(entry.key);
+	row.refusal = !row.writable && refusal_ ? refusal_(entry.key) : QString{};
 	return row;
 }
 
@@ -192,7 +203,7 @@ bool WatchlistModel::insertable(const QVector<WatchEntry>& entries) const
 
 bool WatchlistModel::add(quint32 endpoint, QString name)
 {
-	return add(WatchEntry{watch_key::whole(endpoint), std::move(name), {}, 0});
+	return add(WatchEntry::of(watch_key::whole(endpoint), std::move(name)));
 }
 
 bool WatchlistModel::add(const WatchEntry& entry)
@@ -217,7 +228,7 @@ bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 	QVector<WatchEntry> whole;
 	whole.reserve(entries.size());
 	for (const auto& entry : entries)
-		whole.push_back({watch_key::whole(entry.first), entry.second, {}, 0});
+		whole.push_back(WatchEntry::of(watch_key::whole(entry.first), entry.second));
 	return addMany(whole);
 }
 
@@ -258,7 +269,8 @@ QVector<WatchlistModel::Removed> WatchlistModel::removeIds(const QSet<WatchKey>&
 		return removed;
 	for (int row = 0; row < count_; ++row)
 		if (keys.contains(rows_[row].key))
-			removed.push_back({row, {rows_[row].key, rows_[row].name, rows_[row].member, rows_[row].type}});
+			removed.push_back({row, {rows_[row].key, rows_[row].name, rows_[row].member, rows_[row].type,
+			                         rows_[row].scope, rows_[row].others, rows_[row].kind}});
 	if (removed.isEmpty())
 		return removed;
 	Mutation mutation{changing_};
@@ -471,6 +483,17 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return qulonglong(row.key);
 		case MemberRole:
 			return row.member;
+		case WriteScopeRole:
+			if (watch_key::isWhole(row.key) || row.scope.isEmpty())
+				return QVariantMap{};
+			return QVariantMap{{QStringLiteral("field"), row.scope},
+			                   {QStringLiteral("others"), row.others},
+			                   {QStringLiteral("kind"), row.kind == WatchEntry::Kind::Members ? QStringLiteral("members")
+			                                            : row.kind == WatchEntry::Kind::Elements
+			                                                ? QStringLiteral("elements")
+			                                                : QStringLiteral("values")}};
+		case WriteRefusalRole:
+			return row.refusal;
 		case NameRole:
 		case Qt::DisplayRole:
 			return row.name;
@@ -530,7 +553,9 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {TypeTextRole, "typeText"},
 	        {CategoricalRole, "categorical"},
 	        {WatchKeyRole, "watchKey"},
-	        {MemberRole, "member"}};
+	        {MemberRole, "member"},
+	        {WriteScopeRole, "writeScope"},
+	        {WriteRefusalRole, "writeRefusal"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

@@ -75,6 +75,9 @@ public:
 	};
 	[[nodiscard]] std::optional<Tally> tally(const QModelIndex& index, const QSet<quint64>& watched,
 	                                         quint64 membership);
+	// How many values of [first, first + count) of a Field are watched.
+	[[nodiscard]] qint64 countIn(quint32 field, quint32 first, quint32 count, const QSet<quint64>& watched,
+	                             quint64 membership);
 	// The leaf ordinals watched in [first, first + count) of a Field, ascending.
 	[[nodiscard]] std::vector<quint32> watchedIn(quint32 field, quint32 first, quint32 count,
 	                                             const QSet<quint64>& watched, quint64 membership);

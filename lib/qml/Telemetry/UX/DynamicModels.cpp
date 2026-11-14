@@ -794,6 +794,26 @@ bool EndpointModel::fieldWritable(std::uint32_t id) const
 	return false;
 }
 
+std::uint32_t EndpointModel::fieldWireBytes(std::uint32_t id) const
+{
+	if (!impl_->current() || impl_->tree.changing)
+		return 0;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row && row->endpoint && row->category == 1 && row->endpointId == id)
+			return row->wireBytes;
+	return 0;
+}
+
+QString EndpointModel::fieldPath(std::uint32_t id) const
+{
+	if (!impl_->current() || impl_->tree.changing)
+		return {};
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row && row->endpoint && row->category == 1 && row->endpointId == id)
+			return row->path;
+	return {};
+}
+
 bool EndpointModel::matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const
 {
 	if (!impl_->current() || impl_->tree.changing)

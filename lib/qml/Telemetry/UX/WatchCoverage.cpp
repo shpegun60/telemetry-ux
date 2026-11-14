@@ -154,12 +154,29 @@ std::vector<quint32> WatchCoverage::watchedIn(quint32 field, quint32 first, quin
 	return {from, to};
 }
 
+qint64 WatchCoverage::countIn(quint32 field, quint32 first, quint32 count, const QSet<quint64>& watched,
+                              quint64 membership)
+{
+	if (!built_ || !aggregates_.contains(field) || count == 0)
+		return 0;
+	if (!counted_ || membership != membership_)
+		this->count(watched, membership);
+	const auto found = members_.constFind(field);
+	if (found == members_.cend())
+		return 0;
+	const auto& ordinals = *found;
+	const auto from = std::lower_bound(ordinals.begin(), ordinals.end(), first);
+	const auto to = std::lower_bound(from, ordinals.end(), quint64{first} + count,
+	                                 [](quint32 ordinal, quint64 end) { return ordinal < end; });
+	return qint64(to - from);
+}
+
 int WatchCoverage::memberState(quint32 field, quint32 first, quint32 count,
                                const QSet<quint64>& watched, quint64 membership)
 {
 	if (!built_ || count == 0 || !aggregates_.contains(field))
 		return -1;
-	return boxOf(qint64(watchedIn(field, first, count, watched, membership).size()), count);
+	return boxOf(countIn(field, first, count, watched, membership), count);
 }
 
 std::optional<WatchCoverage::Holdable> WatchCoverage::aggregate(quint32 field) const

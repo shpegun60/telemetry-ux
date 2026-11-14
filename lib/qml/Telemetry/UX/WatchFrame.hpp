@@ -63,11 +63,11 @@ struct WatchSourceSnapshot {
 };
 struct WatchFrameRow {
     quint32 id = 0;
+    qint32 itemStatus = -1, valueStatus = -1; // -1: no per-item result was returned
+    WatchValueBits value;
     // 0 for a whole Field, else 1 + the value's leaf ordinal in that Field
     // (WatchKey's high word): a series is id | quint64(leaf) << 32.
     quint32 leaf = 0;
-    qint32 itemStatus = -1, valueStatus = -1; // -1: no per-item result was returned
-    WatchValueBits value;
 };
 struct WatchFrame {
     qint64 sequence = 0, cycle = 0, portion = 0, sourceBinding = 0;

@@ -892,7 +892,7 @@ struct StaticConfiguratorProvider::Impl {
 			const int n = endpointModel.endpointIndex(index);
 			if (n < 0 || !watchEligible(n))
 				return std::nullopt;
-			return WatchCoverage::Holdable{static_cast<quint64>(n), {}};
+			return WatchCoverage::Holdable{static_cast<quint64>(n), {}, 1, false};
 		});
 	}
 
