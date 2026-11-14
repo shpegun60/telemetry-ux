@@ -113,6 +113,12 @@ FocusScope {
         highlighted = 0
         return true
     }
+    // A container's path with the step into it: "." or "[" after it, unless
+    // the path already ends there, as a top-level group's "device." does.
+    function into(c) {
+        const path = completionOf(c)
+        return path.endsWith(".") || path.endsWith("[") ? path : path + (c.next || ".")
+    }
     // A candidate chosen: a container gets "." or "[" and the next step's
     // candidates; a value fills the field, waiting for Enter.
     function choose(index) {
@@ -124,7 +130,7 @@ FocusScope {
         if (range >= 0)
             text = text.substring(0, text.lastIndexOf("[") + 1)
         else if (c.container)
-            text += c.next || "."
+            text = into(c)
         field.text = text
         field.cursorPosition = text.length
         refresh()
@@ -138,7 +144,7 @@ FocusScope {
             return field.text
         // One container left: into it.
         if (candidates.length === 1 && candidates[0].container && completionOf(candidates[0]).indexOf(" … ") < 0)
-            return completionOf(candidates[0]) + (candidates[0].next || ".")
+            return into(candidates[0])
         const typed = field.text.trim()
         const starting = candidates.map(c => completionOf(c))
                                    .filter(path => path.startsWith(typed) && path.indexOf(" … ") < 0)

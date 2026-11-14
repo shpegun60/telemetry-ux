@@ -16,6 +16,7 @@
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 #include <cstdio>
+#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -98,6 +99,12 @@ public:
 			return QVariantMap{{"path", QString::fromUtf8(path)}, {"typeText", QString::fromUtf8(type)},
 			                   {"values", values}, {"container", container}, {"watched", watched}};
 		};
+		// The top-level groups, as the provider gives them: the path ends in
+		// "." already and there is no "next".
+		if (text == QStringLiteral("d") || text == QStringLiteral("de"))
+			return {entry("device.", "", 3, true, false)};
+		if (text == QStringLiteral("s"))
+			return {entry("device.", "", 3, true, false), entry("signals.", "", 2, true, false)};
 		if (text == QStringLiteral("device."))
 		{
 			auto config = entry("device.Config", "struct (3)", 3, true, false);
@@ -463,6 +470,42 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_Down);
 			auto* addField = named(content, "watchAddField");
 			CHECK(addField && addField->hasActiveFocus() && !named(content, "watchAddRest"));
+			// A top-level group, whose path ends in "." already, goes in with
+			// one dot: by Enter, by Tab, and by a click.
+			typeText(window, "d");
+			settle();
+			key(window, Qt::Key_Down);
+			key(window, Qt::Key_Return);
+			CHECK(addField->property("text").toString() == QStringLiteral("device."));
+			addField->setProperty("text", QString());
+			typeText(window, "de");
+			settle();
+			key(window, Qt::Key_Tab);
+			CHECK(addField->property("text").toString() == QStringLiteral("device."));
+			addField->setProperty("text", QString());
+			typeText(window, "s");
+			settle();
+			{
+				// The popup's rows live in the window's overlay, under its content item.
+				QQuickItem* second = nullptr;
+				const std::function<void(QQuickItem*)> find = [&](QQuickItem* item) {
+					if (item->objectName() == QLatin1String("watchAddCandidate") && item->isVisible() &&
+					    item->property("index").toInt() == 1)
+						second = item;
+					for (auto* child : item->childItems())
+						find(child);
+				};
+				find(window->contentItem());
+				CHECK(second != nullptr);
+				if (second) {
+					const auto at = second->mapToScene(QPointF(second->width() / 2, second->height() / 2)).toPoint();
+					QTest::mouseClick(window, Qt::LeftButton, {}, at);
+					settle();
+				}
+				CHECK(addField->property("text").toString() == QStringLiteral("signals."));
+			}
+			addField->setProperty("text", QString());
+			settle();
 			typeText(window, "device.");
 			settle();
 			auto* addPopup = window->findChild<QObject*>(QStringLiteral("watchAddPopup"));
