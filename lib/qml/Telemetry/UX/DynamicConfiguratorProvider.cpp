@@ -566,7 +566,7 @@ struct DynamicConfiguratorProvider::Impl {
 				watchWrite = words("Wrote %1 = %2; it could not be read back.").arg(writeName, writeIntended);
 			else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
 			                       result.write.status == cl::Status::BufferTooSmall))
-				watchWrite = words("%1 is larger than one write, so one member can't be written.")
+				watchWrite = words("%1 is larger than one write, so a value in it can't be written on its own.")
 				                 .arg(endpoints.fieldPath(writeId));
 			else
 				watchWrite = writeName + (result.write.status == cl::Status::OutcomeUnknown
@@ -853,7 +853,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		const auto field = watch_key::field(key);
 		if (!p || watch_key::isWhole(key) || !p->endpoints.fieldWritable(field))
 			return {};
-		return tr("%1 is larger than one write, so one member can't be written.")
+		return tr("%1 is larger than one write, so a value in it can't be written on its own.")
 		    .arg(p->endpoints.fieldPath(field));
 	});
 	d->batch.setNotify(

@@ -74,7 +74,8 @@ public:
 		WatchKeyRole,    // qulonglong WatchKey: the Field id, or a value inside it
 		MemberRole,      // the value's member text; empty for a whole Field
 		// A value's write: {field: "Config", others: 20, kind: "members" |
-		// "elements" | "values"}; empty for a whole Field.
+		// "elements" | "values"}; empty for a whole Field, and for a value
+		// that is its Field's only one.
 		WriteScopeRole,
 		// Why the row is not written from the Watchlist, in words; empty when
 		// it is writable or there is nothing to say.

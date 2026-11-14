@@ -529,23 +529,31 @@ Pane {
                 readonly property var writeScope: model.writeScope && typeof model.writeScope.field === "string"
                                                   && model.writeScope.field.length > 0 ? model.writeScope : null
                 readonly property string writeRefusal: typeof model.writeRefusal === "string" ? model.writeRefusal : ""
-                readonly property string memberName: typeof model.member === "string" ? model.member : ""
+                // The write reads the Field again first: the other values keep
+                // what the device holds then, not what the row last showed.
                 readonly property string scopeText: {
                     if (!writeScope)
                         return ""
-                    const now = watchRow.ok && watchRow.text.length > 0 ? watchRow.text : "–"
+                    const one = writeScope.others === 1
                     switch (writeScope.kind) {
                     case "elements":
-                        return qsTr("Now %1 · Writes all of %2, its other %L3 elements as last read.")
-                            .arg(now).arg(writeScope.field).arg(writeScope.others)
+                        return one ? qsTr("Writes all of %1; its other element keeps its value.").arg(writeScope.field)
+                                   : qsTr("Writes all of %1; its other %L2 elements keep their values.")
+                                         .arg(writeScope.field).arg(writeScope.others)
                     case "values":
-                        return qsTr("Now %1 · Writes all of %2, its other %L3 values as last read.")
-                            .arg(now).arg(writeScope.field).arg(writeScope.others)
+                        return one ? qsTr("Writes all of %1; its other value keeps its value.").arg(writeScope.field)
+                                   : qsTr("Writes all of %1; its other %L2 values keep their values.")
+                                         .arg(writeScope.field).arg(writeScope.others)
                     default:
-                        return qsTr("Now %1 · Writes all of %2, its other %L3 members as last read.")
-                            .arg(now).arg(writeScope.field).arg(writeScope.others)
+                        return one ? qsTr("Writes all of %1; its other member keeps its value.").arg(writeScope.field)
+                                   : qsTr("Writes all of %1; its other %L2 members keep their values.")
+                                         .arg(writeScope.field).arg(writeScope.others)
                     }
                 }
+                readonly property string overwriteText: writeScope
+                    ? qsTr("If the device changes another value of %1 in between, that change is overwritten.")
+                          .arg(writeScope.field)
+                    : ""
                 property string draftText: ""
                 readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
                 readonly property bool choices: editorKind === "bool" || editorKind === "enum"
@@ -821,8 +829,8 @@ Pane {
                                     Keys.onEscapePressed: watchRow.finishEdit()
                                     Accessible.name: qsTr("New value for %1").arg(watchRow.name)
                                     Accessible.description: watchRow.writeScope
-                                        ? qsTr("%1. %2 Write all or press Enter to send it once. Escape cancels.")
-                                            .arg(watchRow.draftText).arg(watchRow.scopeText)
+                                        ? qsTr("%1. %2 %3 Write all or press Enter to send it once. Escape cancels.")
+                                            .arg(watchRow.draftText).arg(watchRow.scopeText).arg(watchRow.overwriteText)
                                         : qsTr("%1. Write or press Enter to send this value once. Escape cancels.").arg(watchRow.draftText)
                                     PlainToolTip {
                                         objectName: "watchValueEditorToolTip"
@@ -848,8 +856,7 @@ Pane {
                                     text: watchRow.writeScope ? qsTr("Write all") : qsTr("Write")
                                     enabled: watchRow.writable && watchRow.draftText.length > 0
                                     Accessible.name: qsTr("Write %1 once").arg(watchRow.name)
-                                    Accessible.description: watchRow.writeScope
-                                        ? qsTr("Member of %1; writing writes all of %1.").arg(watchRow.writeScope.field) : ""
+                                    Accessible.description: watchRow.scopeText
                                     onClicked: watchRow.commitEdit()
                                 }
                             }
@@ -858,20 +865,24 @@ Pane {
                                 objectName: "watchWriteScope"
                                 visible: watchRow.writeScope !== null
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: visible ? Type.rowHeight : 0
+                                Layout.leftMargin: Type.padding
+                                Layout.preferredHeight: visible ? Math.max(Type.rowHeight, Math.ceil(contentHeight) + 2 * Type.tight) : 0
                                 verticalAlignment: Text.AlignVCenter
                                 textFormat: Text.PlainText
                                 text: watchRow.scopeText
-                                color: Theme.textSecondary
+                                // The edited row is the current one: all of it in its selected colour.
+                                color: watchRow.current ? Theme.selectedForeground : Theme.textSecondary
                                 font.pointSize: Type.caption
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 2
                                 elide: Text.ElideRight
                                 HoverHandler { id: scopeHover }
                                 PlainToolTip {
                                     visible: scopeHover.hovered && watchRow.writeScope !== null
                                     delay: 700
                                     text: watchRow.writeScope
-                                        ? qsTr("The device writes %1 whole. %1 is read, %2 is changed in it, and the whole %1 is written and read back. A change the device makes to another member in between is overwritten.")
-                                            .arg(watchRow.writeScope.field).arg(watchRow.memberName)
+                                        ? qsTr("%1 is written whole: Write all reads it, sets %2 in it, writes all of it and reads it back. %3")
+                                            .arg(watchRow.writeScope.field).arg(watchRow.name).arg(watchRow.overwriteText)
                                         : ""
                                 }
                             }

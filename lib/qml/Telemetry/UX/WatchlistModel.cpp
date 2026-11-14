@@ -484,7 +484,7 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		case MemberRole:
 			return row.member;
 		case WriteScopeRole:
-			if (watch_key::isWhole(row.key) || row.scope.isEmpty())
+			if (watch_key::isWhole(row.key) || row.scope.isEmpty() || row.others == 0)
 				return QVariantMap{};
 			return QVariantMap{{QStringLiteral("field"), row.scope},
 			                   {QStringLiteral("others"), row.others},
