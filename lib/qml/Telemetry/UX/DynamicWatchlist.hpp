@@ -58,6 +58,13 @@ struct WatchlistSource {
 	std::function<runtime::RuntimeSchema()> schema;
 };
 
+// What the Watchlist can hold of a Field: the Field itself (a scalar), or its
+// values (a struct or an array, as many as leaves).
+struct WatchHolding {
+	bool aggregate = false;
+	quint32 leaves = 1;
+};
+
 class DynamicWatchlist final {
 public:
 	explicit DynamicWatchlist(QObject* context);
@@ -87,9 +94,18 @@ public:
 	void remove(int row);
 	void clear();
 	// Which of ids the Watchlist can hold: a Field of 1 to 8 bytes of the
-	// current device. nullopt while it cannot tell (no source, not current,
-	// or in the middle of a change), so a caller does not keep an empty answer.
-	std::optional<QSet<quint32>> holdable(const QSet<quint32>& ids) const;
+	// current device, or the values of a struct or array Field (with
+	// readMembers, at most workbenchSnapshotBytes, at least one value).
+	// nullopt while it cannot tell (no source, not current, or in the middle
+	// of a change), so a caller does not keep an empty answer.
+	std::optional<QHash<quint32, WatchHolding>> holdable(const QSet<quint32>& ids) const;
+	// The rows for the values [first, first + count) of a struct or array
+	// Field not held yet, named fieldPath + their suffix ("device.Config" +
+	// ".Gain"); nullopt when the Field or the range is not this device's.
+	std::optional<QVector<WatchEntry>> entries(quint32 field, quint32 first, quint32 count,
+	                                           const QString& fieldPath) const;
+	// Whether this connection reads struct members (readMembers).
+	bool readsMembers() const;
 	// Whether holdable can answer now; cheap.
 	bool canTellHoldable() const;
 	// The keys held, and a counter that moves whenever they change.

@@ -198,6 +198,47 @@ Pane {
     function fieldsText(count) {
         return count === 1 ? qsTr("1 Field") : qsTr("%L1 Fields").arg(count)
     }
+    function valuesText(count) {
+        return count === 1 ? qsTr("1 value") : qsTr("%L1 values").arg(count)
+    }
+    // What a partly ticked box counts, in words: "2 of 3 members watched".
+    function tallyOf(index, revision) {
+        if (!watchApi || !index || !index.valid || typeof provider.watchTally !== "function")
+            return null
+        const tally = provider.watchTally(index)
+        return tally && tally.total > 0 ? tally : null
+    }
+    // What a click on a struct's or array's box does, counted.
+    function tallyHint(tally, state) {
+        if (!tally)
+            return ""
+        if (state === Qt.PartiallyChecked)
+            return qsTr("%1. Click to watch all %L2.").arg(tallyText(tally)).arg(tally.total)
+        const word = tally.kind === "members" ? qsTr("members") : tally.kind === "elements" ? qsTr("elements")
+                   : tally.kind === "fields" ? qsTr("Fields") : qsTr("values")
+        return state === Qt.Checked ? qsTr("Click to stop watching all %L1 %2.").arg(tally.total).arg(word)
+                                    : qsTr("Click to watch all %L1 %2.").arg(tally.total).arg(word)
+    }
+    function tallyText(tally) {
+        if (!tally)
+            return ""
+        switch (tally.kind) {
+        case "members": return qsTr("%L1 of %L2 members watched").arg(tally.watched).arg(tally.total)
+        case "elements": return qsTr("%L1 of %L2 elements watched").arg(tally.watched).arg(tally.total)
+        case "fields": return qsTr("%L1 of %L2 Fields watched").arg(tally.watched).arg(tally.total)
+        default: return qsTr("%L1 of %L2 values watched").arg(tally.watched).arg(tally.total)
+        }
+    }
+    // A row's path as the Watchlist names it: "device.Config.Gain",
+    // "data.Samples[3]"; from the model where it has one.
+    function rowPath(index) {
+        if (searchSource && typeof searchSource.pathOf === "function") {
+            const path = searchSource.pathOf(index)
+            if (path.length > 0)
+                return path
+        }
+        return pathOf(index)
+    }
     // Ticks or unticks a row: a Field, or every Field under a group. All of
     // a group or none: a group that does not fit changes nothing.
     function toggleWatch(index) {
@@ -211,8 +252,11 @@ Pane {
         if (state < 0)
             return false
         const group = isGroup(index)
-        // A group by its own name ("signals"), a Field by its path.
-        return applyWatch([index], state !== Qt.Checked, group ? nameOf(index) : pathOf(index), group)
+        // A struct or an array changes many rows and says so, like a group.
+        const tally = tallyOf(index, watchRevision)
+        // A group by its own name ("signals"), a Field or a value by its path.
+        return applyWatch([index], state !== Qt.Checked, group ? nameOf(index) : rowPath(index),
+                          group || (tally !== null && tally.total > 1))
     }
     // Watches or stops watching the Fields under indexes, as one change, and
     // says what it did. A single Field says nothing when it worked.
@@ -222,11 +266,23 @@ Pane {
             return false
         }
         const result = provider.setWatchMany(indexes, watched)
+        const values = result && result.values === true
         if (!result || result.status === "capacity") {
-            const fields = result ? result.fields : 0, room = result ? result.room : 0
-            say(qsTr("No room: %L1 Fields, %L2 free").arg(fields).arg(room),
-                qsTr("%1 has %L2 Fields; the Watchlist has room for %L3 more of its %L4.")
-                    .arg(label).arg(fields).arg(room).arg(provider.watchLimit), false)
+            const adding = !result ? 0 : result.adding !== undefined ? result.adding : result.fields
+            const room = result ? result.room : 0
+            if (values)
+                say(qsTr("No room: %L1 more values, %L2 free").arg(adding).arg(room),
+                    qsTr("Watching all of %1 adds %L2 values; the Watchlist has room for %L3 more of its %L4. Remove some first.")
+                        .arg(label).arg(adding).arg(room).arg(provider.watchLimit), false)
+            else
+                say(qsTr("No room: %L1 more Fields, %L2 free").arg(adding).arg(room),
+                    qsTr("Watching all of %1 adds %L2 Fields; the Watchlist has room for %L3 more of its %L4. Remove some first.")
+                        .arg(label).arg(adding).arg(room).arg(provider.watchLimit), false)
+            return false
+        }
+        if (result.status === "stale" || result.status === "invalid") {
+            say(qsTr("Not changed: the tree changed"),
+                qsTr("The Device tree changed meanwhile, so the Watchlist is unchanged. Try again."), false)
             return false
         }
         if (result.status !== "ok") {
@@ -234,18 +290,24 @@ Pane {
                 qsTr("Could not change the Watchlist: %1.").arg(result.status), false)
             return false
         }
-        if (!group)
+        if (!group && result.changed === 0)
             say("", "", false)
+        else if (!group && watched)
+            say(qsTr("Added %1").arg(label), qsTr("Added %1 to the Watchlist.").arg(label), true)
+        else if (!group)
+            say(qsTr("Removed %1").arg(label), qsTr("Removed %1 from the Watchlist.").arg(label), true)
         else if (result.changed === 0)
             say(watched ? qsTr("Already watched") : qsTr("Nothing watched"),
                 watched ? qsTr("Everything in %1 is already watched.").arg(label)
                         : qsTr("Nothing in %1 is watched.").arg(label), false)
         else if (watched)
             say(qsTr("Added %L1").arg(result.changed),
-                qsTr("Added %1 from %2 to the Watchlist.").arg(fieldsText(result.changed)).arg(label), true)
+                qsTr("Added %1 from %2 to the Watchlist.")
+                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), true)
         else
             say(qsTr("Removed %L1").arg(result.changed),
-                qsTr("Removed %1 of %2 from the Watchlist.").arg(fieldsText(result.changed)).arg(label), true)
+                qsTr("Removed %1 of %2 from the Watchlist.")
+                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), true)
         return result.changed > 0
     }
     function undoWatch() {
@@ -264,6 +326,9 @@ Pane {
         watchStatusFull = full
         statusUndo = undoable
         statusRevision = watchRevision
+        // A status line is not read out by itself; the sentence is.
+        if (full.length > 0)
+            Accessible.announce(full)
     }
     onWatchRevisionChanged: {
         if (statusRevision >= 0 && watchRevision !== statusRevision) {
@@ -404,7 +469,7 @@ Pane {
     }
     function watchIndex(index) {
         if (watchApi)
-            return stateOf(index, watchRevision) >= 0 ? applyWatch([index], true, pathOf(index), false) : false
+            return stateOf(index, watchRevision) >= 0 ? applyWatch([index], true, rowPath(index), false) : false
         return canMarkWatch(index) ? watchIndexes([index], pathOf(index), false, false) : false
     }
     function watchGroup(index) {
@@ -428,7 +493,7 @@ Pane {
         return watchIndexes(walk.indexes, "the device", true, walk.limited)
     }
     function copyPath(index) {
-        const path = pathOf(index)
+        const path = rowPath(index)
         if (path.length === 0)
             return false
         clipboardHelper.text = path
@@ -627,7 +692,8 @@ Pane {
         }
         MenuItem {
             objectName: "endpointMenuWatch"
-            readonly property int boxState: panel.watchApi && endpointMenu.targetIsEndpoint
+            // A Field or a value inside one: what its box watches.
+            readonly property int boxState: panel.watchApi && endpointMenu.target && !endpointMenu.targetIsGroup
                                             ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
             text: boxState === Qt.Checked ? qsTr("Stop watching") : qsTr("Watch")
             enabled: panel.provider.watchActive !== true &&
@@ -897,6 +963,12 @@ Pane {
                     if (panel.stateOf(index, panel.watchRevision) >= 0) {
                         panel.toggleWatch(index)
                         event.accepted = true
+                    } else {
+                        const refusal = panel.refusalOf(index, panel.watchRevision)
+                        if (refusal.length > 0) {
+                            panel.say(refusal, refusal, false)
+                            event.accepted = true
+                        }
                     }
                 } else if (panel.canMarkWatch(index)) {
                     panel.toggleWatchMark(index)
@@ -966,6 +1038,12 @@ Pane {
                 highlighted: isEndpoint && panel.selectedEndpointIndex !== undefined
                     && sourceIndex === panel.selectedEndpointIndex
                 readonly property int boxState: panel.stateOf(sourceIndex, panel.watchRevision)
+                // A struct's, an array's or a group's box counts its values;
+                // its tooltip says what a click does before it adds hundreds.
+                readonly property var boxTally: boxState >= 0 && (boxState === Qt.PartiallyChecked || model.previewAggregate === true)
+                    ? panel.tallyOf(sourceIndex, panel.watchRevision) : null
+                watchTally: boxState === Qt.PartiallyChecked ? panel.tallyText(boxTally) : ""
+                watchTallyHint: panel.tallyHint(boxTally, boxState)
                 // A row the Watchlist cannot hold yet keeps a box, off, with its reason.
                 watchable: panel.watchApi ? boxState >= 0 || watchRefusal.length > 0 : panel.canMarkWatch(sourceIndex)
                 watchState: panel.watchApi ? Math.max(0, boxState)
@@ -974,7 +1052,9 @@ Pane {
                 watchOffReason: panel.pollingFull
                 hint: detail
                 watchName: !panel.watchApi ? "Select " + name + " for Watchlist"
-                         : hasChildren ? qsTr("Watch every Field in %1").arg(name) : qsTr("Watch %1").arg(name)
+                         : model.previewChild === true ? qsTr("Watch %1").arg(panel.rowPath(sourceIndex))
+                         : hasChildren && !isEndpoint ? qsTr("Watch every Field in %1").arg(name)
+                         : qsTr("Watch %1").arg(name)
                 onWatchToggled: {
                     if (panel.watchApi)
                         panel.toggleWatch(sourceIndex)

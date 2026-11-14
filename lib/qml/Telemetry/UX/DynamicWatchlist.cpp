@@ -1077,27 +1077,65 @@ bool DynamicWatchlist::canTellHoldable() const
 	return !d->guarded() && d->current() && d->source.fieldBytes;
 }
 
-std::optional<QSet<quint32>> DynamicWatchlist::holdable(const QSet<quint32>& ids) const
+std::optional<QHash<quint32, WatchHolding>> DynamicWatchlist::holdable(const QSet<quint32>& ids) const
 {
 	auto p = d;
 	if (!canTellHoldable())
 		return std::nullopt;
-	QSet<quint32> found;
+	QHash<quint32, WatchHolding> found;
 	if (ids.isEmpty())
 		return found;
 	if (p->source.holdable) {
 		const auto all = p->source.holdable();
 		for (const auto id : ids)
 			if (all.contains(id))
-				found.insert(id);
-		return found;
+				found.insert(id, {});
+	} else {
+		for (const auto id : ids) {
+			const auto bytes = p->source.fieldBytes(id);
+			if (bytes && *bytes && *bytes <= 8)
+				found.insert(id, {});
+		}
 	}
+	if (!p->source.readMembers)
+		return found;
 	for (const auto id : ids) {
-		const auto bytes = p->source.fieldBytes(id);
-		if (bytes && *bytes && *bytes <= 8)
-			found.insert(id);
+		const auto shape = p->fields.constFind(id);
+		if (found.contains(id) || shape == p->fields.cend() || !shape->aggregate || shape->bytes == 0 ||
+		    shape->bytes > workbenchSnapshotBytes)
+			continue;
+		if (const auto leaves = p->leaves.count(shape->type); leaves > 0)
+			found.insert(id, {true, leaves});
 	}
 	return found;
+}
+
+std::optional<QVector<WatchEntry>> DynamicWatchlist::entries(quint32 field, quint32 first, quint32 count,
+                                                             const QString& fieldPath) const
+{
+	auto p = d;
+	if (!canTellHoldable() || !p->source.readMembers)
+		return std::nullopt;
+	const auto shape = p->fields.constFind(field);
+	if (shape == p->fields.cend() || !shape->aggregate ||
+	    quint64{first} + count > p->leaves.count(shape->type))
+		return std::nullopt;
+	QVector<WatchEntry> found;
+	for (quint64 ordinal = first; ordinal < quint64{first} + count; ++ordinal) {
+		const auto key = watch_key::member(field, quint32(ordinal));
+		if (p->model.rowOf(key) >= 0)
+			continue;
+		const auto leaf = p->leaves.locate(shape->type, quint32(ordinal));
+		if (!leaf)
+			return std::nullopt;
+		found.push_back({key, fieldPath + leaf->suffix, leaf->member(), leaf->type});
+	}
+	return found;
+}
+
+bool DynamicWatchlist::readsMembers() const
+{
+	return bool(d->source.readMembers);
 }
 
 QSet<WatchKey> DynamicWatchlist::held() const

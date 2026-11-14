@@ -141,6 +141,12 @@ public:
 	// nothing the Watchlist can hold. Empty where the box is on, for Commands
 	// and Services, and while the tree is changing.
 	Q_INVOKABLE QString watchRefusal(const QModelIndex& index) const;
+	// setWatchMany's map also holds `values` (a struct's or array's values were
+	// asked) and, when adding, `adding`: how many rows it would add.
+	// What a row's box counts, for its words: {watched, total, kind}, kind
+	// "members", "elements", "values" (a struct or an array, or a group with
+	// one below) or "fields"; empty where there is no box.
+	Q_INVOKABLE QVariantMap watchTally(const QModelIndex& index) const;
 	// Watches, or stops watching, every Field the Watchlist can hold at or
 	// under each index, in tree order, as one change: {status: ok, refused,
 	// invalid, stale or capacity, changed, unchanged, fields, room}. At

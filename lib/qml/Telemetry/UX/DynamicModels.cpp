@@ -861,11 +861,26 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 		case CountRole:
 			return row->count;
 		case PathRole:
-			return row->path.isEmpty() ? row->name : row->path;
+			// A range row folds part of its array: data.Samples[0 … 255].
+			return row->path.isEmpty() ? row->name : row->previewRange ? row->path + row->name : row->path;
 		case WatchLeafFirstRole:
 			return row->leafFirst;
 		case WatchLeafCountRole:
 			return row->leafCount;
+		case WatchLeafKindRole: {
+			const bool values = row->previewOwner && row->aggregate;
+			if (!values)
+				return QString{};
+			switch (impl_->leaves.kind(row->typeId)) {
+				case WatchLeaves::Kind::Members:
+					return QStringLiteral("members");
+				case WatchLeaves::Kind::Elements:
+					return QStringLiteral("elements");
+				case WatchLeaves::Kind::Values:
+					break;
+			}
+			return QStringLiteral("values");
+		}
 		case ReadableRole:
 			return row->readable;
 		case IsEndpointRole:
@@ -936,7 +951,8 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {PreviewValueRole, "previewValue"}, {PreviewStateRole, "previewState"},
 	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"},
 	        {CountRole, "count"},           {PathRole, "path"},
-	        {WatchLeafFirstRole, "watchLeafFirst"}, {WatchLeafCountRole, "watchLeafCount"}};
+	        {WatchLeafFirstRole, "watchLeafFirst"}, {WatchLeafCountRole, "watchLeafCount"},
+	        {WatchLeafKindRole, "watchLeafKind"}};
 }
 
 QString EndpointModel::pathOf(const QModelIndex& index) const

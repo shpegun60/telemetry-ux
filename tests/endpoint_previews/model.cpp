@@ -536,8 +536,8 @@ void watchLeavesAndPaths() {
 	CHECK(model.pathOf(samplesRow) == "device.Config.samples" && range(samplesRow) == std::pair{6u, 300u});
 	const auto firstRange = child(model, samplesRow, QStringLiteral("[0 … 255]"));
 	const auto secondRange = child(model, samplesRow, QStringLiteral("[256 … 299]"));
-	CHECK(model.pathOf(firstRange) == "device.Config.samples" && range(firstRange) == std::pair{6u, 256u});
-	CHECK(model.pathOf(secondRange) == "device.Config.samples" && range(secondRange) == std::pair{262u, 44u});
+	CHECK(model.pathOf(firstRange) == "device.Config.samples[0 … 255]" && range(firstRange) == std::pair{6u, 256u});
+	CHECK(model.pathOf(secondRange) == "device.Config.samples[256 … 299]" && range(secondRange) == std::pair{262u, 44u});
 	const auto third = child(model, firstRange, QStringLiteral("[3]"));
 	const auto last = child(model, secondRange, QStringLiteral("[299]"));
 	CHECK(model.pathOf(third) == "device.Config.samples[3]" && range(third) == std::pair{9u, 1u});

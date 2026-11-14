@@ -68,12 +68,17 @@ public:
 		// A category's or group's number of endpoints; 0 on other rows.
 		CountRole,
 		// A Field's or a value's path: "device.Config.Gain", "data.Samples[3]";
-		// a group's or category's name.
+		// a range row's names its range, "data.Samples[0 … 255]"; a group's
+		// or category's name.
 		PathRole,
 		// The row's values as Watchlist leaf ordinals of its Field:
 		// [first, first + count). A scalar Field is 0, 1; groups are 0, 0.
 		WatchLeafFirstRole,
-		WatchLeafCountRole
+		WatchLeafCountRole,
+		// What a struct or array row holds, for a box's words: "members" (a
+		// struct of scalars), "elements" (an array of scalars) or "values"
+		// (anything deeper); empty on other rows.
+		WatchLeafKindRole
 	};
 	Q_ENUM(Role)
 
