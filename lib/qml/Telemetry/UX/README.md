@@ -283,6 +283,7 @@ never has to parse display text:
 | `watchKey`, `member` | The row's `WatchKey` (qulonglong) and, for a value inside a Field, its member text |
 | `writeScope` | A value's write: `{field: "Config", others: 20, kind: "members"/"elements"/"values"}`; empty for a whole Field |
 | `writeRefusal` | Why the row is not written from the Watchlist, in words ("device.Table is larger than one write, so one member can't be written."); empty otherwise |
+| `leafStart`, `access` | Where the name's last segment starts (the prefix is drawn muted: `device.Config.` before `Gain`), and the row family's access mark, `rw` or `r-` |
 
 The Session-backed Dynamic provider's optional `writeWatch(row, text)` writes a
 watched Field from its row, as Details would: its own read, an exact draft of
@@ -304,6 +305,13 @@ back 2.", "…; the device reads back 2.5." or "…; it could not be read back."
 The row's editor says what Write all covers.
 The Static provider does not expose this method or `canWriteWatch`; the shared
 view therefore leaves its rows read-only.
+
+The shared `WatchlistPanel` draws the row family's columns (Name, Value, Type,
+rw, Status, ×): Value, Type and Status are as wide as the widest text they have
+shown and only grow until the list is cleared or the zoom changes; as the room
+for names shrinks, rw hides, Type narrows then hides, and Status becomes a mark
+whose word is in its tooltip. A good reading is its value alone (no dot); a
+reading not made yet is "–". A row is one line except while it is edited.
 
 Adding, group-adding and removing Fields inserts or removes rows (only Clear
 resets the model), so a persistent index — a view's current row, a Trend's

@@ -494,6 +494,18 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			                                                : QStringLiteral("values")}};
 		case WriteRefusalRole:
 			return row.refusal;
+		case LeafStartRole: {
+			// The last path step: an element "[3]" or a name after the last dot.
+			const auto& name = row.name;
+			if (name.endsWith(QLatin1Char(']'))) {
+				const auto open = name.lastIndexOf(QLatin1Char('['));
+				return open > 0 ? int(open) : 0;
+			}
+			const auto dot = name.lastIndexOf(QLatin1Char('.'));
+			return dot >= 0 ? int(dot + 1) : 0;
+		}
+		case AccessRole:
+			return row.writable ? QStringLiteral("rw") : QStringLiteral("r-");
 		case NameRole:
 		case Qt::DisplayRole:
 			return row.name;
@@ -555,7 +567,9 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {WatchKeyRole, "watchKey"},
 	        {MemberRole, "member"},
 	        {WriteScopeRole, "writeScope"},
-	        {WriteRefusalRole, "writeRefusal"}};
+	        {WriteRefusalRole, "writeRefusal"},
+	        {LeafStartRole, "leafStart"},
+	        {AccessRole, "access"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)
