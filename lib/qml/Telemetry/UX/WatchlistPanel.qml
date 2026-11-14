@@ -14,6 +14,17 @@ import QtQuick.Templates as T
 Pane {
     id: panel
     required property var provider
+    // Ctrl+Z takes back the Watchlist's last change wherever in the panel the
+    // keys are - the list, a toolbar button, the ⋯ button after its menu - but
+    // in a text field, which takes back its own typing first.
+    Keys.onShortcutOverride: event => {
+        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && provider.canUndoWatch === true)
+            event.accepted = true
+    }
+    Keys.onPressed: event => {
+        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier)
+            event.accepted = panel.undo()
+    }
     // Optional host workflow (for example, prepare a project recording before
     // starting). Without handlers the existing provider is called directly.
     property var startHandler: null
@@ -104,48 +115,40 @@ Pane {
         return found ? found.text : name
     }
     function setFormat(name) {
-        if (!formatAvailable)
-            return
-        formatsBefore = null
-        provider.watchFormat = name
+        if (formatAvailable && name !== format)
+            provider.watchFormat = name
     }
-    // Every value back to Original at once: the Watchlist's form and every
-    // row's own, those kept for paths the device lacks too. Undo puts them
-    // back while no form has been chosen since.
-    readonly property bool formatsResettable: formatAvailable && typeof provider.watchRowFormats === "function"
-                                              && typeof provider.setWatchRowFormats === "function"
-    property var formatsBefore: null
-    function formatsChosen() {
-        return formatsResettable && (format !== "original" || Object.keys(provider.watchRowFormats()).length > 0)
+    // Every value back to Original at once (WL-3b): the Watchlist's form and
+    // every row's own, those kept for paths not watched now too. One change,
+    // which Undo takes back while no form has been chosen since.
+    readonly property bool formatsResettable: formatAvailable && typeof provider.resetWatchFormats === "function"
+                                              && typeof provider.watchFormatsDiffer === "function"
+    // Whether a value is shown other than as Original; a method of the
+    // provider's, so menus ask it as they open.
+    function formatsDiffer() {
+        return formatsResettable && provider.watchFormatsDiffer() === true
+    }
+    // Where a plain item's label starts in a menu of checkable ones, so the
+    // labels line up: a style that draws the check inside the left padding
+    // has kept the column there (TelemetryDark), one that draws it at the
+    // padding's edge pushes the label past it (Basic).
+    function checkColumn(checkable, fallback) {
+        if (!checkable)
+            return fallback
+        return checkable.leftPadding + (checkable.indicator && checkable.indicator.x >= checkable.leftPadding
+                                        ? checkable.indicator.width + checkable.spacing : 0)
     }
     function resetFormats() {
-        if (!formatsChosen())
+        if (!formatsResettable)
             return false
-        const before = { format: format, rows: provider.watchRowFormats() }
-        provider.watchFormat = "original"
-        provider.setWatchRowFormats({})
+        const result = provider.resetWatchFormats()
+        if (!result || result.status !== "ok")
+            return false
         forgetMeasured()
-        noticeText = qsTr("Every value shown as Original")
-        noticeUndo = false
-        formatsBefore = before
+        say(result.rows === 1 ? qsTr("Number formats reset to Original; 1 row had its own")
+            : result.rows > 1 ? qsTr("Number formats reset to Original; %L1 rows had their own").arg(result.rows)
+            : qsTr("Number formats reset to Original"), true)
         return true
-    }
-    function undoFormats() {
-        const before = formatsBefore
-        formatsBefore = null
-        if (!before)
-            return false
-        provider.watchFormat = before.format
-        const done = provider.setWatchRowFormats(before.rows)
-        forgetMeasured()
-        noticeText = done ? qsTr("Undone") : ""
-        return done
-    }
-    // Any other notice ends what Undo could take back of a reset.
-    onNoticeTextChanged: formatsBefore = null
-    readonly property bool canUndo: formatsBefore !== null || (noticeUndo && provider.canUndoWatch === true)
-    function undo() {
-        return formatsBefore !== null ? undoFormats() : undoRemoval()
     }
     // The Value column grows only, until a form is chosen: hex is wider.
     onFormatChanged: forgetMeasured()
@@ -155,7 +158,6 @@ Pane {
         if (typeof provider.setWatchRowFormat !== "function" || row < 0)
             return
         const sources = rows ? rows.sourceRows(row) : [row]
-        formatsBefore = null
         if (sources.length > 0 && provider.setWatchRowFormat(sources, name))
             forgetMeasured()
     }
@@ -177,11 +179,28 @@ Pane {
         if (row >= 0)
             watchList.positionViewAtIndex(row, ListView.Contain)
     }
+    // The last thing done, in a line under the toolbar: "Removed
+    // device.Config.Gain · Undo". Like the Device tree's, it goes, Undo with
+    // it, once anything changes the Watchlist, the tree or a format - here, in
+    // the Device tree, or by a project loaded - so Undo never takes back
+    // something other than what the line says.
+    property string noticeText: ""
+    // Whether the notice is a change Undo can take back.
+    property bool noticeUndo: false
+    readonly property int revision: typeof provider.watchRevision === "number" ? provider.watchRevision : -1
+    property int noticeRevision: -1
+    function say(text, undoable) {
+        noticeText = text
+        noticeUndo = undoable === true
+        noticeRevision = revision
+    }
+    onRevisionChanged: {
+        if (noticeText.length > 0 && revision !== noticeRevision)
+            say("", false)
+    }
+    readonly property bool canUndo: noticeUndo && provider.canUndoWatch === true
     // Stops watching what row shows: a value, or every value under a node, as
     // one change where the provider takes several, said with Undo.
-    property string noticeText: ""
-    // Whether the notice is a removal that Undo can take back.
-    property bool noticeUndo: false
     function removeAt(row) {
         const sources = rows ? rows.sourceRows(row) : [row]
         if (sources.length === 0 || changeLocked)
@@ -195,18 +214,20 @@ Pane {
         const result = provider.removeWatchRows(sources)
         if (!result || result.status !== "ok" || result.changed === 0)
             return
-        noticeText = sources.length === 1 || label.length === 0
+        say(sources.length === 1 || label.length === 0
             ? (label.length > 0 ? qsTr("Removed %1").arg(label) : qsTr("Removed %L1").arg(result.changed))
-            : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label)
-        noticeUndo = true
+            : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label), true)
     }
-    function undoRemoval() {
+    // Takes back the provider's last change: a removal, an add, a reset of
+    // the formats.
+    function undo() {
         if (typeof provider.undoWatch !== "function" || provider.canUndoWatch !== true)
             return false
         const result = provider.undoWatch()
         const done = result && result.status === "ok"
-        noticeText = done ? qsTr("Undone") : ""
-        noticeUndo = false
+        if (done)
+            forgetMeasured()
+        say(done ? qsTr("Undone") : "", false)
         return done
     }
     // Copies what row shows: "path = value" lines (Ctrl+C), the paths
@@ -229,11 +250,10 @@ Pane {
         clipboardHelper.copy()
         clipboardHelper.text = ""
         const lines = text.split("\n").length
-        noticeText = what === "value" ? qsTr("Copied the value of %1").arg(item.name)
-                   : lines === 1 ? qsTr("Copied %1").arg(what === "paths" ? text : item ? item.name : text)
-                   : what === "paths" ? qsTr("Copied %L1 paths").arg(lines)
-                   : qsTr("Copied %L1 values").arg(lines)
-        noticeUndo = false
+        say(what === "value" ? qsTr("Copied the value of %1").arg(item.name)
+            : lines === 1 ? qsTr("Copied %1").arg(what === "paths" ? text : item ? item.name : text)
+            : what === "paths" ? qsTr("Copied %L1 paths").arg(lines)
+            : qsTr("Copied %L1 values").arg(lines), false)
         return true
     }
 
@@ -681,6 +701,8 @@ Pane {
                 Menu {
                     id: formatMenu
                     objectName: "watchFormatMenu"
+                    property bool differ: false
+                    onAboutToShow: differ = panel.formatsDiffer()
                     ButtonGroup { id: formatItems; exclusive: true }
                     Repeater {
                         model: panel.formats
@@ -694,6 +716,19 @@ Pane {
                             Accessible.description: modelData.tip
                             onTriggered: panel.setFormat(modelData.name)
                         }
+                    }
+                    MenuSeparator {
+                        visible: panel.formatsResettable
+                        height: visible ? implicitHeight : 0
+                    }
+                    MenuItem {
+                        objectName: "watchFormatReset"
+                        visible: panel.formatsResettable
+                        height: visible ? implicitHeight : 0
+                        enabled: visible && formatMenu.differ
+                        leftPadding: panel.checkColumn(formatMenu.count > 0 ? formatMenu.itemAt(0) : null, horizontalPadding)
+                        text: qsTr("Reset number formats to Original")
+                        onTriggered: panel.resetFormats()
                     }
                 }
             }
@@ -748,8 +783,8 @@ Pane {
             readonly property bool choosable: readManySupported || explicitIndividual
             readonly property bool individual: !choosable || panel.provider.watchIndividual === true
             // Whether any value is shown other than as Original, as the menu opens.
-            property bool formatsChosen: false
-            onAboutToShow: formatsChosen = panel.formatsChosen()
+            property bool formatsDiffer: false
+            onAboutToShow: formatsDiffer = panel.formatsDiffer()
             // As wide as its widest item, whatever the style's own width; the
             // plain items keep the check column, so every label lines up.
             readonly property real widestItem: {
@@ -789,6 +824,11 @@ Pane {
                     if (panel.provider.addWatch())
                         panel.expanded = true
                 }
+            }
+            // Read and Watch, then how the rows are shown.
+            MenuSeparator {
+                visible: panel.formatsResettable || (panel.treeAvailable && !panel.viewInBar)
+                height: visible ? implicitHeight : 0
             }
             MenuItem {
                 objectName: "watchViewListItem"
@@ -836,9 +876,9 @@ Pane {
                 objectName: "watchResetFormats"
                 visible: panel.formatsResettable
                 height: panel.formatsResettable ? implicitHeight : 0
-                enabled: panel.formatsResettable && moreMenu.formatsChosen
+                enabled: panel.formatsResettable && moreMenu.formatsDiffer
                 leftPadding: moreMenu.checkColumn
-                text: qsTr("Show every value as Original")
+                text: qsTr("Reset number formats to Original")
                 onTriggered: panel.resetFormats()
             }
             MenuSeparator {}
@@ -996,20 +1036,14 @@ Pane {
             keyNavigationEnabled: true
             currentIndex: -1
             onActiveFocusChanged: if (activeFocus && currentIndex < 0 && count > 0) currentIndex = 0
-            // Ctrl+Z is the Watchlist's own while it has the keys.
+            // Copies are the list's own while it has the keys; Ctrl+Z is the
+            // whole panel's.
             Keys.onShortcutOverride: event => {
-                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier
-                        && (panel.provider.canUndoWatch === true || panel.formatsBefore !== null))
-                    event.accepted = true
                 if (event.key === Qt.Key_C && currentIndex >= 0 && (event.modifiers === Qt.ControlModifier
                         || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)))
                     event.accepted = true
             }
             Keys.onPressed: event => {
-                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier) {
-                    event.accepted = panel.undo()
-                    return
-                }
                 // Insert from anywhere in the list, or Down past the last row: the "+" row.
                 if (panel.addAvailable && (event.key === Qt.Key_Insert
                         || (event.key === Qt.Key_Down && event.modifiers === Qt.NoModifier && currentIndex === count - 1))) {
@@ -1903,8 +1937,7 @@ Pane {
             Layout.preferredHeight: implicitHeight
             provider: panel.provider
             onAdded: (notice, undoable) => {
-                panel.noticeText = notice
-                panel.noticeUndo = undoable
+                panel.say(notice, undoable)
                 // The last value added, its parents opened, in view.
                 const last = panel.count - 1
                 const row = panel.rows ? panel.rows.reveal(last) : last
@@ -1917,8 +1950,7 @@ Pane {
                     watchList.currentIndex = shown
                     watchList.positionViewAtIndex(shown, ListView.Contain)
                 }
-                panel.noticeText = notice
-                panel.noticeUndo = false
+                panel.say(notice, false)
             }
             onLeaveUp: {
                 watchList.forceActiveFocus()
@@ -1987,6 +2019,23 @@ Pane {
                     onTriggered: panel.formatRows(panel.menuRow, modelData.name)
                 }
             }
+            // Where a row was given its form, every value taken back to
+            // Original: the Watchlist's and every row's own.
+            MenuSeparator {
+                visible: panel.formatsResettable
+                height: visible ? implicitHeight : 0
+            }
+            MenuItem {
+                objectName: "watchRowFormatReset"
+                visible: panel.formatsResettable
+                height: visible ? implicitHeight : 0
+                enabled: visible && rowFormatMenu.differ
+                leftPadding: panel.checkColumn(rowFormatMenu.count > 0 ? rowFormatMenu.itemAt(0) : null, horizontalPadding)
+                text: qsTr("Reset number formats to Original")
+                onTriggered: panel.resetFormats()
+            }
+            property bool differ: false
+            onAboutToShow: differ = panel.formatsDiffer()
         }
         MenuSeparator {}
         MenuItem {

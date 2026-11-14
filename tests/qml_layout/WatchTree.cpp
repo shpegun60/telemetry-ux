@@ -321,33 +321,56 @@ int main(int argc, char** argv)
 				settle();
 			}
 			CHECK(!rowMenu->property("visible").toBool());
-			// Every value back to Original from the "…" menu: the Watchlist's
-			// form and every row's own; Undo puts both back.
+			// Every value back to Original (WL-3b): the Watchlist's form and every
+			// row's own, from the "…" menu or a row's Number format menu, as one
+			// change Undo and Ctrl+Z take back from anywhere in the panel; the
+			// notice and its Undo go once a form is chosen again.
 			{
 				auto* fixture = panel->property("provider").value<QObject*>();
 				const auto ownFormats = [fixture] { return fixture->property("rowFormats").toMap(); };
-				CHECK(ownFormats() == QVariantMap({{QStringLiteral("row3"), QStringLiteral("dec")},
-				                                   {QStringLiteral("row1"), QStringLiteral("dec")}}));
+				const QVariantMap chosen{{QStringLiteral("row3"), QStringLiteral("dec")},
+				                         {QStringLiteral("row1"), QStringLiteral("dec")}};
+				const auto formatIs = [panel](const char* name) {
+					return panel->property("format").toString() == QLatin1String(name);
+				};
+				CHECK(ownFormats() == chosen);
 				click(window, named(content, "watchFormat_hex"));
-				click(window, named(content, "watchMoreButton"));
+				auto* more = named(content, "watchMoreButton");
+				click(window, more);
 				auto* reset = shown(content, "watchResetFormats");
 				CHECK(reset->property("enabled").toBool() &&
-				      reset->property("text").toString() == QStringLiteral("Show every value as Original"));
+				      reset->property("text").toString() == QStringLiteral("Reset number formats to Original"));
 				click(window, reset);
-				CHECK(panel->property("format").toString() == QStringLiteral("original") && ownFormats().isEmpty());
-				CHECK(textOf(content, "watchNotice") == QStringLiteral("Every value shown as Original"));
-				click(window, shown(content, "watchUndo"));
-				CHECK(panel->property("format").toString() == QStringLiteral("hex") && ownFormats().size() == 2);
-				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone") && !named(content, "watchUndo"));
-				// Reset again, then a form chosen: Undo would take that back too, so it goes.
-				click(window, named(content, "watchMoreButton"));
-				click(window, shown(content, "watchResetFormats"));
+				CHECK(formatIs("original") && ownFormats().isEmpty());
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Number formats reset to Original; 2 rows had their own"));
 				CHECK(named(content, "watchUndo"));
+				// Ctrl+Z with the keys on the ⋯ button, not in the list.
+				more->forceActiveFocus(Qt::TabFocusReason);
+				settle();
+				QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
+				settle();
+				CHECK(formatIs("hex") && ownFormats() == chosen);
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone") && !named(content, "watchUndo"));
+				// From the row's Number format menu, by keys: Down to it, Right
+				// into it, past "Like the Watchlist", Original, Dec and Hex to
+				// the reset under them.
+				list->setProperty("currentIndex", 2);
+				list->forceActiveFocus();
+				key(window, Qt::Key_Menu);
+				for (const auto k : {Qt::Key_Down, Qt::Key_Right, Qt::Key_Down, Qt::Key_Down, Qt::Key_Down, Qt::Key_Down})
+					key(window, k);
+				auto* rowReset = shown(content, "watchRowFormatReset");
+				CHECK(rowReset->property("enabled").toBool() && rowReset->property("highlighted").toBool());
+				key(window, Qt::Key_Return);
+				CHECK(formatIs("original") && ownFormats().isEmpty() && named(content, "watchUndo"));
+				// A form chosen: the notice no longer says how things are, and
+				// Undo would take back more than it says; both go.
 				click(window, named(content, "watchFormat_dec"));
-				CHECK(!named(content, "watchUndo"));
+				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
+				CHECK(!fixture->property("canUndoWatch").toBool());
 				// With everything Original there is nothing to reset.
 				click(window, named(content, "watchFormat_original"));
-				click(window, named(content, "watchMoreButton"));
+				click(window, more);
 				CHECK(!shown(content, "watchResetFormats")->property("enabled").toBool());
 				auto* moreMenu = window->findChild<QObject*>(QStringLiteral("watchMoreMenu"));
 				QTest::keyClick(window, Qt::Key_Escape);
@@ -642,15 +665,19 @@ int main(int argc, char** argv)
 			CHECK(plusRow->mapToItem(content, QPointF(0, plusRow->height())).y() <= content->height() + 0.5);
 			const auto top = list->property("contentY").toReal();
 			const QPointF middle = list->mapToScene(QPointF(list->width() / 2, list->height() / 2));
-			QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
-			                  Qt::NoModifier, Qt::NoScrollPhase, false);
-			// Stamped after the clicks before it, as a real turn would be: QTest
-			// stamps its mouse events, and a turn stamped 0 reads as older than
-			// them and is ignored.
-			QTest::lastMouseTimestamp += 16;
-			wheel.setTimestamp(ulong(QTest::lastMouseTimestamp));
-			QCoreApplication::sendEvent(window, &wheel);
-			settle();
+			// A turn of the wheel, as a stream of real ones arrives: a Flickable
+			// drops a turn stamped no later than the last event it saw (it
+			// cannot tell a speed), and that may be a clock reading as well as
+			// QTest's stamps, depending on how fast the run went - so the turn
+			// comes again, stamped well after either, until it lands.
+			for (int attempt = 0; attempt < 3 && list->property("contentY").toReal() <= top; ++attempt) {
+				QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
+				                  Qt::NoModifier, Qt::NoScrollPhase, false);
+				QTest::lastMouseTimestamp += attempt == 0 ? 16 : 600000;
+				wheel.setTimestamp(ulong(QTest::lastMouseTimestamp));
+				QCoreApplication::sendEvent(window, &wheel);
+				settle();
+			}
 			CHECK(list->property("contentY").toReal() > top);
 			// Back to the top and settled before the rows go, as a user would be.
 			list->setProperty("contentY", top);

@@ -316,9 +316,17 @@ bounds, not a number, a sign or exponent the type does not take), and
 `watch_format::range(type)`. `DynamicConfiguratorProvider::watchEditPreview(row,
 text)` returns `{preview, error}` for the row being edited: the panel shows
 `= 0x40000000` under the field while the text is a value, the reason in place
-of it while it is not, and Write stays off until it is. The "…" menu gains
-*Show every value as Original*, which sets the Watchlist's format back to
-Original and clears every row's own (`setWatchRowFormats({})`, the formats
-kept for paths the device lacks included), with Undo in the notice line and
-on Ctrl+Z until a format is chosen again. A provider without
-`watchRowFormats`/`setWatchRowFormats` does not get the item.
+of it while it is not, and Write stays off until it is.
+
+*Reset number formats to Original* - in the "…" menu, a row's *Number
+format* menu and the narrow format menu - calls the new
+`DynamicConfiguratorProvider::resetWatchFormats()`: the Watchlist's format
+back to Original and every row's own cleared, those kept for paths not
+watched now included, as one change in the provider's undo slot, which
+`undoWatch()` takes back while no format has changed since (from any
+panel, or a project loaded). `watchFormatsDiffer()` says whether anything
+is shown other than as Original, for the items' enabled state.
+`watchRevision()` now also moves with every format change. In the panel,
+the notice line goes, Undo with it, once the revision moves, as the
+Device tree's does, and Ctrl+Z works from anywhere in the panel but a text
+field. A provider without `resetWatchFormats` does not get the items.

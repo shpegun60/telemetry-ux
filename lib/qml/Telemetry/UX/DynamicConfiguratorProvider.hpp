@@ -178,6 +178,15 @@ public:
 	// "hex"}, as a project saves them; setWatchRowFormats puts them back, for
 	// rows watched now and rows added later.
 	Q_INVOKABLE QVariantMap watchRowFormats() const;
+	// Whether any watched value is shown other than as Original: the
+	// Watchlist's format, or a row's own that is not Original.
+	Q_INVOKABLE bool watchFormatsDiffer() const;
+	// Every value back to Original (WL-3b): the Watchlist's format and every
+	// format of a row's own, those kept for paths not watched now too, as one
+	// change undoWatch takes back while no format has changed since.
+	// {status: ok, unchanged (nothing to reset) or refused, rows: the watched
+	// rows that had a format of their own}.
+	Q_INVOKABLE QVariantMap resetWatchFormats();
 	// The Watchlist's "+" row (WL-4b). What a typed path would add, in words
 	// for the line under it: {status: "adds", "watched", "missing", "error"
 	// or "empty", message, adds, already, row (a watched value's row, or -1)}.
@@ -236,7 +245,8 @@ public:
 	// capacity nothing changes; room says how many more fit.
 	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
 	// Undoes the last change setWatchMany made, while nothing else has changed
-	// the Watchlist or the tree since: {status, changed}.
+	// the Watchlist or the tree since, or the last resetWatchFormats while no
+	// format has changed since: {status, changed}.
 	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();

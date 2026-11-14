@@ -28,6 +28,20 @@ ApplicationWindow {
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         property bool canUndoWatch: false
         property string watchFormat: "original"
+        // As the provider's: moves with every change of the rows or a format.
+        property int watchRevision: 0
+        // A reset's formats, while Undo can take it back.
+        property var formatUndo: null
+        property bool resetting: false
+        // A format chosen ends what Undo could take back of a reset.
+        function formatChanged() {
+            ++watchRevision
+            if (!resetting && formatUndo !== null) {
+                formatUndo = null
+                canUndoWatch = false
+            }
+        }
+        onWatchFormatChanged: formatChanged()
         function checkWatchPath(text) { return watchTreeCalls.check(text) }
         function watchEditPreview(row, text) {
             return text === "2" ? { preview: "= 0x40000000", error: "" }
@@ -36,7 +50,9 @@ ApplicationWindow {
         }
         function watchPathCandidates(text) { return watchTreeCalls.candidates(text) }
         function addWatchPaths(lines) {
+            formatUndo = null
             canUndoWatch = true
+            ++watchRevision
             return watchTreeCalls.addPaths(lines)
         }
         // The rows' own formats by a stand-in path, as the provider keeps them by path.
@@ -51,22 +67,55 @@ ApplicationWindow {
                     next["row" + row] = format
             }
             rowFormats = next
+            formatChanged()
             return true
         }
         function watchRowFormats() { return Object.assign({}, rowFormats) }
         function setWatchRowFormats(formats) {
             rowFormats = Object.assign({}, formats)
+            formatChanged()
             return true
+        }
+        function watchFormatsDiffer() {
+            return watchFormat !== "original" || Object.values(rowFormats).some(format => format !== "original")
+        }
+        function resetWatchFormats() {
+            const rows = Object.keys(rowFormats).length
+            if (watchFormat === "original" && rows === 0)
+                return { status: "unchanged", rows: 0 }
+            const undo = { format: watchFormat, rows: Object.assign({}, rowFormats) }
+            resetting = true
+            rowFormats = ({})
+            watchFormat = "original"
+            resetting = false
+            formatUndo = undo
+            canUndoWatch = true
+            ++watchRevision
+            return { status: "ok", rows: rows }
         }
         function removeWatch(row) { watchTreeCalls.remove([row]) }
         function removeWatchRows(rows) {
             watchTreeCalls.remove(rows)
+            formatUndo = null
             canUndoWatch = true
+            ++watchRevision
             return { status: "ok", changed: rows.length }
         }
         function undoWatch() {
+            if (formatUndo !== null) {
+                const undo = formatUndo
+                resetting = true
+                rowFormats = undo.rows
+                watchFormat = undo.format
+                resetting = false
+                formatUndo = null
+                canUndoWatch = false
+                ++watchRevision
+                return { status: "ok", changed: Object.keys(undo.rows).length + 1 }
+            }
             watchTreeCalls.undo()
             canUndoWatch = false
+            ++watchRevision
             return { status: "ok", changed: 1 }
         }
         function refreshWatch() {}
