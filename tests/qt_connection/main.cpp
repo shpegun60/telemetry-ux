@@ -7,6 +7,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QLocale>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
@@ -609,6 +610,12 @@ void memberWatchBoxes()
 	      result.value("adding").toInt() == 16384 &&
 	      result.value("room").toInt() == 1024 && result.value("values").toBool() && dataProvider->watchCount() == 0);
 	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
+	// Typed, the same room is said before Enter, and a paste adds all or nothing.
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
+	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(1024))));
+	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
+	      dataProvider->watchCount() == 0);
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
 	const auto range = child(samples, QStringLiteral("[256 … 511]"));
 	CHECK(range.isValid() && dataProvider->watchState(range) == Qt::Unchecked);
 	result = dataProvider->setWatchMany(one(range), true);
@@ -618,6 +625,56 @@ void memberWatchBoxes()
 	CHECK(dataList->index(3, 0).data(Qt::DisplayRole).toString() == "data.Samples[259]" &&
 	      dataList->index(3, 0).data(ux::WatchlistModel::MemberRole).toString() == "[259]");
 	dataConnection.disconnect();
+}
+
+// The "+" row's API over a real session (WL-4b): a typed path in words, what
+// may come next, and pasted lines added as one change Undo takes back.
+void watchPaths()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	const auto check = [&](const char* text) { return provider->checkWatchPath(QString::fromUtf8(text)); };
+	auto said = check("device.Config.Gain");
+	CHECK(said.value("status") == "adds" && said.value("message") == "Adds device.Config.Gain" &&
+	      said.value("adds").toInt() == 1);
+	said = check("device.Config");
+	CHECK(said.value("status") == "adds" && said.value("adds").toInt() == 21);
+	CHECK(check("control.Execute").value("message") == "control.Execute is a Command. Only Fields can be watched.");
+	CHECK(check("control.Transform").value("message") == "control.Transform is a Service. Only Fields can be watched.");
+	CHECK(check("device.Nope").value("status") == "missing");
+	CHECK(check("device.Config.Gainn").value("status") == "error" &&
+	      check("device.Config.Gainn").value("message").toString().contains("Did you mean Gain?"));
+	CHECK(check("Gain").value("status") == "error" && check("  ").value("status") == "empty");
+	// Candidates come from the descriptor, in its order.
+	const auto candidates = provider->watchPathCandidates(QStringLiteral("device.Config."));
+	CHECK(!candidates.isEmpty() && candidates.first().toMap().value("path") == "device.Config.Gain");
+	CHECK(provider->watchPathCandidates(QStringLiteral("gain")).size() >= 1);
+	// Pasted lines: a path, a copied "path = value", a struct for all its
+	// values, one not on this device, a Command; one change, Undo takes it back.
+	auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.SignedZero32\t-0"),
+	                                      QStringLiteral("device.Nope"), QStringLiteral("control.Execute"),
+	                                      QStringLiteral(""), QStringLiteral("device.Config.Gain")});
+	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2 && provider->watchCount() == 2);
+	CHECK(added.value("missing").toList() == QVariantList({QStringLiteral("device.Nope")}));
+	CHECK(added.value("refused").toList().size() == 1 && provider->canUndoWatch());
+	said = check("device.Config.Gain");
+	CHECK(said.value("status") == "watched" && said.value("row").toInt() >= 0);
+	CHECK(provider->undoWatch().value("status") == "ok" && provider->watchCount() == 0);
+	CHECK(provider->addWatchPaths({QStringLiteral("device.Config")}).value("added").toInt() == 21 &&
+	      provider->watchCount() == 21);
+	// While the Watchlist polls, a typed path goes in between two reads (fix 8).
+	provider->startWatch();
+	CHECK(await([&] { return provider->watchActive(); }));
+	CHECK(provider->addWatchPaths({QStringLiteral("device.SignedZero32")}).value("added").toInt() == 1 &&
+	      provider->watchCount() == 22);
+	provider->stopWatch();
+	CHECK(await([&] { return !provider->watchActive(); }));
+	connection.disconnect();
 }
 
 // A project saves the Watchlist as paths: {group, name} for a whole Field,
@@ -1712,6 +1769,7 @@ int main(int argc, char** argv)
 	bulkSessionWatch();
 	groupWatchBoxes();
 	memberWatchBoxes();
+	watchPaths();
 	memberRowWrite();
 	watchBindings();
 	watchChangesWhilePolling();

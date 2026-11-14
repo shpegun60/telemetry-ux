@@ -117,6 +117,36 @@ public:
 	enum class Resolution { Ok, Missing, Ambiguous, Unwatchable };
 	std::pair<Resolution, WatchEntry> resolve(const QString& group, const QString& name,
 	                                          const QString& member) const;
+	// A typed path as the rows it adds (WL-4b): "device.Config.Gain",
+	// "data.Samples[3]", or a struct or array ("device.Config") for all its
+	// values. entries are the values not watched yet, in the Field's order;
+	// already counts those watched, firstWatched is one of them. missing:
+	// this device has no such Field; error says why nothing is added.
+	struct PathResolution {
+		QVector<WatchEntry> entries;
+		quint32 already = 0;
+		WatchKey firstWatched = 0;
+		bool missing = false;
+		QString error;
+		quint32 adds = 0;  // the values entries holds, or would hold
+	};
+	// build false: counts only (entries left empty, adds said in `adds`),
+	// cheap enough for every keystroke.
+	PathResolution resolvePath(const QString& text, bool build = true) const;
+	// What may come next in a typed path, for its completion: groups, a
+	// group's Fields, a struct's members, an array's elements, then paths
+	// whose last step contains the word typed; at most limit, in the
+	// descriptor's order. watched: every value it holds is in the Watchlist.
+	struct PathCandidate {
+		QString path;
+		QString typeText;
+		quint32 values = 0;
+		bool container = false;
+		bool watched = false;
+		// What follows a container's path: "." for a struct, "[" for an array.
+		QString next;
+	};
+	QVector<PathCandidate> pathCandidates(const QString& text, int limit = 50) const;
 	// A row as it is saved: {group, name} or {group, name, member}; empty
 	// when the row or its Field is not known.
 	QVariantMap binding(int row) const;

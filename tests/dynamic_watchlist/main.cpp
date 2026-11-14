@@ -1046,6 +1046,62 @@ QVector<ux::WatchEntry> configEntries(std::initializer_list<quint32> ordinals)
 
 // One cycle's reads: whole Fields together in ReadMany portions, every value
 // of one struct in one read, wherever its rows are, in ascending order.
+// A typed path as the rows it adds, and what may come next (WL-4b).
+void pathResolution()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	auto r = watch.resolvePath(QStringLiteral(" device.Config.gain "));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "device.Config.gain" && r.already == 0);
+	CHECK(watch.resolvePath("device.Config.samples").entries.size() == 300);
+	CHECK(watch.resolvePath("device.Config").entries.size() == int(members::leaves));
+	r = watch.resolvePath("device.Config.samples[3]");
+	CHECK(r.entries.size() == 1 && r.entries[0].name == "device.Config.samples[3]" &&
+	      r.entries[0].key == ux::watch_key::member(members::config, 5));
+	r = watch.resolvePath("device.Counter");
+	CHECK(r.entries.size() == 1 && ux::watch_key::isWhole(r.entries[0].key) && r.entries[0].name == "device.Counter");
+	CHECK(watch.resolvePath("device.Config.gian").error == "device.Config has no member gian. Did you mean gain?");
+	CHECK(watch.resolvePath("device.Config.samples[300]").error ==
+	      "device.Config.samples has 300 elements, [0] to [299].");
+	r = watch.resolvePath("device.Nope");
+	CHECK(r.missing && r.entries.isEmpty() && r.error == "device.Nope is not on this device.");
+	for (const auto bad : {"nope", "device.", ".Config", "device.Config."}) {
+		r = watch.resolvePath(QString::fromLatin1(bad));
+		CHECK(!r.missing && r.entries.isEmpty() && !r.error.isEmpty());
+	}
+	CHECK(!watch.resolvePath("device.Counter.x").error.isEmpty());
+	// Watched already: nothing to add, and which row has it.
+	CHECK(watch.addEntries(watch.resolvePath("device.Config.gain").entries).value("added").toInt() == 1);
+	r = watch.resolvePath("device.Config.gain");
+	CHECK(r.entries.isEmpty() && r.already == 1 && r.firstWatched == ux::watch_key::member(members::config, 0));
+	r = watch.resolvePath("device.Config");
+	CHECK(r.entries.size() == int(members::leaves) - 1 && r.already == 1);
+
+	// Candidates: groups, Fields, members, elements; then the word anywhere.
+	const auto paths = [&](const char* text) {
+		QStringList out;
+		for (const auto& c : watch.pathCandidates(QString::fromLatin1(text)))
+			out << c.path;
+		return out;
+	};
+	auto c = watch.pathCandidates("dev");
+	CHECK(c.size() == 1 && c[0].path == "device." && c[0].container && c[0].values == 2);
+	c = watch.pathCandidates("device.C");
+	CHECK(c.size() == 2 && c[0].path == "device.Counter" && !c[0].container && c[0].values == 1);
+	CHECK(c[1].path == "device.Config" && c[1].container && c[1].typeText == "struct (3)" &&
+	      c[1].values == members::leaves && !c[1].watched);
+	CHECK(paths("device.Config.") ==
+	      QStringList({"device.Config.gain", "device.Config.enabled", "device.Config.samples"}));
+	CHECK(paths("device.Config.sa") == QStringList({"device.Config.samples"}));
+	c = watch.pathCandidates("device.Config.samples[");
+	CHECK(c.size() == 1 && c[0].path == QStringLiteral("device.Config.samples[0 … 299]") && c[0].typeText == "u16");
+	CHECK(paths("gain").contains("device.Config.gain"));
+	CHECK(watch.pathCandidates("device.Config.samples[", 0).isEmpty());
+}
+
 void memberPlan()
 {
 	QObject owner;
@@ -1443,6 +1499,7 @@ int main(int argc, char** argv)
 	drainAndStale();
 	schedulingAndReentrancy();
 	replaceSourceDuringPublication();
+	pathResolution();
 	memberPlan();
 	memberFanOut();
 	memberUrgent();

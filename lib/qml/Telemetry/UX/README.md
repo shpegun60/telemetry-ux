@@ -121,6 +121,23 @@ Actions retain the existing provider signatures:
   digit past the type's width is refused in words); a number's editor opens in
   hex on a row shown in hex. A provider without `watchFormat` shows its rows'
   `text` and no format controls.
+- **The "+" row (WL-4b), Dynamic.** A path typed or pasted under the last row,
+  as Live Expressions' "Add new expression". `checkWatchPath(text) ->
+  QVariantMap` says what Enter would add, in words: `{status: adds, watched,
+  missing, error or empty, message, adds, already, row}` ("Adds 21 values of
+  device.Config", "device.Config.Gainn: did you mean Gain?", "control.Execute
+  is a Command. Only Fields can be watched.", "device.Key is write only, so it
+  can't be watched."). `watchPathCandidates(text) -> QVariantList` lists what
+  may come next, at most 50 `{path, typeText, values, container, watched}`:
+  groups, a group's Fields, a struct's members, an array's elements
+  (`data.Samples[0 … 63]`), then paths whose last step holds the word typed.
+  `addWatchPaths(QStringList) -> QVariantMap` adds what each line names - a
+  path, a struct or array for all its values, or a line copied from the
+  Watchlist (`path = value`, `path<Tab>value`) - as one change `undoWatch()`
+  takes back: `{status, added, already, missing: [paths], refused: [{path,
+  reason}]}`. The panel shows the row (`WatchAddRow.qml`) where a provider has
+  all three; Insert, or Down from the last row, edits it; Tab completes the
+  common prefix; several pasted lines are added at once.
 - `removeWatchRows(QVariantList of rows) -> QVariantMap` (Dynamic) stops
   watching several rows as one change that `undoWatch()` takes back; the panel
   uses it for a node's × and Delete. `{status: ok, invalid or refused,

@@ -509,6 +509,35 @@ void watchLeavesAndPaths() {
 		roundTrip = roundTrip && leaf && leaves.ordinal(config, leaf->member()) == n;
 	}
 	CHECK(roundTrip);
+	// A path names a range of values (WL-4b): a leaf, or all of a struct's or
+	// an array's; or says in words why not.
+	{
+		const auto path = QStringLiteral("device.Config");
+		const auto all = leaves.range(config, u"", path);
+		CHECK(all.error.isEmpty() && all.first == 0 && all.count == 306);
+		const auto run = leaves.range(config, u"samples", path);
+		CHECK(run.error.isEmpty() && run.first == 6 && run.count == 300);
+		const auto one = leaves.range(config, u"samples[3]", path);
+		CHECK(one.error.isEmpty() && one.first == 9 && one.count == 1);
+		CHECK(leaves.range(config, u"mode", path).first == 5 && leaves.range(config, u"mode", path).count == 1);
+		CHECK(leaves.range(samples, u"[7]", QStringLiteral("data.Samples")).first == 7);
+		CHECK(leaves.range(config, u"gian", path).error == "device.Config has no member gian. Did you mean gain?");
+		CHECK(leaves.range(config, u"zzzzzz", path).error == "device.Config has no member zzzzzz.");
+		CHECK(leaves.range(config, u"samples[300]", path).error ==
+		      "device.Config.samples has 300 elements, [0] to [299].");
+		CHECK(leaves.range(config, u"mode[0]", path).error == "device.Config.mode is not an array.");
+		CHECK(leaves.range(config, u"samples[3].x", path).error ==
+		      "device.Config.samples[3] is not a struct, so it has no member x.");
+		for (const auto bad : {u"samples[3", u"samples[]", u"gain.", u"samples.[3]", u".mode", u"samples[x]"})
+			CHECK(!leaves.range(config, bad, path).error.isEmpty() && leaves.range(config, bad, path).count == 0);
+		bool ranges = true;
+		for (quint32 n = 0; n < 306; ++n) {
+			const auto leaf = leaves.locate(config, n);
+			const auto at = leaf ? leaves.range(config, leaf->member(), path) : ux::WatchLeaves::Range{};
+			ranges = ranges && at.error.isEmpty() && at.first == n && at.count == 1;
+		}
+		CHECK(ranges);
+	}
 
 	Source source; source.schema = schema;
 	ux::EndpointPreviews previews(nullptr, [&] { return source.now; });

@@ -1405,6 +1405,149 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 	return result;
 }
 
+namespace {
+// A line as typed or pasted: its path, without a copied value after it.
+QString pathOfLine(const QString& line)
+{
+	auto path = line;
+	const auto equals = path.indexOf(QStringLiteral(" = "));
+	if (equals >= 0)
+		path = path.left(equals);
+	const auto tab = path.indexOf(QLatin1Char('\t'));
+	if (tab >= 0)
+		path = path.left(tab);
+	return path.trimmed();
+}
+QString words(const char* text)
+{
+	return QCoreApplication::translate("DynamicConfiguratorProvider", text);
+}
+} // namespace
+
+QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) const
+{
+	auto p = d;
+	QVariantMap out{{QStringLiteral("status"), QStringLiteral("empty")}, {QStringLiteral("message"), QString{}},
+	                {QStringLiteral("adds"), 0}, {QStringLiteral("already"), 0}, {QStringLiteral("row"), -1}};
+	const auto typed = pathOfLine(text);
+	if (typed.isEmpty())
+		return out;
+	const auto say = [&](const QString& status, const QString& message) {
+		out[QStringLiteral("status")] = status;
+		out[QStringLiteral("message")] = message;
+		return out;
+	};
+	const auto resolved = p->watch.resolvePath(typed, false);
+	if (resolved.missing)
+		return say(QStringLiteral("missing"), resolved.error);
+	if (!resolved.error.isEmpty())
+		return say(QStringLiteral("error"), resolved.error);
+	out[QStringLiteral("adds")] = static_cast<int>(resolved.adds);
+	out[QStringLiteral("already")] = static_cast<int>(resolved.already);
+	const int room = watchLimit() - watchCount();
+	if (static_cast<int>(resolved.adds) > room)
+		return say(QStringLiteral("error"), words("%1 adds %L2 values; the Watchlist has room for %L3 more of its %L4.")
+		                                        .arg(typed)
+		                                        .arg(resolved.adds)
+		                                        .arg(room)
+		                                        .arg(watchLimit()));
+	if (resolved.adds == 0) {
+		const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
+		out[QStringLiteral("row")] = model ? model->rowOf(resolved.firstWatched) : -1;
+		return say(QStringLiteral("watched"), resolved.already == 1
+		                                          ? words("%1 is already watched.").arg(typed)
+		                                          : words("Every value of %1 is already watched.").arg(typed));
+	}
+	const auto adds = resolved.adds == 1 && resolved.already == 0 && !typed.contains(QLatin1String(" "))
+	                      ? words("Adds %1").arg(typed)
+	                      : words("Adds %L1 values of %2").arg(resolved.adds).arg(typed);
+	if (resolved.already == 0)
+		return say(QStringLiteral("adds"), adds);
+	return say(QStringLiteral("adds"), resolved.already == 1 ? words("%1; 1 more is watched already.").arg(adds)
+	                                                         : words("%1; %L2 more are watched already.").arg(adds).arg(resolved.already));
+}
+
+QVariantList DynamicConfiguratorProvider::watchPathCandidates(const QString& text) const
+{
+	QVariantList out;
+	for (const auto& c : d->watch.pathCandidates(text, 50))
+		out.append(QVariantMap{{QStringLiteral("path"), c.path},       {QStringLiteral("typeText"), c.typeText},
+		                       {QStringLiteral("values"), c.values},   {QStringLiteral("container"), c.container},
+		                       {QStringLiteral("watched"), c.watched}, {QStringLiteral("next"), c.next}});
+	return out;
+}
+
+QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("added"), 0},
+	                   {QStringLiteral("already"), 0}, {QStringLiteral("missing"), QVariantList{}},
+	                   {QStringLiteral("refused"), QVariantList{}}};
+	if (!p->current() || p->updating || p->endpoints.changing()) {
+		result[QStringLiteral("status")] = QStringLiteral("refused");
+		result[QStringLiteral("message")] = words("The device is changing; try again in a moment.");
+		return result;
+	}
+	QVector<WatchEntry> add;
+	QSet<WatchKey> seen;
+	QVariantList missing, refused;
+	int already = 0;
+	for (const auto& line : lines) {
+		const auto path = pathOfLine(line);
+		if (path.isEmpty())
+			continue;
+		const auto resolved = p->watch.resolvePath(path);
+		if (resolved.missing) {
+			missing.append(path);
+			continue;
+		}
+		if (!resolved.error.isEmpty()) {
+			refused.append(QVariantMap{{QStringLiteral("path"), path}, {QStringLiteral("reason"), resolved.error}});
+			continue;
+		}
+		already += static_cast<int>(resolved.already);
+		for (const auto& entry : resolved.entries)
+			if (!seen.contains(entry.key)) {
+				seen.insert(entry.key);
+				add.push_back(entry);
+			}
+	}
+	result[QStringLiteral("missing")] = missing;
+	result[QStringLiteral("refused")] = refused;
+	result[QStringLiteral("already")] = already;
+	if (add.isEmpty())
+		return result;
+	// All of them or none, as a tree box: a part would leave the paste half done.
+	const int room = watchLimit() - watchCount();
+	if (add.size() > room) {
+		result[QStringLiteral("status")] = QStringLiteral("capacity");
+		result[QStringLiteral("message")] =
+		    words("These add %L1 values; the Watchlist has room for %L2 more of its %L3. Remove some first.")
+		        .arg(add.size())
+		        .arg(room)
+		        .arg(watchLimit());
+		return result;
+	}
+	const auto added = p->watch.addEntries(add);
+	if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
+		result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+		return result;
+	}
+	const int count = added.value(QStringLiteral("added")).toInt();
+	result[QStringLiteral("added")] = count;
+	if (count > 0) {
+		p->undo = {};
+		p->undo.valid = true;
+		p->undo.added = true;
+		for (const auto& entry : std::as_const(add))
+			p->undo.addedIds.insert(entry.key);
+		p->undo.membership = p->watch.membership();
+		p->undo.treeEpoch = p->treeEpoch;
+	}
+	p->notify();
+	return result;
+}
+
 QString DynamicConfiguratorProvider::watchFormat() const
 {
 	return watch_format::name(d->watchFormat);

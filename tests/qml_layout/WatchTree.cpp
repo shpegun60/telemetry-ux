@@ -80,6 +80,38 @@ public:
 		writeText = text;
 	}
 	Q_INVOKABLE void undo() { ++undos; }
+	QStringList addedLines;
+	Q_INVOKABLE QVariantMap check(const QString& text) const
+	{
+		const auto typed = text.trimmed();
+		if (typed == QStringLiteral("device.Config.Gain"))
+			return {{"status", "adds"}, {"message", "Adds device.Config.Gain"}, {"adds", 1}, {"already", 0}, {"row", -1}};
+		if (typed == QStringLiteral("control.Execute"))
+			return {{"status", "error"}, {"message", "control.Execute is a Command. Only Fields can be watched."}};
+		return {{"status", typed.isEmpty() ? "empty" : "missing"}, {"message", typed.isEmpty() ? "" : typed + " is not on this device."}};
+	}
+	Q_INVOKABLE QVariantList candidates(const QString& text) const
+	{
+		const auto entry = [](const char* path, const char* type, int values, bool container, bool watched) {
+			return QVariantMap{{"path", QString::fromUtf8(path)}, {"typeText", QString::fromUtf8(type)},
+			                   {"values", values}, {"container", container}, {"watched", watched}};
+		};
+		if (text == QStringLiteral("device."))
+		{
+			auto config = entry("device.Config", "struct (3)", 3, true, false);
+			config.insert("next", ".");
+			return {entry("device.Voltage", "u16", 1, false, true), config};
+		}
+		if (text == QStringLiteral("device.Config.") || text == QStringLiteral("device.Config.G"))
+			return {entry("device.Config.Gain", "f32", 1, false, false)};
+		return {};
+	}
+	Q_INVOKABLE QVariantMap addPaths(const QStringList& lines)
+	{
+		addedLines = lines;
+		return {{"status", "ok"}, {"added", int(lines.size())}, {"already", 0},
+		        {"missing", QVariantList{}}, {"refused", QVariantList{}}};
+	}
 	QList<int> formatted;
 	QString formatName = QStringLiteral("unset");
 	Q_INVOKABLE void format(const QVariantList& rows, const QString& name)
@@ -144,6 +176,12 @@ void click(QQuickWindow* window, QQuickItem* target)
 	QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
 	                  target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint());
 	settle();
+}
+void typeText(QQuickWindow* window, const char* text)
+{
+	for (const char* at = text; *at; ++at)
+		QTest::keyClick(window, *at);
+	QTest::qWait(150);  // past the row's 80 ms settle
 }
 void key(QQuickWindow* window, Qt::Key k)
 {
@@ -388,6 +426,55 @@ int main(int argc, char** argv)
 			window->setWidth(480);
 			settle();
 			CHECK(panel->property("viewInBar").toBool() && !treeItem->property("shown").toBool());
+
+			// The "+" row (WL-4b): Down past the last row edits it; typing
+			// completes from the provider; Enter on a candidate fills the
+			// field, on the path adds it; pasted lines go in at once.
+			window->setWidth(720);
+			settle();
+			CHECK(named(content, "watchAddRow") && named(content, "watchAddRest"));
+			list->setProperty("currentIndex", list->property("count").toInt() - 1);
+			list->forceActiveFocus();
+			key(window, Qt::Key_Down);
+			auto* addField = named(content, "watchAddField");
+			CHECK(addField && addField->hasActiveFocus() && !named(content, "watchAddRest"));
+			typeText(window, "device.");
+			settle();
+			auto* addPopup = window->findChild<QObject*>(QStringLiteral("watchAddPopup"));
+			CHECK(addPopup && addPopup->property("visible").toBool());
+			shot(window, argc, argv, QStringLiteral("watch-add-720"));
+			key(window, Qt::Key_Down);
+			key(window, Qt::Key_Down);
+			key(window, Qt::Key_Return);  // device.Config, a struct: its members next
+			CHECK(addField->property("text").toString() == QStringLiteral("device.Config."));
+			typeText(window, "Gain");
+			settle();
+			CHECK(named(content, "watchAddCheck")->property("text").toString() == QStringLiteral("Adds device.Config.Gain"));
+			key(window, Qt::Key_Return);
+			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain")}));
+			CHECK(addField->property("text").toString().isEmpty() && addField->hasActiveFocus());
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added device.Config.Gain"));
+			CHECK(named(content, "watchUndo"));
+			// A Command is refused in words, and Enter adds nothing.
+			typeText(window, "control.Execute");
+			settle();
+			CHECK(named(content, "watchAddCheck")->property("text").toString() ==
+			      QStringLiteral("control.Execute is a Command. Only Fields can be watched."));
+			calls.addedLines.clear();
+			key(window, Qt::Key_Return);
+			CHECK(calls.addedLines.isEmpty());
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			key(window, Qt::Key_Delete);
+			// Several lines pasted, as copied from the Watchlist: added at once.
+			QGuiApplication::clipboard()->setText(QStringLiteral("device.Config.Gain = 1.5\ndevice.Voltage = 230\n"));
+			QTest::keyClick(window, Qt::Key_V, Qt::ControlModifier);
+			settle();
+			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.Voltage = 230")}));
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added 2"));
+			key(window, Qt::Key_Escape);
+			CHECK(named(content, "watchAddRest"));
+			window->setWidth(480);
+			settle();
 
 			// Back to the list: the current value stays current.
 			list->setProperty("currentIndex", 4);  // Gain
