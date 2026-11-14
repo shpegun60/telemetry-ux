@@ -241,10 +241,11 @@ WatchLeaves::Range WatchLeaves::range(TypeId root, QStringView member, const QSt
 			const auto close = member.indexOf(u']', pos);
 			if (close < 0)
 				return syntax();
-			bool ok = false;
-			const auto index = member.mid(pos + 1, close - pos - 1).toULongLong(&ok);
-			if (!ok)
+			const auto digits = member.mid(pos + 1, close - pos - 1);
+			if (digits.isEmpty() || digits.size() > 10 ||
+			    !std::all_of(digits.begin(), digits.end(), [](QChar c) { return c >= u'0' && c <= u'9'; }))
 				return syntax();
+			const auto index = digits.toULongLong();
 			if (type->kind != TypeKind::Array) {
 				out.error = tr("%1 is not an array.").arg(here);
 				return out;
@@ -269,24 +270,26 @@ WatchLeaves::Range WatchLeaves::range(TypeId root, QStringView member, const QSt
 				return out;
 			}
 			bool found = false;
-			QString nearest;
-			int best = 3;
 			std::uint64_t skipped = 0;
 			for (const auto& m : schema_.members(current)) {
-				const auto text = QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size()));
-				if (text == name) {
+				if (QStringView(QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size()))) == name) {
 					current = m.typeId;
 					found = true;
 					break;
 				}
 				skipped += count(m.typeId);
-				const int d = distance(name, text);
-				if (d < best) {
-					best = d;
-					nearest = text;
-				}
 			}
 			if (!found) {
+				QString nearest;
+				int best = 3;
+				for (const auto& m : schema_.members(current)) {
+					const auto text = QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size()));
+					const int d = distance(name, text);
+					if (d < best) {
+						best = d;
+						nearest = text;
+					}
+				}
 				out.error = nearest.isEmpty()
 				                ? tr("%1 has no member %2.").arg(here, name.toString())
 				                : tr("%1 has no member %2. Did you mean %3?").arg(here, name.toString(), nearest);
@@ -353,6 +356,24 @@ QVector<WatchLeaves::Child> WatchLeaves::children(TypeId root, QStringView membe
 			out.append({QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size())),
 			            QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size())), m.typeId,
 			            count(m.typeId), !isLeaf(inner)});
+		}
+	} else if (shape->kind == TypeKind::Array && shape->elementCount > 0) {
+		out.append({QStringLiteral("[0 … %1]").arg(shape->elementCount - 1), QStringLiteral("["), shape->relatedTypeId,
+		            count(shape->relatedTypeId), true});
+	}
+	return out;
+}
+
+QVector<WatchLeaves::Child> WatchLeaves::children(TypeId type) const
+{
+	QVector<Child> out;
+	const auto* shape = schema_.valid() ? schema_.type(type) : nullptr;
+	if (!shape)
+		return out;
+	if (shape->kind == TypeKind::Struct) {
+		for (const auto& m : schema_.members(type)) {
+			const auto name = QString::fromUtf8(m.name.data(), static_cast<qsizetype>(m.name.size()));
+			out.append({name, name, m.typeId, count(m.typeId), !isLeaf(schema_.type(m.typeId))});
 		}
 	} else if (shape->kind == TypeKind::Array && shape->elementCount > 0) {
 		out.append({QStringLiteral("[0 … %1]").arg(shape->elementCount - 1), QStringLiteral("["), shape->relatedTypeId,

@@ -80,6 +80,8 @@ public:
 		bool container = false;
 	};
 	[[nodiscard]] QVector<Child> children(TypeId root, QStringView member) const;
+	// The same below a type itself.
+	[[nodiscard]] QVector<Child> children(TypeId type) const;
 	// The type's words, as the tree shows them: "f32", "struct (3)", "u16[64]".
 	[[nodiscard]] QString typeText(TypeId type) const;
 

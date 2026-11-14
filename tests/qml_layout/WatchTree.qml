@@ -28,6 +28,12 @@ ApplicationWindow {
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         property bool canUndoWatch: false
         property string watchFormat: "original"
+        function checkWatchPath(text) { return watchTreeCalls.check(text) }
+        function watchPathCandidates(text) { return watchTreeCalls.candidates(text) }
+        function addWatchPaths(lines) {
+            canUndoWatch = true
+            return watchTreeCalls.addPaths(lines)
+        }
         function setWatchRowFormat(rows, format) {
             watchTreeCalls.format(rows, format)
             return true

@@ -128,8 +128,11 @@ public:
 		WatchKey firstWatched = 0;
 		bool missing = false;
 		QString error;
+		quint32 adds = 0;  // the values entries holds, or would hold
 	};
-	PathResolution resolvePath(const QString& text) const;
+	// build false: counts only (entries left empty, adds said in `adds`),
+	// cheap enough for every keystroke.
+	PathResolution resolvePath(const QString& text, bool build = true) const;
 	// What may come next in a typed path, for its completion: groups, a
 	// group's Fields, a struct's members, an array's elements, then paths
 	// whose last step contains the word typed; at most limit, in the
@@ -140,6 +143,8 @@ public:
 		quint32 values = 0;
 		bool container = false;
 		bool watched = false;
+		// What follows a container's path: "." for a struct, "[" for an array.
+		QString next;
 	};
 	QVector<PathCandidate> pathCandidates(const QString& text, int limit = 50) const;
 	// A row as it is saved: {group, name} or {group, name, member}; empty

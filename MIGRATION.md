@@ -233,6 +233,15 @@ the list as added, the same as before.
 The panel's row is a `FocusScope` (it was an `Item`), so an open editor keeps
 the focus when the list gives the row the focus again.
 
+## Typed paths and the "+" row (WL-4b, November 2026)
+
+Additive only. `WatchLeaves` gains `range`, `children` and `typeText`;
+`DynamicWatchlist` gains `resolvePath` and `pathCandidates`; the Dynamic
+provider gains `checkWatchPath`, `watchPathCandidates` and `addWatchPaths`.
+`WatchAddRow.qml` is new in the QML module. With a provider that has the three
+invokables the Watchlist's list is as tall as its rows, the "+" row right under
+the last one; without them it fills its room as before.
+
 ## The Watchlist's number format (WL-3, November 2026)
 
 `WatchlistModel` gains the roles `shownText` and `format`, `setFormat`,

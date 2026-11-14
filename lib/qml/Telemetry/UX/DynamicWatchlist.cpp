@@ -1319,7 +1319,7 @@ std::optional<PathParts> splitPath(const QString& text)
 }
 } // namespace
 
-DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& text) const
+DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& text, bool build) const
 {
 	auto p = d;
 	PathResolution out;
@@ -1378,7 +1378,9 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 			out.already = 1;
 			out.firstWatched = whole;
 		} else {
-			out.entries.push_back(WatchEntry::of(whole, fieldPath));
+			out.adds = 1;
+			if (build)
+				out.entries.push_back(WatchEntry::of(whole, fieldPath));
 		}
 		return out;
 	}
@@ -1395,18 +1397,22 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 		out.error = range.error;
 		return out;
 	}
+	for (quint32 n = range.first; n < range.first + range.count; ++n)
+		if (p->model.rowOf(watch_key::member(found, n)) >= 0) {
+			if (!out.already)
+				out.firstWatched = watch_key::member(found, n);
+			++out.already;
+		}
+	out.adds = range.count - out.already;
+	if (!build)
+		return out;
 	const auto added = entries(found, range.first, range.count, fieldPath);
 	if (!added) {
 		out.error = words("%1 can't be watched on this device.").arg(typed);
+		out.adds = 0;
 		return out;
 	}
 	out.entries = *added;
-	out.already = range.count - static_cast<quint32>(added->size());
-	for (quint32 n = range.first; out.already && n < range.first + range.count; ++n)
-		if (p->model.rowOf(watch_key::member(found, n)) >= 0) {
-			out.firstWatched = watch_key::member(found, n);
-			break;
-		}
 	return out;
 }
 
@@ -1431,9 +1437,14 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 				return false;
 		return true;
 	};
+	const auto nextOf = [&](TypeId type) {
+		const auto kids = p->leaves.children(type, QString{});
+		return kids.isEmpty() ? QString{} : kids.first().append == QLatin1String("[") ? QStringLiteral("[") : QStringLiteral(".");
+	};
 	const auto fieldCandidate = [&](quint32 id) {
 		const auto& shape = p->fields[id];
 		PathCandidate c;
+		c.next = shape.aggregate ? nextOf(shape.type) : QString{};
 		c.path = shape.group + QLatin1Char('.') + shape.name;
 		c.typeText = p->leaves.typeText(shape.type);
 		c.container = shape.aggregate;
@@ -1447,7 +1458,7 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		QStringList groups;
 		for (const auto id : std::as_const(ids)) {
 			const auto& group = p->fields[id].group;
-			if (!groups.contains(group) && starts(group, typed))
+			if (p->fields[id].readable && !groups.contains(group) && starts(group, typed))
 				groups.append(group);
 		}
 		for (const auto& group : std::as_const(groups)) {
@@ -1455,7 +1466,7 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 			c.path = group + QLatin1Char('.');
 			c.container = true;
 			for (const auto id : std::as_const(ids))
-				if (p->fields[id].group == group)
+				if (p->fields[id].group == group && p->fields[id].readable)
 					++c.values;
 			out.append(c);
 			if (out.size() >= limit)
@@ -1470,7 +1481,7 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		if (end == rest.size()) {
 			// A group's Fields.
 			for (const auto id : std::as_const(ids))
-				if (p->fields[id].group == group && starts(p->fields[id].name, rest)) {
+				if (p->fields[id].group == group && p->fields[id].readable && starts(p->fields[id].name, rest)) {
 					out.append(fieldCandidate(id));
 					if (out.size() >= limit)
 						return out;
@@ -1510,6 +1521,7 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 					c.typeText = p->leaves.typeText(child.type);
 					c.container = child.container;
 					c.values = child.leaves;
+					c.next = child.container && !elements ? nextOf(child.type) : QString{};
 					out.append(c);
 					if (out.size() >= limit)
 						return out;
@@ -1528,6 +1540,8 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		shown.insert(c.path);
 	for (const auto id : std::as_const(ids)) {
 		const auto& shape = p->fields[id];
+		if (!shape.readable)
+			continue;
 		if (shape.name.contains(last, Qt::CaseInsensitive)) {
 			const auto c = fieldCandidate(id);
 			if (!shown.contains(c.path)) {
@@ -1538,13 +1552,12 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		if (!shape.aggregate)
 			continue;
 		// Members, breadth first, struct inside struct only.
-		QVector<std::pair<QString, QString>> queue{{QString{}, shape.group + QLatin1Char('.') + shape.name}};
+		QVector<std::pair<TypeId, QString>> queue{{shape.type, shape.group + QLatin1Char('.') + shape.name}};
 		while (!queue.isEmpty() && walked < 4096 && out.size() < limit) {
-			const auto [member, path] = queue.takeFirst();
-			for (const auto& child : p->leaves.children(shape.type, member)) {
+			const auto [type, path] = queue.takeFirst();
+			for (const auto& child : p->leaves.children(type)) {
 				if (++walked > 4096 || child.append == QLatin1String("["))
 					break;
-				const auto childMember = member.isEmpty() ? child.label : member + QLatin1Char('.') + child.label;
 				const auto childPath = path + QLatin1Char('.') + child.label;
 				if (child.label.contains(last, Qt::CaseInsensitive) && !shown.contains(childPath)) {
 					PathCandidate c;
@@ -1552,11 +1565,12 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 					c.typeText = p->leaves.typeText(child.type);
 					c.container = child.container;
 					c.values = child.leaves;
+					c.next = child.container ? nextOf(child.type) : QString{};
 					out.append(c);
 					shown.insert(childPath);
 				}
 				if (child.container)
-					queue.append({childMember, childPath});
+					queue.append({child.type, childPath});
 			}
 		}
 		if (out.size() >= limit)

@@ -609,6 +609,12 @@ void memberWatchBoxes()
 	      result.value("adding").toInt() == 16384 &&
 	      result.value("room").toInt() == 1024 && result.value("values").toBool() && dataProvider->watchCount() == 0);
 	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
+	// Typed, the same room is said before Enter, and a paste adds all or nothing.
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
+	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains("room for 1,024"));
+	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
+	      dataProvider->watchCount() == 0);
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
 	const auto range = child(samples, QStringLiteral("[256 … 511]"));
 	CHECK(range.isValid() && dataProvider->watchState(range) == Qt::Unchecked);
 	result = dataProvider->setWatchMany(one(range), true);
@@ -660,6 +666,13 @@ void watchPaths()
 	CHECK(provider->undoWatch().value("status") == "ok" && provider->watchCount() == 0);
 	CHECK(provider->addWatchPaths({QStringLiteral("device.Config")}).value("added").toInt() == 21 &&
 	      provider->watchCount() == 21);
+	// While the Watchlist polls, a typed path goes in between two reads (fix 8).
+	provider->startWatch();
+	CHECK(await([&] { return provider->watchActive(); }));
+	CHECK(provider->addWatchPaths({QStringLiteral("device.SignedZero32")}).value("added").toInt() == 1 &&
+	      provider->watchCount() == 22);
+	provider->stopWatch();
+	CHECK(await([&] { return !provider->watchActive(); }));
 	connection.disconnect();
 }
 

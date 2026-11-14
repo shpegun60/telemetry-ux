@@ -1437,28 +1437,34 @@ QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) con
 		out[QStringLiteral("message")] = message;
 		return out;
 	};
-	const auto resolved = p->watch.resolvePath(typed);
+	const auto resolved = p->watch.resolvePath(typed, false);
 	if (resolved.missing)
 		return say(QStringLiteral("missing"), resolved.error);
 	if (!resolved.error.isEmpty())
 		return say(QStringLiteral("error"), resolved.error);
-	out[QStringLiteral("adds")] = static_cast<int>(resolved.entries.size());
+	out[QStringLiteral("adds")] = static_cast<int>(resolved.adds);
 	out[QStringLiteral("already")] = static_cast<int>(resolved.already);
-	if (resolved.entries.isEmpty()) {
+	const int room = watchLimit() - watchCount();
+	if (static_cast<int>(resolved.adds) > room)
+		return say(QStringLiteral("error"), words("%1 adds %L2 values; the Watchlist has room for %L3 more of its %L4.")
+		                                        .arg(typed)
+		                                        .arg(resolved.adds)
+		                                        .arg(room)
+		                                        .arg(watchLimit()));
+	if (resolved.adds == 0) {
 		const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
 		out[QStringLiteral("row")] = model ? model->rowOf(resolved.firstWatched) : -1;
 		return say(QStringLiteral("watched"), resolved.already == 1
 		                                          ? words("%1 is already watched.").arg(typed)
 		                                          : words("Every value of %1 is already watched.").arg(typed));
 	}
-	if (resolved.entries.size() == 1 && resolved.already == 0)
-		return say(QStringLiteral("adds"), words("Adds %1").arg(resolved.entries.first().name));
-	return say(QStringLiteral("adds"), resolved.already == 0
-	                                       ? words("Adds %L1 values of %2").arg(resolved.entries.size()).arg(typed)
-	                                       : words("Adds %L1 values of %2; %L3 are watched already.")
-	                                             .arg(resolved.entries.size())
-	                                             .arg(typed)
-	                                             .arg(resolved.already));
+	const auto adds = resolved.adds == 1 && resolved.already == 0 && !typed.contains(QLatin1String(" "))
+	                      ? words("Adds %1").arg(typed)
+	                      : words("Adds %L1 values of %2").arg(resolved.adds).arg(typed);
+	if (resolved.already == 0)
+		return say(QStringLiteral("adds"), adds);
+	return say(QStringLiteral("adds"), resolved.already == 1 ? words("%1; 1 more is watched already.").arg(adds)
+	                                                         : words("%1; %L2 more are watched already.").arg(adds).arg(resolved.already));
 }
 
 QVariantList DynamicConfiguratorProvider::watchPathCandidates(const QString& text) const
@@ -1467,7 +1473,7 @@ QVariantList DynamicConfiguratorProvider::watchPathCandidates(const QString& tex
 	for (const auto& c : d->watch.pathCandidates(text, 50))
 		out.append(QVariantMap{{QStringLiteral("path"), c.path},       {QStringLiteral("typeText"), c.typeText},
 		                       {QStringLiteral("values"), c.values},   {QStringLiteral("container"), c.container},
-		                       {QStringLiteral("watched"), c.watched}});
+		                       {QStringLiteral("watched"), c.watched}, {QStringLiteral("next"), c.next}});
 	return out;
 }
 
@@ -1477,6 +1483,11 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("added"), 0},
 	                   {QStringLiteral("already"), 0}, {QStringLiteral("missing"), QVariantList{}},
 	                   {QStringLiteral("refused"), QVariantList{}}};
+	if (!p->current() || p->updating || p->endpoints.changing()) {
+		result[QStringLiteral("status")] = QStringLiteral("refused");
+		result[QStringLiteral("message")] = words("The device is changing; try again in a moment.");
+		return result;
+	}
 	QVector<WatchEntry> add;
 	QSet<WatchKey> seen;
 	QVariantList missing, refused;
@@ -1485,18 +1496,15 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 		const auto path = pathOfLine(line);
 		if (path.isEmpty())
 			continue;
-		const auto checked = checkWatchPath(path);
-		const auto status = checked.value(QStringLiteral("status")).toString();
-		if (status == QStringLiteral("missing")) {
+		const auto resolved = p->watch.resolvePath(path);
+		if (resolved.missing) {
 			missing.append(path);
 			continue;
 		}
-		if (status == QStringLiteral("error")) {
-			refused.append(QVariantMap{{QStringLiteral("path"), path},
-			                           {QStringLiteral("reason"), checked.value(QStringLiteral("message"))}});
+		if (!resolved.error.isEmpty()) {
+			refused.append(QVariantMap{{QStringLiteral("path"), path}, {QStringLiteral("reason"), resolved.error}});
 			continue;
 		}
-		const auto resolved = p->watch.resolvePath(path);
 		already += static_cast<int>(resolved.already);
 		for (const auto& entry : resolved.entries)
 			if (!seen.contains(entry.key)) {
@@ -1509,6 +1517,17 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 	result[QStringLiteral("already")] = already;
 	if (add.isEmpty())
 		return result;
+	// All of them or none, as a tree box: a part would leave the paste half done.
+	const int room = watchLimit() - watchCount();
+	if (add.size() > room) {
+		result[QStringLiteral("status")] = QStringLiteral("capacity");
+		result[QStringLiteral("message")] =
+		    words("These add %L1 values; the Watchlist has room for %L2 more of its %L3. Remove some first.")
+		        .arg(add.size())
+		        .arg(room)
+		        .arg(watchLimit());
+		return result;
+	}
 	const auto added = p->watch.addEntries(add);
 	if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 		result[QStringLiteral("status")] = added.value(QStringLiteral("status"));

@@ -75,6 +75,10 @@ Pane {
     // without them, by "Watch the selected Field".
     readonly property bool treeBoxes: typeof provider.watchState === "function" &&
                                       typeof provider.setWatchMany === "function"
+    // The "+" row, where a provider resolves typed paths (WL-4b).
+    readonly property bool addAvailable: typeof provider.addWatchPaths === "function" &&
+                                         typeof provider.watchPathCandidates === "function" &&
+                                         typeof provider.checkWatchPath === "function"
 
     // The rows as shown, from the provider: one per value with its whole
     // path, or grouped by path - group, Field, member - folding as the Device
@@ -902,8 +906,12 @@ Pane {
             onCurrentIndexChanged: panel.writeRefusalText = ""
             objectName: "watchlistView"
             Layout.fillWidth: true
-            Layout.fillHeight: panel.open
-            Layout.preferredHeight: panel.open ? Math.max(120, Type.rowHeight * 5) : 0
+            // With the "+" row the list is as tall as its rows, the row right
+            // under the last one; past the room it scrolls.
+            Layout.fillHeight: panel.open && !panel.addAvailable
+            Layout.preferredHeight: !panel.open ? 0 : panel.addAvailable ? Math.max(1, contentHeight)
+                                                                     : Math.max(120, Type.rowHeight * 5)
+            Layout.minimumHeight: panel.open && panel.addAvailable ? Math.min(contentHeight, Type.rowHeight * 3) : 0
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             model: !panel.open ? null : panel.rows ? panel.rows : panel.provider.watchlist
@@ -924,6 +932,13 @@ Pane {
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier) {
                     event.accepted = panel.undoRemoval()
+                    return
+                }
+                // Insert from anywhere in the list, or Down past the last row: the "+" row.
+                if (panel.addAvailable && (event.key === Qt.Key_Insert
+                        || (event.key === Qt.Key_Down && event.modifiers === Qt.NoModifier && currentIndex === count - 1))) {
+                    addRow.begin()
+                    event.accepted = true
                     return
                 }
                 if (currentIndex < 0)
@@ -1710,7 +1725,7 @@ Pane {
                 parent: watchList
                 anchors.centerIn: parent
                 width: parent.width - 2 * Type.padding
-                visible: panel.open && panel.count === 0
+                visible: panel.open && panel.count === 0 && !panel.addAvailable
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
@@ -1718,6 +1733,58 @@ Pane {
                 text: !panel.connected ? qsTr("Connect to a device to watch its Fields.")
                     : panel.treeBoxes ? qsTr("Tick Fields in the Device tree to watch them.")
                     : qsTr("Select a Field in the Device tree, then choose Watch the selected Field in the Watchlist's menu.")
+            }
+        }
+        WatchAddRow {
+            id: addRow
+            visible: panel.open && panel.addAvailable
+            Layout.fillWidth: true
+            Layout.rightMargin: panel.scrollReserve
+            Layout.minimumHeight: implicitHeight
+            Layout.preferredHeight: implicitHeight
+            provider: panel.provider
+            onAdded: (notice, undoable) => {
+                panel.noticeText = notice
+                panel.noticeUndo = undoable
+                // The last value added, its parents opened, in view.
+                const last = panel.count - 1
+                const row = panel.rows ? panel.rows.reveal(last) : last
+                if (row >= 0)
+                    watchList.positionViewAtIndex(row, ListView.Contain)
+            }
+            onReveal: (row, notice) => {
+                const shown = panel.rows ? panel.rows.reveal(row) : row
+                if (shown >= 0) {
+                    watchList.currentIndex = shown
+                    watchList.positionViewAtIndex(shown, ListView.Contain)
+                }
+                panel.noticeText = notice
+                panel.noticeUndo = false
+            }
+            onLeaveUp: {
+                watchList.forceActiveFocus()
+                watchList.currentIndex = watchList.count - 1
+            }
+        }
+        // Under the "+" row: the room left, and while the list is empty what to do.
+        // An open list asks for the room it always did, rows and "+" row included.
+        Item {
+            visible: panel.open && panel.addAvailable
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.preferredHeight: Math.max(0, Math.max(120, Type.rowHeight * 5)
+                                                - watchList.Layout.preferredHeight - addRow.implicitHeight)
+            Label {
+                objectName: "watchEmptyAdd"
+                visible: panel.count === 0
+                x: Type.padding + Type.indent + Type.tight
+                y: Type.tight
+                width: parent.width - x - Type.padding
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                color: Theme.textMuted
+                text: panel.connected ? qsTr("Tick Fields in the Device tree to watch them, or type a path.")
+                                      : qsTr("Connect to a device to watch its Fields.")
             }
         }
     }
