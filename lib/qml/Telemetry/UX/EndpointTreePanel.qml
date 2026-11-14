@@ -41,7 +41,10 @@ Pane {
         typeof provider.setWatchMany === "function"
     // Moves whenever a box may show something else; the rows ask again then.
     readonly property int watchRevision: watchApi ? provider.watchRevision : 0
-    readonly property bool watchLocked: provider && provider.watchActive === true
+    // Locked while polling only for a provider that cannot take changes then;
+    // the Dynamic one takes them between two reads.
+    readonly property bool watchLocked: provider && provider.watchActive === true &&
+                                        provider.watchChangesWhilePolling !== true
     // The revision the status line spoke at: another change clears it.
     property int statusRevision: -1
     property bool statusUndo: false
@@ -375,7 +378,7 @@ Pane {
         watchMarkStatus = ""
     }
     function addMarkedWatches() {
-        if (!bulkWatchAvailable || watchMarks.length === 0 || provider.watchActive === true) return
+        if (!bulkWatchAvailable || watchMarks.length === 0 || watchLocked) return
         const generation = watchMarkGeneration
         const originalProvider = provider
         const originalSource = searchSource
@@ -440,7 +443,7 @@ Pane {
     function watchIndexes(indexes, label, group, limited) {
         if (!bulkWatchAvailable)
             return false
-        if (provider.watchActive === true) {
+        if (watchLocked) {
             watchMarkStatus = "Stop polling to change the Watchlist."
             return false
         }
@@ -581,7 +584,7 @@ Pane {
             return ""
         if (watchApi ? stateOf(first.index, watchRevision) < 0 : !canMarkWatch(first.index))
             return "; Enter shows the first"
-        return provider.watchActive === true ? "" : "; Enter watches the first"
+        return watchLocked ? "" : "; Enter watches the first"
     }
 
     // DelegateModel exposes named roles independently of their numeric IDs.
@@ -696,7 +699,7 @@ Pane {
             readonly property int boxState: panel.watchApi && endpointMenu.target && !endpointMenu.targetIsGroup
                                             ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
             text: boxState === Qt.Checked ? qsTr("Stop watching") : qsTr("Watch")
-            enabled: panel.provider.watchActive !== true &&
+            enabled: !panel.watchLocked &&
                      (panel.watchApi ? boxState >= 0 : panel.canMarkWatch(endpointMenu.target))
             onTriggered: {
                 const target = panel.menuTarget()
@@ -712,7 +715,7 @@ Pane {
                                             ? panel.stateOf(endpointMenu.target, panel.watchRevision) : -1
             text: !panel.watchApi ? qsTr("Watch this group")
                 : boxState === Qt.Checked ? qsTr("Stop watching group") : qsTr("Watch all in group")
-            enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && panel.provider.watchActive !== true &&
+            enabled: panel.bulkWatchAvailable && endpointMenu.targetIsGroup && !panel.watchLocked &&
                      (!panel.watchApi || boxState >= 0)
             onTriggered: {
                 const target = panel.menuTarget()
@@ -725,7 +728,7 @@ Pane {
         MenuItem {
             objectName: "endpointMenuWatchAll"
             text: "Watch all Fields"
-            enabled: panel.bulkWatchAvailable && panel.provider.watchActive !== true
+            enabled: panel.bulkWatchAvailable && !panel.watchLocked
             onTriggered: panel.watchAll()
         }
         MenuItem {
@@ -783,7 +786,7 @@ Pane {
             Button {
                 objectName: "endpointAddSelectedWatches"
                 text: "Add " + panel.watchMarks.length
-                enabled: panel.watchMarks.length > 0 && panel.provider.watchActive !== true
+                enabled: panel.watchMarks.length > 0 && !panel.watchLocked
                 onClicked: panel.addMarkedWatches()
                 Accessible.name: "Add selected fields to Watchlist"
                 ToolTip.visible: hovered

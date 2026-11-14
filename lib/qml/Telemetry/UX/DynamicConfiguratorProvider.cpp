@@ -438,11 +438,6 @@ struct DynamicConfiguratorProvider::Impl {
 		       !values.changing() && !responses.changing();
 	}
 
-	bool idle() const
-	{
-		return selectable() && !watch.active();
-	}
-
 	bool mutate() const
 	{
 		return selectable() && allowed && binding->mutationsAllowed() && !state->staleData;
@@ -1313,7 +1308,7 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
 	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
 	                   {QStringLiteral("unsupported"), 0}, {QStringLiteral("capacity"), 0}};
-	if (!p->idle())
+	if (!p->selectable())
 		return result;
 	QVector<QPair<quint32, QString>> fields;
 	int unsupported = 0;
@@ -1336,11 +1331,13 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 		fields.push_back({endpoint.value(QStringLiteral("id")).toUInt(),
 		                  endpoint.value(QStringLiteral("path")).toString()});
 	}
-	if (!p->idle()) {
+	if (!p->selectable()) {
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
 	result = p->watch.addMany(fields);
+	if (result.value(QStringLiteral("added")).toInt() > 0)
+		p->notify();
 	if (result.value(QStringLiteral("status")) == QStringLiteral("ok"))
 		result[QStringLiteral("unsupported")] =
 		    result.value(QStringLiteral("unsupported")).toInt() + unsupported;
@@ -1368,7 +1365,7 @@ bool DynamicConfiguratorProvider::canUndoWatch() const
 {
 	const auto& undo = d->undo;
 	return undo.valid && undo.membership == d->watch.membership() &&
-	       undo.treeEpoch == d->treeEpoch && d->current() && !d->updating && !d->watch.active();
+	       undo.treeEpoch == d->treeEpoch && d->current() && !d->updating;
 }
 
 int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
@@ -1408,7 +1405,7 @@ QVariantMap DynamicConfiguratorProvider::addWatchBindings(const QVariantList& bi
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
 	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
 	                   {QStringLiteral("capacity"), 0}, {QStringLiteral("missing"), QVariantList{}}};
-	if (!p->current() || p->updating || p->watch.active() || !p->watch.canTellHoldable())
+	if (!p->current() || p->updating || !p->watch.canTellHoldable())
 		return result;
 	QVector<WatchEntry> entries;
 	QVariantList missing;
@@ -1424,6 +1421,8 @@ QVariantMap DynamicConfiguratorProvider::addWatchBindings(const QVariantList& bi
 	}
 	if (!entries.isEmpty()) {
 		const auto added = p->watch.addEntries(entries);
+		if (added.value(QStringLiteral("added")).toInt() > 0)
+			p->notify();
 		for (const auto& name : {QStringLiteral("status"), QStringLiteral("added"), QStringLiteral("duplicate"),
 		                         QStringLiteral("capacity")})
 			result[name] = added.value(name);
@@ -1515,9 +1514,10 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 	                   {QStringLiteral("changed"), 0}, {QStringLiteral("unchanged"), 0},
 	                   {QStringLiteral("fields"), 0}, {QStringLiteral("room"), 0},
 	                   {QStringLiteral("values"), false}};
-	// A read or a write in Details does not hold the tree's boxes; polling,
-	// a model update and a stale connection do.
-	if (!p->current() || p->updating || p->endpoints.changing() || p->watch.active())
+	// A read or a write in Details does not hold the tree's boxes, nor does
+	// polling (the Watchlist takes changes between two reads); a model update
+	// and a stale connection do.
+	if (!p->current() || p->updating || p->endpoints.changing())
 		return result;
 	p->ensureCoverage();
 	using Role = EndpointModel::Role;

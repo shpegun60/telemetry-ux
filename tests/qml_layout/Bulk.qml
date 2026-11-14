@@ -45,6 +45,8 @@ Window {
         property var endpoints: bulkFixtureModel
         property var selectedEndpointIndex
         property bool watchActive: false
+        // The Dynamic provider's promise: changes are taken while polling.
+        property bool watchChangesWhilePolling: false
         property int watchRevision: 0
         property bool canUndoWatch: false
         readonly property int watchLimit: 1024

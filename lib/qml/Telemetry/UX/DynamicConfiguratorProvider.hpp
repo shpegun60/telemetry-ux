@@ -53,6 +53,10 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchRevision READ watchRevision NOTIFY stateChanged)
 	Q_PROPERTY(bool canUndoWatch READ canUndoWatch NOTIFY stateChanged)
 	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
+	// The Watchlist takes changes (boxes, add, remove, Undo, Clear) while it
+	// polls, between two reads. A provider without this property is locked
+	// while polling.
+	Q_PROPERTY(bool watchChangesWhilePolling READ watchChangesWhilePolling CONSTANT)
 	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
 	Q_PROPERTY(QModelIndex selectedEndpointIndex READ selectedEndpointIndex NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
@@ -132,6 +136,7 @@ public:
 	int watchRevision() const;
 	bool canUndoWatch() const;
 	static constexpr int watchLimit() noexcept { return watchlistRowLimit; }
+	static constexpr bool watchChangesWhilePolling() noexcept { return true; }
 	// A tree row's watch box: -1 when nothing at or below it can be watched
 	// (a Command, a Service, a Field the Watchlist cannot hold, a stale index);
 	// otherwise Qt::Unchecked, Qt::PartiallyChecked or Qt::Checked as an int.

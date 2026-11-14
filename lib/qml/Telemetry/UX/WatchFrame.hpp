@@ -84,6 +84,10 @@ struct WatchFrame {
     // to 32 values of one struct or array Field: a read of more values is
     // published as several frames of the same cycle and portion.
     std::array<WatchFrameRow, 32> rows{};
+    // The Watchlist's membership the read's plan was built from: rows may be
+    // added or removed while a read is in flight, and a recorder files the
+    // read under the list it was asked for.
+    quint64 membership = 0;
 };
 } // namespace telemetry::ux
 Q_DECLARE_METATYPE(telemetry::ux::WatchFrame)
