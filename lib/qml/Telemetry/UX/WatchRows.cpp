@@ -177,7 +177,7 @@ void WatchRows::setTree(bool tree)
 	const auto before = selected_;
 	tree_ = tree;
 	bool unfolded = false;
-	if (tree_)
+	if (tree_ && values.size() <= unfoldForSelection)
 		for (const auto& id : values) {
 			const auto folds = folded_.size();
 			unfoldAbove(id.mid(valuePrefix.size()));
@@ -229,7 +229,6 @@ bool WatchRows::setExpanded(int row, bool expanded)
 	const auto& node = shape_.nodes.at(shape_.rows.at(row));
 	if (node.children.isEmpty())
 		return false;
-	const auto identity = node.identity;
 	bool changed = false;
 	if (expanded) {
 		changed = folded_.remove(node.path);
@@ -239,12 +238,8 @@ bool WatchRows::setExpanded(int row, bool expanded)
 	}
 	if (!changed)
 		return true;
-	const bool hadSelection = !selected_.isEmpty();
 	refresh();
 	Q_EMIT foldedChanged();
-	// A fold that hid everything selected selects the node it folded.
-	if (!expanded && hadSelection && selected_.isEmpty())
-		setSelection({identity}, identity);
 	return true;
 }
 
@@ -289,6 +284,8 @@ void WatchRows::unfoldAbove(const QString& path)
 
 int WatchRows::reveal(int sourceRow)
 {
+	if (!settled())
+		return -1;
 	const int node = shape_.nodeOfSource.value(sourceRow, -1);
 	if (node < 0)
 		return -1;
@@ -306,6 +303,8 @@ int WatchRows::reveal(int sourceRow)
 
 int WatchRows::revealPath(const QString& path)
 {
+	if (!settled())
+		return -1;
 	int found = -1;
 	for (qsizetype i = 1; i < shape_.nodes.size(); ++i) {
 		const auto& node = shape_.nodes.at(i);
@@ -336,7 +335,7 @@ int WatchRows::revealPath(const QString& path)
 QVariantList WatchRows::sourceRows(int row) const
 {
 	QVariantList out;
-	if (row < 0 || row >= count())
+	if (!settled() || row < 0 || row >= count())
 		return out;
 	QVector<int> stack{shape_.rows.at(row)};
 	while (!stack.isEmpty()) {
@@ -373,12 +372,12 @@ QString WatchRows::linesOf(const QVariantList& sources, bool paths) const
 
 bool WatchRows::isSelected(int row) const
 {
-	return !refreshing_ && row >= 0 && row < identities_.size() && selected_.contains(identities_.at(row));
+	return settled() && row >= 0 && row < identities_.size() && selected_.contains(identities_.at(row));
 }
 
 void WatchRows::select(int row, bool toggle)
 {
-	if (refreshing_ || row < 0 || row >= identities_.size())
+	if (!settled() || row < 0 || row >= identities_.size())
 		return;
 	const auto id = identities_.at(row);
 	auto next = toggle ? selected_ : QSet<QString>{};
@@ -391,7 +390,7 @@ void WatchRows::select(int row, bool toggle)
 
 void WatchRows::selectRange(int row, bool add)
 {
-	if (refreshing_ || row < 0 || row >= identities_.size())
+	if (!settled() || row < 0 || row >= identities_.size())
 		return;
 	int from = anchorRow();
 	auto anchor = anchor_;
@@ -407,7 +406,7 @@ void WatchRows::selectRange(int row, bool add)
 
 void WatchRows::selectAll()
 {
-	if (refreshing_)
+	if (!settled())
 		return;
 	QSet<QString> next(identities_.cbegin(), identities_.cend());
 	setSelection(std::move(next), anchorRow() >= 0 || identities_.isEmpty() ? anchor_ : identities_.first());
@@ -420,13 +419,13 @@ void WatchRows::clearSelection()
 
 int WatchRows::anchorRow() const
 {
-	return refreshing_ || anchor_.isEmpty() ? -1 : static_cast<int>(identities_.indexOf(anchor_));
+	return !settled() || anchor_.isEmpty() ? -1 : static_cast<int>(identities_.indexOf(anchor_));
 }
 
 QVariantList WatchRows::selectedRows() const
 {
 	QVariantList out;
-	if (refreshing_)
+	if (!settled())
 		return out;
 	for (qsizetype row = 0; row < identities_.size(); ++row)
 		if (selected_.contains(identities_.at(row)))
@@ -437,7 +436,7 @@ QVariantList WatchRows::selectedRows() const
 QVariantList WatchRows::selectedSourceRows() const
 {
 	QVariantList out;
-	if (refreshing_ || selected_.isEmpty())
+	if (!settled() || selected_.isEmpty())
 		return out;
 	QVector<bool> seen(source_ ? source_->rowCount() : 0, false);
 	for (qsizetype row = 0; row < identities_.size(); ++row) {
@@ -487,9 +486,39 @@ void WatchRows::pruneSelection()
 	if (selected_.isEmpty())
 		return;
 	const QSet<QString> shown(identities_.cbegin(), identities_.cend());
-	const auto before = selected_.size();
-	selected_.intersect(shown);
-	if (selected_.size() != before)
+	QSet<QString> kept, hidden;
+	for (const auto& id : std::as_const(selected_))
+		(shown.contains(id) ? kept : hidden).insert(id);
+	if (hidden.isEmpty())
+		return;
+	// Folds that hid everything selected select the nodes they fold: what
+	// is still in the tree but not shown, by its nearest node shown.
+	QVector<int> marked;
+	if (kept.isEmpty()) {
+		for (qsizetype i = 1; i < shape_.nodes.size(); ++i) {
+			const auto& node = shape_.nodes.at(i);
+			if (!hidden.contains(node.identity))
+				continue;
+			for (int up = node.parent; up > 0; up = shape_.nodes.at(up).parent) {
+				const int row = rowOfNode_.value(up, -1);
+				if (row < 0)
+					continue;
+				if (!kept.contains(shape_.nodes.at(up).identity)) {
+					kept.insert(shape_.nodes.at(up).identity);
+					marked << row;
+				}
+				break;
+			}
+		}
+		if (!marked.isEmpty() && !shown.contains(anchor_))
+			anchor_ = identities_.at(*std::min_element(marked.cbegin(), marked.cend()));
+	}
+	selected_ = std::move(kept);
+	for (const int row : std::as_const(marked))
+		Q_EMIT dataChanged(index(row), index(row), {SelectedRole});
+	if (refreshing_)
+		selectionMoved_ = true;
+	else
 		Q_EMIT selectionChanged();
 }
 
@@ -671,6 +700,8 @@ void WatchRows::refresh()
 		apply(build());
 	} while (again_);
 	refreshing_ = false;
+	if (std::exchange(selectionMoved_, false))
+		Q_EMIT selectionChanged();
 }
 
 namespace {
@@ -854,11 +885,14 @@ void WatchRows::endChanges()
 	const bool rows = std::exchange(heldRows_, false);
 	const bool data = std::exchange(heldData_, false);
 	const bool folds = std::exchange(heldFolds_, false);
-	if (rows)
+	// A held reading may have renamed or renumbered a row (a reconnect
+	// rebinds them): the rows are rebuilt whatever came, then every role of
+	// every row is told, for what a provider said about them while held.
+	if (rows || data) {
 		refresh();
-	// Whatever a held reading or format moved, every role of every row.
-	if (data && count() > 0)
-		Q_EMIT dataChanged(index(0), index(count() - 1));
+		if (count() > 0)
+			Q_EMIT dataChanged(index(0), index(count() - 1));
+	}
 	if (folds)
 		Q_EMIT foldedChanged();
 }

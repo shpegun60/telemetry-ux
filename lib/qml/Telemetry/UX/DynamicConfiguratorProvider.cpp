@@ -1631,7 +1631,10 @@ void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 	auto p = d;
 	// Which Fields can be held may differ with the new source.
 	p->treeChanged();
-	p->watch.setSource(std::move(source));
+	{
+		WatchRows::Changes held{p->rows};
+		p->watch.setSource(std::move(source));
+	}
 	// The Watchlist's model exists from its first source on.
 	p->rows.setSource(p->watch.model());
 	if (auto* model = qobject_cast<WatchlistModel*>(p->watch.model())) {
@@ -2040,6 +2043,7 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 	}
 	result[QStringLiteral("duplicate")] = duplicate;
 	result[QStringLiteral("missing")] = missing;
+	WatchRows::Changes held{p->rows};
 	if (replace)
 		p->watch.clear();
 	if (!entries.isEmpty()) {
@@ -2112,6 +2116,19 @@ void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
 	const auto parsed = watch_format::parse(format);
 	if (!parsed || *parsed == p->watchFormat)
 		return;
+	p->putFormat(*parsed);
+	++p->formatRevision;
+	p->notify();
+}
+
+bool DynamicConfiguratorProvider::chooseWatchFormat(const QString& format)
+{
+	auto p = d;
+	const auto parsed = watch_format::parse(format);
+	if (!parsed)
+		return false;
+	if (*parsed == p->watchFormat)
+		return true;
 	// A format chosen is one change Undo takes back (WL-2c): Ctrl+Z after it
 	// returns the format, never an older change under it.
 	Impl::WatchUndo undo;
@@ -2123,6 +2140,7 @@ void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
 	undo.formatRevision = ++p->formatRevision;
 	p->undo = std::move(undo);
 	p->notify();
+	return true;
 }
 
 bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, const QString& format)
@@ -2554,7 +2572,12 @@ QVariantMap DynamicConfiguratorProvider::undoWatch()
 		// The rows' formats first: if the model refuses, nothing changed and
 		// Undo stays.
 		const auto& undo = p->undo;
-		const int changed = static_cast<int>(undo.pathFormats.size()) + (undo.format != WatchNumberFormat::Original ? 1 : 0);
+		const auto now = p->pathFormats();
+		int changed = undo.format != p->watchFormat ? 1 : 0;
+		for (auto at = undo.pathFormats.cbegin(); at != undo.pathFormats.cend(); ++at)
+			changed += now.value(at.key()) != at.value() || !now.contains(at.key()) ? 1 : 0;
+		for (auto at = now.cbegin(); at != now.cend(); ++at)
+			changed += undo.pathFormats.contains(at.key()) ? 0 : 1;
 		if (!p->putPathFormats(undo.pathFormats))
 			return result;
 		p->putFormat(undo.format);

@@ -115,7 +115,11 @@ Pane {
         return found ? found.text : name
     }
     function setFormat(name) {
-        if (formatAvailable && name !== format)
+        if (!formatAvailable || name === format)
+            return
+        if (typeof provider.chooseWatchFormat === "function")
+            provider.chooseWatchFormat(name)
+        else
             provider.watchFormat = name
     }
     // Every value back to Original at once (WL-3b): the Watchlist's form and
@@ -163,7 +167,7 @@ Pane {
             return
         forgetMeasured()
         if (many)
-            say(name.length === 0 ? qsTr("%L1 values shown like the Watchlist").arg(sources.length)
+            say(name.length === 0 ? qsTr("%L1 values shown like the Watchlist (%2)").arg(sources.length).arg(formatWord(format))
                                   : qsTr("%L1 values shown in %2").arg(sources.length).arg(formatWord(name)),
                 provider.canUndoWatch === true)
     }
@@ -184,11 +188,15 @@ Pane {
     function moveTo(row, how) {
         if (row < 0 || row >= watchList.count)
             return
+        const from = watchList.currentIndex
         watchList.currentIndex = row
-        if (selectable && how === "extend")
+        if (selectable && how === "extend") {
+            if (rows.anchorRow() < 0 && from >= 0 && from !== row)
+                rows.select(from)
             rows.selectRange(row)
-        else if (selectable && how === "select")
+        } else if (selectable && how === "select") {
             rows.select(row)
+        }
         watchList.positionViewAtIndex(row, ListView.Contain)
     }
     // The row a menu was opened for.
@@ -230,30 +238,37 @@ Pane {
     onRevisionChanged: {
         if (noticeText.length > 0 && revision !== noticeRevision)
             say("", false)
+        if (removeDialog.visible) {
+            removalAsked = []
+            removeDialog.close()
+        }
     }
     readonly property bool canUndo: noticeUndo && provider.canUndoWatch === true
     // Stops watching what row shows: a value, or every value under a node, as
     // one change where the provider takes several, said with Undo.
-    function removeAt(row, confirmed) {
-        const many = onSelection(row)
-        const sources = sourcesAt(row)
+    function removeAt(row, confirmed, own) {
+        const many = own !== true && onSelection(row)
+        const sources = many ? sourcesAt(row) : rows ? rows.sourceRows(row) : [row]
         if (sources.length === 0 || changeLocked)
             return
         // A selection is named by its count: its rows may be out of view.
         const item = many ? null : watchList.itemAtIndex(row)
         const label = item ? item.name : ""
-        if (typeof provider.removeWatchRows !== "function") {
-            sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
-            return
-        }
-        if (sources.length > 1 && provider.connected === false && confirmed !== true) {
+        const oneByOne = typeof provider.removeWatchRows !== "function"
+        if (sources.length > 1 && confirmed !== true && (oneByOne || provider.connected !== true)) {
             removalAsked = sources
             removeDialog.open()
+            return
+        }
+        if (oneByOne) {
+            sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
+            selectCurrent()
             return
         }
         const result = provider.removeWatchRows(sources)
         if (!result || result.status !== "ok" || result.changed === 0)
             return
+        selectCurrent()
         say(many ? qsTr("Removed %L1 values").arg(result.changed)
             : sources.length === 1 || label.length === 0
             ? (label.length > 0 ? qsTr("Removed %1").arg(label) : qsTr("Removed %L1").arg(result.changed))
@@ -262,11 +277,24 @@ Pane {
     function removeAsked() {
         const sources = removalAsked
         removalAsked = []
-        if (sources.length === 0 || changeLocked || typeof provider.removeWatchRows !== "function")
+        if (sources.length === 0 || changeLocked)
             return
+        if (typeof provider.removeWatchRows !== "function") {
+            sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
+            say(qsTr("Removed %L1 values").arg(sources.length), false)
+            selectCurrent()
+            return
+        }
         const result = provider.removeWatchRows(sources)
-        if (result && result.status === "ok" && result.changed > 0)
-            say(qsTr("Removed %L1 values").arg(result.changed), false)
+        if (result && result.status === "ok" && result.changed > 0) {
+            say(qsTr("Removed %L1 values").arg(result.changed), provider.canUndoWatch === true)
+            selectCurrent()
+        }
+    }
+    // After a removal the row the cursor moved to is the one selected.
+    function selectCurrent() {
+        if (selectable && watchList.currentIndex >= 0)
+            rows.select(watchList.currentIndex)
     }
     // Takes back the provider's last change: a removal, an add, a reset of
     // the formats.
@@ -1085,9 +1113,21 @@ Pane {
             // The keyboard: arrows move the current row, Delete removes it,
             // F2 or Enter writes a writable one.
             activeFocusOnTab: panel.open
-            keyNavigationEnabled: true
+            // Every key that moves is the list's own (Keys.onPressed), so the
+            // selection follows; none moves while a row is edited.
+            keyNavigationEnabled: false
             currentIndex: -1
-            onActiveFocusChanged: if (activeFocus && currentIndex < 0 && count > 0) panel.moveTo(0, "select")
+            // In: the cursor on the first selected row, the selection kept;
+            // with none, the first row.
+            onActiveFocusChanged: {
+                if (!activeFocus || currentIndex >= 0 || count === 0)
+                    return
+                const selected = panel.selectable ? panel.rows.selectedRows() : []
+                if (selected.length > 0)
+                    currentIndex = selected[0]
+                else
+                    panel.moveTo(0, "select")
+            }
             // Copies are the list's own while it has the keys; Ctrl+Z is the
             // whole panel's.
             Keys.onShortcutOverride: event => {
@@ -1107,10 +1147,12 @@ Pane {
                     event.accepted = true
                     return
                 }
+                // While a row is edited its keys are the editor's alone.
+                if (editing)
+                    return
                 // Moving selects; Shift extends from the anchor, Ctrl moves
-                // the cursor alone. Not while a row is edited: its keys are
-                // the editor's.
-                if (!editing && count > 0) {
+                // the cursor alone.
+                if (count > 0) {
                     const shift = (event.modifiers & Qt.ShiftModifier) !== 0
                     const ctrl = (event.modifiers & Qt.ControlModifier) !== 0
                     const how = shift ? "extend" : ctrl ? "cursor" : "select"
@@ -1146,7 +1188,8 @@ Pane {
                         return
                     }
                     if (panel.selectable && currentIndex >= 0 && event.key === Qt.Key_Escape
-                            && event.modifiers === Qt.NoModifier && panel.selectedCount > 1) {
+                            && event.modifiers === Qt.NoModifier
+                            && (panel.selectedCount > 1 || !panel.rows.isSelected(currentIndex))) {
                         panel.rows.select(currentIndex)
                         event.accepted = true
                         return
@@ -1298,6 +1341,7 @@ Pane {
                     }
                     if (!writable || editing)
                         return
+                    watchList.currentIndex = index
                     if (panel.selectable)
                         panel.rows.select(index)
                     panel.writeRefusalText = ""
@@ -1401,7 +1445,7 @@ Pane {
                 // quiet without them, so it stays visible.
                 readonly property bool marked: panel.selectable ? model.selected === true
                                                                 : ListView.isCurrentItem && watchList.activeFocus
-                readonly property bool active: marked && watchList.activeFocus
+                readonly property bool active: marked && (watchList.activeFocus || rowMenu.visible || removeDialog.visible)
                 // Muted text steps up on the quiet fill, to stay readable.
                 readonly property color muted: marked && !active ? Theme.textSecondary : Theme.textMuted
                 readonly property bool removeShown: compact || rowHover.hovered || current
@@ -1410,6 +1454,8 @@ Pane {
                 // What a keyboard or screen reader user hears: the hidden
                 // columns too, and the status the glyph only marks (spec F).
                 Accessible.role: panel.treeView ? Accessible.TreeItem : Accessible.ListItem
+                Accessible.selectable: panel.selectable
+                Accessible.selected: watchRow.marked
                 Accessible.name: [panel.treeView ? watchRow.name.substring(nameCell.leafStart) : watchRow.name,
                                   watchRow.isGroup ? qsTr("group, %L1 watched").arg(watchRow.leaves)
                                   : watchRow.isValue ? ""
@@ -1927,7 +1973,7 @@ Pane {
                                 font.family: Type.fixedFamily
                                 font.pointSize: Type.caption
                                 color: watchRow.active ? Theme.selectedForeground
-                                     : modelData === "-" ? Theme.textDisabled : Theme.textSecondary
+                                     : modelData === "-" && !watchRow.marked ? Theme.textDisabled : Theme.textSecondary
                             }
                         }
                         HoverHandler { id: accessHover }
@@ -2035,10 +2081,13 @@ Pane {
                                      : remove.hovered ? Theme.textPrimary : Theme.textSecondary
                             }
                             background: Rectangle {
+                                // Inside the current row's focus frame.
+                                anchors.fill: parent
+                                anchors.margins: 3
                                 radius: Type.radius
                                 color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
                             }
-                            onClicked: panel.removeAt(watchRow.index)
+                            onClicked: panel.removeAt(watchRow.index, false, true)
                             Accessible.name: qsTr("Remove %1").arg(watchRow.name)
                             ToolTip.visible: hovered
                             ToolTip.delay: 700
@@ -2133,6 +2182,9 @@ Pane {
         objectName: "watchRowMenu"
         readonly property var item: panel.menuRow >= 0 ? watchList.itemAtIndex(panel.menuRow) : null
         readonly property string own: item && typeof item.model.format === "string" ? item.model.format : ""
+        // Opened inside a selection of several: the menu is the selection's.
+        property int many: 0
+        onAboutToShow: many = panel.onSelection(panel.menuRow) ? panel.rows.selectedSourceRows().length : 0
         Menu {
             id: rowFormatMenu
             objectName: "watchRowFormatMenu"
@@ -2143,7 +2195,7 @@ Pane {
                 objectName: "watchRowFormat_inherit"
                 text: qsTr("Like the Watchlist (%1)").arg(panel.formatWord(panel.format))
                 checkable: true
-                checked: rowMenu.own.length === 0
+                checked: rowMenu.many === 0 && rowMenu.own.length === 0
                 ButtonGroup.group: rowFormatItems
                 onTriggered: panel.formatRows(panel.menuRow, "")
             }
@@ -2154,7 +2206,7 @@ Pane {
                     objectName: "watchRowFormat_" + modelData.name
                     text: modelData.text
                     checkable: true
-                    checked: rowMenu.own === modelData.name
+                    checked: rowMenu.many === 0 && rowMenu.own === modelData.name
                     ButtonGroup.group: rowFormatItems
                     Accessible.description: modelData.tip
                     onTriggered: panel.formatRows(panel.menuRow, modelData.name)
@@ -2181,24 +2233,27 @@ Pane {
         MenuSeparator {}
         MenuItem {
             objectName: "watchRowCopy"
-            text: qsTr("Copy") + "\t" + qsTr("Ctrl+C")
+            text: (rowMenu.many > 0 ? qsTr("Copy %L1 values").arg(rowMenu.many) : qsTr("Copy")) + "\t" + qsTr("Ctrl+C")
             onTriggered: panel.copyRows(panel.menuRow, "lines")
         }
         MenuItem {
             objectName: "watchRowCopyValue"
             text: qsTr("Copy value")
-            enabled: rowMenu.item !== null && rowMenu.item.isValue && rowMenu.item.shownText.length > 0
+            enabled: rowMenu.many === 0 && rowMenu.item !== null && rowMenu.item.isValue && rowMenu.item.shownText.length > 0
             onTriggered: panel.copyRows(panel.menuRow, "value")
         }
         MenuItem {
             objectName: "watchRowCopyPath"
-            text: qsTr("Copy path") + "\t" + qsTr("Alt+Shift+C")
+            text: (rowMenu.many > 0 ? qsTr("Copy %L1 paths").arg(rowMenu.many) : qsTr("Copy path")) + "\t" + qsTr("Alt+Shift+C")
             onTriggered: panel.copyRows(panel.menuRow, "paths")
         }
         MenuSeparator {}
         MenuItem {
             objectName: "watchRowRemove"
-            text: qsTr("Remove") + "\t" + qsTr("Delete")
+            text: (rowMenu.many === 0 ? qsTr("Remove")
+                   : panel.provider.connected !== true || typeof panel.provider.removeWatchRows !== "function"
+                     ? qsTr("Remove %L1 values…").arg(rowMenu.many) : qsTr("Remove %L1 values").arg(rowMenu.many))
+                  + "\t" + qsTr("Delete")
             enabled: !panel.changeLocked
             onTriggered: panel.removeAt(panel.menuRow)
         }
@@ -2223,8 +2278,8 @@ Pane {
         palette.buttonText: Theme.textPrimary
         palette.highlight: Theme.stateSelected
         palette.highlightedText: Theme.selectedForeground
-        title: panel.count === 1 ? qsTr("Remove the one Field from the Watchlist?")
-                                 : qsTr("Remove all %L1 Fields from the Watchlist?").arg(panel.count)
+        title: panel.count === 1 ? qsTr("Remove the one value from the Watchlist?")
+                                 : qsTr("Remove all %L1 values from the Watchlist?").arg(panel.count)
         // No body: the question is the title, the answer the buttons.
         topPadding: 0
         bottomPadding: 0
@@ -2267,9 +2322,10 @@ Pane {
         palette.highlightedText: Theme.selectedForeground
         title: qsTr("Remove %L1 values from the Watchlist?").arg(panel.removalAsked.length)
         Label {
-            width: parent ? parent.width : implicitWidth
+            width: removeDialog.availableWidth
             wrapMode: Text.Wrap
-            text: qsTr("No device is connected, so Undo cannot bring them back.")
+            text: panel.provider.connected !== true ? qsTr("No device is connected, so Undo cannot bring them back.")
+                                                    : qsTr("Undo cannot bring them back.")
             color: Theme.textSecondary
         }
         footer: DialogButtonBox {
@@ -2286,11 +2342,13 @@ Pane {
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
             onDiscarded: {
-                removeDialog.close()
                 panel.removeAsked()
+                removeDialog.close()
             }
-            onRejected: panel.removalAsked = []
         }
         onOpened: removeCancel.forceActiveFocus(Qt.TabFocusReason)
+        // Cancel or Escape: the rows asked about are forgotten. (Not on close:
+        // a Remove closes the dialog before its own signal comes.)
+        onRejected: panel.removalAsked = []
     }
 }

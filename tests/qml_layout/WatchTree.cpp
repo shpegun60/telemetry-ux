@@ -553,15 +553,30 @@ int main(int argc, char** argv)
 				key(window, Qt::Key_Delete);
 				CHECK(calls.removed.size() == model.rowCount());
 				CHECK(textOf(content, "watchNotice") == QStringLiteral("Removed %1 values").arg(model.rowCount()));
+				// After a removal the cursor's row is the one selected.
+				CHECK(selectedRows() == QList<int>({current()}));
 				// With no device there is no Undo to bring them back: asked first.
 				auto* fixture = panel->property("provider").value<QObject*>();
 				fixture->setProperty("connected", false);
+				QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+				settle();
 				calls.removed.clear();
 				key(window, Qt::Key_Delete);
 				auto* dialog = window->findChild<QObject*>(QStringLiteral("removeWatchDialog"));
 				CHECK(dialog && dialog->property("visible").toBool() && calls.removed.isEmpty());
 				click(window, shown(content, "removeWatchConfirm"));
 				CHECK(calls.removed.size() == model.rowCount() && !dialog->property("visible").toBool());
+				CHECK(!named(content, "watchUndo"));
+				// A question about rows that changed meanwhile goes away unanswered.
+				list->forceActiveFocus();
+				QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+				settle();
+				calls.removed.clear();
+				key(window, Qt::Key_Delete);
+				CHECK(dialog->property("visible").toBool());
+				fixture->setProperty("watchRevision", fixture->property("watchRevision").toInt() + 1);
+				settle();
+				CHECK(!dialog->property("visible").toBool() && calls.removed.isEmpty());
 				fixture->setProperty("connected", true);
 				list->forceActiveFocus();
 				settle();
@@ -593,8 +608,62 @@ int main(int argc, char** argv)
 				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, at(4));
 				settle();
 				CHECK(selectedRows() == QList<int>({3, 4, 5}));
+				// The menu says it acts on the selection, and how much.
+				auto* menu = window->findChild<QObject*>(QStringLiteral("watchRowMenu"));
+				CHECK(menu && menu->property("visible").toBool());
+				const int values = int(rows.selectedSourceRows().size());
+				CHECK(shown(content, "watchRowCopy")->property("text").toString()
+				          .startsWith(QStringLiteral("Copy %1 values").arg(values)));
+				CHECK(shown(content, "watchRowRemove")->property("text").toString()
+				          .startsWith(QStringLiteral("Remove %1 values").arg(values)));
+				CHECK(!shown(content, "watchRowCopyValue")->property("enabled").toBool());
+				CHECK(rowShown(list, 3)->property("active").toBool());  // still strong behind its menu
 				QTest::keyClick(window, Qt::Key_Escape);
 				settle();
+				if (menu->property("visible").toBool())
+					QTest::keyClick(window, Qt::Key_Escape);
+				settle();
+				// x is its own row's, whatever is selected.
+				list->forceActiveFocus();
+				list->setProperty("currentIndex", 4);
+				settle();
+				calls.removed.clear();
+				click(window, shown(rowShown(list, 4), "removeWatchButton"));
+				{
+					QList<int> own;
+					for (const auto& source : rows.sourceRows(4))
+						own << source.toInt();
+					// Only its row's values went; the cursor's row is the one selected after.
+					CHECK(!own.isEmpty() && calls.removed == own && selectedRows() == QList<int>({4}));
+				}
+				// Escape with the cursor off the selection: the cursor's row alone.
+				list->forceActiveFocus();
+				rows.select(1);
+				list->setProperty("currentIndex", 1);
+				settle();
+				QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+				settle();
+				key(window, Qt::Key_Escape);
+				CHECK(selectedRows() == QList<int>({2}));
+				// While a value is edited, its keys are the editor's: the
+				// selection and the cursor stay.
+				int writable = -1;
+				for (int row = 0; row < count && writable < 0; ++row)
+					if (rowShown(list, row)->property("writable").toBool() && rowShown(list, row)->property("isValue").toBool())
+						writable = row;
+				CHECK(writable >= 0);
+				list->setProperty("currentIndex", writable);
+				list->forceActiveFocus();
+				settle();
+				key(window, Qt::Key_F2);
+				CHECK(rowShown(list, writable)->property("editing").toBool() && selectedRows() == QList<int>({writable}));
+				QTest::keyClick(window, Qt::Key_Down, Qt::ShiftModifier);
+				QTest::keyClick(window, Qt::Key_PageDown);
+				QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
+				settle();
+				CHECK(current() == writable && selectedRows() == QList<int>({writable}));
+				key(window, Qt::Key_Escape);
+				CHECK(!rowShown(list, writable)->property("editing").toBool());
 				list->forceActiveFocus();
 				rows.select(1);
 				settle();

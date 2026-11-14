@@ -90,6 +90,18 @@ QString line(const Rows& rows, int row)
 	    .arg(role(rows, row, Rows::SourceRowRole).toInt())
 	    .arg(role(rows, row, Rows::TextRole).toString());
 }
+// A row as a view draws it, its selection too: what the Mirror must keep.
+QString told(const Rows& rows, int row)
+{
+	return line(rows, row) + (role(rows, row, Rows::SelectedRole).toBool() ? QStringLiteral(" *") : QString{});
+}
+QStringList toldAll(const Rows& rows)
+{
+	QStringList out;
+	for (int row = 0; row < rows.count(); ++row)
+		out << told(rows, row);
+	return out;
+}
 
 // What a view would show if it read a row only when told: every insert,
 // removal, move, change and reset applied as it is announced.
@@ -100,14 +112,14 @@ struct Mirror {
 		const auto all = [this, &rows] {
 			lines.clear();
 			for (int row = 0; row < rows.count(); ++row)
-				lines << line(rows, row);
+				lines << told(rows, row);
 		};
 		all();
 		QObject::connect(&rows, &QAbstractItemModel::modelReset, &rows, all);
 		QObject::connect(&rows, &QAbstractItemModel::rowsInserted, &rows,
 		                 [this, &rows](const QModelIndex&, int first, int last) {
 			                 for (int row = first; row <= last; ++row)
-				                 lines.insert(row, line(rows, row));
+				                 lines.insert(row, told(rows, row));
 		                 });
 		QObject::connect(&rows, &QAbstractItemModel::rowsRemoved, &rows,
 		                 [this](const QModelIndex&, int first, int last) { lines.remove(first, last - first + 1); });
@@ -122,7 +134,7 @@ struct Mirror {
 		QObject::connect(&rows, &QAbstractItemModel::dataChanged, &rows,
 		                 [this, &rows](const QModelIndex& top, const QModelIndex& bottom) {
 			                 for (int row = top.row(); row <= bottom.row(); ++row)
-				                 lines[row] = line(rows, row);
+				                 lines[row] = told(rows, row);
 		                 });
 	}
 };
@@ -489,6 +501,22 @@ void selection()
 	rows.setTree(true);    // device.Config opened again to show it
 	CHECK(rows.folded().isEmpty() &&
 	      rows.selectedLines(true) == QStringLiteral("device.Config.Enabled\ndata.First"));
+	// Folding everything over what is selected selects the nodes folded,
+	// whichever way the fold comes (here a project's folds).
+	rows.select(3);  // device.Config.Gain
+	rows.select(7, true);  // data.First
+	rows.setFolded({QStringLiteral("device.Config"), QStringLiteral("data")});
+	CHECK(rows.selectedLines(true) == QStringLiteral("device.Config.Gain\ndevice.Config.Enabled\ndata.Count\ndata.First"));
+	CHECK(rows.selectedCount() == 2);
+	rows.expandAll();
+	// A selection of every value kept to the list and back keeps the folds
+	// rather than opening every node; a few values open theirs.
+	rows.collapseAll();
+	rows.setTree(false);
+	rows.selectAll();
+	rows.setTree(true);
+	CHECK(!rows.folded().isEmpty() || rows.selectedCount() <= 64);
+	rows.expandAll();
 	// Everything shown; the selection survives a sort switch.
 	rows.selectAll();
 	CHECK(rows.selectedCount() == rows.count() && rows.selectedSourceRows().size() == source->rowCount());
@@ -535,7 +563,7 @@ void heldChanges()
 			Rows fresh;
 			fresh.setTree(tree);
 			fresh.setSource(source.get());
-			CHECK(shown(rows) == shown(fresh) && mirror.lines == shown(rows) && resets.isEmpty());
+			CHECK(shown(rows) == shown(fresh) && mirror.lines == toldAll(rows) && resets.isEmpty());
 			CHECK(rows.selectedSourceRows().size() == 512);
 			if (held) {
 				// One refresh: one change of the rows that stayed, then the held format.
@@ -550,6 +578,26 @@ void heldChanges()
 		// Held is one rebuild for 512: far cheaper whenever the cost shows at all.
 		if (took[0] >= 40)
 			CHECK(took[1] * 4 < took[0]);
+	}
+	// A held reading that renames a row (a reconnect rebinds them): the rows
+	// are rebuilt at the end, not only told.
+	{
+		auto source = sourceModel();
+		add(*source, 0, QStringLiteral("a.X"), key(1, 0));
+		add(*source, 1, QStringLiteral("b.Y"), key(2, 0));
+		Rows rows;
+		rows.setTree(true);
+		rows.setSource(source.get());
+		rows.select(1);  // a.X
+		{
+			Rows::Changes hold{rows};
+			source->item(0)->setData(QStringLiteral("c.X"), Name);
+			CHECK(rows.selectedRows().isEmpty() && rows.sourceRows(0).isEmpty());  // held: answers nothing
+		}
+		Rows fresh;
+		fresh.setTree(true);
+		fresh.setSource(source.get());
+		CHECK(shown(rows) == shown(fresh));
 	}
 	// Nested pairs: the rows follow at the outer end only.
 	auto source = sourceModel();
@@ -654,7 +702,7 @@ void randomSequences()
 			fresh.setSorted(rows.sorted());
 			fresh.setSource(source.get());
 			CHECK(shown(rows) == shown(fresh));
-			CHECK(mirror.lines == shown(rows));
+			CHECK(mirror.lines == toldAll(rows));
 		}
 		CHECK(resets.isEmpty());
 	}

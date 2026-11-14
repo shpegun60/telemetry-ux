@@ -97,7 +97,8 @@ ApplicationWindow {
         function removeWatchRows(rows) {
             watchTreeCalls.remove(rows)
             formatUndo = null
-            canUndoWatch = true
+            // As the provider's: no Undo without a device to put them back against.
+            canUndoWatch = connected
             ++watchRevision
             return { status: "ok", changed: rows.length }
         }

@@ -150,8 +150,10 @@ public:
 
 	// Holds the rows back while one call changes many source rows - a
 	// scattered removal comes as a signal for every run of rows - and brings
-	// them up to date once, at the last end. In between nothing is told and
-	// the rows are not read. Nested pairs count. (WL-2c)
+	// them up to date once, at the last end, then tells every role of every
+	// row. In between the rows tell nothing and answer nothing (no source
+	// rows, no selection, -1), whatever a provider says meanwhile. Nested
+	// pairs count. (WL-2c)
 	void beginChanges() noexcept { ++held_; }
 	void endChanges();
 	// One pair around a scope.
@@ -252,6 +254,12 @@ private:
 	bool refreshing_ = false, again_ = false;
 	int held_ = 0;                          // beginChanges without their end
 	bool heldRows_ = false, heldData_ = false, heldFolds_ = false;  // what came while held
+	bool selectionMoved_ = false;  // pruned in a refresh, told after it
+	// Neither refreshing nor held: the rows are what the source holds.
+	bool settled() const noexcept { return !refreshing_ && held_ == 0; }
+	// Going to the tree opens the nodes above at most this many selected
+	// values; a selection of more (Ctrl+A) keeps the folds.
+	static constexpr int unfoldForSelection = 64;
 	bool tree_ = false;
 	bool sorted_ = false;
 	QSet<QString> folded_;
