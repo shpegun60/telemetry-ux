@@ -141,6 +141,26 @@ void numberFormats()
 	CHECK(!hex("0x7FC00001", type(ux::WatchScalar::F32, 4)).error.isEmpty() &&
 	      hex("0x7FC00001", type(ux::WatchScalar::F32, 4)).canonical.isEmpty());
 	CHECK(!hex("0x7FF0000000000001", type(ux::WatchScalar::F64, 8)).error.isEmpty());
+	// A typed value as the bits it would write, or why not (WL-3b).
+	const auto encode = [](const char* text, const ux::WatchValueType& of) {
+		return wf::encode(QString::fromLatin1(text), of);
+	};
+	CHECK(wf::text(encode("2", type(ux::WatchScalar::F32, 4)).value, WatchNumberFormat::Hex) == "0x40000000");
+	CHECK(wf::text(encode("0x3FC00000", type(ux::WatchScalar::F32, 4)).value, WatchNumberFormat::Dec) == "1.5");
+	CHECK(wf::text(encode("-1", type(ux::WatchScalar::S16, 2)).value, WatchNumberFormat::Hex) == "0xFFFF");
+	CHECK(wf::text(encode("true", type(ux::WatchScalar::Boolean, 1)).value, WatchNumberFormat::Hex) == "0x01");
+	CHECK(wf::range(type(ux::WatchScalar::U16, 2)) == "from 0 to 65535 (0x0000 to 0xFFFF)");
+	CHECK(wf::range(type(ux::WatchScalar::S16, 2)) == "from -32768 to 32767 (0x8000 to 0x7FFF)");
+	CHECK(wf::range(type(ux::WatchScalar::F32, 4)).isEmpty());
+	CHECK(encode("65536", type(ux::WatchScalar::U16, 2)).error ==
+	      "65536 is past a u16: enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("0x10000", type(ux::WatchScalar::U16, 2)).error ==
+	      "0x10000 is past a u16: enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("from 0 to 255 (0x00 to 0xFF)"));
+	CHECK(encode("abc", type(ux::WatchScalar::U16, 2)).error == "abc is not a number a u16 holds.");
+	CHECK(encode("yes", type(ux::WatchScalar::Boolean, 1)).error == "Enter true or false (1 or 0).");
+	CHECK(encode("", type(ux::WatchScalar::U16, 2)).error.isEmpty() && encode("", type(ux::WatchScalar::U16, 2)).value.size == 0);
+	CHECK(!encode("1", {}).error.isEmpty());
 
 	// The model: the Watchlist's form, a row's own, remembered by path.
 	ux::WatchlistModel model;

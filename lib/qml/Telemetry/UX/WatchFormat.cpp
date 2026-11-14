@@ -10,6 +10,9 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QStringList>
+#include <array>
+#include <bit>
+#include <cstdint>
 
 namespace telemetry::ux::watch_format {
 namespace {
@@ -43,6 +46,16 @@ QString typeName(const WatchValueType& type)
 QString tr(const char* text)
 {
 	return QCoreApplication::translate("WatchFormat", text);
+}
+
+QString hexAt(std::uint64_t bits, unsigned width)
+{
+	return QStringLiteral("0x") + QString::number(bits, 16).toUpper().rightJustified(2 * int(width), QLatin1Char('0'));
+}
+
+bool isFloat(ScalarCode code)
+{
+	return code == ScalarCode::F32 || code == ScalarCode::F64;
 }
 
 } // namespace
@@ -140,7 +153,9 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 		return parsed;
 	}
 	if (digits.size() > width) {
-		parsed.error = tr("%1 has more digits than a %2 holds (%3).").arg(trimmed.toString(), typeName(type)).arg(width);
+		parsed.error = isFloat(*code) || *code == ScalarCode::Bool
+		    ? tr("%1 has more digits than a %2 holds (%3).").arg(trimmed.toString(), typeName(type)).arg(width)
+		    : tr("%1 is past a %2: enter a number %3.").arg(trimmed.toString(), typeName(type), range(type));
 		return parsed;
 	}
 	bool ok = false;
@@ -172,6 +187,90 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 		parsed.canonical.clear();
 	}
 	return parsed;
+}
+
+QString range(const WatchValueType& type)
+{
+	const auto code = codeOf(type.scalar);
+	if (!type.valid() || !code || isFloat(*code) || *code == ScalarCode::Bool || type.width == 0 || type.width > 8)
+		return {};
+	const unsigned bitsWide = 8 * type.width;
+	const std::uint64_t all = bitsWide == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bitsWide) - 1;
+	const bool isSigned = *code == ScalarCode::S8 || *code == ScalarCode::S16 || *code == ScalarCode::S32 ||
+	                      *code == ScalarCode::S64;
+	const std::uint64_t low = isSigned ? std::uint64_t{1} << (bitsWide - 1) : 0;
+	const std::uint64_t high = isSigned ? low - 1 : all;
+	return tr("from %1 to %2 (%3 to %4)")
+	    .arg(detail::scalarEditorBits(low, *code), detail::scalarEditorBits(high, *code), hexAt(low, type.width),
+	         hexAt(high, type.width));
+}
+
+Encoded encode(QStringView text, const WatchValueType& type)
+{
+	Encoded out;
+	const auto code = codeOf(type.scalar);
+	const auto trimmed = text.trimmed().toString();
+	if (trimmed.isEmpty())
+		return out;
+	if (!type.valid() || !code) {
+		out.error = tr("This value's type is not known yet; read it once first.");
+		return out;
+	}
+	auto typed = trimmed;
+	if (isHex(trimmed)) {
+		const auto parsed = fromHex(trimmed, type);
+		if (!parsed.error.isEmpty()) {
+			out.error = parsed.error;
+			return out;
+		}
+		typed = parsed.canonical;
+	}
+	std::uint64_t bits = 0;
+	const auto as = [&]<class T, class B>() {
+		T number{};
+		if (!detail::parseScalar(typed, number))
+			return false;
+		bits = static_cast<std::uint64_t>(std::bit_cast<B>(number));
+		return true;
+	};
+	bool ok = false;
+	switch (*code) {
+		case ScalarCode::Bool: {
+			bool value = false;
+			ok = detail::parseScalar(typed, value);
+			bits = value ? 1 : 0;
+			break;
+		}
+		case ScalarCode::U8: ok = as.template operator()<std::uint8_t, std::uint8_t>(); break;
+		case ScalarCode::S8: ok = as.template operator()<std::int8_t, std::uint8_t>(); break;
+		case ScalarCode::U16: ok = as.template operator()<std::uint16_t, std::uint16_t>(); break;
+		case ScalarCode::S16: ok = as.template operator()<std::int16_t, std::uint16_t>(); break;
+		case ScalarCode::U32: ok = as.template operator()<std::uint32_t, std::uint32_t>(); break;
+		case ScalarCode::S32: ok = as.template operator()<std::int32_t, std::uint32_t>(); break;
+		case ScalarCode::U64: ok = as.template operator()<std::uint64_t, std::uint64_t>(); break;
+		case ScalarCode::S64: ok = as.template operator()<std::int64_t, std::uint64_t>(); break;
+		case ScalarCode::F32: ok = as.template operator()<float, std::uint32_t>(); break;
+		case ScalarCode::F64: ok = as.template operator()<double, std::uint64_t>(); break;
+		default: break;
+	}
+	if (!ok) {
+		// A whole number past the type says its range; anything else is not one.
+		bool whole = !typed.isEmpty();
+		for (qsizetype at = 0; at < typed.size() && whole; ++at)
+			whole = typed.at(at).isDigit() || (at == 0 && (typed.at(0) == u'-' || typed.at(0) == u'+'));
+		out.error = *code == ScalarCode::Bool ? tr("Enter true or false (1 or 0).")
+		            : whole && !isFloat(*code)
+		                ? tr("%1 is past a %2: enter a number %3.").arg(trimmed, typeName(type), range(type))
+		                : tr("%1 is not a number a %2 holds.").arg(trimmed, typeName(type));
+		return out;
+	}
+	std::array<std::byte, 8> bytes{};
+	for (unsigned i = 0; i < type.width && i < bytes.size(); ++i)
+		bytes[i] = std::byte((bits >> (8 * i)) & 0xff);
+	out.value.type = type;
+	if (!out.value.assign(bytes.data(), type.width))
+		out.error = tr("This value's type is not known yet; read it once first.");
+	return out;
 }
 
 } // namespace telemetry::ux::watch_format

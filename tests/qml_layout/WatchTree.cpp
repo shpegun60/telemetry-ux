@@ -383,8 +383,16 @@ int main(int argc, char** argv)
 			auto* gain = rowAt(list, 3);
 			CHECK(gain && gain->property("editing").toBool());
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			QTest::keyClick(window, 'x');
+			settle();
+			// What Enter would write, in the other form; or why not, in the warning colour.
+			CHECK(textOf(gain, "watchValuePreview") == QStringLiteral("x is not a number a f32 holds."));
+			const auto warned = shown(gain, "watchValuePreview")->property("color");
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, '2');
 			settle();
+			CHECK(textOf(gain, "watchValuePreview") == QStringLiteral("= 0x40000000"));
+			CHECK(shown(gain, "watchValuePreview")->property("color") != warned);
 			// A row in above it: the list hands its current row the focus
 			// again, and the row keeps it in its editor.
 			QSignalSpy resets(&rows, &QAbstractItemModel::modelReset);

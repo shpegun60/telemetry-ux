@@ -296,6 +296,8 @@ struct DynamicConfiguratorProvider::Impl {
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
 	QString writeText, writeName, watchWrite;
+	// The written row's type, to say why a text is not a value of it.
+	WatchValueType writeType;
 	// A value inside a struct or array Field: where it is, so the write walks
 	// to it in the Field just read; and the value as it will be written.
 	std::optional<WatchLeaves::Leaf> writeLeaf;
@@ -848,8 +850,11 @@ struct DynamicConfiguratorProvider::Impl {
 			writeIntended = parsed ? canonicalScalarText(info.value.code, writeText) : QString{};
 		}
 		if (!parsed || set != rt::Status::Ok) {
-			failWatchWrite(writeName + QStringLiteral(" not written: \"") + writeText +
-			               QStringLiteral("\" is not a valid value"));
+			// Why, in words: the type's range for a number past it (WL-3b).
+			const auto why = writeType.valid() && !writeType.enumeration
+			                     ? watch_format::encode(writeText, writeType).error : QString{};
+			failWatchWrite(writeName + QStringLiteral(" not written: ") +
+			               (why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why));
 			return;
 		}
 		auto target = writer;
@@ -2024,6 +2029,29 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 	return result;
 }
 
+QVariantMap DynamicConfiguratorProvider::watchEditPreview(int row, const QString& text) const
+{
+	auto p = d;
+	QVariantMap out{{QStringLiteral("preview"), QString{}}, {QStringLiteral("error"), QString{}}};
+	const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
+	if (!model || row < 0 || row >= model->count() || text.trimmed().isEmpty())
+		return out;
+	const auto type = model->valueType(row);
+	// An enum is chosen by name; a row never read has no type to say yet.
+	if (!type.valid() || type.enumeration)
+		return out;
+	const auto encoded = watch_format::encode(text, type);
+	if (!encoded.error.isEmpty()) {
+		out[QStringLiteral("error")] = encoded.error;
+		return out;
+	}
+	const bool hex = watch_format::isHex(text);
+	const auto shown = watch_format::text(encoded.value, hex ? WatchNumberFormat::Dec : WatchNumberFormat::Hex);
+	if (!shown.isEmpty() && shown.compare(text.trimmed(), Qt::CaseInsensitive) != 0)
+		out[QStringLiteral("preview")] = QStringLiteral("= ") + shown;
+	return out;
+}
+
 QString DynamicConfiguratorProvider::watchFormat() const
 {
 	return watch_format::name(d->watchFormat);
@@ -2507,6 +2535,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeIntended = typed;
 	p->writeText = typed;
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
+	if (const auto* watched = qobject_cast<const WatchlistModel*>(model))
+		p->writeType = watched->valueType(row);
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->notify();
 	return true;

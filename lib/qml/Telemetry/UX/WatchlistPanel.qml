@@ -545,6 +545,8 @@ Pane {
                         checked: panel.treeView === modelData.tree
                         flat: !checked
                         ButtonGroup.group: viewModes
+                        focusPolicy: checked ? Qt.StrongFocus : Qt.ClickFocus
+                        Accessible.role: Accessible.RadioButton
                         onClicked: panel.showTree(modelData.tree)
                         Keys.onLeftPressed: {
                             panel.showTree(false)
@@ -588,6 +590,8 @@ Pane {
                         checked: panel.format === modelData.name
                         flat: !checked
                         ButtonGroup.group: formatModes
+                        focusPolicy: checked ? Qt.StrongFocus : Qt.ClickFocus
+                        Accessible.role: Accessible.RadioButton
                         onClicked: panel.setFormat(modelData.name)
                         Keys.onLeftPressed: if (index > 0) {
                             panel.setFormat(panel.formats[index - 1].name)
@@ -612,8 +616,9 @@ Pane {
                 objectName: "watchFormatButton"
                 visible: panel.formatAvailable && !panel.formatInBar
                 Layout.leftMargin: panel.barGap
-                TextMetrics { id: widestFormat; font: formatButton.font; text: qsTr("Original") + " ▾" }
-                implicitWidth: Math.ceil(widestFormat.advanceWidth) + leftPadding + rightPadding
+                FontMetrics { id: formatMetrics; font: formatButton.font }
+                implicitWidth: Math.ceil(Math.max(...panel.formats.map(item => formatMetrics.advanceWidth(item.text + " ▾"))))
+                               + leftPadding + rightPadding
                 Layout.preferredHeight: Type.controlHeight
                 verticalPadding: 0
                 flat: true
@@ -638,6 +643,7 @@ Pane {
                             checkable: true
                             checked: panel.format === modelData.name
                             ButtonGroup.group: formatItems
+                            Accessible.description: modelData.tip
                             onTriggered: panel.setFormat(modelData.name)
                         }
                     }
@@ -1528,16 +1534,37 @@ Pane {
                                     Keys.onEnterPressed: watchRow.commitEdit()
                                     Keys.onEscapePressed: watchRow.finishEdit()
                                     Accessible.name: qsTr("New value for %1").arg(watchRow.name)
-                                    Accessible.description: watchRow.writeScope
+                                    Accessible.description: (watchRow.writeScope
                                         ? qsTr("%1. %2 %3 Write all or press Enter to send it once. Escape cancels.")
                                             .arg(watchRow.draftText).arg(watchRow.scopeText).arg(watchRow.overwriteText)
-                                        : qsTr("%1. Write or press Enter to send this value once. Escape cancels.").arg(watchRow.draftText)
+                                        : qsTr("%1. Write or press Enter to send this value once. Escape cancels.").arg(watchRow.draftText))
+                                        + (editPreview.text.length > 0 ? " " + editPreview.text : "")
                                     PlainToolTip {
                                         objectName: "watchValueEditorToolTip"
                                         visible: valueEditor.hovered || valueEditor.activeFocus
                                         delay: 700
                                         text: valueEditor.Accessible.description
                                     }
+                                }
+                                // What Enter would write in the other form, "= 0x40000000",
+                                // or why not; the whole reason in the tooltip.
+                                Label {
+                                    id: editPreview
+                                    objectName: "watchValuePreview"
+                                    readonly property var result: watchRow.editing && valueEditor.visible
+                                        && typeof panel.provider.watchEditPreview === "function"
+                                        ? panel.provider.watchEditPreview(watchRow.sourceRow, watchRow.draftText) : null
+                                    readonly property string error: result && result.error ? result.error : ""
+                                    visible: text.length > 0
+                                    Layout.maximumWidth: Type.bodyPixels * 14
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideRight
+                                    text: error.length > 0 ? error : result && result.preview ? result.preview : ""
+                                    font.family: error.length > 0 ? Qt.application.font.family : Type.fixedFamily
+                                    font.pointSize: Type.caption
+                                    color: error.length > 0 ? Theme.warning : Theme.textMuted
+                                    HoverHandler { id: previewHover }
+                                    PlainToolTip { visible: previewHover.hovered && editPreview.truncated; text: editPreview.text; delay: 300 }
                                 }
                                 ToolButton {
                                     objectName: "watchValueChoiceReturn"
@@ -1856,6 +1883,7 @@ Pane {
                     checkable: true
                     checked: rowMenu.own === modelData.name
                     ButtonGroup.group: rowFormatItems
+                    Accessible.description: modelData.tip
                     onTriggered: panel.formatRows(panel.menuRow, modelData.name)
                 }
             }

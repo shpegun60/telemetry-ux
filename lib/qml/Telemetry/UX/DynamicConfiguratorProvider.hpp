@@ -197,6 +197,11 @@ public:
 	// [positions of the rows not on this device]}.
 	Q_INVOKABLE QVariantMap restoreWatchBindings(const QVariantList& bindings);
 	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
+	// While a row's value is typed (WL-3b): {preview: "= 0x40000000" - the
+	// other form of what Enter would write, hex for a number and the value for
+	// hex - or error: why it can't be, the type's range for a number past it}.
+	// Both empty before the row's first reading, for an enum and for nothing typed.
+	Q_INVOKABLE QVariantMap watchEditPreview(int row, const QString& text) const;
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
 	bool canUndoWatch() const;

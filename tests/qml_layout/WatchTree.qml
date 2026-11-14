@@ -29,6 +29,11 @@ ApplicationWindow {
         property bool canUndoWatch: false
         property string watchFormat: "original"
         function checkWatchPath(text) { return watchTreeCalls.check(text) }
+        function watchEditPreview(row, text) {
+            return text === "2" ? { preview: "= 0x40000000", error: "" }
+                 : text === "x" ? { preview: "", error: "x is not a number a f32 holds." }
+                 : { preview: "", error: "" }
+        }
         function watchPathCandidates(text) { return watchTreeCalls.candidates(text) }
         function addWatchPaths(lines) {
             canUndoWatch = true
