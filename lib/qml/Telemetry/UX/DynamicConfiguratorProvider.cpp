@@ -2112,8 +2112,16 @@ void DynamicConfiguratorProvider::setWatchFormat(const QString& format)
 	const auto parsed = watch_format::parse(format);
 	if (!parsed || *parsed == p->watchFormat)
 		return;
+	// A format chosen is one change Undo takes back (WL-2c): Ctrl+Z after it
+	// returns the format, never an older change under it.
+	Impl::WatchUndo undo;
+	undo.valid = true;
+	undo.formats = true;
+	undo.format = p->watchFormat;
+	undo.pathFormats = p->pathFormats();
 	p->putFormat(*parsed);
-	++p->formatRevision;
+	undo.formatRevision = ++p->formatRevision;
+	p->undo = std::move(undo);
 	p->notify();
 }
 
@@ -2140,8 +2148,16 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 		for (const int row : std::as_const(chosen))
 			done = model->setRowFormat(row, target) && done;
 	}
-	if (model->pathFormats() != before)
-		++p->formatRevision;
+	if (model->pathFormats() != before) {
+		// One change for all the rows given, which Undo takes back.
+		Impl::WatchUndo undo;
+		undo.valid = true;
+		undo.formats = true;
+		undo.format = p->watchFormat;
+		undo.pathFormats = before;
+		undo.formatRevision = ++p->formatRevision;
+		p->undo = std::move(undo);
+	}
 	p->notify();
 	return done;
 }

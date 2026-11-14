@@ -13,7 +13,7 @@ ApplicationWindow {
         readonly property var watchlist: watchTreeModel
         readonly property var watchRows: watchTreeRows
         readonly property int watchCount: 5
-        readonly property bool connected: true
+        property bool connected: true
         readonly property bool watchActive: false
         readonly property bool watchPending: false
         readonly property bool canWriteWatch: true
