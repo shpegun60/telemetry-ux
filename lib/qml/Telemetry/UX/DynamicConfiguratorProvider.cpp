@@ -11,6 +11,7 @@
 #include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QSortFilterProxyModel>
@@ -851,8 +852,7 @@ struct DynamicConfiguratorProvider::Impl {
 		}
 		if (!parsed || set != rt::Status::Ok) {
 			// Why, in words: the type's range for a number past it (WL-3b).
-			const auto why = writeType.valid() && !writeType.enumeration
-			                     ? watch_format::encode(writeText, writeType).error : QString{};
+			const auto why = writeType.valid() ? watch_format::encode(writeText, writeType).error : QString{};
 			failWatchWrite(writeName + QStringLiteral(" not written: ") +
 			               (why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why));
 			return;
@@ -2037,18 +2037,30 @@ QVariantMap DynamicConfiguratorProvider::watchEditPreview(int row, const QString
 	if (!model || row < 0 || row >= model->count() || text.trimmed().isEmpty())
 		return out;
 	const auto type = model->valueType(row);
-	// An enum is chosen by name; a row never read has no type to say yet.
-	if (!type.valid() || type.enumeration)
+	const auto typed = text.trimmed();
+	// A row never read has no type to say yet; a row without a device writes
+	// nothing; an enum is chosen by name, its code only in numbers.
+	static const QRegularExpression number(QStringLiteral("^(-?[0-9]+|0[xX][0-9A-Fa-f_]+)$"));
+	if (!type.valid() || model->isUnbound(row) || (type.enumeration && !number.match(typed).hasMatch()))
 		return out;
-	const auto encoded = watch_format::encode(text, type);
+	// A start not yet a number ("-", "0x", "1e") is judged on Enter, not on the key.
+	static const QRegularExpression unfinished(QStringLiteral("^([-+]|0[xX]|.*[eE][-+]?|.*\\.)$"));
+	if (unfinished.match(typed).hasMatch())
+		return out;
+	const auto encoded = watch_format::encode(typed, type);
 	if (!encoded.error.isEmpty()) {
 		out[QStringLiteral("error")] = encoded.error;
 		return out;
 	}
-	const bool hex = watch_format::isHex(text);
+	const bool hex = watch_format::isHex(typed);
 	const auto shown = watch_format::text(encoded.value, hex ? WatchNumberFormat::Dec : WatchNumberFormat::Hex);
-	if (!shown.isEmpty() && shown.compare(text.trimmed(), Qt::CaseInsensitive) != 0)
-		out[QStringLiteral("preview")] = QStringLiteral("= ") + shown;
+	if (shown.isEmpty())
+		return out;
+	// A float's hex is its bits, not its number: said so.
+	const bool real = type.scalar == WatchScalar::F32 || type.scalar == WatchScalar::F64;
+	out[QStringLiteral("preview")] = !hex && real
+	    ? QStringLiteral("= %1 (%2 bits)").arg(shown, type.scalar == WatchScalar::F32 ? QStringLiteral("f32") : QStringLiteral("f64"))
+	    : QStringLiteral("= ") + shown;
 	return out;
 }
 
@@ -2491,7 +2503,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		const auto* watched = qobject_cast<const WatchlistModel*>(model);
 		const auto parsed = watch_format::fromHex(typed, watched ? watched->valueType(row) : WatchValueType{});
 		if (!parsed.error.isEmpty()) {
-			p->watchWrite = parsed.error;
+			p->watchWrite = model->data(index, WatchlistModel::NameRole).toString() + QStringLiteral(" not written: ") +
+			                parsed.error;
 			p->notify();
 			return false;
 		}
@@ -2535,8 +2548,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeIntended = typed;
 	p->writeText = typed;
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
-	if (const auto* watched = qobject_cast<const WatchlistModel*>(model))
-		p->writeType = watched->valueType(row);
+	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
+	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->notify();
 	return true;

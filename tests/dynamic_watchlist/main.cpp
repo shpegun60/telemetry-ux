@@ -149,15 +149,21 @@ void numberFormats()
 	CHECK(wf::text(encode("0x3FC00000", type(ux::WatchScalar::F32, 4)).value, WatchNumberFormat::Dec) == "1.5");
 	CHECK(wf::text(encode("-1", type(ux::WatchScalar::S16, 2)).value, WatchNumberFormat::Hex) == "0xFFFF");
 	CHECK(wf::text(encode("true", type(ux::WatchScalar::Boolean, 1)).value, WatchNumberFormat::Hex) == "0x01");
-	CHECK(wf::range(type(ux::WatchScalar::U16, 2)) == "from 0 to 65535 (0x0000 to 0xFFFF)");
-	CHECK(wf::range(type(ux::WatchScalar::S16, 2)) == "from -32768 to 32767 (0x8000 to 0x7FFF)");
+	CHECK(wf::range(type(ux::WatchScalar::U16, 2)) == "0 to 65535 (0x0000 to 0xFFFF)");
+	CHECK(wf::range(type(ux::WatchScalar::S16, 2)) == "-32768 to 32767, or 0x0000 to 0xFFFF as bits");
 	CHECK(wf::range(type(ux::WatchScalar::F32, 4)).isEmpty());
 	CHECK(encode("65536", type(ux::WatchScalar::U16, 2)).error ==
-	      "65536 is past a u16: enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
+	      "“65536” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF).");
 	CHECK(encode("0x10000", type(ux::WatchScalar::U16, 2)).error ==
-	      "0x10000 is past a u16: enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
-	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("from 0 to 255 (0x00 to 0xFF)"));
-	CHECK(encode("abc", type(ux::WatchScalar::U16, 2)).error == "abc is not a number a u16 holds.");
+	      "“0x10000” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("enter 0 to 255 (0x00 to 0xFF)"));
+	CHECK(encode("40000", type(ux::WatchScalar::S16, 2)).error ==
+	      "“40000” is out of range for i16: enter -32768 to 32767, or 0x0000 to 0xFFFF as bits.");
+	CHECK(encode("abc", type(ux::WatchScalar::U16, 2)).error == "“abc” is not a number for u16.");
+	CHECK(encode("+7", type(ux::WatchScalar::U16, 2)).error == "“+7”: write it without the + sign.");
+	CHECK(encode("1e3", type(ux::WatchScalar::U16, 2)).error == "“1e3”: u16 takes whole numbers only.");
+	CHECK(encode("1e40", type(ux::WatchScalar::F32, 4)).error == "“1e40” is out of range for f32.");
+	CHECK(encode("0x1FFFFFFFF", type(ux::WatchScalar::F32, 4)).error == "“0x1FFFFFFFF”: f32 takes at most 8 hex digits.");
 	CHECK(encode("yes", type(ux::WatchScalar::Boolean, 1)).error == "Enter true or false (1 or 0).");
 	CHECK(encode("", type(ux::WatchScalar::U16, 2)).error.isEmpty() && encode("", type(ux::WatchScalar::U16, 2)).value.size == 0);
 	CHECK(!encode("1", {}).error.isEmpty());

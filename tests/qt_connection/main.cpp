@@ -944,7 +944,7 @@ void memberRowWrite()
 	CHECK(await([&] { return finished.count() == 3; }));
 	// Said in words: what the text is not, for the row's type (WL-3b).
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
-	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: gain is not a number a f32 holds."));
+	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32."));
 	connection.disconnect();
 }
 
@@ -1280,7 +1280,7 @@ void watchRowWrite()
 		return finished.count() == 2;
 	}));
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == writes);
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("not written: twelve is not a number a ")));
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("not written: “twelve” is not a number for ")));
 	// The device refuses a value above its limit; the row keeps the old one.
 	CHECK(provider->writeWatch(0, QStringLiteral("200000")));
 	CHECK(await([&] {
@@ -1473,12 +1473,16 @@ ApplicationWindow {
 	// Too wide for the type: refused in words, nothing written.
 	const auto writesBefore = peer.nativeWrites();
 	// While typing: the other form of what would be written, or why not (WL-3b).
-	CHECK(provider->watchEditPreview(0, QStringLiteral("2")).value("preview") == "= 0x40000000");
+	CHECK(provider->watchEditPreview(0, QStringLiteral("2")).value("preview") == "= 0x40000000 (f32 bits)");
 	CHECK(provider->watchEditPreview(0, QStringLiteral("0x3FC00000")).value("preview") == "= 1.5");
-	CHECK(provider->watchEditPreview(0, QStringLiteral("abc")).value("error") == "abc is not a number a f32 holds.");
+	CHECK(provider->watchEditPreview(0, QStringLiteral("abc")).value("error") == "“abc” is not a number for f32.");
 	CHECK(provider->watchEditPreview(0, QString{}).value("preview").toString().isEmpty());
+	// A start not yet a number is judged on Enter, not on the key.
+	for (const auto* start : {"-", "0x", "1e", "2."})
+		CHECK(provider->watchEditPreview(0, QString::fromLatin1(start)).value("error").toString().isEmpty());
 	CHECK(!provider->writeWatch(0, QStringLiteral("0x1FFFFFFFF")));
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("more digits")) && peer.nativeWrites() == writesBefore);
+	CHECK(provider->watchWriteOutcome().endsWith(QStringLiteral(" not written: “0x1FFFFFFFF”: f32 takes at most 8 hex digits.")) &&
+	      peer.nativeWrites() == writesBefore);
 	connection.disconnect();
 }
 

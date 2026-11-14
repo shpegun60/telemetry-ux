@@ -519,6 +519,8 @@ Pane {
             Row {
                 id: viewSegments
                 objectName: "watchViewSegments"
+                Accessible.role: Accessible.Grouping
+                Accessible.name: qsTr("View")
                 visible: panel.viewInBar
                 Layout.preferredHeight: Type.controlHeight
                 spacing: 0
@@ -558,7 +560,7 @@ Pane {
                         }
                         Accessible.name: modelData.name
                         Accessible.description: modelData.tip
-                        ToolTip.visible: hovered
+                        ToolTip.visible: hovered || visualFocus
                         ToolTip.delay: 700
                         ToolTip.text: modelData.tip
                     }
@@ -568,6 +570,8 @@ Pane {
             Row {
                 id: formatSegments
                 objectName: "watchFormatSegments"
+                Accessible.role: Accessible.Grouping
+                Accessible.name: qsTr("Number format")
                 visible: panel.formatInBar
                 // A gap from List | Tree: two choices, not one of five.
                 Layout.leftMargin: panel.barGap
@@ -603,7 +607,7 @@ Pane {
                         }
                         Accessible.name: qsTr("%1 format").arg(modelData.text)
                         Accessible.description: modelData.tip
-                        ToolTip.visible: hovered
+                        ToolTip.visible: hovered || visualFocus
                         ToolTip.delay: 700
                         ToolTip.text: modelData.tip
                     }
@@ -617,8 +621,11 @@ Pane {
                 visible: panel.formatAvailable && !panel.formatInBar
                 Layout.leftMargin: panel.barGap
                 FontMetrics { id: formatMetrics; font: formatButton.font }
-                implicitWidth: Math.ceil(Math.max(...panel.formats.map(item => formatMetrics.advanceWidth(item.text + " ▾"))))
-                               + leftPadding + rightPadding
+                implicitWidth: {
+                    void formatMetrics.font
+                    return Math.ceil(Math.max(...panel.formats.map(item => formatMetrics.advanceWidth(item.text + " ▾"))))
+                           + leftPadding + rightPadding
+                }
                 Layout.preferredHeight: Type.controlHeight
                 verticalPadding: 0
                 flat: true
@@ -1118,6 +1125,10 @@ Pane {
                 function commitEdit() {
                     if (!editing || !writable || draftText.length === 0)
                         return
+                    if (editPreview.error.length > 0) {
+                        valueEditor.Accessible.announce(editPreview.error)
+                        return
+                    }
                     const value = draftText
                     finishEdit()
                     panel.provider.writeWatch(watchRow.sourceRow, value)
@@ -1551,18 +1562,24 @@ Pane {
                                 Label {
                                     id: editPreview
                                     objectName: "watchValuePreview"
-                                    readonly property var result: watchRow.editing && valueEditor.visible
-                                        && typeof panel.provider.watchEditPreview === "function"
-                                        ? panel.provider.watchEditPreview(watchRow.sourceRow, watchRow.draftText) : null
+                                    // Read again when the row's reading changes (its type may
+                                    // only now be known) and on every key.
+                                    readonly property var result: {
+                                        void watchRow.text
+                                        return watchRow.editing && valueEditor.visible
+                                            && typeof panel.provider.watchEditPreview === "function"
+                                            ? panel.provider.watchEditPreview(watchRow.sourceRow, watchRow.draftText) : null
+                                    }
                                     readonly property string error: result && result.error ? result.error : ""
                                     visible: text.length > 0
                                     Layout.maximumWidth: Type.bodyPixels * 14
                                     textFormat: Text.PlainText
                                     elide: Text.ElideRight
-                                    text: error.length > 0 ? error : result && result.preview ? result.preview : ""
-                                    font.family: error.length > 0 ? Qt.application.font.family : Type.fixedFamily
+                                    text: error.length === 0 && result && result.preview ? result.preview : ""
+                                    font.family: Type.fixedFamily
                                     font.pointSize: Type.caption
-                                    color: error.length > 0 ? Theme.warning : Theme.textMuted
+                                    // The edited row is the current one: its selected colour.
+                                    color: watchRow.current ? Theme.selectedForeground : Theme.textMuted
                                     HoverHandler { id: previewHover }
                                     PlainToolTip { visible: previewHover.hovered && editPreview.truncated; text: editPreview.text; delay: 300 }
                                 }
@@ -1581,10 +1598,39 @@ Pane {
                                     objectName: "watchValueWrite"
                                     Layout.preferredWidth: implicitContentWidth + leftPadding + rightPadding
                                     text: watchRow.writeScope ? qsTr("Write all") : qsTr("Write")
-                                    enabled: watchRow.writable && watchRow.draftText.length > 0
+                                    Layout.minimumWidth: implicitWidth
+                                    enabled: watchRow.writable && watchRow.draftText.length > 0 && editPreview.error.length === 0
                                     Accessible.name: qsTr("Write %1 once").arg(watchRow.name)
                                     Accessible.description: watchRow.scopeText
                                     onClicked: watchRow.commitEdit()
+                                }
+                            }
+                            // Line 2 of a value's editor: why the typed value can't be
+                            // written - a mark in the warning colour, the words in the
+                            // row's own - before what Write all covers.
+                            RowLayout {
+                                objectName: "watchValueError"
+                                visible: editPreview.error.length > 0
+                                Layout.fillWidth: true
+                                Layout.leftMargin: Type.padding
+                                spacing: Type.tight
+                                Text {
+                                    text: "⚠"
+                                    color: Theme.warning
+                                    font.pointSize: Type.caption
+                                    Layout.alignment: Qt.AlignTop
+                                    Accessible.ignored: true
+                                }
+                                Label {
+                                    objectName: "watchValueErrorText"
+                                    Layout.fillWidth: true
+                                    textFormat: Text.PlainText
+                                    text: editPreview.error
+                                    color: watchRow.current ? Theme.selectedForeground : Theme.textPrimary
+                                    font.pointSize: Type.caption
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
                                 }
                             }
                             // Line 2 of a value's editor: what Write all covers.
