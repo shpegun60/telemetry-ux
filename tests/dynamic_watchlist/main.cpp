@@ -1,6 +1,10 @@
 // Controlled completions and ticks: no event-loop timing assumptions. MIT.
 #include <Telemetry/UX/DynamicWatchlist.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
+#include <Telemetry/UX/WatchKey.hpp>
+#include <telemetry/Telemetry.hpp>
+#include <telemetry/descriptor/Descriptor.hpp>
+#include <algorithm>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QByteArray>
 #include <QtCore/QEvent>
@@ -14,6 +18,49 @@
 
 namespace ux = telemetry::ux;
 namespace cl = telemetry::client;
+namespace rt = telemetry::runtime;
+
+// A device whose Field 1 is a struct: device.Config holds 302 values, gain
+// first, enabled second, then samples[0] to samples[299]. Field 0 is a
+// scalar. Ids 2 to 99 stay the Peer's whole 8-byte Fields.
+namespace members {
+struct Config {
+	float gain = 1.25f;
+	bool enabled = true;
+	std::array<std::uint16_t, 300> samples{};
+};
+struct Device {
+	std::uint32_t counter() const noexcept { return 7; }
+	Config config() const noexcept { return {}; }
+};
+inline Device device;
+inline constexpr telemetry::FieldTable fields{
+    telemetry::field<&Device::counter>("Counter", device),
+    telemetry::field<&Device::config>("Config", device)};
+inline constexpr telemetry::FieldCatalogTable catalogs{telemetry::group("device", fields)};
+inline constexpr telemetry::ServiceCatalogTable<> services{};
+inline constexpr telemetry::Model model{catalogs, telemetry::emptyCommands, services};
+inline constexpr telemetry::descriptor::Descriptor descriptor{model};
+inline constexpr auto descriptorBytes = telemetry::descriptor::packDescriptor<descriptor>();
+constexpr quint32 config = 1, leaves = 302;
+
+struct Schema {
+	std::array<std::byte, descriptorBytes.size()> bytes = descriptorBytes;
+	std::array<rt::RuntimeType, 32> types{};
+	std::array<rt::RuntimeMember, 32> members{};
+	std::array<rt::RuntimeEnumEntry, 4> enums{};
+	std::array<rt::RuntimeCatalog, 4> catalogs{};
+	std::array<rt::RuntimeEndpoint, 8> endpoints{};
+	rt::RuntimeSchemaWorkspace workspace{types, members, enums, catalogs, endpoints};
+	rt::RuntimeSchema schema;
+	Schema()
+	{
+		const auto parsed = rt::RuntimeSchema::parse(bytes, workspace);
+		if (!parsed) std::abort();
+		schema = parsed.schema;
+	}
+};
+} // namespace members
 
 namespace {
 unsigned checks = 0;
@@ -118,6 +165,10 @@ struct Peer {
 	ux::WatchlistSource::Completion completion;
 	std::vector<std::uint32_t> pending;
 	std::shared_ptr<int> lease = std::make_shared<int>(0);
+	// Set to read struct members: the schema and the member reads asked.
+	std::shared_ptr<members::Schema> schema;
+	std::vector<std::pair<quint32, std::vector<std::uint32_t>>> memberCalls;
+	quint32 memberField = 0;
 
 	ux::WatchlistSource source()
 	{
@@ -142,7 +193,52 @@ struct Peer {
 		source.readField = [this](quint32 id, ux::WatchlistSource::Completion done) {
 			return submit(std::span<const std::uint32_t>{&id, 1}, std::move(done));
 		};
+		if (schema) {
+			source.schema = [this] { return schema->schema; };
+			source.readMembers = [this](quint32 field, std::span<const std::uint32_t> leaves,
+			                            ux::WatchlistSource::Completion done) -> cl::Submission {
+				CHECK(current && !busy && !completion && !leaves.empty() && leaves.size() <= 1024);
+				CHECK(std::is_sorted(leaves.begin(), leaves.end()));
+				memberField = field;
+				pending.assign(leaves.begin(), leaves.end());
+				memberCalls.push_back({field, pending});
+				completion = std::move(done);
+				busy = true;
+				return {cl::Status::Ok, {}};
+			};
+		}
 		return source;
+	}
+
+	// Answers a member read: each value is its own ordinal as a u16. skew
+	// answers the first value as another leaf, as a confused device would.
+	void finishMembers(cl::Status status = cl::Status::Ok, bool skew = false)
+	{
+		CHECK(busy && bool(completion) && memberField != 0);
+		ux::WatchlistCompletion result;
+		result.status = status;
+		result.native.value = status == cl::Status::Ok ? 0 : 2;
+		result.completed = ux::WatchTimestamp::now();
+		result.count = int(pending.size());
+		result.members.resize(pending.size());
+		for (std::size_t i = 0; i < pending.size(); ++i) {
+			auto& row = result.members[i];
+			row.id = memberField;
+			row.leaf = pending[i] + 1;
+			row.itemStatus = row.valueStatus = status == cl::Status::Ok ? 0 : 2;
+			row.value.type = {7, ux::WatchScalar::U16, 2, false};
+			const std::array<std::byte, 2> bytes{std::byte(pending[i] & 0xff), std::byte(pending[i] >> 8)};
+			CHECK(row.value.assign(bytes.data(), 2));
+			row.status = QStringLiteral("Ok");
+			row.text = QString::number(pending[i]);
+			row.sample = ux::WatchSample::ofUnsigned(pending[i]);
+		}
+		if (skew)
+			result.members[0].leaf += 1;
+		auto done = std::exchange(completion, {});
+		busy = false;
+		memberField = 0;
+		*done = std::move(result);
 	}
 
 	cl::Submission submit(std::span<const std::uint32_t> ids, ux::WatchlistSource::Completion done)
@@ -157,7 +253,7 @@ struct Peer {
 
 	void finish(cl::Status status = cl::Status::Ok, bool malformed = false)
 	{
-		CHECK(busy && bool(completion));
+		CHECK(busy && bool(completion) && memberField == 0);
 		inCallback = true;
 		ux::WatchlistCompletion result;
 		result.status = status;
@@ -842,6 +938,204 @@ void exactCompletionFrames()
 }
 } // namespace
 
+// The Config values of the members fixture, as the Device tree would name them.
+QVector<ux::WatchEntry> configEntries(std::initializer_list<quint32> ordinals)
+{
+	QVector<ux::WatchEntry> entries;
+	for (const auto ordinal : ordinals)
+		entries.push_back({ux::watch_key::member(members::config, ordinal),
+		                   QStringLiteral("device.Config #%1").arg(ordinal), {}, 0});
+	return entries;
+}
+
+// One cycle's reads: whole Fields together in ReadMany portions, every value
+// of one struct in one read, wherever its rows are, in ascending order.
+void memberPlan()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	auto* model = watch.model();
+	QVector<ux::WatchEntry> rows{{ux::watch_key::whole(2), "device.Two", {}, 0}};
+	rows += configEntries({5});
+	rows.push_back({ux::watch_key::whole(3), "device.Three", {}, 0});
+	rows += configEntries({0});
+	rows.push_back({ux::watch_key::whole(4), "device.Four", {}, 0});
+	// Refused: past the last value, a scalar Field's "member", a wrong member text.
+	rows += configEntries({members::leaves});
+	rows.push_back({ux::watch_key::member(0, 0), "device.Counter", {}, 0});
+	rows.push_back({ux::watch_key::member(members::config, 1), "device.Config.enabled", "gain", 0});
+	rows += configEntries({5});
+	const auto added = watch.addEntries(rows);
+	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 5);
+	CHECK(added.value("unsupported").toInt() == 3 && added.value("duplicate").toInt() == 1);
+	CHECK(watch.held().contains(ux::watch_key::member(members::config, 5)) && watch.held().contains(2));
+	const auto memberRow = model->index(1, 0);
+	CHECK(model->data(memberRow, ux::WatchlistModel::MemberRole).toString() == "samples[3]");
+	CHECK(model->data(memberRow, ux::WatchlistModel::WatchKeyRole).toULongLong() ==
+	      ux::watch_key::member(members::config, 5));
+	CHECK(model->data(memberRow, ux::WatchlistModel::EndpointIdRole).toUInt() == members::config);
+	CHECK(model->data(memberRow, ux::WatchlistModel::TypeTextRole).toString() == "u16");
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::TypeTextRole).toString() == "f32");
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::MemberRole).toString().isEmpty());
+
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	CHECK(watch.begin(false));
+	CHECK(peer.calls.size() == 1 && peer.calls[0] == std::vector<std::uint32_t>{2, 3, 4});
+	CHECK(watch.status() == "Reading values 1-3 of 5");
+	peer.finish(); watch.poll(); events();
+	CHECK(peer.memberCalls.size() == 1 && peer.memberCalls[0].first == members::config &&
+	      peer.memberCalls[0].second == std::vector<std::uint32_t>{0, 5});
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(!watch.active() && watch.status() == "ReadMany complete - 5 values");
+	CHECK(model->data(model->index(1, 0), ux::WatchlistModel::TextRole).toString() == "5");
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::TextRole).toString() == "0");
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::SampleValueRole).toDouble() == 0.0);
+	CHECK(frames.size() == 2 && frames[1].operation == ux::WatchOperation::FieldRead && frames[1].count == 2);
+	CHECK(frames[1].rows[0].id == members::config && frames[1].rows[0].leaf == 1 && frames[1].rows[1].leaf == 6);
+	CHECK(frames[0].rows[0].leaf == 0 && frames[1].phase == ux::WatchCompletionPhase::Current && frames[1].exact);
+	CHECK(frames[1].sequence == frames[0].sequence + 1 && frames[1].portion == 1);
+
+	// Individual mode: one FieldRead per whole Field, the struct still one read.
+	peer.calls.clear(); peer.memberCalls.clear();
+	watch.setIndividual(true);
+	CHECK(watch.begin(false));
+	for (const quint32 id : {2u, 3u, 4u}) {
+		CHECK(peer.calls.size() == 1 + std::size_t(id - 2) && peer.calls.back() == std::vector<std::uint32_t>{id});
+		if (id == 2) {
+			// The struct's read comes where its first row is: after Field 2.
+			peer.finish(); watch.poll(); events();
+			CHECK(peer.memberCalls.size() == 1);
+			peer.finishMembers(); watch.poll(); events();
+		} else {
+			peer.finish(); watch.poll(); events();
+		}
+	}
+	CHECK(!watch.active() && watch.status() == "Individual FieldRead complete - 5 values");
+
+	// Taken out by key, put back in place.
+	const auto removed = watch.removeMany({ux::watch_key::member(members::config, 0), 3});
+	CHECK(removed.size() == 2 && removed[0].row == 2 && removed[1].row == 3 && watch.count() == 3);
+	CHECK(removed[1].entry.member == "gain" && removed[1].entry.type != 0);
+	CHECK(watch.restore(removed) && watch.count() == 5 &&
+	      model->data(model->index(3, 0), ux::WatchlistModel::MemberRole).toString() == "gain");
+}
+
+// All 302 values of one struct: one read, published as ten frames of at most
+// 32 rows with consecutive sequences, the same cycle and portion.
+void memberFanOut()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	QVector<ux::WatchEntry> all;
+	for (quint32 n = 0; n < members::leaves; ++n)
+		all += configEntries({n});
+	CHECK(watch.addEntries(all).value("added").toInt() == int(members::leaves));
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	CHECK(watch.begin(false));
+	CHECK(peer.calls.empty() && peer.memberCalls.size() == 1 && peer.memberCalls[0].second.size() == members::leaves);
+	CHECK(watch.status() == "Reading values 1-302 of 302");
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(!watch.active() && peer.memberCalls.size() == 1 && frames.size() == 10);
+	for (std::size_t k = 0; k != frames.size(); ++k) {
+		const auto& frame = frames[k];
+		CHECK(frame.sequence == frames[0].sequence + qint64(k) && frame.cycle == frames[0].cycle &&
+		      frame.portion == 0 && frame.startedNs == frames[0].startedNs);
+		CHECK(frame.operation == ux::WatchOperation::FieldRead && frame.phase == ux::WatchCompletionPhase::Current &&
+		      frame.correlated && frame.exact && !frame.urgent);
+		CHECK(frame.count == (k < 9 ? 32 : 14));
+		for (int i = 0; i < frame.count; ++i)
+			CHECK(frame.rows[std::size_t(i)].id == members::config &&
+			      frame.rows[std::size_t(i)].leaf == quint32(k * 32 + std::size_t(i) + 1));
+	}
+	auto* model = watch.model();
+	CHECK(model->data(model->index(301, 0), ux::WatchlistModel::TextRole).toString() == "301");
+	CHECK(model->data(model->index(301, 0), ux::WatchlistModel::MemberRole).toString() == "samples[299]");
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::StatusRole).toString() == "Ok");
+	// A second cycle numbers its frames on.
+	CHECK(watch.begin(false));
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(frames.size() == 20 && frames[10].sequence == frames[9].sequence + 1 && frames[10].cycle == frames[9].cycle + 1);
+}
+
+// A struct written while polling is read again before the cycle goes on, as
+// one read of its watched values; a struct not yet reached is not.
+void memberUrgent()
+{
+	QObject owner;
+	Peer peer;
+	peer.schema = std::make_shared<members::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	auto rows = configEntries({1, 0});
+	rows.push_back({ux::watch_key::whole(2), "device.Two", {}, 0});
+	CHECK(watch.addEntries(rows).value("added").toInt() == 3);
+	std::vector<ux::WatchFrame> frames;
+	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+	CHECK(watch.begin(true));
+	CHECK(peer.memberCalls.size() == 1 && peer.memberCalls[0].second == std::vector<std::uint32_t>{0, 1});
+	watch.wake(2);               // not reached yet: read in its turn
+	watch.wake(members::config); // in flight: sent before the write, so read again
+	watch.wake(members::config); // once is enough
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(peer.calls.empty() && peer.memberCalls.size() == 2 &&
+	      peer.memberCalls[1].second == std::vector<std::uint32_t>{0, 1});
+	CHECK(watch.status() == "Reading a written Field again");
+	peer.finishMembers(); watch.poll(); events();
+	CHECK(peer.calls.size() == 1 && peer.calls[0] == std::vector<std::uint32_t>{2} && peer.memberCalls.size() == 2);
+	CHECK(frames.size() == 2 && !frames[0].urgent && frames[1].urgent &&
+	      frames[1].phase == ux::WatchCompletionPhase::Current);
+	CHECK(frames[1].count == 2 && frames[1].rows[0].leaf == 1 && frames[1].rows[1].leaf == 2);
+	peer.finish(); watch.poll(); events();
+	CHECK(frames.size() == 3 && !frames[2].urgent && !peer.busy);
+	watch.stop();
+	events();
+}
+
+// What stops a cycle at a struct's read: no member reads on this connection,
+// a reply that names other values, a failed read.
+void memberFailure()
+{
+	{
+		QObject owner;
+		Peer peer;
+		peer.schema = std::make_shared<members::Schema>();
+		auto source = peer.source();
+		source.readMembers = {};
+		ux::DynamicWatchlist watch(&owner);
+		watch.setSource(std::move(source));
+		const auto added = watch.addEntries(configEntries({0, 1}));
+		CHECK(added.value("added").toInt() == 0 && added.value("unsupported").toInt() == 2);
+	}
+	for (const bool skew : {true, false}) {
+		QObject owner;
+		Peer peer;
+		peer.schema = std::make_shared<members::Schema>();
+		ux::DynamicWatchlist watch(&owner);
+		watch.setSource(peer.source());
+		auto rows = configEntries({0, 1});
+		rows.push_back({ux::watch_key::whole(2), "device.Two", {}, 0});
+		CHECK(watch.addEntries(rows).value("added").toInt() == 3);
+		std::vector<ux::WatchFrame> frames;
+		watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+		CHECK(watch.begin(true));
+		peer.finishMembers(skew ? cl::Status::Ok : cl::Status::CodecError, skew);
+		watch.poll(); events();
+		CHECK(!watch.active() && peer.calls.empty() && watch.status().startsWith("Watch read failed"));
+		CHECK(frames.size() == 1 && frames[0].phase == ux::WatchCompletionPhase::Failed);
+		CHECK(frames[0].correlated == !skew);
+		auto* model = watch.model();
+		CHECK(model->data(model->index(0, 0), ux::WatchlistModel::StatusRole).toString() == "Stale");
+	}
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -859,6 +1153,10 @@ int main(int argc, char** argv)
 	drainAndStale();
 	schedulingAndReentrancy();
 	replaceSourceDuringPublication();
-	std::printf("Dynamic Watchlist checks=%u chunks=32,32,1 no_native_callback_signals=1\n",
+	memberPlan();
+	memberFanOut();
+	memberUrgent();
+	memberFailure();
+	std::printf("Dynamic Watchlist checks=%u chunks=32,32,1 member_frames=10 no_native_callback_signals=1\n",
 	            checks);
 }

@@ -414,7 +414,7 @@ void watchWarmingAndCorrelation() {
 	frame.startedNs = 0; // Explicit old monotonic epoch; no elapsed-time assumption.
 	previews.ingest(frame); CHECK(!hasValue(previews, 0));
 	frame = frameFor(peer, 0, 42);
-	for (unsigned n = 0; n < 6; ++n) {
+	for (unsigned n = 0; n < 7; ++n) {
 		auto invalid = frame;
 		if (n == 0) invalid.correlated = false;
 		if (n == 1) invalid.phase = ux::WatchCompletionPhase::Drained;
@@ -422,6 +422,7 @@ void watchWarmingAndCorrelation() {
 		if (n == 3) ++invalid.source.fingerprint;
 		if (n == 4) ++invalid.source.schemaGeneration;
 		if (n == 5) invalid.rows[0].value.type.typeId = peer.type(bounds_fixture::modeId);
+		if (n == 6) invalid.rows[0].leaf = 1; // a value inside a Field never warms the Field's preview
 		previews.ingest(invalid); CHECK(!hasValue(previews, 0));
 	}
 	// The public C++ cache boundary must not turn failed/unvalidated facts into

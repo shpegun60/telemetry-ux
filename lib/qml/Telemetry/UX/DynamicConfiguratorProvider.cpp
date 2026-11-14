@@ -325,7 +325,7 @@ struct DynamicConfiguratorProvider::Impl {
 	quint64 heldMembership = ~quint64{0};
 	struct WatchUndo {
 		bool valid = false, added = false;
-		QSet<quint32> addedIds;
+		QSet<WatchKey> addedIds;
 		QVector<WatchlistModel::Removed> removed;
 		quint64 membership = 0, treeEpoch = 0;
 	} undo;
@@ -751,9 +751,10 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		if (const auto p = weak.lock(); p && p->q)
 			Q_EMIT p->q->watchCompleted(frame);
 	});
-	d->watch.setWritable([weak](quint32 id) {
+	// A value inside a struct or array Field is not written from its row yet.
+	d->watch.setWritable([weak](WatchKey key) {
 		const auto p = weak.lock();
-		return p && p->endpoints.fieldWritable(id);
+		return p && watch_key::isWhole(key) && p->endpoints.fieldWritable(watch_key::field(key));
 	});
 	d->batch.setNotify(
 	    [weak] {
@@ -1366,16 +1367,16 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 				p->undo.valid = true;
 				p->undo.added = true;
 				for (const auto& entry : add)
-					p->undo.addedIds.insert(entry.first);
+					p->undo.addedIds.insert(watch_key::whole(entry.first));
 				p->undo.membership = p->watch.membership();
 				p->undo.treeEpoch = p->treeEpoch;
 			}
 		}
 	} else {
-		QSet<quint32> ids;
+		QSet<WatchKey> ids;
 		for (const auto& field : fields)
 			if (held.contains(field.key))
-				ids.insert(static_cast<quint32>(field.key));
+				ids.insert(field.key);
 		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - ids.size());
 		if (!ids.isEmpty()) {
 			const auto removed = p->watch.removeMany(ids);

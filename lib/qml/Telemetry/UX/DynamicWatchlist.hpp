@@ -2,10 +2,12 @@
 #pragma once
 #include "WatchlistModel.hpp"
 #include "WatchFrame.hpp"
+#include "WatchLeaves.hpp"
 #include <functional>
 #include <optional>
 #include <span>
 #include <array>
+#include <vector>
 
 namespace telemetry::ux {
 // Host-only dependency boundary: native-only Dynamic providers do not acquire
@@ -13,6 +15,7 @@ namespace telemetry::ux {
 struct WatchlistCompletion {
 	struct Row {
 		quint32 id = 0;
+		quint32 leaf = 0; // 0 for a whole Field, else 1 + the value's leaf ordinal
 		QString status, text;
 		WatchSample sample; // WatchlistModel::sampleOf() of the same value as text
 		qint32 itemStatus = -1, valueStatus = -1;
@@ -22,6 +25,8 @@ struct WatchlistCompletion {
 	client::Status status = client::Status::Ok;
 	int count = 0;
 	std::array<Row, 32> rows{};
+	// readMembers only: one row per leaf asked, in its order; count is its size.
+	std::vector<Row> members;
 	WatchNativeStatus native;
 	WatchSourceSnapshot source;
 	WatchTimestamp completed;
@@ -44,6 +49,11 @@ struct WatchlistSource {
 	// The completion slot receives owned copies only; it cannot publish Qt signals.
 	std::function<client::Submission(std::span<const std::uint32_t>, Completion)> readMany;
 	std::function<client::Submission(quint32, Completion)> readField;
+	// Optional: one FieldRead of a struct or array Field, answered as the
+	// values at these leaf ordinals (ascending, 1 to watchlistRowLimit) in
+	// completion.members. Without it the Watchlist holds whole Fields only.
+	std::function<client::Submission(quint32 field, std::span<const std::uint32_t> leaves, Completion)>
+	    readMembers;
 	// Optional admitted metadata, copied once on attachment. No read is sent.
 	std::function<runtime::RuntimeSchema()> schema;
 };
@@ -58,7 +68,7 @@ public:
 	// allowed there; recursive poll/start is refused until publication returns.
 	void setCompletionObserver(std::function<void(const WatchFrame&)> observer);
 	void setSource(WatchlistSource source);
-	void setWritable(std::function<bool(quint32)> writable);
+	void setWritable(std::function<bool(WatchKey)> writable);
 	void retire(bool clearRows = true);
 	void poll(); // Only after native callback/progress has returned.
 	void tick(); // Local scheduler tick, also usable with a controlled test clock.
@@ -69,6 +79,11 @@ public:
 	bool canAdd(quint32 id) const;
 	bool add(quint32 id, QString name);
 	QVariantMap addMany(const QVector<QPair<quint32, QString>>& entries);
+	// Whole Fields and values inside struct or array Fields in one change,
+	// answered as addMany. A value needs readMembers and the source's schema,
+	// a Field of at most workbenchSnapshotBytes and a key naming a leaf; its
+	// member text and type are taken from the key when left empty.
+	QVariantMap addEntries(const QVector<WatchEntry>& entries);
 	void remove(int row);
 	void clear();
 	// Which of ids the Watchlist can hold: a Field of 1 to 8 bytes of the
@@ -77,12 +92,12 @@ public:
 	std::optional<QSet<quint32>> holdable(const QSet<quint32>& ids) const;
 	// Whether holdable can answer now; cheap.
 	bool canTellHoldable() const;
-	// The Fields held, and a counter that moves whenever they change.
-	QSet<quint32> held() const;
+	// The keys held, and a counter that moves whenever they change.
+	QSet<WatchKey> held() const;
 	quint64 membership() const;
-	// Takes every row of ids out, and puts such rows back; refused (empty,
+	// Takes every row of keys out, and puts such rows back; refused (empty,
 	// false) while polling or while the Watchlist cannot change.
-	QVector<WatchlistModel::Removed> removeMany(const QSet<quint32>& ids);
+	QVector<WatchlistModel::Removed> removeMany(const QSet<WatchKey>& keys);
 	bool restore(const QVector<WatchlistModel::Removed>& rows);
 	int count() const;
 	QString status() const;

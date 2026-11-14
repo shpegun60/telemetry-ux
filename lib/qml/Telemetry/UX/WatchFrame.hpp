@@ -63,6 +63,9 @@ struct WatchSourceSnapshot {
 };
 struct WatchFrameRow {
     quint32 id = 0;
+    // 0 for a whole Field, else 1 + the value's leaf ordinal in that Field
+    // (WatchKey's high word): a series is id | quint64(leaf) << 32.
+    quint32 leaf = 0;
     qint32 itemStatus = -1, valueStatus = -1; // -1: no per-item result was returned
     WatchValueBits value;
 };
@@ -77,7 +80,10 @@ struct WatchFrame {
     WatchCompletionPhase phase = WatchCompletionPhase::Failed;
     bool urgent = false, correlated = false, exact = false;
     int count = 0; // accepted request count, even when the failure returned zero rows
-    std::array<WatchFrameRow, 32> rows{}; // immutable requested order, owned bits
+    // Immutable requested order, owned bits. A FieldRead holds one row, or up
+    // to 32 values of one struct or array Field: a read of more values is
+    // published as several frames of the same cycle and portion.
+    std::array<WatchFrameRow, 32> rows{};
 };
 } // namespace telemetry::ux
 Q_DECLARE_METATYPE(telemetry::ux::WatchFrame)

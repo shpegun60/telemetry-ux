@@ -156,27 +156,56 @@ void WatchlistModel::bind(std::function<bool()> current)
 	}
 }
 
-void WatchlistModel::setWritable(std::function<bool(quint32)> writable)
+void WatchlistModel::setWritable(std::function<bool(WatchKey)> writable)
 {
 	writable_ = std::move(writable);
 }
 
+WatchlistModel::Row WatchlistModel::makeRow(const WatchEntry& entry)
+{
+	Row row;
+	row.key = entry.key;
+	row.token = nextToken_++;
+	row.name = entry.name;
+	row.member = watch_key::isWhole(entry.key) ? QString{} : entry.member;
+	row.type = watch_key::isWhole(entry.key) ? TypeId{0} : entry.type;
+	row.status = QStringLiteral("Not read");
+	row.writable = writable_ && writable_(entry.key);
+	return row;
+}
+
+bool WatchlistModel::insertable(const QVector<WatchEntry>& entries) const
+{
+	if (changing_ || entries.isEmpty() || entries.size() > maxRows - count_ || nextToken_ == 0 ||
+	    static_cast<quintptr>(entries.size() - 1) > std::numeric_limits<quintptr>::max() - nextToken_)
+		return false;
+	QSet<WatchKey> seen;
+	for (int row = 0; row < count_; ++row)
+		seen.insert(rows_[row].key);
+	for (const auto& entry : entries) {
+		if (entry.name.isEmpty() || seen.contains(entry.key))
+			return false;
+		seen.insert(entry.key);
+	}
+	return true;
+}
+
 bool WatchlistModel::add(quint32 endpoint, QString name)
 {
-	if (changing_ || count_ == maxRows || nextToken_ == 0 || name.isEmpty())
+	return add(WatchEntry{watch_key::whole(endpoint), std::move(name), {}, 0});
+}
+
+bool WatchlistModel::add(const WatchEntry& entry)
+{
+	if (!insertable({entry}))
 		return false;
-	for (int row = 0; row < count_; ++row)
-		if (rows_[row].id == endpoint)
-			return false;
 	if (rows_.size() == rows_.capacity())
 		rows_.reserve(rows_.capacity() >= maxRows / 2
 		                  ? qsizetype(maxRows)
 		                  : std::max(qsizetype(4), rows_.capacity() * 2));
 	Mutation mutation{changing_};
 	beginInsertRows({}, count_, count_);
-	const bool writable = writable_ && writable_(endpoint);
-	rows_.push_back(
-	    {endpoint, nextToken_++, std::move(name), QStringLiteral("Not read"), {}, {}, 0, {}, writable});
+	rows_.push_back(makeRow(entry));
 	++count_;
 	++membership_;
 	endInsertRows();
@@ -185,28 +214,24 @@ bool WatchlistModel::add(quint32 endpoint, QString name)
 
 bool WatchlistModel::addMany(const QVector<QPair<quint32, QString>>& entries)
 {
-	if (changing_ || entries.isEmpty() || entries.size() > maxRows - count_ || nextToken_ == 0 ||
-	    static_cast<quintptr>(entries.size() - 1) >
-	        std::numeric_limits<quintptr>::max() - nextToken_)
+	QVector<WatchEntry> whole;
+	whole.reserve(entries.size());
+	for (const auto& entry : entries)
+		whole.push_back({watch_key::whole(entry.first), entry.second, {}, 0});
+	return addMany(whole);
+}
+
+bool WatchlistModel::addMany(const QVector<WatchEntry>& entries)
+{
+	if (!insertable(entries))
 		return false;
-	QSet<quint32> seen;
-	for (const auto& row : rows_)
-		seen.insert(row.id);
-	for (const auto& entry : entries) {
-		if (entry.second.isEmpty() || seen.contains(entry.first))
-			return false;
-		seen.insert(entry.first);
-	}
 	rows_.reserve(qsizetype(count_) + entries.size());
 	const int first = count_;
 	const int last = first + static_cast<int>(entries.size()) - 1;
 	Mutation mutation{changing_};
 	beginInsertRows({}, first, last);
-	for (const auto& entry : entries) {
-		const bool writable = writable_ && writable_(entry.first);
-		rows_.push_back({entry.first, nextToken_++, entry.second, QStringLiteral("Not read"), {}, {}, 0,
-		                 {}, writable});
-	}
+	for (const auto& entry : entries)
+		rows_.push_back(makeRow(entry));
 	count_ += static_cast<int>(entries.size());
 	++membership_;
 	endInsertRows();
@@ -226,14 +251,14 @@ bool WatchlistModel::remove(int row)
 	return true;
 }
 
-QVector<WatchlistModel::Removed> WatchlistModel::removeIds(const QSet<quint32>& ids)
+QVector<WatchlistModel::Removed> WatchlistModel::removeIds(const QSet<WatchKey>& keys)
 {
 	QVector<Removed> removed;
-	if (changing_ || ids.isEmpty())
+	if (changing_ || keys.isEmpty())
 		return removed;
 	for (int row = 0; row < count_; ++row)
-		if (ids.contains(rows_[row].id))
-			removed.push_back({row, rows_[row].id, rows_[row].name});
+		if (keys.contains(rows_[row].key))
+			removed.push_back({row, {rows_[row].key, rows_[row].name, rows_[row].member, rows_[row].type}});
 	if (removed.isEmpty())
 		return removed;
 	Mutation mutation{changing_};
@@ -258,18 +283,18 @@ bool WatchlistModel::restore(const QVector<Removed>& rows)
 	if (changing_ || rows.isEmpty() || rows.size() > maxRows - count_ || nextToken_ == 0 ||
 	    static_cast<quintptr>(rows.size() - 1) > std::numeric_limits<quintptr>::max() - nextToken_)
 		return false;
-	QSet<quint32> held;
+	QSet<WatchKey> held;
 	for (int row = 0; row < count_; ++row)
-		held.insert(rows_[row].id);
+		held.insert(rows_[row].key);
 	// In removeIds' order, each row's place is where it was among the rows
 	// put back before it, so the places must rise and fit.
 	int previous = -1;
 	for (int i = 0; i < rows.size(); ++i) {
 		const auto& entry = rows[i];
-		if (entry.name.isEmpty() || held.contains(entry.id) || entry.row <= previous ||
+		if (entry.entry.name.isEmpty() || held.contains(entry.entry.key) || entry.row <= previous ||
 		    entry.row > count_ + i)
 			return false;
-		held.insert(entry.id);
+		held.insert(entry.entry.key);
 		previous = entry.row;
 	}
 	Mutation mutation{changing_};
@@ -280,10 +305,7 @@ bool WatchlistModel::restore(const QVector<Removed>& rows)
 		const int first = rows[start].row, last = rows[end - 1].row;
 		beginInsertRows({}, first, last);
 		for (auto i = start; i < end; ++i) {
-			const auto& entry = rows[i];
-			const bool writable = writable_ && writable_(entry.id);
-			rows_.insert(entry.row, Row{entry.id, nextToken_++, entry.name, QStringLiteral("Not read"),
-			                            {}, {}, 0, {}, writable});
+			rows_.insert(rows[i].row, makeRow(rows[i].entry));
 			++count_;
 		}
 		endInsertRows();
@@ -360,7 +382,37 @@ bool WatchlistModel::setResult(int row, QString status, QString text, WatchSampl
 
 quint32 WatchlistModel::id(int row) const noexcept
 {
-	return row >= 0 && row < count_ ? rows_[row].id : 0;
+	return row >= 0 && row < count_ ? watch_key::field(rows_[row].key) : 0;
+}
+
+WatchKey WatchlistModel::key(int row) const noexcept
+{
+	return row >= 0 && row < count_ ? rows_[row].key : 0;
+}
+
+QString WatchlistModel::member(int row) const
+{
+	return row >= 0 && row < count_ ? rows_[row].member : QString{};
+}
+
+int WatchlistModel::rowOf(WatchKey key) const
+{
+	// Every change of the rows moves membership_ once it is done; rebuilt on
+	// first use after. While rows are changing, looked up row by row.
+	if (changing_) {
+		for (int row = 0; row < count_; ++row)
+			if (rows_[row].key == key)
+				return row;
+		return -1;
+	}
+	if (rowOfMembership_ != membership_) {
+		rowOf_.clear();
+		rowOf_.reserve(count_);
+		for (int row = 0; row < count_; ++row)
+			rowOf_.insert(rows_[row].key, row);
+		rowOfMembership_ = membership_;
+	}
+	return rowOf_.value(key, -1);
 }
 
 int WatchlistModel::count() const noexcept
@@ -407,14 +459,18 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		if (role >= EditorTextRole && role <= CategoricalRole)
 			return {};
 	}
-	const auto* metadata = metadata_->field(row.id);
+	const auto* metadata = row.type ? metadata_->type(row.type) : metadata_->field(watch_key::field(row.key));
 	const auto kind = metadata ? metadata->kind
 	                  : row.value.type.enumeration ? QStringLiteral("enum")
 	                  : row.value.type.scalar == WatchScalar::Boolean ? QStringLiteral("bool")
 	                  : QStringLiteral("text");
 	switch (role) {
 		case EndpointIdRole:
-			return row.id;
+			return watch_key::field(row.key);
+		case WatchKeyRole:
+			return qulonglong(row.key);
+		case MemberRole:
+			return row.member;
 		case NameRole:
 		case Qt::DisplayRole:
 			return row.name;
@@ -472,7 +528,9 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {EditorChoicesRole, "editorChoices"},
 	        {EditorChoicesTruncatedRole, "editorChoicesTruncated"},
 	        {TypeTextRole, "typeText"},
-	        {CategoricalRole, "categorical"}};
+	        {CategoricalRole, "categorical"},
+	        {WatchKeyRole, "watchKey"},
+	        {MemberRole, "member"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

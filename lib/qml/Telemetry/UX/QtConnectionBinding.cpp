@@ -100,13 +100,13 @@ BatchSource batchSource(integration::qt::ConnectionSession* value)
 	return source;
 }
 
-WatchValueType watchType(const integration::qt::ConnectionStorage& storage, quint32 id)
+// A scalar or enum type as the Watchlist carries its value; invalid otherwise.
+WatchValueType watchType(const runtime::RuntimeSchema& schema, TypeId id)
 {
-	const auto binding = storage.inspector.bindField(id);
-	const auto* type = binding ? storage.schema.type(binding.endpoint.responseType()) : nullptr;
+	const auto* type = schema.type(id);
 	if (!type || (type->kind != TypeKind::Scalar && type->kind != TypeKind::Enum) ||
 	    type->wireBytes == 0 || type->wireBytes > 8) return {};
-	const auto* scalar = type->kind == TypeKind::Enum ? storage.schema.type(type->relatedTypeId) : type;
+	const auto* scalar = type->kind == TypeKind::Enum ? schema.type(type->relatedTypeId) : type;
 	if (!scalar || scalar->kind != TypeKind::Scalar) return {};
 	WatchScalar code = WatchScalar::Unknown;
 	switch (scalar->scalarCode) {
@@ -124,6 +124,12 @@ WatchValueType watchType(const integration::qt::ConnectionStorage& storage, quin
 	}
 	WatchValueType result{type->id, code, quint8(type->wireBytes), type->kind == TypeKind::Enum};
 	return result.valid() ? result : WatchValueType{};
+}
+// A whole Field's value type: the type its read answers with.
+WatchValueType watchType(const integration::qt::ConnectionStorage& storage, quint32 id)
+{
+	const auto binding = storage.inspector.bindField(id);
+	return binding ? watchType(storage.schema, binding.endpoint.responseType()) : WatchValueType{};
 }
 WatchNativeStatus watchStatus(const client::ResultView& result, int valueStatus)
 {
@@ -245,6 +251,87 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 					    row.text = WatchlistModel::formatValue(item.value);
 					    row.sample = WatchlistModel::sampleOf(item.value);
 				    }
+			    }
+			    *done = std::move(out);
+		    });
+	};
+	// One read of a struct or array Field, answered value by value: each leaf
+	// is found in the reply by the steps WatchLeaves located it with. The
+	// leaves are numbered once per admission, on first use.
+	const auto numbered = std::make_shared<WatchLeaves>();
+	source.readMembers = [session, storage, current, numbered](
+	                         quint32 field, std::span<const std::uint32_t> leaves,
+	                         WatchlistSource::Completion done) -> client::Submission {
+		if (!current())
+			return {client::Status::NotAdmitted, {}};
+		if (leaves.empty() || leaves.size() > std::size_t(watchlistRowLimit))
+			return {client::Status::InvalidArgument, {}};
+		const auto binding = storage->inspector.bindField(field);
+		const auto root = binding ? binding.endpoint.responseType() : TypeId{0};
+		const auto* type = binding ? storage->schema.type(root) : nullptr;
+		if (!type || (type->kind != TypeKind::Struct && type->kind != TypeKind::Array) ||
+		    type->wireBytes == 0 || type->wireBytes > workbenchSnapshotBytes)
+			return {client::Status::NotAdmitted, {}};
+		if (!numbered->matches(storage->schema))
+			numbered->reset(storage->schema);
+		auto rows = std::make_shared<std::vector<WatchlistCompletion::Row>>(leaves.size());
+		auto plan = std::make_shared<std::vector<WatchLeaves::Leaf>>();
+		plan->reserve(leaves.size());
+		for (std::size_t i = 0; i < leaves.size(); ++i) {
+			auto leaf = numbered->locate(root, leaves[i]);
+			if (!leaf || (i && leaves[i] <= leaves[i - 1]))
+				return {client::Status::NotAdmitted, {}};
+			auto& row = (*rows)[i];
+			row.id = field;
+			row.leaf = leaves[i] + 1;
+			row.value.type = watchType(storage->schema, leaf->type);
+			if (!row.value.type.valid())
+				return {client::Status::NotAdmitted, {}};
+			plan->push_back(std::move(*leaf));
+		}
+		const WatchSourceSnapshot origin{storage->inspector.session(), storage->schema.fingerprint(), storage->schema.generation()};
+		return session->readFieldValue(
+		    field, [done = std::move(done), rows = std::move(rows), plan = std::move(plan), origin](
+		               const integration::dynamic::DynamicResult& result) noexcept {
+			    WatchlistCompletion out;
+			    out.source = origin;
+			    out.native = watchStatus(result.operation, int(result.valueStatus));
+			    out.completed = WatchTimestamp::now();
+			    out.status = result.operation.status;
+			    if (result.operation.succeeded() && !result.hasValue())
+				    out.status = client::Status::CodecError;
+			    out.members = std::move(*rows);
+			    out.count = int(out.members.size());
+			    const auto refused = QStringLiteral("Field refused (dispatch %1, endpoint %2)")
+			                             .arg(result.operation.dispatch)
+			                             .arg(result.operation.endpointStatus);
+			    for (std::size_t i = 0; i < out.members.size(); ++i) {
+				    auto& row = out.members[i];
+				    row.itemStatus = result.operation.endpointStatus;
+				    row.valueStatus = qint32(result.valueStatus);
+				    if (!result.hasValue()) {
+					    row.status = refused;
+					    continue;
+				    }
+				    const auto& leaf = (*plan)[i];
+				    auto value = result.value;
+				    bool found = true;
+				    for (std::size_t step = 0; found && step < leaf.depth; ++step) {
+					    const auto next = leaf.steps[step].element ? value.index(leaf.steps[step].index)
+					                                               : value.member(leaf.steps[step].index);
+					    found = bool(next);
+					    if (found)
+						    value = next.value;
+				    }
+				    if (!found) {
+					    row.status = QStringLiteral("Bad reply");
+					    out.status = client::Status::CodecError;
+					    continue;
+				    }
+				    row.status = QStringLiteral("Ok");
+				    copyWatchValue(row.value, value);
+				    row.text = WatchlistModel::formatValue(value);
+				    row.sample = WatchlistModel::sampleOf(value);
 			    }
 			    *done = std::move(out);
 		    });
@@ -406,8 +493,12 @@ public:
 			watched.clear();
 			for (const auto& provider : providers) if (provider && provider->watchActive()) {
 				const auto* model = provider->watchlist();
-				for (int row = 0; row < model->rowCount(); ++row)
-					watched.insert(model->data(model->index(row, 0), WatchlistModel::EndpointIdRole).toUInt());
+				for (int row = 0; row < model->rowCount(); ++row) {
+					// A whole Field only: a struct with watched values keeps its preview.
+					const auto key = WatchKey(model->data(model->index(row, 0), WatchlistModel::WatchKeyRole).toULongLong());
+					if (watch_key::isWhole(key))
+						watched.insert(watch_key::field(key));
+				}
 			}
 			watchRevisions = std::move(revisions);
 		}

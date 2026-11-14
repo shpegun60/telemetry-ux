@@ -40,8 +40,10 @@ struct WatchSample {
 	}
 };
 
-// The most Fields one Watchlist holds, in both providers. One polling cycle
-// then needs at most 32 ReadMany portions; adding past it reports "capacity".
+// The most rows one Watchlist holds, in both providers: whole Fields and values
+// inside struct or array Fields. One polling cycle then needs at most 32
+// ReadMany portions plus one FieldRead per struct or array Field watched;
+// adding past it reports "capacity".
 inline constexpr int watchlistRowLimit = 1024;
 
 // Stable codes beside a row's display status. Providers word their statuses
