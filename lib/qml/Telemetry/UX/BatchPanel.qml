@@ -60,6 +60,29 @@ Pane {
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
+        // Adding by name or path (BA-1), where the provider can.
+        BatchAddRow {
+            id: batchAdd
+            visible: typeof panel.provider.addBatchPaths === "function"
+            provider: panel.provider
+            Layout.fillWidth: true
+            onAdded: notice => {
+                batchNotice.text = notice
+                expanded.checked = true
+            }
+        }
+        // What the row last did, in words.
+        Label {
+            id: batchNotice
+            objectName: "batchAddNotice"
+            visible: batchAdd.visible && text.length > 0
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: Theme.textSecondary
+            font.pointSize: Type.caption
+            Layout.fillWidth: true
+            Layout.leftMargin: Type.padding + Type.indent + Type.tight
+        }
         SplitView {
             visible: expanded.checked
             Layout.fillWidth: true
@@ -184,7 +207,12 @@ Pane {
     }
     Connections {
         target: panel.provider
-        function onStateChanged() { ++panel.providerRevision }
+        function onStateChanged() {
+            ++panel.providerRevision
+            // The Batch changed under the row: what Enter would do may too.
+            if (batchAdd.editing)
+                batchAdd.recheck()
+        }
     }
     Connections {
         target: panel.provider.batchResponses
