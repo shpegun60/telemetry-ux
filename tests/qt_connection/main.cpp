@@ -796,7 +796,7 @@ void watchKeptAcrossReconnect()
 	// A saved Watchlist comes back in its own order, the absent path in its place.
 	const auto restored = provider->restoreWatchBindings(QVariantList{saved[2], saved[1], saved[0]});
 	CHECK(restored.value("status") == "ok" && restored.value("added").toInt() == 2 &&
-	      restored.value("missing").toList() == QVariantList({1}));
+	      restored.value("missing").toList() == QVariantList{1});
 	CHECK(role(0, ux::WatchlistModel::NameRole) == "device.Config.Counter" && role(1, ux::WatchlistModel::NameRole) == "device.Nope" &&
 	      role(2, ux::WatchlistModel::NameRole) == "device.Config.Gain" && !provider->canUndoWatch());
 	// A saved path the device has but that names nothing to watch says why.
@@ -813,7 +813,7 @@ void watchKeptAcrossReconnect()
 		tooMany.append(QVariantMap{{"group", "device"}, {"name", QStringLiteral("F%1").arg(i)}});
 	CHECK(provider->restoreWatchBindings(tooMany).value("status") == "refused" && provider->watchCount() == 1);
 	const auto odd = provider->restoreWatchBindings({QVariantMap{{"group", ""}, {"name", "Lonely"}}, saved[0]});
-	CHECK(odd.value("status") == "ok" && odd.value("missing").toList() == QVariantList({0}) && provider->watchCount() == 1);
+	CHECK(odd.value("status") == "ok" && odd.value("missing").toList() == QVariantList{0} && provider->watchCount() == 1);
 	CHECK(provider->watchBindings() == QVariantList({saved[0]}));
 	connection.disconnect();
 }
