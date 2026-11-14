@@ -84,14 +84,28 @@ Actions retain the existing provider signatures:
     - `-1` when nothing at or under a row can be watched (a Command, a Service, a
       Field the Watchlist cannot hold, a stale index);
     - otherwise `Qt.Unchecked`, `Qt.PartiallyChecked` or `Qt.Checked` for none,
-      some or all of the Fields under it.
+      some or all of the values under it.
+    - In Dynamic, a value is a scalar Field or a scalar or enum inside a struct
+      or array Field, at any depth (S3-A). A struct's or an array's box counts
+      all its values, whether its rows are open or not; a member's, an
+      element's and a range row's box counts its own. Opening a struct changes
+      no box and keeps Undo.
   - `setWatchMany(QVariantList, bool watched) -> QVariantMap` watches, or stops
-    watching, every Field the Watchlist can hold at or under each index, in tree
-    order, as one change and with no request sent.
+    watching, every value the Watchlist can hold at or under each index, in tree
+    order, as one change and with no request sent. A value's row is named by its
+    path: `device.Config.Gain`, `data.Samples[3]`.
     - The map holds `status` (`ok`, `refused`, `invalid`, `stale` or
-      `capacity`) and `changed`, `unchanged`, `fields`, `room`.
+      `capacity`) and `changed`, `unchanged`, `fields` (the values asked for),
+      `room`; Dynamic adds `values` (a struct's or array's values were asked)
+      and, when adding, `adding` (how many rows that would add).
     - All or nothing: a group that does not fit changes nothing, and `room` says
       how many more fit.
+  - Dynamic only: `watchTally(QModelIndex) -> QVariantMap` is what a box counts,
+    `{watched, total, kind}`, kind `members`, `elements`, `values` or `fields`,
+    for the words of a partly ticked box ("2 of 3 members watched").
+    `watchRefusal(QModelIndex)` says why a Field's box is off: write only, no
+    values, larger than the Watchlist reads at once (64 KiB), or a connection
+    that can't read struct members.
   - `undoWatch() -> QVariantMap` undoes the last such change: removed rows go
     back in their places. `canUndoWatch` says whether it can: nothing else may
     have changed the Watchlist or the tree since, and the Watchlist must not be
@@ -105,7 +119,9 @@ Actions retain the existing provider signatures:
     no empty answer is kept. A read into Details does not hold the boxes.
   - The first question after the tree changes builds `WatchCoverage`:
     - in Dynamic, one walk collects the Field ids, the Watchlist is asked once
-      which of them it can hold, and a second walk builds the coverage;
+      which of them it can hold (a scalar, or a struct's or array's number of
+      values), and a second walk builds the coverage; it stops at every
+      endpoint, so value rows are never walked;
     - in Static, one walk builds it.
 
     After that each question is a hash lookup, and a change of the Watchlist
@@ -206,8 +222,29 @@ operation is in flight leaves `watchStatus` saying so. `busy` is this view's own
 and leaves the Watchlist's reads out, so Cancel and Batch editing stay available
 while it polls. Several Watchlists on one session take turns: each session
 progress starts with the next panel, and a Batch is never refused because the
-session is busy. One Watchlist holds at most 1024 Fields
+session is busy. One Watchlist holds at most 1024 rows
 (`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
+
+**Values inside struct and array Fields (S3-A).** A row is keyed by
+`WatchKey` (`WatchKey.hpp`): a whole Field's key is its id; a value's is
+`id | (1 + ordinal) << 32`, the ordinal its pre-order position among the
+Field type's scalar and enum leaves (members in declaration order, elements in
+index order, depth first; `WatchLeaves` counts, locates and names them). A
+key holds under one descriptor fingerprint only; what is saved is a path.
+A cycle reads whole Fields in ReadMany portions (or FieldReads) as before,
+and every value watched in one struct or array Field with one FieldRead,
+through the source's optional `readMembers(field, leaves, completion)`
+(ordinals ascending, 1 to 1024; answered in `completion.members`). That read
+is published as `WatchFrame`s of at most 32 rows of the same cycle and portion,
+each row carrying `leaf` (0 for a whole Field, else 1 + its ordinal); a series
+is `id | leaf << 32`. A Field read for its values is at most 64 KiB
+(`workbenchSnapshotBytes`); one whose values are written from rows at most
+4 KiB (`workbenchPayloadBytes`).
+
+`watchBindings()` gives the rows as a project saves them, `{group, name}` or
+`{group, name, member}` (member as `RuntimeSchema::resolve` reads it: `Gain`,
+`[3]`, `Phase[2].Offset`), and `addWatchBindings(list)` puts such rows back in
+one change: `{status, added, duplicate, capacity, missing: [positions]}`.
 
 The generated Static provider uses Individual FieldRead cycles instead. Its open
 Field or Command/Service request draft prevents Watchlist reads, foreground actions
@@ -234,7 +271,10 @@ never has to parse display text:
 | `sampleValue` | That reading as a `double` when it is exact; no value otherwise |
 | `sampleExact` | `true` only for a finite number a double holds exactly: an integer beyond 2^53 − 1, NaN or infinity is `false` and is not plotted. Enums give their code |
 | `sampleRevision`, `sampleEpoch` | Change counters: a new reading increments the revision; a new session or admission changes the epoch |
-| `writable` | The Field accepts writes, taken from the device's endpoint table when the row is added |
+| `writable` | The row accepts writes, taken from the device's endpoint table when the row is added: a value inside a Field when that Field is writable and at most 4 KiB |
+| `watchKey`, `member` | The row's `WatchKey` (qulonglong) and, for a value inside a Field, its member text |
+| `writeScope` | A value's write: `{field: "Config", others: 20, kind: "members"/"elements"/"values"}`; empty for a whole Field |
+| `writeRefusal` | Why the row is not written from the Watchlist, in words ("device.Table is larger than one write, so one member can't be written."); empty otherwise |
 
 The Session-backed Dynamic provider's optional `writeWatch(row, text)` writes a
 watched Field from its row, as Details would: its own read, an exact draft of
@@ -247,7 +287,13 @@ what happened in words (confirmed, written but unconfirmed, an invalid text, the
 device's refusal), `watchWriteFinished(confirmed)` signals the end, and the
 Watchlist reads the row again at once: within the running cycle, or as a Read
 once when it is not polling. Start during a Read once turns that cycle into the
-first one of polling.
+first one of polling. A value inside a struct or array Field is written by
+writing its whole Field: the Field is read, the value changed in it, and the
+whole Field written and read back; the other values keep what was read (a
+change the device made to them in between is overwritten). The outcome says
+what was written and what reads back: "Wrote device.Config.Gain = 2 · read
+back 2.", "…; the device reads back 2.5." or "…; it could not be read back.".
+The row's editor says what Write all covers.
 The Static provider does not expose this method or `canWriteWatch`; the shared
 view therefore leaves its rows read-only.
 
