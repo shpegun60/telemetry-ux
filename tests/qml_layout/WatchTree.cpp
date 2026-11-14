@@ -7,6 +7,7 @@
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
+#include <QtGui/QWheelEvent>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickItem>
@@ -540,6 +541,28 @@ int main(int argc, char** argv)
 			CHECK(value(list, 5) == QStringLiteral("–"));
 			shot(window, argc, argv, QStringLiteral("watch-missing-480"));
 			model.removeRow(5);
+			settle();
+			// Many rows in a short panel: the list takes the room and scrolls,
+			// the "+" row stays in view under it.
+			for (int at = 0; at < 40; ++at)
+				model.put(model.rowCount(), QStringLiteral("data.Samples[%1]").arg(100 + at), 7, quint32(101 + at),
+				          QStringLiteral("1"), {QStringLiteral("u16[64]"), QStringLiteral("u16")}, false);
+			settle();
+			CHECK(list->height() + 1 < list->property("contentHeight").toReal());
+			auto* plusRow = shown(content, "watchAddRow");
+			CHECK(plusRow->mapToItem(content, QPointF(0, plusRow->height())).y() <= content->height() + 0.5);
+			const auto top = list->property("contentY").toReal();
+			const QPointF middle = list->mapToScene(QPointF(list->width() / 2, list->height() / 2));
+			QWheelEvent wheel(middle, window->mapToGlobal(middle), QPoint(), QPoint(0, -360), Qt::NoButton,
+			                  Qt::NoModifier, Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(window, &wheel);
+			settle();
+			CHECK(list->property("contentY").toReal() > top);
+			// Back to the top and settled before the rows go, as a user would be.
+			list->setProperty("contentY", top);
+			QTest::qWait(200);
+			settle();
+			model.removeRows(5, 40);
 			settle();
 			window->close();
 		}

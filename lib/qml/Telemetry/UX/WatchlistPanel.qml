@@ -912,10 +912,14 @@ Pane {
             objectName: "watchlistView"
             Layout.fillWidth: true
             // With the "+" row the list is as tall as its rows, the row right
-            // under the last one; past the room it scrolls.
-            Layout.fillHeight: panel.open && !panel.addAvailable
+            // under the last one; past the room it scrolls. It fills, up to its
+            // rows: a layout keeps an item that does not fill at its preferred
+            // height, so a list as tall as many rows would never shrink to the
+            // room and never scroll.
+            Layout.fillHeight: panel.open
             Layout.preferredHeight: !panel.open ? 0 : panel.addAvailable ? Math.max(1, contentHeight)
                                                                      : Math.max(120, Type.rowHeight * 5)
+            Layout.maximumHeight: panel.open && panel.addAvailable ? Math.max(1, contentHeight) : Number.POSITIVE_INFINITY
             Layout.minimumHeight: panel.open && panel.addAvailable ? Math.min(contentHeight, Type.rowHeight * 3) : 0
             clip: true
             boundsBehavior: Flickable.StopAtBounds
