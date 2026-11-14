@@ -30,6 +30,10 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString batchStatus READ batchStatus NOTIFY stateChanged)
 	Q_PROPERTY(QString batchResponseEndpoint READ batchResponseEndpoint NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
+	// The Watchlist's rows as shown: a list of whole paths or a tree grouped
+	// by path (a WatchRows over watchlist). Made here, so a host needs no
+	// registered type for the panel's two views.
+	Q_PROPERTY(QObject* watchRows READ watchRows CONSTANT)
 	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported NOTIFY stateChanged)
 	Q_PROPERTY(bool watchRequiresExplicitIndividual READ watchRequiresExplicitIndividual CONSTANT)
 	Q_PROPERTY(bool watchActive READ watchActive NOTIFY stateChanged)
@@ -111,6 +115,7 @@ public:
 	Q_INVOKABLE bool selectBatch(int row);
 	Q_INVOKABLE bool executeBatch();
 	QAbstractItemModel* watchlist() const;
+	QObject* watchRows() const;
 	bool watchReadManySupported() const;
 
 	bool watchRequiresExplicitIndividual() const
@@ -132,6 +137,10 @@ public:
 	Q_INVOKABLE bool watchCandidate(const QModelIndex& index) const;
 	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
+	// Stops watching the Watchlist's rows given (a tree node's values) as one
+	// change, which undoWatch takes back: {status: ok, invalid or refused,
+	// changed}.
+	Q_INVOKABLE QVariantMap removeWatchRows(const QVariantList& rows);
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
 	bool canUndoWatch() const;

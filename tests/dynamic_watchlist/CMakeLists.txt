@@ -10,5 +10,11 @@ target_compile_features(telemetry_dynamic_watchlist_check PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_dynamic_watchlist_check PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(telemetry_dynamic_watchlist_check PRIVATE TelemetryUX::dynamic_configurator
     Telemetry::core Qt6::Test)
+# The Watchlist's rows as shown, list and tree, over a plain item model.
+qt_add_executable(telemetry_watch_rows_check watch_rows.cpp)
+target_compile_features(telemetry_watch_rows_check PRIVATE cxx_std_17)
+target_compile_definitions(telemetry_watch_rows_check PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(telemetry_watch_rows_check PRIVATE TelemetryUX::configurator Qt6::Test)
 enable_testing()
 add_test(NAME dynamic_watchlist COMMAND telemetry_dynamic_watchlist_check)
+add_test(NAME watch_rows COMMAND telemetry_watch_rows_check)

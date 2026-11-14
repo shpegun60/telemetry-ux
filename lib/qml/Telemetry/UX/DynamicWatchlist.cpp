@@ -361,6 +361,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		if (!leaf || (entry.type && entry.type != leaf->type))
 			return false;
 		entry.type = leaf->type;
+		entry.steps = QVector<TypeId>(leaf->types.cbegin(), leaf->types.cbegin() + leaf->depth);
 		if (entry.member.isEmpty())
 			entry.member = leaf->member();
 		scope(entry, *shape);

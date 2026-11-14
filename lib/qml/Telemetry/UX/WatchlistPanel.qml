@@ -1,9 +1,10 @@
-// The Watchlist: the watched Fields and their latest readings. One toolbar
-// row - Read once, Start, the interval and a ⋯ menu - the status under it,
-// then the column titles and a row per Field. The toolbar and the titles stay
-// where they are; only the rows scroll. As the panel narrows, "Every" goes,
-// the rows take two lines, and Read once moves into ⋯. Presentation only: the
-// caller owns the provider and all I/O. MIT.
+// The Watchlist: the watched values and their latest readings. One toolbar
+// row - Read once, Start, the interval, List | Tree and a ⋯ menu - the status
+// under it, then the column titles and the rows: one per value with its whole
+// path, or a tree grouped by path, as Live Expressions shows them. The toolbar
+// and the titles stay where they are; only the rows scroll. As the panel
+// narrows, "Every" goes, then Read once and List | Tree move into ⋯.
+// Presentation only: the caller owns the provider and all I/O. MIT.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
@@ -75,6 +76,55 @@ Pane {
     readonly property bool treeBoxes: typeof provider.watchState === "function" &&
                                       typeof provider.setWatchMany === "function"
 
+    // The rows as shown, from the provider: one per value with its whole
+    // path, or grouped by path - group, Field, member - folding as the Device
+    // tree does (a WatchRows). The view's only: polling, writes and recording
+    // are the same in both. A provider without it shows its watchlist as a
+    // list. The provider keeps the rows, so a fold outlives a closed list.
+    readonly property var rows: provider.watchRows ?? null
+    readonly property bool treeAvailable: rows !== null
+    readonly property bool treeView: rows !== null && rows.tree === true
+    // Switches the view; the current value stays current, its parents opened.
+    function showTree(tree) {
+        if (!rows || tree === treeView)
+            return
+        const current = watchList.currentIndex
+        const sources = current >= 0 ? rows.sourceRows(current) : []
+        rows.tree = tree
+        const row = sources.length > 0 ? rows.reveal(sources[0]) : -1
+        watchList.currentIndex = row
+        if (row >= 0)
+            watchList.positionViewAtIndex(row, ListView.Contain)
+    }
+    // Stops watching what row shows: a value, or every value under a node, as
+    // one change where the provider takes several, said with Undo.
+    property string removedText: ""
+    function removeAt(row) {
+        const sources = rows ? rows.sourceRows(row) : [row]
+        if (sources.length === 0 || changeLocked)
+            return
+        const item = watchList.itemAtIndex(row)
+        const label = item ? item.name : ""
+        if (typeof provider.removeWatchRows !== "function") {
+            sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
+            return
+        }
+        const result = provider.removeWatchRows(sources)
+        if (!result || result.status !== "ok" || result.changed === 0)
+            return
+        removedText = sources.length === 1 || label.length === 0
+            ? (label.length > 0 ? qsTr("Removed %1").arg(label) : qsTr("Removed %L1").arg(result.changed))
+            : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label)
+    }
+    function undoRemoval() {
+        if (typeof provider.undoWatch !== "function" || provider.canUndoWatch !== true)
+            return false
+        const result = provider.undoWatch()
+        const done = result && result.status === "ok"
+        removedText = done ? qsTr("Undone") : ""
+        return done
+    }
+
     // A row's status in a word or two; the provider's own word is the tooltip.
     // A word not known here is shown as it is.
     function statusWord(status) {
@@ -97,16 +147,20 @@ Pane {
         return status
     }
 
-    // What gives way first as the panel narrows: "Every", then Read once.
-    // Measured from the controls, so it holds at any zoom; the toolbar's
-    // controls are as wide as their text, whatever the style's minimum, so the
-    // row holds the same in any host.
+    // What gives way first as the panel narrows: "Every", then Read once,
+    // then List | Tree. Measured from the controls, so it holds at any zoom;
+    // the toolbar's controls are as wide as their text, whatever the style's
+    // minimum, so the row holds the same in any host.
     readonly property real barGap: Type.spacing
-    readonly property real barCore: (fold.visible ? fold.implicitWidth + barGap : 0)
+    readonly property real barBase: (fold.visible ? fold.implicitWidth + barGap : 0)
                                     + start.barWidth + barGap + interval.barWidth
                                     + 2 * barGap + more.implicitWidth
-    readonly property bool readOnceInBar: availableWidth >= barCore + readOnce.barWidth + barGap
-    readonly property bool everyShown: availableWidth >= barCore + readOnce.barWidth + every.implicitWidth + 2 * barGap
+    readonly property bool viewInBar: treeAvailable && availableWidth >= barBase + viewSegments.implicitWidth + barGap
+    readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0)
+    readonly property bool readOnceInBar: (viewInBar || !treeAvailable)
+                                          && availableWidth >= barCore + readOnce.barWidth + barGap
+    readonly property bool everyShown: readOnceInBar
+                                       && availableWidth >= barCore + readOnce.barWidth + every.implicitWidth + 2 * barGap
     // The row family's columns (family A1-A3): Name fills; Value, Type and
     // Status are as wide as the widest text they have shown, growing only
     // until the list is cleared or the zoom changes, so a reading never makes
@@ -182,6 +236,7 @@ Pane {
     readonly property real glyphWidth: Math.round(Type.bodyPixels * 1.05)
     function nameRoom(type, access, status) {
         return listWidth - Type.padding - valueColumn - removeColumnWidth - 2 * columnGap
+            - (treeView ? 3 * Type.indent : 0)
             - (type > 0 ? type + columnGap : 0) - (access > 0 ? access + columnGap : 0)
             - (status > 0 ? status + columnGap : 0)
     }
@@ -379,6 +434,54 @@ Pane {
             Item {
                 Layout.fillWidth: true
             }
+            // List | Tree, as FileViewer's Values | Hex: checkable, the chosen
+            // one filled; Left and Right move between them.
+            Row {
+                id: viewSegments
+                objectName: "watchViewSegments"
+                visible: panel.viewInBar
+                Layout.preferredHeight: Type.controlHeight
+                spacing: 0
+                ButtonGroup { id: viewModes }
+                Repeater {
+                    id: viewButtons
+                    model: [
+                        { tree: false, text: qsTr("List"), name: qsTr("List view"),
+                          tip: qsTr("List: one row per path") },
+                        { tree: true, text: qsTr("Tree"), name: qsTr("Tree view"),
+                          tip: qsTr("Tree: grouped by path, as in the Device tree") }
+                    ]
+                    delegate: Button {
+                        id: segment
+                        required property var modelData
+                        objectName: modelData.tree ? "watchViewTree" : "watchViewList"
+                        // As wide as its word, whatever the style's minimum.
+                        width: implicitContentWidth + leftPadding + rightPadding
+                        height: Type.controlHeight
+                        verticalPadding: 0
+                        font.pointSize: Type.caption
+                        text: modelData.text
+                        checkable: true
+                        checked: panel.treeView === modelData.tree
+                        flat: !checked
+                        ButtonGroup.group: viewModes
+                        onClicked: panel.showTree(modelData.tree)
+                        Keys.onLeftPressed: {
+                            panel.showTree(false)
+                            viewButtons.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        Keys.onRightPressed: {
+                            panel.showTree(true)
+                            viewButtons.itemAt(1).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        Accessible.name: modelData.name
+                        Accessible.description: modelData.tip
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 700
+                        ToolTip.text: modelData.tip
+                    }
+                }
+            }
             Basic.ToolButton {
                 id: more
                 objectName: "watchMoreButton"
@@ -469,6 +572,48 @@ Pane {
                         panel.expanded = true
                 }
             }
+            MenuItem {
+                objectName: "watchViewListItem"
+                readonly property bool shown: panel.treeAvailable && !panel.viewInBar
+                visible: shown
+                height: shown ? implicitHeight : 0
+                enabled: shown
+                checkable: true
+                ButtonGroup.group: viewItems
+                checked: !panel.treeView
+                text: qsTr("List view")
+                onTriggered: panel.showTree(false)
+            }
+            MenuItem {
+                objectName: "watchViewTreeItem"
+                readonly property bool shown: panel.treeAvailable && !panel.viewInBar
+                visible: shown
+                height: shown ? implicitHeight : 0
+                enabled: shown
+                checkable: true
+                ButtonGroup.group: viewItems
+                checked: panel.treeView
+                text: qsTr("Tree view")
+                onTriggered: panel.showTree(true)
+            }
+            MenuItem {
+                objectName: "watchExpandAll"
+                visible: panel.treeView
+                height: panel.treeView ? implicitHeight : 0
+                enabled: panel.treeView && panel.rows.count > 0
+                leftPadding: moreMenu.checkColumn
+                text: qsTr("Expand all")
+                onTriggered: panel.rows.expandAll()
+            }
+            MenuItem {
+                objectName: "watchCollapseAll"
+                visible: panel.treeView
+                height: panel.treeView ? implicitHeight : 0
+                enabled: panel.treeView && panel.rows.count > 0
+                leftPadding: moreMenu.checkColumn
+                text: qsTr("Collapse all")
+                onTriggered: panel.rows.collapseAll()
+            }
             MenuSeparator {}
             MenuItem {
                 id: readManyItem
@@ -531,6 +676,41 @@ Pane {
             font.pointSize: Type.caption
             wrapMode: Text.Wrap
         }
+        // What the last removal did, as the Device tree says it: "Removed 3
+        // values of device.Config · Undo", Undo while nothing else changed.
+        RowLayout {
+            objectName: "watchRemovedLine"
+            visible: panel.open && panel.removedText.length > 0
+            Layout.fillWidth: true
+            spacing: Type.spacing
+            Label {
+                objectName: "watchRemoved"
+                // As wide as its words, cut only when the line is too narrow.
+                Layout.minimumWidth: 0
+                textFormat: Text.PlainText
+                text: panel.removedText
+                color: Theme.textSecondary
+                font.pointSize: Type.caption
+                elide: Text.ElideRight
+            }
+            Label {
+                id: removedDot
+                visible: removedUndo.visible
+                text: "·"
+                color: Theme.textMuted
+                font.pointSize: Type.caption
+                Accessible.ignored: true
+            }
+            LinkButton {
+                id: removedUndo
+                objectName: "watchUndo"
+                visible: panel.removedText !== qsTr("Undone") && panel.provider.canUndoWatch === true
+                text: qsTr("Undo")
+                font.pointSize: Type.caption
+                onClicked: panel.undoRemoval()
+            }
+            Item { Layout.fillWidth: true }
+        }
         // Column titles over the one-line rows; they stay while the rows scroll.
         RowLayout {
             objectName: "watchColumns"
@@ -571,18 +751,46 @@ Pane {
             Layout.preferredHeight: panel.open ? Math.max(120, Type.rowHeight * 5) : 0
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: panel.open ? panel.provider.watchlist : null
+            model: !panel.open ? null : panel.rows ? panel.rows : panel.provider.watchlist
             // The keyboard: arrows move the current row, Delete removes it,
             // F2 or Enter writes a writable one.
             activeFocusOnTab: panel.open
             keyNavigationEnabled: true
             currentIndex: -1
             onActiveFocusChanged: if (activeFocus && currentIndex < 0 && count > 0) currentIndex = 0
+            // Ctrl+Z is the Watchlist's own while it has the keys.
+            Keys.onShortcutOverride: event => {
+                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && panel.provider.canUndoWatch === true)
+                    event.accepted = true
+            }
             Keys.onPressed: event => {
+                if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier) {
+                    event.accepted = panel.undoRemoval()
+                    return
+                }
                 if (currentIndex < 0)
                     return
                 if (event.key === Qt.Key_Delete && !panel.changeLocked) {
-                    panel.provider.removeWatch(currentIndex)
+                    panel.removeAt(currentIndex)
+                    event.accepted = true
+                } else if (panel.treeView && currentItem
+                           && (event.key === Qt.Key_Right || event.key === Qt.Key_Left)) {
+                    // The Device tree's keys: Right opens, then steps in; Left
+                    // folds, then steps out.
+                    if (event.key === Qt.Key_Right) {
+                        if (currentItem.branch && !currentItem.expanded)
+                            panel.rows.setExpanded(currentIndex, true)
+                        else if (currentItem.branch && currentIndex + 1 < count)
+                            currentIndex = currentIndex + 1
+                    } else if (currentItem.branch && currentItem.expanded) {
+                        panel.rows.setExpanded(currentIndex, false)
+                    } else if (panel.rows.parentRow(currentIndex) >= 0) {
+                        currentIndex = panel.rows.parentRow(currentIndex)
+                    }
+                    event.accepted = true
+                } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                           && currentItem && currentItem.branch) {
+                    panel.rows.setExpanded(currentIndex, !currentItem.expanded)
                     event.accepted = true
                 } else if ((event.key === Qt.Key_F2 || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                            && currentItem && currentItem.writable) {
@@ -598,7 +806,10 @@ Pane {
                 objectName: "watchlistScrollBar"
                 policy: ScrollBar.AsNeeded
             }
-            delegate: Item {
+            // A focus scope: the list gives its current row the focus again
+            // when rows come in above it, and the row hands it to its open
+            // editor instead of taking it away.
+            delegate: FocusScope {
                 id: watchRow
                 objectName: "watchlistRow"
                 required property int index
@@ -614,6 +825,19 @@ Pane {
                 // Enter writes, Esc or clicking elsewhere cancels.
                 readonly property bool writable: model.writable === true &&
                                                  panel.provider.canWriteWatch === true
+                // What the row is: a value, or in the tree a node above values
+                // (a group, a struct, an array, an element of one).
+                readonly property string node: typeof model.node === "string" ? model.node : "value"
+                readonly property bool isValue: node === "value"
+                readonly property bool isGroup: node === "group"
+                readonly property int depth: typeof model.depth === "number" ? model.depth : 0
+                readonly property bool branch: model.branch === true
+                readonly property bool expanded: model.expanded === true
+                readonly property int leaves: typeof model.leaves === "number" ? model.leaves : 1
+                // Inside a Field in the tree: one read, one outcome, shown on
+                // the Field; its members leave Status and rw blank.
+                readonly property bool nested: model.nested === true
+                readonly property int sourceRow: typeof model.sourceRow === "number" ? model.sourceRow : index
                 property bool editing: false
                 property bool manualCode: false
                 // A value inside a struct or array Field is written by writing
@@ -694,7 +918,7 @@ Pane {
                         return
                     const value = draftText
                     finishEdit()
-                    panel.provider.writeWatch(watchRow.index, value)
+                    panel.provider.writeWatch(watchRow.sourceRow, value)
                 }
                 // The list is a focus scope: the editor lets go of its focus
                 // first, or the list would hand it back to the hidden editor.
@@ -711,15 +935,17 @@ Pane {
                 readonly property bool compact: editing
                 // A reading not yet made, and one a newer reading should have
                 // replaced (family A6).
-                readonly property bool waiting: status === "" || status === "Pending" || status === "Not read" || status === "NotRead"
+                readonly property bool quiet: status === "" || status === "Pending" || status === "Not read" || status === "NotRead"
+                readonly property bool waiting: isValue && quiet
                 readonly property bool stale: status === "Stale"
-                // Numbers, hex and bools line up on the right; enum names on the left.
-                readonly property bool leftValue: editorKind === "enum"
+                // Numbers, hex and bools line up on the right; enum names and a
+                // folded node's summary on the left.
+                readonly property bool leftValue: !isValue || editorKind === "enum"
                 // A word only for a problem or a stale value; waiting is "–" alone,
                 // its word in the value's tooltip and the row's description.
-                readonly property string statusText: ok || waiting ? "" : panel.statusWord(status)
+                readonly property string statusText: ok || quiet || nested || isGroup ? "" : panel.statusWord(status)
                 readonly property string waitingText: waiting ? panel.statusWord(status === "" ? "Not read" : status) : ""
-                readonly property string accessText: typeof model.access === "string" ? model.access : ""
+                readonly property string accessText: !nested && typeof model.access === "string" ? model.access : ""
                 readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                 // Reports this row's widths again when the panel forgot them.
                 readonly property int measureEpoch: panel.measureEpoch
@@ -729,10 +955,13 @@ Pane {
                 Timer { id: reportAgain; interval: 0; onTriggered: watchRow.report() }
                 // Numbers never elide; text and summaries do, within the cap.
                 function reportValue() {
+                    // A node's summary uses the name's room, never the column's.
+                    if (!watchRow.isValue)
+                        return
                     if (watchRow.leftValue)
-                        panel.noteMeasured(valueText.shownWidth, 0, 0, false)
+                        panel.noteMeasured(valueText.implicitWidth - valueText.leftPadding, 0, 0, false)
                     else
-                        panel.noteNumber(valueText.shownWidth)
+                        panel.noteNumber(valueText.implicitWidth - valueText.leftPadding)
                 }
                 function report() {
                     watchRow.reportValue()
@@ -743,15 +972,23 @@ Pane {
                 }
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
-                readonly property bool problem: !ok && status !== "" && status !== "Pending" && status !== "Not read" && status !== "NotRead"
+                readonly property bool problem: !ok && !quiet
                 readonly property bool current: ListView.isCurrentItem && watchList.activeFocus
                 readonly property bool removeShown: compact || rowHover.hovered || current
                 readonly property color foreground: current ? Theme.selectedForeground : Theme.textPrimary
                 readonly property real valueHeight: editing ? Math.max(Type.rowHeight, editorScope.implicitHeight) : Type.rowHeight
                 // What a keyboard or screen reader user hears: the hidden
                 // columns too, and the status the glyph only marks (spec F).
-                Accessible.role: Accessible.ListItem
-                Accessible.name: [watchRow.name, watchRow.text.length > 0 ? watchRow.text : "–", watchRow.typeText,
+                Accessible.role: panel.treeView ? Accessible.TreeItem : Accessible.ListItem
+                Accessible.name: [panel.treeView ? watchRow.name.substring(nameCell.leafStart) : watchRow.name,
+                                  watchRow.isGroup ? qsTr("group, %L1 watched").arg(watchRow.leaves)
+                                  : watchRow.isValue ? ""
+                                  : watchRow.node === "array" ? qsTr("array, %L1 watched").arg(watchRow.leaves)
+                                  : watchRow.node === "element" ? qsTr("element, %L1 watched").arg(watchRow.leaves)
+                                  : qsTr("struct, %L1 watched").arg(watchRow.leaves),
+                                  watchRow.branch ? (watchRow.expanded ? qsTr("expanded") : qsTr("collapsed")) : "",
+                                  watchRow.text.length > 0 ? watchRow.text : watchRow.isValue ? "–" : "",
+                                  watchRow.typeText,
                                   watchRow.accessText === "rw" ? qsTr("read and write")
                                   : watchRow.accessText === "r-" ? qsTr("read only") : ""]
                     .filter(part => part.length > 0).join(", ")
@@ -770,6 +1007,55 @@ Pane {
                         watchList.currentIndex = watchRow.index
                         if (!watchRow.editing)
                             watchList.forceActiveFocus(Qt.MouseFocusReason)
+                    }
+                    onDoubleTapped: if (watchRow.branch) panel.rows.setExpanded(watchRow.index, !watchRow.expanded)
+                }
+                // A folded node's values in brief, in the name's spare room up
+                // to the numbers' edge, so no column moves when a row folds.
+                Text {
+                    id: summaryText
+                    objectName: "watchRowSummary"
+                    visible: !watchRow.isValue && !watchRow.isGroup && watchRow.text.length > 0 && width > 0
+                    readonly property real start: rowLayout.x + nameCell.x + leafText.x + leafText.width + panel.columnGap
+                    x: start
+                    y: 0
+                    width: Math.max(0, rowLayout.x + valueText.x + valueText.width - start)
+                    height: Type.rowHeight
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: Text.AlignRight
+                    textFormat: Text.PlainText
+                    text: watchRow.text
+                    font.family: Type.fixedFamily
+                    font.pointSize: panel.font.pointSize
+                    font.italic: watchRow.stale || watchRow.problem
+                    color: watchRow.current ? Theme.selectedForeground
+                         : watchRow.ok ? Theme.textPrimary : Theme.textMuted
+                    elide: Text.ElideRight
+                    HoverHandler { id: summaryHover }
+                    PlainToolTip { visible: summaryHover.hovered && summaryText.truncated; text: watchRow.text; delay: 700 }
+                }
+                // The tree's chevron, an indent wide at the row's depth; the
+                // indent is kept on values, so names of one depth share an x.
+                Item {
+                    objectName: "watchRowChevron"
+                    visible: panel.treeView && watchRow.branch
+                    x: Type.padding + watchRow.depth * Type.indent
+                    y: 0
+                    width: Type.indent
+                    height: Type.rowHeight
+                    Accessible.ignored: true
+                    Chevron {
+                        anchors.centerIn: parent
+                        width: Type.iconSize
+                        height: Type.iconSize
+                        open: watchRow.expanded
+                        color: watchRow.current ? Theme.selectedForeground : Theme.textSecondary
+                    }
+                    TapHandler {
+                        onTapped: {
+                            watchList.currentIndex = watchRow.index
+                            panel.rows.setExpanded(watchRow.index, !watchRow.expanded)
+                        }
                     }
                 }
                 // One grid for both shapes: a table row is name, value, status,
@@ -791,7 +1077,7 @@ Pane {
                         objectName: "watchRowName"
                         Layout.row: 0
                         Layout.column: 0
-                        Layout.leftMargin: Type.padding
+                        Layout.leftMargin: Type.padding + (panel.treeView ? (watchRow.depth + 1) * Type.indent : 0)
                         Layout.fillWidth: true
                         Layout.minimumWidth: 1
                         Layout.preferredHeight: Type.rowHeight
@@ -805,7 +1091,7 @@ Pane {
                             width: Math.max(0, Math.min(implicitWidth, parent.width - leafText.implicitWidth))
                             visible: text.length > 0 && width > 0
                             textFormat: Text.PlainText
-                            text: watchRow.name.substring(0, nameCell.leafStart)
+                            text: panel.treeView ? "" : watchRow.name.substring(0, nameCell.leafStart)
                             font: panel.font
                             color: watchRow.current ? Theme.selectedForeground : Theme.textMuted
                             elide: Text.ElideMiddle
@@ -818,7 +1104,9 @@ Pane {
                             width: Math.min(implicitWidth, parent.width - (prefixText.visible ? prefixText.width : 0))
                             textFormat: Text.PlainText
                             text: watchRow.name.substring(nameCell.leafStart)
-                            font: panel.font
+                            font.family: panel.font.family
+                            font.pointSize: panel.font.pointSize
+                            font.weight: watchRow.isGroup ? Type.headingWeight : Font.Normal
                             color: watchRow.foreground
                             elide: Text.ElideRight
                         }
@@ -829,10 +1117,24 @@ Pane {
                             delay: 700
                         }
                     }
+                    // A group shows how many values it holds, at the row's right.
+                    Label {
+                        objectName: "watchGroupCount"
+                        visible: watchRow.isGroup
+                        Layout.row: 0
+                        Layout.column: 1
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                        Layout.preferredHeight: Type.rowHeight
+                        verticalAlignment: Text.AlignVCenter
+                        textFormat: Text.PlainText
+                        text: qsTr("%L1 watched").arg(watchRow.leaves)
+                        font.pointSize: Type.caption
+                        color: watchRow.current ? Theme.selectedForeground : Theme.textMuted
+                    }
                     Label {
                         id: valueText
                         objectName: "watchValueText"
-                        visible: !watchRow.editing
+                        visible: !watchRow.editing && !watchRow.isGroup
                         Layout.row: 0
                         Layout.column: 1
                         Layout.preferredWidth: panel.valueColumn
@@ -841,7 +1143,7 @@ Pane {
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         // Not read yet: a dash at the value's alignment, no word.
-                        text: watchRow.text.length > 0 ? watchRow.text : watchRow.waiting ? "–" : ""
+                        text: !watchRow.isValue ? "" : watchRow.text.length > 0 ? watchRow.text : watchRow.waiting ? "–" : ""
                         font.family: Type.fixedFamily
                         font.italic: (watchRow.stale || watchRow.problem) && watchRow.text.length > 0
                         color: watchRow.current ? Theme.selectedForeground
@@ -849,7 +1151,6 @@ Pane {
                         horizontalAlignment: watchRow.leftValue ? Text.AlignLeft : Text.AlignRight
                         leftPadding: watchRow.leftValue ? panel.pencilRoom : 0
                         elide: Text.ElideRight
-                        readonly property real shownWidth: implicitWidth - leftPadding
                         onImplicitWidthChanged: watchRow.reportValue()
                         Component.onCompleted: watchRow.reportValue()
                         ToolTip.visible: valueHover.hovered && (truncated || watchRow.waitingText.length > 0)
@@ -1057,7 +1358,7 @@ Pane {
                     }
                     Label {
                         objectName: "watchRowType"
-                        visible: !watchRow.editing && panel.typeColumn > 0
+                        visible: !watchRow.editing && !watchRow.isGroup && panel.typeColumn > 0
                         Layout.row: 0
                         Layout.column: 2
                         Layout.preferredWidth: panel.typeColumn
@@ -1075,7 +1376,7 @@ Pane {
                     // rw: each letter, a missing right as "-" in the placeholder colour.
                     Row {
                         objectName: "watchRowAccess"
-                        visible: !watchRow.editing && panel.accessColumn > 0
+                        visible: !watchRow.editing && !watchRow.isGroup && panel.accessColumn > 0
                         Layout.row: 0
                         Layout.column: 3
                         Layout.preferredWidth: panel.accessColumn
@@ -1105,7 +1406,7 @@ Pane {
                     // own words in the tooltip.
                     Label {
                         objectName: "watchRowStatus"
-                        visible: !watchRow.editing && panel.statusColumn > 0 && !panel.statusGlyph
+                        visible: !watchRow.editing && !watchRow.isGroup && panel.statusColumn > 0 && !panel.statusGlyph
                         Layout.row: 0
                         Layout.column: 4
                         Layout.minimumWidth: 1
@@ -1125,7 +1426,7 @@ Pane {
                     // Too little room: the word becomes a mark, the word in its tooltip.
                     Item {
                         objectName: "watchRowStatusGlyph"
-                        visible: !watchRow.editing && panel.statusGlyph
+                        visible: !watchRow.editing && !watchRow.isGroup && panel.statusGlyph
                         Layout.row: 0
                         Layout.column: 4
                         Layout.preferredWidth: panel.statusColumn
@@ -1191,7 +1492,7 @@ Pane {
                                 radius: Type.radius
                                 color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
                             }
-                            onClicked: panel.provider.removeWatch(watchRow.index)
+                            onClicked: panel.removeAt(watchRow.index)
                             Accessible.name: qsTr("Remove %1").arg(watchRow.name)
                             ToolTip.visible: hovered
                             ToolTip.delay: 700
@@ -1228,6 +1529,8 @@ Pane {
 
     // The two read modes: one is always chosen.
     ButtonGroup { id: modes; exclusive: true }
+    // So are the two views, in the menu.
+    ButtonGroup { id: viewItems; exclusive: true }
 
     // Clearing asks first. Cancel has the focus, so Enter keeps the list;
     // Remove all is drawn in the danger colour, not the accent.

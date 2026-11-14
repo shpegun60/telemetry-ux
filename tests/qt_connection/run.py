@@ -161,6 +161,12 @@ def main():
         report['watchlist_scheduling'] = dict(checks=int(scheduled_checks[1]),
             executable_sha256=digest(scheduling_executable), chunks=[32,32,1], member_frames=10,
             signals_in_native_callback=False, controlled_ticks=True)
+        rows_executable = build / ('telemetry_watch_rows_check.exe' if os.name == 'nt' else 'telemetry_watch_rows_check')
+        rows_log = run('watch-rows-runtime', [rows_executable], env=headless_environment)
+        rows_checks = re.search(r'Watch rows checks=(\d+) failures=0', rows_log)
+        if not rows_checks or int(rows_checks[1]) < 2500:
+            raise RuntimeError('The Watchlist rows did not reach their assertion floor')
+        report['watch_rows'] = dict(checks=int(rows_checks[1]), executable_sha256=digest(rows_executable))
         batch_executable = build / ('telemetry_dynamic_batch_check.exe' if os.name == 'nt' else 'telemetry_dynamic_batch_check')
         batch_log = run('batch-presentation-runtime', [batch_executable], env=headless_environment)
         batch_checks = re.search(r'Dynamic Batch checks=(\d+) no_native_callback_signals=1 bounded_items=32', batch_log)
@@ -245,6 +251,19 @@ def main():
             executable_sha256=digest(typed_watch_executable),
             screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
                                 for image in typed_watch_images})
+        watch_tree_executable = build / ('telemetry_qml_watch_tree.exe' if os.name == 'nt' else 'telemetry_qml_watch_tree')
+        watch_tree_output = output / 'watch-tree'
+        watch_tree_output.mkdir()
+        watch_tree_log = run('watch-tree-runtime', [watch_tree_executable, watch_tree_output])
+        watch_tree_checks = re.search(r'Watch tree checks=(\d+) warnings=0', watch_tree_log)
+        if not watch_tree_checks or int(watch_tree_checks[1]) < 60:
+            raise RuntimeError('The Watchlist tree did not reach its warning-free assertion floor')
+        watch_tree_images = [watch_tree_output / (name + '.png') for name in (
+            'watch-list-480', 'watch-tree-480', 'watch-tree-folded-480', 'watch-tree-320')]
+        report['watch_tree'] = dict(checks=int(watch_tree_checks[1]), warnings=0,
+            executable_sha256=digest(watch_tree_executable),
+            screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
+                                for image in watch_tree_images})
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]

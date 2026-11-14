@@ -19,7 +19,7 @@ qt_import_qml_plugins(telemetry_qt_connection_check)
 
 # Keep controlled watch scheduling in the maintained installed-Session gate.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_watchlist" watchlist-scheduling)
-set_target_properties(telemetry_dynamic_watchlist_check PROPERTIES
+set_target_properties(telemetry_dynamic_watchlist_check telemetry_watch_rows_check PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../dynamic_batch" batch-presentation)
@@ -34,5 +34,5 @@ set_target_properties(telemetry_endpoint_previews_check
 
 # Geometry over the same installed Session/view, without opening a connection.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml_layout" layout)
-set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers telemetry_qml_bulk_selection telemetry_qml_trend telemetry_qml_typed_watch PROPERTIES
+set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers telemetry_qml_bulk_selection telemetry_qml_trend telemetry_qml_typed_watch telemetry_qml_watch_tree PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

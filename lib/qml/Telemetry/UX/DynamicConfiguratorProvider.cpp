@@ -6,6 +6,7 @@
 #include "ScalarEditor.hpp"
 #include "ScalarEditorMetadata.hpp"
 #include "WatchCoverage.hpp"
+#include "WatchRows.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
@@ -307,6 +308,8 @@ struct DynamicConfiguratorProvider::Impl {
 	QPersistentModelIndex selectedIndex;
 	ValueModel values, responses;
 	DynamicWatchlist watch;
+	// After watch: it goes first, while the rows it shows still exist.
+	WatchRows rows;
 	DynamicBatch batch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
@@ -1219,6 +1222,8 @@ void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 	// Which Fields can be held may differ with the new source.
 	p->treeChanged();
 	p->watch.setSource(std::move(source));
+	// The Watchlist's model exists from its first source on.
+	p->rows.setSource(p->watch.model());
 	p->notify();
 }
 
@@ -1231,6 +1236,11 @@ void DynamicConfiguratorProvider::pollWatch()
 QAbstractItemModel* DynamicConfiguratorProvider::watchlist() const
 {
 	return d->watch.model();
+}
+
+QObject* DynamicConfiguratorProvider::watchRows() const
+{
+	return &d->rows;
 }
 
 bool DynamicConfiguratorProvider::watchReadManySupported() const
@@ -1348,6 +1358,42 @@ void DynamicConfiguratorProvider::removeWatch(int row)
 {
 	auto p = d;
 	p->watch.remove(row);
+}
+
+QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& rows)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")}, {QStringLiteral("changed"), 0}};
+	const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model());
+	if (!model)
+		return result;
+	QSet<WatchKey> keys;
+	for (const auto& row : rows) {
+		bool ok = false;
+		const int at = row.toInt(&ok);
+		if (!ok || at < 0 || at >= model->count()) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		keys.insert(model->key(at));
+	}
+	if (keys.isEmpty()) {
+		result[QStringLiteral("status")] = QStringLiteral("ok");
+		return result;
+	}
+	// Every key is a row's, so nothing removed means the Watchlist refused.
+	const auto removed = p->watch.removeMany(keys);
+	if (removed.isEmpty())
+		return result;
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	result[QStringLiteral("changed")] = static_cast<int>(removed.size());
+	p->undo = {};
+	p->undo.valid = true;
+	p->undo.removed = removed;
+	p->undo.membership = p->watch.membership();
+	p->undo.treeEpoch = p->treeEpoch;
+	p->notify();
+	return result;
 }
 
 void DynamicConfiguratorProvider::clearWatch()
