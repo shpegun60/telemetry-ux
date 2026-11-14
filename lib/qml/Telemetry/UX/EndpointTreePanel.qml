@@ -740,7 +740,7 @@ Pane {
         MenuSeparator {}
         MenuItem {
             objectName: "endpointMenuCopyPath"
-            text: "Copy path"
+            text: "Copy path\tCtrl+C"
             onTriggered: { const target = panel.menuTarget(); if (target) panel.copyPath(target) }
         }
     }
@@ -984,6 +984,15 @@ Pane {
                 if (event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier)) {
                     panel.find()
                     event.accepted = true
+                    return
+                }
+                // Ctrl+C and Alt+Shift+C copy the current row's path, as
+                // values.bin copies its rows; values are copied where shown.
+                if (event.key === Qt.Key_C && (event.modifiers === Qt.ControlModifier
+                                               || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier))) {
+                    const current = endpointTree.selectionModel.currentIndex
+                    if (current.valid && panel.copyPath(current))
+                        event.accepted = true
                     return
                 }
                 if (event.key !== Qt.Key_Menu && !(event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)))

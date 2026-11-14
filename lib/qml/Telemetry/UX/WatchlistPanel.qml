@@ -132,7 +132,9 @@ Pane {
     }
     // Stops watching what row shows: a value, or every value under a node, as
     // one change where the provider takes several, said with Undo.
-    property string removedText: ""
+    property string noticeText: ""
+    // Whether the notice is a removal that Undo can take back.
+    property bool noticeUndo: false
     function removeAt(row) {
         const sources = rows ? rows.sourceRows(row) : [row]
         if (sources.length === 0 || changeLocked)
@@ -146,17 +148,46 @@ Pane {
         const result = provider.removeWatchRows(sources)
         if (!result || result.status !== "ok" || result.changed === 0)
             return
-        removedText = sources.length === 1 || label.length === 0
+        noticeText = sources.length === 1 || label.length === 0
             ? (label.length > 0 ? qsTr("Removed %1").arg(label) : qsTr("Removed %L1").arg(result.changed))
             : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label)
+        noticeUndo = true
     }
     function undoRemoval() {
         if (typeof provider.undoWatch !== "function" || provider.canUndoWatch !== true)
             return false
         const result = provider.undoWatch()
         const done = result && result.status === "ok"
-        removedText = done ? qsTr("Undone") : ""
+        noticeText = done ? qsTr("Undone") : ""
+        noticeUndo = false
         return done
+    }
+    // Copies what row shows: "path = value" lines (Ctrl+C), the paths
+    // alone (Alt+Shift+C), or the value alone.
+    function copyRows(row, what) {
+        if (row < 0)
+            return false
+        const item = watchList.itemAtIndex(row)
+        let text = ""
+        if (what === "value")
+            text = item && item.isValue ? item.shownText : ""
+        else if (rows)
+            text = rows.lines(row, what === "paths")
+        else if (item)
+            text = what === "paths" || item.shownText.length === 0 ? item.name : item.name + " = " + item.shownText
+        if (text.length === 0)
+            return false
+        clipboardHelper.text = text
+        clipboardHelper.selectAll()
+        clipboardHelper.copy()
+        clipboardHelper.text = ""
+        const lines = text.split("\n").length
+        noticeText = what === "value" ? qsTr("Copied the value of %1").arg(item.name)
+                   : lines === 1 ? qsTr("Copied %1").arg(what === "paths" ? text : item ? item.name : text)
+                   : what === "paths" ? qsTr("Copied %L1 paths").arg(lines)
+                   : qsTr("Copied %L1 values").arg(lines)
+        noticeUndo = false
+        return true
     }
 
     // A row's status in a word or two; the provider's own word is the tooltip.
@@ -797,19 +828,22 @@ Pane {
             font.pointSize: Type.caption
             wrapMode: Text.Wrap
         }
-        // What the last removal did, as the Device tree says it: "Removed 3
-        // values of device.Config · Undo", Undo while nothing else changed.
+        // Qt Quick has no clipboard API; a hidden editor copies its text.
+        TextEdit { id: clipboardHelper; visible: false; textFormat: TextEdit.PlainText }
+        // What the last removal or copy did, as the Device tree says it:
+        // "Removed 3 values of device.Config · Undo", Undo while nothing else
+        // changed; "Copied device.Config.Gain".
         RowLayout {
-            objectName: "watchRemovedLine"
-            visible: panel.open && panel.removedText.length > 0
+            objectName: "watchNoticeLine"
+            visible: panel.open && panel.noticeText.length > 0
             Layout.fillWidth: true
             spacing: Type.spacing
             Label {
-                objectName: "watchRemoved"
+                objectName: "watchNotice"
                 // As wide as its words, cut only when the line is too narrow.
                 Layout.minimumWidth: 0
                 textFormat: Text.PlainText
-                text: panel.removedText
+                text: panel.noticeText
                 color: Theme.textSecondary
                 font.pointSize: Type.caption
                 elide: Text.ElideRight
@@ -825,7 +859,7 @@ Pane {
             LinkButton {
                 id: removedUndo
                 objectName: "watchUndo"
-                visible: panel.removedText !== qsTr("Undone") && panel.provider.canUndoWatch === true
+                visible: panel.noticeUndo && panel.provider.canUndoWatch === true
                 text: qsTr("Undo")
                 font.pointSize: Type.caption
                 onClicked: panel.undoRemoval()
@@ -883,6 +917,9 @@ Pane {
             Keys.onShortcutOverride: event => {
                 if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && panel.provider.canUndoWatch === true)
                     event.accepted = true
+                if (event.key === Qt.Key_C && currentIndex >= 0 && (event.modifiers === Qt.ControlModifier
+                        || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)))
+                    event.accepted = true
             }
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier) {
@@ -891,6 +928,14 @@ Pane {
                 }
                 if (currentIndex < 0)
                     return
+                if (event.key === Qt.Key_C && event.modifiers === Qt.ControlModifier) {
+                    event.accepted = panel.copyRows(currentIndex, "lines")
+                    return
+                }
+                if (event.key === Qt.Key_C && event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)) {
+                    event.accepted = panel.copyRows(currentIndex, "paths")
+                    return
+                }
                 if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers === Qt.ShiftModifier)) {
                     if (currentItem)
                         panel.openRowMenu(currentIndex, currentItem, Type.padding, currentItem.height)
@@ -1715,6 +1760,23 @@ Pane {
                     onTriggered: panel.formatRows(panel.menuRow, modelData.name)
                 }
             }
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "watchRowCopy"
+            text: qsTr("Copy") + "\t" + qsTr("Ctrl+C")
+            onTriggered: panel.copyRows(panel.menuRow, "lines")
+        }
+        MenuItem {
+            objectName: "watchRowCopyValue"
+            text: qsTr("Copy value")
+            enabled: rowMenu.item !== null && rowMenu.item.isValue && rowMenu.item.shownText.length > 0
+            onTriggered: panel.copyRows(panel.menuRow, "value")
+        }
+        MenuItem {
+            objectName: "watchRowCopyPath"
+            text: qsTr("Copy path") + "\t" + qsTr("Alt+Shift+C")
+            onTriggered: panel.copyRows(panel.menuRow, "paths")
         }
         MenuSeparator {}
         MenuItem {

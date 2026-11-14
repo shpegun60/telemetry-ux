@@ -190,6 +190,22 @@ int main(int argc, char** argv) {
         click(window, menuItem("endpointMenuCopyPath"));
         CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("measure.Current"));
         CHECK(status->property("text").toString() == QStringLiteral("Copied measure.Current."));
+        // ...and so do Ctrl+C and Alt+Shift+C on the keyboard's current row.
+        {
+            auto* keys = qobject_cast<QItemSelectionModel*>(tree->property("selectionModel").value<QObject*>());
+            CHECK(keys);
+            keys->setCurrentIndex(voltage, QItemSelectionModel::NoUpdate);
+            tree->forceActiveFocus();
+            settle();
+            QGuiApplication::clipboard()->clear();
+            QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
+            settle();
+            CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("measure.Voltage"));
+            QGuiApplication::clipboard()->clear();
+            QTest::keyClick(window, Qt::Key_C, Qt::AltModifier | Qt::ShiftModifier);
+            settle();
+            CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("measure.Voltage"));
+        }
 
         // The Menu key and Shift+F10 open the menu on the keyboard's current row.
         auto* selection = qobject_cast<QItemSelectionModel*>(tree->property("selectionModel").value<QObject*>());

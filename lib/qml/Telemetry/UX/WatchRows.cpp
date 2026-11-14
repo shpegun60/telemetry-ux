@@ -316,6 +316,23 @@ QVariantList WatchRows::sourceRows(int row) const
 	return out;
 }
 
+QString WatchRows::lines(int row, bool paths) const
+{
+	QStringList out;
+	for (const auto& source : sourceRows(row)) {
+		const auto path = sourceData(source.toInt(), NameRole).toString();
+		if (paths) {
+			out << path;
+			continue;
+		}
+		auto value = sourceData(source.toInt(), ShownTextRole).toString();
+		if (value.isEmpty())
+			value = sourceData(source.toInt(), TextRole).toString();
+		out << (value.isEmpty() ? path : path + QStringLiteral(" = ") + value);
+	}
+	return out.join(QLatin1Char('\n'));
+}
+
 void WatchRows::findRoles()
 {
 	sourceRole_.clear();

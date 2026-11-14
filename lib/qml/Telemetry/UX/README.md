@@ -91,7 +91,11 @@ Actions retain the existing provider signatures:
     under it, and adding a value opens the nodes above it.
     `setExpanded(row, bool)`, `expandAll()`, `collapseAll()`,
     `parentRow(row)`, `sourceRows(row)` (the values at and under a row),
-    `reveal(sourceRow)` and `revealPath(path)` (the row, its parents opened).
+    `reveal(sourceRow)` and `revealPath(path)` (the row, its parents opened), and
+    `lines(row, paths)`, what a copy takes: one `path = value` line per value at and
+    under the row as shown, or the paths alone. The panel copies with Ctrl+C (lines),
+    Alt+Shift+C (paths) and its row menu (Copy, Copy value, Copy path); the Device
+    tree copies a row's path with Ctrl+C and Alt+Shift+C as its menu's Copy path does.
   - A change of the Watchlist's rows changes only the rows it touches (the
     rows before and after are compared by path), so a row being edited keeps
     its editor while values come and go around it; a reading moves no row and

@@ -4,6 +4,7 @@
 // removed around it. MIT.
 #include <Telemetry/UX/WatchRows.hpp>
 #include <QtCore/QDir>
+#include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
 #include <QtQml/QQmlApplicationEngine>
@@ -253,6 +254,26 @@ int main(int argc, char** argv)
 			window->setWidth(480);
 			settle();
 
+			// Copies (WL-4a): Ctrl+C takes "path = value" lines for what the
+			// row shows, a node every value under it; Alt+Shift+C the paths.
+			list->setProperty("currentIndex", 2);  // Config
+			list->forceActiveFocus();
+			QGuiApplication::clipboard()->clear();
+			QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
+			settle();
+			CHECK(QGuiApplication::clipboard()->text() ==
+			      QStringLiteral("device.Config.Gain = 1.5\ndevice.Config.Enabled = true"));
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Copied 2 values"));
+			CHECK(!named(content, "watchUndo"));
+			QTest::keyClick(window, Qt::Key_C, Qt::AltModifier | Qt::ShiftModifier);
+			settle();
+			CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("device.Config.Gain\ndevice.Config.Enabled"));
+			list->setProperty("currentIndex", 1);  // Voltage
+			QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
+			settle();
+			CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("device.Voltage = 230"));
+			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Copied device.Voltage"));
+
 			// The Device tree's keys: Left folds, then steps out; Right opens,
 			// then steps in. Folded, a node shows its values in brief.
 			list->setProperty("currentIndex", 2);
@@ -321,7 +342,7 @@ int main(int argc, char** argv)
 			click(window, named(rowAt(list, 3), "removeWatchButton"));
 			CHECK(calls.removed == QList<int>({3, 1}));
 			// Said with Undo, as the Device tree says it.
-			auto* removedLine = named(content, "watchRemoved");
+			auto* removedLine = named(content, "watchNotice");
 			CHECK(removedLine && removedLine->property("text").toString() ==
 			                         QStringLiteral("Removed 2 values of device.Config"));
 			click(window, named(content, "watchUndo"));
