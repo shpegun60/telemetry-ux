@@ -128,11 +128,17 @@ void WatchRows::setSource(QAbstractItemModel* source)
 	source_ = source;
 	findRoles();
 	if (source_) {
+		const auto rowsChanged = [this] {
+			if (held_ > 0)
+				heldRows_ = true;
+			else
+				refresh();
+		};
 		connections_ << connect(source_, &QAbstractItemModel::dataChanged, this, &WatchRows::sourceDataChanged)
 		             << connect(source_, &QAbstractItemModel::rowsInserted, this, &WatchRows::sourceRowsInserted)
-		             << connect(source_, &QAbstractItemModel::rowsRemoved, this, [this] { refresh(); })
-		             << connect(source_, &QAbstractItemModel::rowsMoved, this, [this] { refresh(); })
-		             << connect(source_, &QAbstractItemModel::layoutChanged, this, [this] { refresh(); })
+		             << connect(source_, &QAbstractItemModel::rowsRemoved, this, rowsChanged)
+		             << connect(source_, &QAbstractItemModel::rowsMoved, this, rowsChanged)
+		             << connect(source_, &QAbstractItemModel::layoutChanged, this, rowsChanged)
 		             << connect(source_, &QAbstractItemModel::modelReset, this, [this] {
 			                // Every value may be another: shown again, from scratch.
 			                findRoles();
@@ -824,23 +830,47 @@ void WatchRows::sourceRowsInserted(const QModelIndex& parent, int first, int las
 	findRoles();
 	// What is added is shown: the nodes above it open.
 	const int nameRole = sourceRole_.value(NameRole, -1);
+	bool unfolded = false;
 	if (tree_ && nameRole >= 0 && !folded_.isEmpty()) {
 		const auto before = folded_.size();
 		for (int row = first; row <= last; ++row)
 			unfoldAbove(source_->index(row, 0).data(nameRole).toString());
-		if (folded_.size() != before) {
-			refresh();
-			Q_EMIT foldedChanged();
-			return;
-		}
+		unfolded = folded_.size() != before;
+	}
+	if (held_ > 0) {
+		heldRows_ = true;
+		heldFolds_ = heldFolds_ || unfolded;
+		return;
 	}
 	refresh();
+	if (unfolded)
+		Q_EMIT foldedChanged();
+}
+
+void WatchRows::endChanges()
+{
+	if (held_ == 0 || --held_ > 0)
+		return;
+	const bool rows = std::exchange(heldRows_, false);
+	const bool data = std::exchange(heldData_, false);
+	const bool folds = std::exchange(heldFolds_, false);
+	if (rows)
+		refresh();
+	// Whatever a held reading or format moved, every role of every row.
+	if (data && count() > 0)
+		Q_EMIT dataChanged(index(0), index(count() - 1));
+	if (folds)
+		Q_EMIT foldedChanged();
 }
 
 void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight, const QList<int>& roles)
 {
 	if (topLeft.parent().isValid() || !source_)
 		return;
+	if (held_ > 0) {
+		heldData_ = true;
+		return;
+	}
 	if (refreshing_) {
 		again_ = true;
 		return;

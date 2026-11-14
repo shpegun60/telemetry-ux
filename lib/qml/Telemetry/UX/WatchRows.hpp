@@ -148,6 +148,24 @@ public:
 	// lines() over the selection, each value once.
 	Q_INVOKABLE QString selectedLines(bool paths) const;
 
+	// Holds the rows back while one call changes many source rows - a
+	// scattered removal comes as a signal for every run of rows - and brings
+	// them up to date once, at the last end. In between nothing is told and
+	// the rows are not read. Nested pairs count. (WL-2c)
+	void beginChanges() noexcept { ++held_; }
+	void endChanges();
+	// One pair around a scope.
+	class Changes {
+	public:
+		explicit Changes(WatchRows& rows) : rows_(rows) { rows_.beginChanges(); }
+		~Changes() { rows_.endChanges(); }
+		Changes(const Changes&) = delete;
+		Changes& operator=(const Changes&) = delete;
+
+	private:
+		WatchRows& rows_;
+	};
+
 	int rowCount(const QModelIndex& parent = {}) const override;
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 	QHash<int, QByteArray> roleNames() const override;
@@ -232,6 +250,8 @@ private:
 	QList<int> lastSource_, lastOwn_;
 	bool lastTexts_ = false, lastOutcome_ = false, lastFormat_ = false;
 	bool refreshing_ = false, again_ = false;
+	int held_ = 0;                          // beginChanges without their end
+	bool heldRows_ = false, heldData_ = false, heldFolds_ = false;  // what came while held
 	bool tree_ = false;
 	bool sorted_ = false;
 	QSet<QString> folded_;

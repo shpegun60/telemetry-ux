@@ -1765,7 +1765,10 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
-	result = p->watch.addMany(fields);
+	{
+		WatchRows::Changes held{p->rows};
+		result = p->watch.addMany(fields);
+	}
 	if (result.value(QStringLiteral("added")).toInt() > 0)
 		p->notify();
 	if (result.value(QStringLiteral("status")) == QStringLiteral("ok"))
@@ -1802,7 +1805,11 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 		return result;
 	}
 	// Every key is a row's, so nothing removed means the Watchlist refused.
-	const auto removed = p->watch.removeMany(keys);
+	QVector<WatchlistModel::Removed> removed;
+	{
+		WatchRows::Changes held{p->rows};
+		removed = p->watch.removeMany(keys);
+	}
 	if (removed.isEmpty())
 		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");
@@ -1952,7 +1959,11 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 		        .arg(watchLimit());
 		return result;
 	}
-	const auto added = p->watch.addEntries(add);
+	QVariantMap added;
+	{
+		WatchRows::Changes held{p->rows};
+		added = p->watch.addEntries(add);
+	}
 	if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 		result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
 		return result;
@@ -2124,8 +2135,11 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 	const auto target = format.isEmpty() ? std::nullopt : parsed;
 	const auto before = model->pathFormats();
 	bool done = true;
-	for (const int row : std::as_const(chosen))
-		done = model->setRowFormat(row, target) && done;
+	{
+		WatchRows::Changes held{p->rows};
+		for (const int row : std::as_const(chosen))
+			done = model->setRowFormat(row, target) && done;
+	}
 	if (model->pathFormats() != before)
 		++p->formatRevision;
 	p->notify();
@@ -2461,7 +2475,11 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 			}
 		}
 		if (!add.isEmpty()) {
-			const auto added = p->watch.addEntries(add);
+			QVariantMap added;
+			{
+				WatchRows::Changes held{p->rows};
+				added = p->watch.addEntries(add);
+			}
 			if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 				result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
 				return result;
@@ -2489,7 +2507,11 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 					keys.insert(watch_key::member(field, ordinal));
 		result[QStringLiteral("unchanged")] = total - keys.size();
 		if (!keys.isEmpty()) {
-			const auto removed = p->watch.removeMany(keys);
+			QVector<WatchlistModel::Removed> removed;
+			{
+				WatchRows::Changes held{p->rows};
+				removed = p->watch.removeMany(keys);
+			}
 			if (removed.isEmpty())
 				return result;
 			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
@@ -2529,10 +2551,13 @@ QVariantMap DynamicConfiguratorProvider::undoWatch()
 	}
 	const auto undo = std::exchange(p->undo, {});
 	int changed = 0;
-	if (undo.added)
-		changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
-	else if (p->watch.restore(undo.removed))
-		changed = static_cast<int>(undo.removed.size());
+	{
+		WatchRows::Changes held{p->rows};
+		if (undo.added)
+			changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
+		else if (p->watch.restore(undo.removed))
+			changed = static_cast<int>(undo.removed.size());
+	}
 	if (changed == 0)
 		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");

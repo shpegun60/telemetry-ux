@@ -2,6 +2,7 @@
 #include <Telemetry/UX/WatchRows.hpp>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QRandomGenerator>
 #include <QtGui/QStandardItemModel>
 #include <QtTest/QAbstractItemModelTester>
@@ -496,6 +497,75 @@ void selection()
 	CHECK(rows.selectedCount() == rows.count());
 }
 
+// Many source changes in one call (WL-2c): a scattered removal comes as a
+// signal for every run of rows; held, the rows follow once, to the same end.
+void heldChanges()
+{
+	for (const bool tree : {false, true}) {
+		qint64 took[2] = {0, 0};
+		for (const bool held : {false, true}) {
+			auto source = sourceModel();
+			for (int at = 0; at < 1024; ++at)
+				add(*source, at, QStringLiteral("g%1.F%2.V%3").arg(at % 8).arg(at / 64).arg(at), key(at / 64 + 1, at),
+				    QString::number(at));
+			Rows rows;
+			rows.setTree(tree);
+			rows.setSource(source.get());
+			Mirror mirror(rows);
+			QSignalSpy data(&rows, &QAbstractItemModel::dataChanged);
+			QSignalSpy resets(&rows, &QAbstractItemModel::modelReset);
+			rows.selectAll();
+			data.clear();
+			QElapsedTimer timer;
+			timer.start();
+			{
+				std::unique_ptr<Rows::Changes> hold;
+				if (held)
+					hold = std::make_unique<Rows::Changes>(rows);
+				// Every other row, last first: 512 removals, as removeIds sends them.
+				for (int at = 1023; at > 0; at -= 2)
+					source->removeRow(at);
+				// A held format comes out as every role of every row.
+				source->item(0)->setData(QStringLiteral("hex"), Format);
+				if (held)
+					CHECK(data.isEmpty() && rows.count() > source->rowCount());
+			}
+			took[held] = timer.elapsed();
+			QCoreApplication::processEvents();
+			Rows fresh;
+			fresh.setTree(tree);
+			fresh.setSource(source.get());
+			CHECK(shown(rows) == shown(fresh) && mirror.lines == shown(rows) && resets.isEmpty());
+			CHECK(rows.selectedSourceRows().size() == 512);
+			if (held) {
+				// One refresh: one change of the rows that stayed, then the held format.
+				int whole = 0;
+				for (const auto& signal : data)
+					whole += signal[0].toModelIndex().row() == 0 && signal[1].toModelIndex().row() == rows.count() - 1;
+				CHECK(whole == 2 && data.last()[2].value<QList<int>>().isEmpty());
+			}
+		}
+		std::printf("Watch rows: 512 scattered removals of 1024 rows (%s): %lld ms one by one, %lld ms held\n",
+		            tree ? "tree" : "list", static_cast<long long>(took[0]), static_cast<long long>(took[1]));
+		// Held is one rebuild for 512: far cheaper whenever the cost shows at all.
+		if (took[0] >= 40)
+			CHECK(took[1] * 4 < took[0]);
+	}
+	// Nested pairs: the rows follow at the outer end only.
+	auto source = sourceModel();
+	add(*source, 0, QStringLiteral("a.X"), key(1, 0));
+	add(*source, 1, QStringLiteral("a.Y"), key(2, 0));
+	Rows rows;
+	rows.setSource(source.get());
+	rows.beginChanges();
+	rows.beginChanges();
+	source->removeRow(0);
+	rows.endChanges();
+	CHECK(rows.count() == 2);
+	rows.endChanges();
+	CHECK(rows.count() == 1 && name(rows, 0) == QStringLiteral("a.Y"));
+}
+
 // Any sequence of adds, removals, reads, folds and switches leaves the rows
 // as a model made afresh shows them, without a reset unless the switch asks.
 void randomSequences()
@@ -600,6 +670,7 @@ int main(int argc, char** argv)
 	treeView();
 	staticNames();
 	selection();
+	heldChanges();
 	randomSequences();
 	std::printf("Watch rows checks=%u failures=0\n", checks);
 }
