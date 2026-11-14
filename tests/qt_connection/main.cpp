@@ -7,6 +7,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QLocale>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
@@ -611,7 +612,7 @@ void memberWatchBoxes()
 	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
 	// Typed, the same room is said before Enter, and a paste adds all or nothing.
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
-	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains("room for 1,024"));
+	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(1024))));
 	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
 	      dataProvider->watchCount() == 0);
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
