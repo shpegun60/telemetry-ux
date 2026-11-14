@@ -398,6 +398,104 @@ void staticNames()
 	CHECK(rows.count() == 0 && rows.source() == nullptr);
 }
 
+QList<int> ints(const QVariantList& list)
+{
+	QList<int> out;
+	for (const auto& value : list)
+		out << value.toInt();
+	return out;
+}
+
+// The selection (WL-2c): kept by path through readings, rows added and
+// removed, folds and a switch of view; a node is every value under it.
+void selection()
+{
+	auto source = sourceModel();
+	add(*source, 0, QStringLiteral("device.Voltage"), key(1, 0), QStringLiteral("230"));
+	add(*source, 1, QStringLiteral("device.Config.Gain"), key(2, 1), QStringLiteral("1.5"));
+	add(*source, 2, QStringLiteral("device.Config.Enabled"), key(2, 2), QStringLiteral("true"));
+	add(*source, 3, QStringLiteral("data.Count"), key(3, 0), QStringLiteral("7"));
+	Rows rows;
+	QAbstractItemModelTester tester(&rows, QAbstractItemModelTester::FailureReportingMode::Fatal);
+	rows.setSource(source.get());
+	QSignalSpy changed(&rows, &Rows::selectionChanged);
+	QSignalSpy data(&rows, &QAbstractItemModel::dataChanged);
+	// A click: the row alone, the anchor; Ctrl+click toggles.
+	rows.select(1);
+	CHECK(rows.selectedCount() == 1 && rows.isSelected(1) && role(rows, 1, Rows::SelectedRole).toBool());
+	CHECK(rows.anchorRow() == 1 && changed.count() == 1);
+	CHECK(data.count() == 1 && data[0][0].toModelIndex().row() == 1 && data[0][1].toModelIndex().row() == 1 &&
+	      data[0][2].value<QList<int>>() == QList<int>({Rows::SelectedRole}));
+	rows.select(3, true);
+	CHECK(ints(rows.selectedRows()) == QList<int>({1, 3}) && rows.anchorRow() == 3);
+	rows.select(3, true);
+	CHECK(ints(rows.selectedRows()) == QList<int>({1}));
+	// Shift+click: from the anchor, alone or added to what is selected.
+	rows.select(1);
+	rows.selectRange(3);
+	CHECK(ints(rows.selectedRows()) == QList<int>({1, 2, 3}) && rows.anchorRow() == 1);
+	rows.selectRange(0);
+	CHECK(ints(rows.selectedRows()) == QList<int>({0, 1}));
+	rows.select(3, true);
+	rows.selectRange(2, true);
+	CHECK(ints(rows.selectedRows()) == QList<int>({0, 1, 2, 3}));
+	CHECK(rows.selectedLines(true) ==
+	      QStringLiteral("device.Voltage\ndevice.Config.Gain\ndevice.Config.Enabled\ndata.Count"));
+	rows.clearSelection();
+	CHECK(rows.selectedCount() == 0 && rows.selectedSourceRows().isEmpty());
+	// A reading moves nothing; a row added before keeps the selection on its row.
+	rows.select(2);
+	source->item(2)->setData(QStringLiteral("false"), Text);
+	add(*source, 0, QStringLiteral("data.First"), key(4, 0));
+	CHECK(ints(rows.selectedRows()) == QList<int>({3}) && name(rows, 3) == QStringLiteral("device.Config.Enabled"));
+	// The row removed leaves the selection.
+	changed.clear();
+	source->removeRow(3);
+	CHECK(rows.selectedCount() == 0 && changed.count() == 1);
+	add(*source, 3, QStringLiteral("device.Config.Enabled"), key(2, 2), QStringLiteral("true"));
+	// In the tree a node is every value under it, each once, in the order shown.
+	rows.setTree(true);
+	CHECK(names(rows) == QStringList({QStringLiteral("device"), QStringLiteral("device.Voltage"),
+	                                  QStringLiteral("device.Config"), QStringLiteral("device.Config.Gain"),
+	                                  QStringLiteral("device.Config.Enabled"), QStringLiteral("data"),
+	                                  QStringLiteral("data.Count"), QStringLiteral("data.First")}));
+	rows.select(2);             // device.Config
+	rows.select(3, true);       // and its Gain: still once
+	rows.select(6, true);       // data.Count
+	CHECK(ints(rows.selectedSourceRows()) == QList<int>({2, 3, 4}));
+	CHECK(rows.selectedLines(false) ==
+	      QStringLiteral("device.Config.Gain = 1.5\ndevice.Config.Enabled = true\ndata.Count = 7"));
+	// A fold hides what it covers: those rows leave; folding everything
+	// selected away selects the node folded.
+	rows.setExpanded(2, false);
+	CHECK(ints(rows.selectedRows()) == QList<int>({2, 4}) && name(rows, 4) == QStringLiteral("data.Count"));
+	rows.select(4);  // device.Config folded: row 3 is data, row 4 its Count
+	rows.setExpanded(3, false);
+	CHECK(ints(rows.selectedRows()) == QList<int>({3}) && name(rows, 3) == QStringLiteral("data"));
+	rows.setExpanded(3, true);
+	rows.setExpanded(2, true);
+	// To the list: a node is its values; back to the tree: the values, the
+	// nodes above them opened.
+	rows.select(2);  // device.Config
+	rows.setTree(false);
+	CHECK(rows.selectedLines(true) == QStringLiteral("device.Config.Gain\ndevice.Config.Enabled"));
+	rows.setTree(true);
+	rows.setExpanded(2, false);  // device.Config folded: its values leave
+	CHECK(rows.selectedCount() == 1 && name(rows, 2) == QStringLiteral("device.Config") && rows.isSelected(2));
+	rows.setTree(false);
+	rows.selectRange(0);   // no anchor in the list: data.First alone
+	rows.select(3, true);  // and device.Config.Enabled
+	rows.setTree(true);    // device.Config opened again to show it
+	CHECK(rows.folded().isEmpty() &&
+	      rows.selectedLines(true) == QStringLiteral("device.Config.Enabled\ndata.First"));
+	// Everything shown; the selection survives a sort switch.
+	rows.selectAll();
+	CHECK(rows.selectedCount() == rows.count() && rows.selectedSourceRows().size() == source->rowCount());
+	rows.setTree(false);
+	rows.setSorted(true);
+	CHECK(rows.selectedCount() == rows.count());
+}
+
 // Any sequence of adds, removals, reads, folds and switches leaves the rows
 // as a model made afresh shows them, without a reset unless the switch asks.
 void randomSequences()
@@ -446,7 +544,40 @@ void randomSequences()
 			} else if (rows.count() > 0) {
 				rows.collapseAll();
 			}
+			// A click, Ctrl+click, Shift+click, Ctrl+Shift+click or Ctrl+A.
+			if (rows.count() > 0) {
+				const auto row = random->bounded(rows.count());
+				switch (random->bounded(7)) {
+					case 0: rows.select(row); break;
+					case 1: rows.select(row, true); break;
+					case 2: rows.selectRange(row); break;
+					case 3: rows.selectRange(row, true); break;
+					case 4: rows.selectAll(); break;
+					case 5: if (step % 7 == 0) rows.clearSelection(); break;
+					default: break;
+				}
+			}
 			QCoreApplication::processEvents();
+			// The selection is of rows shown, each says so, and what it
+			// acts on is every value at and under them, once, in order.
+			{
+				QList<int> brute;
+				QVector<bool> seen(source->rowCount(), false);
+				int selectedShown = 0;
+				for (int row = 0; row < rows.count(); ++row) {
+					CHECK(rows.isSelected(row) == role(rows, row, Rows::SelectedRole).toBool());
+					if (!rows.isSelected(row))
+						continue;
+					++selectedShown;
+					for (const auto& at : rows.sourceRows(row))
+						if (!seen[at.toInt()]) {
+							seen[at.toInt()] = true;
+							brute << at.toInt();
+						}
+				}
+				CHECK(selectedShown == rows.selectedCount() && rows.selectedRows().size() == selectedShown);
+				CHECK(ints(rows.selectedSourceRows()) == brute);
+			}
 			Rows fresh;
 			fresh.setFolded(rows.folded());
 			fresh.setTree(rows.tree());
@@ -468,6 +599,7 @@ int main(int argc, char** argv)
 	listView();
 	treeView();
 	staticNames();
+	selection();
 	randomSequences();
 	std::printf("Watch rows checks=%u failures=0\n", checks);
 }
