@@ -2,6 +2,8 @@
 #include <Telemetry/UX/EndpointPreviews.hpp>
 #include <Telemetry/UX/WatchlistModel.hpp>
 #include <Telemetry/UX/DynamicWatchlist.hpp>
+#include <Telemetry/UX/WatchKey.hpp>
+#include <Telemetry/UX/WatchLeaves.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
 #include <integration/read_many/Workbench.hpp>
 #include <QtCore/QPersistentModelIndex>
@@ -460,6 +462,90 @@ void schemaSourceReplacement() {
 }
 } // namespace
 
+// A Field's values numbered as the Watchlist keys them, and the tree's rows
+// carrying their path and leaf range: device.Config holds 306 leaves, serial
+// first and samples[299] last.
+void watchLeavesAndPaths() {
+	static_assert(ux::watch_key::whole(7) == 7 && ux::watch_key::isWhole(7));
+	static_assert(ux::watch_key::field(ux::watch_key::member(7, 0)) == 7 &&
+	              ux::watch_key::ordinal(ux::watch_key::member(7, 262142)) == 262142 &&
+	              !ux::watch_key::isWhole(ux::watch_key::member(7, 0)));
+	static_assert(ux::watch_key::member(0xffffffffu, 262142) < (quint64{1} << 51));
+	auto storage = std::make_shared<f::Backing>();
+	const auto& schema = storage->schema;
+	ux::WatchLeaves leaves;
+	CHECK(leaves.count(0) == 0 && !leaves.locate(0, 0) && !leaves.matches(schema));
+	leaves.reset(schema);
+	CHECK(leaves.matches(schema));
+	const auto fields = schema.endpoints(telemetry::descriptor::Category::Field);
+	const auto services = schema.endpoints(telemetry::descriptor::Category::Service);
+	CHECK(fields.size() == 2 && !services.empty());
+	const auto config = fields[0].typeId, serial = fields[1].typeId;
+	const auto members = schema.members(config);
+	CHECK(members.size() == 7);
+	const auto samples = members[6].typeId;
+	CHECK(leaves.count(config) == 306 && leaves.count(serial) == 1 && leaves.count(samples) == 300);
+	CHECK(leaves.kind(config) == ux::WatchLeaves::Kind::Values);
+	CHECK(leaves.kind(samples) == ux::WatchLeaves::Kind::Elements);
+	CHECK(leaves.kind(services[0].typeId) == ux::WatchLeaves::Kind::Members);
+	const auto gain = leaves.locate(config, 2);
+	CHECK(gain && gain->suffix == ".gain" && gain->member() == "gain" && gain->depth == 1 &&
+	      !gain->steps[0].element && gain->steps[0].index == 2 && gain->offset == members[2].wireOffset);
+	const auto sample = leaves.locate(config, 300);
+	CHECK(sample && sample->suffix == ".samples[294]" && sample->member() == "samples[294]" &&
+	      sample->depth == 2 && sample->steps[1].element && sample->steps[1].index == 294 &&
+	      sample->offset == members[6].wireOffset + 294 * 2 && sample->type == schema.type(samples)->relatedTypeId);
+	const auto whole = leaves.locate(serial, 0);
+	CHECK(whole && whole->suffix.isEmpty() && whole->depth == 0 && whole->offset == 0);
+	CHECK(!leaves.locate(config, 306) && !leaves.locate(serial, 1));
+	CHECK(leaves.ordinal(config, u"mode") == 5u && leaves.ordinal(config, u"samples[3]") == 9u);
+	CHECK(leaves.ordinal(config, u"samples[299]") == 305u && leaves.ordinal(samples, u"[7]") == 7u);
+	for (const auto bad : {u"samples", u"samples[300]", u".mode", u"nope", u"mode[0]", u"samples[3", u"samples[]",
+	                       u"samples[3].x", u"gain.", u"samples.[3]", u"[0]"})
+		CHECK(!leaves.ordinal(config, bad));
+	bool roundTrip = true;
+	for (quint32 n = 0; n < 306; ++n) {
+		const auto leaf = leaves.locate(config, n);
+		roundTrip = roundTrip && leaf && leaves.ordinal(config, leaf->member()) == n;
+	}
+	CHECK(roundTrip);
+
+	Source source; source.schema = schema;
+	ux::EndpointPreviews previews(nullptr, [&] { return source.now; });
+	previews.setSource(source.source());
+	ux::EndpointModel model;
+	QAbstractItemModelTester tester{&model, QAbstractItemModelTester::FailureReportingMode::Fatal};
+	model.setPreviews(&previews); model.rebuild(storage->owner);
+	const auto field = endpoint(model, 1, 0);
+	const auto scalar = endpoint(model, 1, 1);
+	const auto command = endpoint(model, 2, 0);
+	const auto range = [&](const QModelIndex& index) {
+		return std::pair{model.data(index, ux::EndpointModel::WatchLeafFirstRole).toUInt(),
+		                 model.data(index, ux::EndpointModel::WatchLeafCountRole).toUInt()};
+	};
+	CHECK(model.pathOf(model.parent(field)) == "device" && range(model.parent(field)) == std::pair{0u, 0u});
+	CHECK(model.pathOf(field) == "device.Config" && range(field) == std::pair{0u, 306u});
+	CHECK(model.pathOf(scalar) == "device.Serial" && range(scalar) == std::pair{0u, 1u});
+	CHECK(model.pathOf(command) == "device.Reset" && range(command) == std::pair{0u, 0u});
+	CHECK(model.data(field, ux::EndpointModel::PathRole).toString() == "device.Config" && model.pathOf({}).isEmpty());
+	const auto gainRow = child(model, field, QStringLiteral("gain"));
+	const auto modeRow = child(model, field, QStringLiteral("mode"));
+	const auto samplesRow = child(model, field, QStringLiteral("samples"));
+	CHECK(model.pathOf(gainRow) == "device.Config.gain" && range(gainRow) == std::pair{2u, 1u});
+	CHECK(model.pathOf(modeRow) == "device.Config.mode" && range(modeRow) == std::pair{5u, 1u});
+	CHECK(model.pathOf(samplesRow) == "device.Config.samples" && range(samplesRow) == std::pair{6u, 300u});
+	const auto firstRange = child(model, samplesRow, QStringLiteral("[0 … 255]"));
+	const auto secondRange = child(model, samplesRow, QStringLiteral("[256 … 299]"));
+	CHECK(model.pathOf(firstRange) == "device.Config.samples" && range(firstRange) == std::pair{6u, 256u});
+	CHECK(model.pathOf(secondRange) == "device.Config.samples" && range(secondRange) == std::pair{262u, 44u});
+	const auto third = child(model, firstRange, QStringLiteral("[3]"));
+	const auto last = child(model, secondRange, QStringLiteral("[299]"));
+	CHECK(model.pathOf(third) == "device.Config.samples[3]" && range(third) == std::pair{9u, 1u});
+	CHECK(model.pathOf(last) == "device.Config.samples[299]" && range(last) == std::pair{305u, 1u});
+	const auto lastLeaf = leaves.locate(config, 305);
+	CHECK(lastLeaf && "device.Config" + lastLeaf->suffix == model.pathOf(last));
+}
+
 int main(int argc, char** argv) {
 	// QAbstractItemModelTester validates GUI roles (including QPixmap), even
 	// though this executable never creates a window or sends native input.
@@ -473,6 +559,8 @@ int main(int argc, char** argv) {
 	});
 	currentScenario = "metadata/local children";
 	metadataAndLocalChildren();
+	currentScenario = "watch leaves and paths";
+	watchLeavesAndPaths();
 	currentScenario = "draft/preview FIFO";
 	CHECK(draftAfterPreview(false) == draftAfterPreview(true));
 	currentScenario = "editor precision";

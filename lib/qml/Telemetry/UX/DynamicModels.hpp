@@ -16,17 +16,25 @@
 #include <QtCore/QAbstractItemModel>
 #include <QtCore/QVariantMap>
 
+#include <cstddef>
 #include <memory>
 
 namespace telemetry::ux {
 
 class EndpointPreviews;
 
-using Inspector = telemetry::integration::inspector::InspectorModel<8, 4096, 65536>;
+// The largest Field value the GUI reads whole (a struct read for its
+// members included) and the largest it writes back.
+inline constexpr std::size_t workbenchPayloadBytes = 4096;
+inline constexpr std::size_t workbenchSnapshotBytes = 65536;
+using Inspector =
+    telemetry::integration::inspector::InspectorModel<8, workbenchPayloadBytes, workbenchSnapshotBytes>;
 // ReadMany copies its bounded binding into the existing FIFO completion slot.
 // This opt-in GUI budget does not change the portable Workbench default.
-using Workbench = telemetry::integration::workbench::WorkbenchModel<8, 4096, 65536, 1536>;
-using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, 4096, 65536, 1536>;
+using Workbench = telemetry::integration::workbench::WorkbenchModel<8, workbenchPayloadBytes,
+                                                                    workbenchSnapshotBytes, 1536>;
+using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, workbenchPayloadBytes,
+                                                                       workbenchSnapshotBytes, 1536>;
 
 // All calls run on the Inspector owner thread. The Inspector object must outlive
 // these models. Materialized labels and values are Qt-owned copies; the controller
@@ -58,7 +66,14 @@ public:
 		PreviewAgeMsRole,
 		PreviewReasonRole,
 		// A category's or group's number of endpoints; 0 on other rows.
-		CountRole
+		CountRole,
+		// A Field's or a value's path: "device.Config.Gain", "data.Samples[3]";
+		// a group's or category's name.
+		PathRole,
+		// The row's values as Watchlist leaf ordinals of its Field:
+		// [first, first + count). A scalar Field is 0, 1; groups are 0, 0.
+		WatchLeafFirstRole,
+		WatchLeafCountRole
 	};
 	Q_ENUM(Role)
 
@@ -80,6 +95,8 @@ public:
 	Q_INVOKABLE bool previewOnlyChange(const QList<int>& roles) const;
 	Q_INVOKABLE QVariantMap endpoint(const QModelIndex& index) const;
 	Q_INVOKABLE bool isGroup(const QModelIndex& index) const;
+	// What PathRole holds; empty for an invalid or stale index.
+	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
 	// Resolve the current model index without retaining one across a reset.
 	bool matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const;
 	// Whether the current device's Field with this id accepts writes.

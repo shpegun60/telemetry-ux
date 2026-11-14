@@ -8,6 +8,7 @@
 #include "EndpointPreviews.hpp"
 #include "SchemaText.hpp"
 #include "ScalarEditorMetadata.hpp"
+#include "WatchLeaves.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
@@ -105,6 +106,8 @@ struct Row {
 	std::uint32_t wireBytes = 0, responseWireBytes = 0;
 	std::uint32_t previewFieldId = 0, previewOffset = 0, previewFieldBytes = 0;
 	std::uint32_t rangeFirst = 0, rangeCount = 0;
+	// The row's values as leaf ordinals of its Field: [leafFirst, leafFirst + leafCount).
+	std::uint32_t leafFirst = 0, leafCount = 0;
 	// A category's or group's endpoints.
 	std::uint32_t count = 0;
 	int category = 0;
@@ -448,6 +451,7 @@ struct EndpointModel::Impl {
 	QPointer<EndpointPreviews> previews;
 	QMetaObject::Connection previewChanged, previewSource, previewDestroyed;
 	QHash<TypeId, TypeMetadata> types;
+	WatchLeaves leaves;
 	std::size_t previewNodes = 0;
 
 	bool current() const
@@ -509,6 +513,7 @@ void EndpointModel::clear()
 		return;
 	impl_->tree.clear();
 	impl_->types.clear();
+	impl_->leaves.clear();
 	impl_->previewNodes = 0;
 	impl_->inspector = {};
 	endResetModel();
@@ -543,6 +548,7 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 {
 	if (changing() || !impl_->matchesSchema(schema))
 		return;
+	impl_->leaves.reset(schema);
 	QVector<QModelIndex> indices;
 	for (auto* row : std::as_const(impl_->tree.rows)) {
 		if (!row->endpoint)
@@ -563,6 +569,8 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 			row->previewFieldId = row->endpointId;
 			row->previewReadable = row->readable;
 			row->previewFieldBytes = row->wireBytes;
+			row->leafFirst = 0;
+			row->leafCount = impl_->leaves.count(row->typeId);
 			previewShape(*row, schema);
 		}
 		row->detail = endpointDetail(*row);
@@ -577,7 +585,8 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 			continue;
 		Q_EMIT dataChanged(index, index, {DetailRole, TypeTextRole, WireBytesRole,
 		                                 ResponseTypeTextRole, PreviewEligibleRole,
-		                                 PreviewFieldIdRole, PreviewAggregateRole});
+		                                 PreviewFieldIdRole, PreviewAggregateRole,
+		                                 WatchLeafCountRole});
 	}
 }
 
@@ -669,6 +678,7 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 		return;
 	impl_->tree.clear();
 	impl_->types.clear();
+	impl_->leaves.clear();
 	impl_->previewNodes = 0;
 	impl_->inspector = {inspector, workbench, false, false, view};
 	impl_->admission = impl_->inspector.snapshotInfo().admission;
@@ -850,6 +860,12 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			return row->category;
 		case CountRole:
 			return row->count;
+		case PathRole:
+			return row->path.isEmpty() ? row->name : row->path;
+		case WatchLeafFirstRole:
+			return row->leafFirst;
+		case WatchLeafCountRole:
+			return row->leafCount;
 		case ReadableRole:
 			return row->readable;
 		case IsEndpointRole:
@@ -919,7 +935,13 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {PreviewAggregateRole, "previewAggregate"}, {PreviewChildRole, "previewChild"},
 	        {PreviewValueRole, "previewValue"}, {PreviewStateRole, "previewState"},
 	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"},
-	        {CountRole, "count"}};
+	        {CountRole, "count"},           {PathRole, "path"},
+	        {WatchLeafFirstRole, "watchLeafFirst"}, {WatchLeafCountRole, "watchLeafCount"}};
+}
+
+QString EndpointModel::pathOf(const QModelIndex& index) const
+{
+	return data(index, PathRole).toString();
 }
 
 bool EndpointModel::canFetchMore(const QModelIndex& parent) const
@@ -940,7 +962,17 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 	const auto* type = schema.type(row->typeId);
 	if (!type)
 		return;
+	if (!impl_->leaves.matches(schema))
+		impl_->leaves.reset(schema);
+	const auto& leaves = impl_->leaves;
 	const auto first = row->children.size();
+	// Leaves before the first new member: the struct's earlier members.
+	std::uint64_t memberLeaf = row->leafFirst;
+	if (type->kind == Kind::Struct) {
+		const auto members = schema.members(row->typeId);
+		for (std::size_t at = 0; at < first && at < members.size(); ++at)
+			memberLeaf += leaves.count(members[at].typeId);
+	}
 	const auto count = (std::min)({std::size_t{128}, std::size_t{row->totalChildren} - first,
 	                             previewNodeLimit - impl_->previewNodes});
 	std::vector<std::unique_ptr<Row>> pending;
@@ -964,6 +996,9 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 			child->typeId = member.typeId;
 			child->valuePath.append(child->name);
 			offset += member.wireOffset;
+			child->leafFirst = static_cast<std::uint32_t>(memberLeaf);
+			child->leafCount = leaves.count(member.typeId);
+			memberLeaf += child->leafCount;
 		} else if (type->kind == Kind::Array) {
 			if (!row->previewRange && type->elementCount > previewRangeSize) {
 				const auto rangeFirst = static_cast<std::uint32_t>(at * previewRangeSize);
@@ -973,6 +1008,9 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 				child->typeId = row->typeId;
 				child->name = QStringLiteral("[%1 … %2]").arg(rangeFirst)
 				                  .arg(rangeFirst + child->rangeCount - 1);
+				const auto each = std::uint64_t{leaves.count(type->relatedTypeId)};
+				child->leafFirst = static_cast<std::uint32_t>(row->leafFirst + rangeFirst * each);
+				child->leafCount = static_cast<std::uint32_t>(child->rangeCount * each);
 			} else {
 				const auto elementIndex = static_cast<std::uint32_t>(at) +
 				                          (row->previewRange ? row->rangeFirst : 0);
@@ -983,6 +1021,10 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 				child->typeId = type->relatedTypeId;
 				child->valuePath.append(elementIndex);
 				offset += std::uint64_t{elementIndex} * element->wireBytes;
+				const auto each = std::uint64_t{leaves.count(type->relatedTypeId)};
+				const auto within = elementIndex - (row->previewRange ? row->rangeFirst : 0);
+				child->leafFirst = static_cast<std::uint32_t>(row->leafFirst + within * each);
+				child->leafCount = static_cast<std::uint32_t>(each);
 			}
 		} else {
 			return;
@@ -993,7 +1035,11 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 		const auto metadata = impl_->metadata(schema, child->typeId);
 		child->type = metadata.label;
 		child->wireBytes = metadata.wireBytes;
-		child->path = row->path + (type->kind == Kind::Struct ? QStringLiteral(".") : QString{}) + child->name;
+		// A range row only folds its elements: it has its array's path, and
+		// an element under it reads data.Samples[300].
+		child->path = child->previewRange ? row->path
+		              : row->path + (type->kind == Kind::Struct ? QStringLiteral(".") : QString{}) +
+		                    child->name;
 		child->detail = child->type + QStringLiteral(" (#") + integerText(child->typeId) +
 		                QStringLiteral(", ") + integerText(child->wireBytes) + QStringLiteral(" B)");
 		previewShape(*child, schema);
