@@ -191,15 +191,18 @@ void listView()
 	CHECK(role(rows, 0, Rows::NameRole).typeId() == QMetaType::QString);
 
 	QSignalSpy resets(&rows, &QAbstractItemModel::modelReset);
+	QSignalSpy moved(&rows, &QAbstractItemModel::rowsMoved);
 	rows.setSorted(true);
-	CHECK(resets.count() == 1);
+	// The rows move into place, without a reset: a row being edited keeps
+	// its delegate.
+	CHECK(resets.isEmpty() && !moved.isEmpty());
 	CHECK(names(rows) == QStringList({QStringLiteral("data.Samples[9]"), QStringLiteral("data.Samples[10]"),
 	                                  QStringLiteral("device.Voltage")}));
 	CHECK(role(rows, 0, Rows::SourceRowRole).toInt() == 2);
 	// Added while sorted: in its place, without a reset.
 	QSignalSpy inserted(&rows, &QAbstractItemModel::rowsInserted);
 	add(*source, 3, QStringLiteral("data.Count"), key(6, 0));
-	CHECK(resets.count() == 1 && inserted.count() == 1);
+	CHECK(resets.isEmpty() && inserted.count() == 1);
 	CHECK(name(rows, 0) == QStringLiteral("data.Count"));
 	// A value read: its row, nothing else.
 	QSignalSpy changed(&rows, &QAbstractItemModel::dataChanged);

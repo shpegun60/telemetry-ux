@@ -16,7 +16,7 @@
  * removed, the ones that stay and changed places are moved (the longest run
  * already in order stays put) and the new ones inserted, so a row being
  * edited keeps its delegate while the Watchlist changes around it. Only a
- * switch of view or sort, or a reset of the source, resets the rows. Reading
+ * switch of view or a reset of the source resets the rows; a sort moves them. Reading
  * a value moves no row; the nodes it shows in are told once per event-loop
  * turn.
  *

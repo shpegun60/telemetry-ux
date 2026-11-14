@@ -199,8 +199,10 @@ void WatchRows::setSorted(bool sorted)
 	if (sorted_ == sorted)
 		return;
 	sorted_ = sorted;
+	// The rows move into their places, as when the source moves them: a row
+	// being edited keeps its delegate (WL-2c).
 	if (!tree_)
-		reset();
+		refresh();
 	Q_EMIT sortedChanged();
 }
 

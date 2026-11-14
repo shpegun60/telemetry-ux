@@ -355,3 +355,12 @@ Delete, Ctrl+C and Number format act on the selection when the current row
 is in a selection of two or more. Removing several values with no Undo to
 bring them back (no device, or a provider without `removeWatchRows`) asks
 first. A provider without `WatchRows` keeps the one current row.
+
+The list sorts by name from the Name header or *Sort by name* in the "…"
+menu: `WatchRows::setSorted` now moves the rows into place instead of
+resetting them, so a row being edited keeps its delegate. The tree keeps the
+device's order. A node's name shows a tooltip with its path, type and the
+values watched; × names what it removes; rows tell a screen reader what a
+member or element belongs to and whether a node is expandable and expanded
+(Qt 6.12's `Accessible.expandable`/`expanded`), and the selection's size is
+announced once it settles.

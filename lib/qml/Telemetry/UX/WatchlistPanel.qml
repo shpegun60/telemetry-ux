@@ -205,6 +205,34 @@ Pane {
         menuRow = row
         rowMenu.popup(item, x, y)
     }
+    // How many are selected, said once the selection settles; one row moved
+    // to is the row's own name, not a count.
+    property int announcedCount: 0
+    Timer {
+        id: selectionAnnounce
+        interval: 300
+        onTriggered: {
+            const n = panel.selectedCount
+            if (n > 1)
+                Accessible.announce(n === watchList.count ? qsTr("All %L1 selected").arg(n) : qsTr("%L1 selected").arg(n))
+            else if (panel.announcedCount > 1)
+                Accessible.announce(qsTr("Selection cleared"))
+            panel.announcedCount = n
+        }
+    }
+    onSelectedCountChanged: selectionAnnounce.restart()
+    // The list by name A-Z, or as added; the rows move, the cursor's row
+    // stays current and in view.
+    readonly property bool sortable: rows !== null && typeof rows.sorted === "boolean"
+    readonly property bool sorted: sortable && rows.sorted
+    function setSorted(on) {
+        if (!sortable || rows.sorted === on)
+            return
+        rows.sorted = on
+        if (watchList.currentIndex >= 0)
+            watchList.positionViewAtIndex(watchList.currentIndex, ListView.Contain)
+        Accessible.announce(on ? qsTr("Sorted by name, A to Z") : qsTr("In the order added"))
+    }
     // Switches the view; the current value stays current, its parents opened.
     function showTree(tree) {
         if (!rows || tree === treeView)
@@ -953,6 +981,17 @@ Pane {
                 onTriggered: panel.rows.collapseAll()
             }
             MenuItem {
+                objectName: "watchSortByName"
+                readonly property bool shown: panel.sortable && !panel.treeView
+                visible: shown
+                height: shown ? implicitHeight : 0
+                enabled: shown
+                checkable: true
+                checked: panel.sorted
+                text: qsTr("Sort by name")
+                onTriggered: panel.setSorted(checked)
+            }
+            MenuItem {
                 objectName: "watchResetFormats"
                 visible: panel.formatsResettable
                 height: panel.formatsResettable ? implicitHeight : 0
@@ -1070,7 +1109,39 @@ Pane {
             Layout.topMargin: Type.tight
             // The row family's gap: "230" and "OK" read as two things.
             spacing: panel.columnGap
-            Label { objectName: "watchColumnName"; text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.leftMargin: Type.padding; Layout.fillWidth: true; elide: Text.ElideRight }
+            // The list by name, A-Z, and back to the order added (WL-2c); the
+            // tree keeps the device's order, so its header only names.
+            Label {
+                id: nameHeader
+                objectName: "watchColumnName"
+                readonly property bool sortable: panel.sortable && !panel.treeView
+                text: sortable && panel.sorted ? qsTr("Name") + " \u25B4" : qsTr("Name")
+                color: nameHeaderHover.hovered && sortable ? Theme.textPrimary : Theme.textSecondary
+                font.pointSize: Type.caption
+                Layout.leftMargin: Type.padding
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                background: Rectangle {
+                    radius: Type.radius
+                    color: nameHeaderTap.pressed ? Theme.statePressed
+                         : nameHeaderHover.hovered && nameHeader.sortable ? Theme.stateHover : "transparent"
+                }
+                HoverHandler { id: nameHeaderHover; enabled: nameHeader.sortable }
+                TapHandler {
+                    id: nameHeaderTap
+                    enabled: nameHeader.sortable
+                    onTapped: panel.setSorted(!panel.sorted)
+                }
+                PlainToolTip {
+                    visible: nameHeaderHover.hovered && nameHeader.sortable
+                    delay: 700
+                    text: panel.sorted ? qsTr("Sorted by name, A-Z · click for the order added")
+                                       : qsTr("Sort by name, A-Z")
+                }
+                Accessible.role: Accessible.ColumnHeader
+                Accessible.name: sortable && panel.sorted ? qsTr("Name, sorted A to Z") : qsTr("Name")
+                Accessible.onPressAction: if (sortable) panel.setSorted(!panel.sorted)
+            }
             Label { objectName: "watchColumnValue"; text: qsTr("Value"); color: Theme.textSecondary; font.pointSize: Type.caption; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: panel.valueColumn; elide: Text.ElideRight }
             Label { objectName: "watchColumnType"; visible: panel.typeColumn > 0; text: qsTr("Type"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.typeColumn; elide: Text.ElideRight }
             Label { objectName: "watchColumnAccess"; visible: panel.accessColumn > 0; text: qsTr("rw"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.accessColumn
@@ -1456,13 +1527,28 @@ Pane {
                 Accessible.role: panel.treeView ? Accessible.TreeItem : Accessible.ListItem
                 Accessible.selectable: panel.selectable
                 Accessible.selected: watchRow.marked
+                Accessible.expandable: watchRow.branch
+                Accessible.expanded: watchRow.branch && watchRow.expanded
+                // What a nested row belongs to, by its parent's own step:
+                // "Config" for device.Config.Gain, "Samples" for data.Samples[3].
+                readonly property string parentLabel: {
+                    if (!panel.treeView || model.nested !== true)
+                        return ""
+                    let before = watchRow.name.substring(0, nameCell.leafStart)
+                    if (before.endsWith("."))
+                        before = before.substring(0, before.length - 1)
+                    return before.substring(Math.max(before.lastIndexOf("."), before.lastIndexOf("[") - 1) + 1)
+                }
                 Accessible.name: [panel.treeView ? watchRow.name.substring(nameCell.leafStart) : watchRow.name,
+                                  watchRow.parentLabel.length === 0 ? ""
+                                  : watchRow.name.charAt(nameCell.leafStart) === "["
+                                    ? qsTr("element of %1").arg(watchRow.parentLabel)
+                                    : qsTr("member of %1").arg(watchRow.parentLabel),
                                   watchRow.isGroup ? qsTr("group, %L1 watched").arg(watchRow.leaves)
                                   : watchRow.isValue ? ""
                                   : watchRow.node === "array" ? qsTr("array, %L1 watched").arg(watchRow.leaves)
                                   : watchRow.node === "element" ? qsTr("element, %L1 watched").arg(watchRow.leaves)
                                   : qsTr("struct, %L1 watched").arg(watchRow.leaves),
-                                  watchRow.branch ? (watchRow.expanded ? qsTr("expanded") : qsTr("collapsed")) : "",
                                   watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.isValue ? "–" : "",
                                   watchRow.typeText,
                                   watchRow.accessText === "rw" ? qsTr("read and write")
@@ -1630,8 +1716,12 @@ Pane {
                         }
                         HoverHandler { id: nameHover }
                         PlainToolTip {
-                            visible: nameHover.hovered && (prefixText.truncated || leafText.truncated)
-                            text: watchRow.name
+                            objectName: "watchRowNameTip"
+                            visible: nameHover.hovered && (!watchRow.isValue || prefixText.truncated || leafText.truncated)
+                            text: watchRow.isValue ? watchRow.name
+                                : [watchRow.name, watchRow.typeText,
+                                   watchRow.leaves === 1 ? qsTr("1 value watched") : qsTr("%L1 values watched").arg(watchRow.leaves)]
+                                  .filter(part => part.length > 0).join(" \u00B7 ")
                             delay: 700
                         }
                     }
@@ -2088,10 +2178,15 @@ Pane {
                                 color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
                             }
                             onClicked: panel.removeAt(watchRow.index, false, true)
-                            Accessible.name: qsTr("Remove %1").arg(watchRow.name)
+                            readonly property string what: watchRow.isValue ? qsTr("Remove %1").arg(watchRow.name)
+                                : watchRow.leaves === 1 ? qsTr("Remove the 1 value of %1").arg(watchRow.name)
+                                : qsTr("Remove the %L1 values of %2").arg(watchRow.leaves).arg(watchRow.name)
+                            Accessible.name: what
                             ToolTip.visible: hovered
                             ToolTip.delay: 700
-                            ToolTip.text: qsTr("Remove from the Watchlist (Delete)")
+                            // Delete does the same only where this row is all that is selected.
+                            ToolTip.text: !panel.selectable || (watchRow.marked && panel.selectedCount === 1)
+                                          ? qsTr("%1 (Delete)").arg(what) : what
                         }
                     }
                 }
