@@ -147,18 +147,29 @@ bool hasMembers(const rt::RuntimeSchema& schema, TypeId id)
 	return !schema.members(membersOf(schema, id)).empty();
 }
 
-QString accessText(descriptor::Category category, const rt::RuntimeSchema& schema, const rt::RuntimeEndpoint& endpoint)
+// A Field's access in words, as copies and JSON carry it; the view draws it
+// as the Device tree's marks. Commands and Services have none: every one can
+// be run or called.
+QString accessText(descriptor::Category category, const rt::RuntimeEndpoint& endpoint)
 {
-	if (category == descriptor::Category::Field) {
-		const bool read = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Readable);
-		const bool write = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Writable);
-		return read && write ? DescriptorContent::tr("read, write")
-		     : read          ? DescriptorContent::tr("read")
-		     : write         ? DescriptorContent::tr("write")
-		                     : DescriptorContent::tr("no access");
-	}
-	return DescriptorContent::tr("%1 → %2").arg(typeText(schema, endpoint.typeId),
-	                                            typeText(schema, endpoint.responseTypeId));
+	if (category != descriptor::Category::Field)
+		return {};
+	const bool read = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Readable);
+	const bool write = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Writable);
+	return read && write ? DescriptorContent::tr("read, write")
+	     : read          ? DescriptorContent::tr("read")
+	     : write         ? DescriptorContent::tr("write")
+	                     : DescriptorContent::tr("no access");
+}
+
+// A Field's type; a Command's arguments, a Service's whole signature, as the
+// Device tree writes them: "(bool)", "(f32, f32) -> f32".
+QString typeOf(descriptor::Category category, const rt::RuntimeSchema& schema, const rt::RuntimeEndpoint& endpoint)
+{
+	if (category == descriptor::Category::Field)
+		return typeText(schema, endpoint.typeId);
+	return schema_text::signatureText(schema, endpoint.typeId, endpoint.responseTypeId,
+	                                  category == descriptor::Category::Service);
 }
 } // namespace
 
@@ -255,8 +266,8 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 				item->name = text(endpoint.name);
 				item->path = group->path + QLatin1Char('.') + item->name;
 				item->kind = QStringLiteral("endpoint");
-				item->type = typeText(schema, endpoint.typeId);
-				item->access = accessText(category, schema, endpoint);
+				item->type = typeOf(category, schema, endpoint);
+				item->access = accessText(category, endpoint);
 				item->parent = group.get();
 				item->row = static_cast<int>(group->children.size());
 				item->category = static_cast<int>(c);

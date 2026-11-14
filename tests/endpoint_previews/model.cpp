@@ -152,13 +152,17 @@ void metadataAndLocalChildren() {
 	ux::EndpointModel foreign;
 	foreign.rebuild(storage->owner);
 	CHECK(!model.isGroup(foreign.index(0, 0)));
-	CHECK(model.data(config, ux::EndpointModel::TypeTextRole).toString() == "struct, 7 members");
+	CHECK(model.data(config, ux::EndpointModel::TypeTextRole).toString() == "struct (7)");
 	CHECK(model.data(config, ux::EndpointModel::WireBytesRole).toUInt() == telemetry::wireSize<f::Config>);
 	CHECK(model.data(config, ux::EndpointModel::AccessTextRole).toString() == "Read / Write");
-	CHECK(model.data(command, ux::EndpointModel::TypeTextRole).toString() == "nothing");
+	// A Command reads as its arguments: none here.
+	CHECK(model.data(command, ux::EndpointModel::TypeTextRole).toString() == "()");
 	CHECK(model.data(command, ux::EndpointModel::AccessTextRole).toString() == "Execute");
-	CHECK(model.data(service, ux::EndpointModel::ResponseTypeTextRole).toString() == "struct, 7 members");
-	CHECK(model.data(service, ux::EndpointModel::DetailRole).toString().contains("Response:"));
+	CHECK(model.data(service, ux::EndpointModel::ResponseTypeTextRole).toString() == "struct (7)");
+	// The row in words, its signature included, never an internal id.
+	CHECK(model.data(service, ux::EndpointModel::DetailRole).toString().startsWith("Service") &&
+	      model.data(service, ux::EndpointModel::DetailRole).toString().contains(" -> ") &&
+	      !model.data(service, ux::EndpointModel::DetailRole).toString().contains("#"));
 	CHECK(model.endpoint(service).value("responseWireBytes").toUInt() == telemetry::wireSize<f::Config>);
 	CHECK(model.previewDemandField(config).isValid() && model.previewDemandField(config).toUInt() == 0);
 	CHECK(!model.previewDemandField(command).isValid() && !model.previewDemandField(service).isValid());
@@ -288,7 +292,7 @@ void definitionsBeforeRead() {
 	tester.setUseFetchMore(false);
 	f::select(provider, "Config");
 	const auto info = provider.selectionInfo();
-	CHECK(info.value("id").toUInt() == 0 && info.value("typeText") == "struct, 7 members");
+	CHECK(info.value("id").toUInt() == 0 && info.value("typeText") == "struct (7)");
 	CHECK(info.value("wireBytes").toUInt() == telemetry::wireSize<f::Config>);
 	const auto root = provider.definitionRootIndex();
 	CHECK(root.isValid() && definitions->rowCount(root) == 1);
@@ -312,9 +316,9 @@ void definitionsBeforeRead() {
 	CHECK(definitions->rowCount(scalarRoot) == 1);
 	CHECK(!definitions->hasChildren(definitions->index(0, 0, scalarRoot)));
 	f::select(provider, "Reset");
-	CHECK(provider.selectionInfo().value("typeText") == "nothing");
+	CHECK(provider.selectionInfo().value("typeText") == "()");
 	f::select(provider, "Inspect");
-	CHECK(provider.selectionInfo().value("responseTypeText") == "struct, 7 members");
+	CHECK(provider.selectionInfo().value("responseTypeText") == "struct (7)");
 	CHECK(h.storage->packets == 0 && h.storage->owner.pending() == 0 && source.calls.isEmpty());
 	CHECK(f::device.reads == 0 && f::device.writes == 0 && f::device.commands == 0 && f::device.services == 0);
 }

@@ -370,8 +370,47 @@ QPainterPath clearLines()
 	path.lineTo(15, 18);
 	return path;
 }
+// Zoom: a lens with its handle, a plus or a minus inside.
+QPainterPath lens(bool plus)
+{
+	QPainterPath path;
+	path.addEllipse(QPointF(10.5, 10.5), 6, 6);
+	path.moveTo(15, 15);
+	path.lineTo(19.5, 19.5);
+	path.moveTo(7.5, 10.5);
+	path.lineTo(13.5, 10.5);
+	if (plus) {
+		path.moveTo(10.5, 7.5);
+		path.lineTo(10.5, 13.5);
+	}
+	return path;
+}
+// Fit: four corners of a frame, the whole range in view.
+QPainterPath corners()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 9);
+	path.lineTo(4.5, 4.5);
+	path.lineTo(9, 4.5);
+	path.moveTo(15, 4.5);
+	path.lineTo(19.5, 4.5);
+	path.lineTo(19.5, 9);
+	path.moveTo(19.5, 15);
+	path.lineTo(19.5, 19.5);
+	path.lineTo(15, 19.5);
+	path.moveTo(9, 19.5);
+	path.lineTo(4.5, 19.5);
+	path.lineTo(4.5, 15);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
+	if (name == QLatin1String("zoomIn"))
+		return lens(true);
+	if (name == QLatin1String("zoomOut"))
+		return lens(false);
+	if (name == QLatin1String("fit"))
+		return corners();
 	if (name == QLatin1String("error"))
 		return errorMark();
 	if (name == QLatin1String("info"))

@@ -126,7 +126,7 @@ QString typeText(const rt::RuntimeSchema& schema, TypeId id)
 		return QStringLiteral("?");
 	switch (type->kind) {
 		case TypeKind::Void:
-			return tr("nothing");
+			return QStringLiteral("()");
 		case TypeKind::Scalar:
 			return scalarName(type->scalarCode);
 		case TypeKind::Enum: {
@@ -138,11 +138,52 @@ QString typeText(const rt::RuntimeSchema& schema, TypeId id)
 			return entries.size() > 4 ? tr("enum %1, …").arg(shown) : tr("enum %1").arg(shown);
 		}
 		case TypeKind::Struct:
-			return type->memberCount == 1 ? tr("struct, 1 member") : tr("struct, %1 members").arg(type->memberCount);
+			return QStringLiteral("struct (%1)").arg(type->memberCount);
 		case TypeKind::Array:
 			return QStringLiteral("%1[%2]").arg(typeText(schema, type->relatedTypeId)).arg(type->elementCount);
 	}
 	return QStringLiteral("?");
+}
+
+namespace {
+// A member's type inside a signature: an enum is "enum", the rest as typeText.
+QString memberText(const rt::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	if (type && type->kind == TypeKind::Enum)
+		return QStringLiteral("enum");
+	return typeText(schema, id);
+}
+} // namespace
+
+QString argumentsText(const rt::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	if (!type)
+		return QStringLiteral("?");
+	if (type->kind == TypeKind::Void)
+		return QStringLiteral("()");
+	if (type->kind != TypeKind::Struct)
+		return QStringLiteral("(%1)").arg(memberText(schema, id));
+	QStringList parts;
+	const auto members = schema.members(id);
+	for (const auto& member : members.first(std::min<std::size_t>(members.size(), 4)))
+		parts << memberText(schema, member.typeId);
+	if (members.size() > 4)
+		parts << QStringLiteral("…");
+	return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
+}
+
+QString signatureText(const rt::RuntimeSchema& schema, TypeId request, TypeId response, bool returns)
+{
+	if (!returns)
+		return argumentsText(schema, request);
+	const auto* result = schema.type(response);
+	const auto out = !result || result->kind == TypeKind::Void ? QStringLiteral("()")
+	                 : result->kind == TypeKind::Struct        ? argumentsText(schema, response)
+	                                                           : memberText(schema, response);
+	// ASCII: a fallback font's arrow would make the row taller.
+	return argumentsText(schema, request) + QStringLiteral(" -> ") + out;
 }
 
 Value valueText(const rt::RuntimeSchema& schema, const rt::DynamicValueView& view)
@@ -167,4 +208,53 @@ Value valueText(const rt::RuntimeSchema& schema, const rt::DynamicValueView& vie
 			return {QStringLiteral("?"), Json::Text, {}};
 	}
 }
+namespace {
+bool leafType(const runtime::RuntimeSchema& schema, std::uint32_t typeId)
+{
+	const auto* type = schema.type(typeId);
+	return type && (type->kind == TypeKind::Scalar || type->kind == TypeKind::Enum);
+}
+} // namespace
+
+QString summaryText(const runtime::RuntimeSchema& schema, const runtime::DynamicValueView& view)
+{
+	const auto* type = schema.type(view.typeId());
+	if (!type)
+		return {};
+	QStringList shown;
+	if (type->kind == TypeKind::Struct) {
+		const auto members = schema.members(view.typeId());
+		for (std::uint32_t i = 0; i < members.size(); ++i) {
+			if (shown.size() == 4) {
+				shown << QStringLiteral("…");
+				break;
+			}
+			const auto name = text(members[i].name);
+			const auto member = view.member(i);
+			if (!member) {
+				shown << name + QStringLiteral(" ?");
+				continue;
+			}
+			const auto* memberType = schema.type(members[i].typeId);
+			shown << name + QLatin1Char(' ') +
+			             (leafType(schema, members[i].typeId) ? valueText(schema, member.value).text
+			              : memberType && memberType->kind == TypeKind::Array ? QStringLiteral("[…]")
+			                                                                   : QStringLiteral("{…}"));
+		}
+		return QLatin1Char('{') + shown.join(QStringLiteral(", ")) + QLatin1Char('}');
+	}
+	if (type->kind == TypeKind::Array && leafType(schema, type->relatedTypeId)) {
+		for (std::uint32_t i = 0; i < type->elementCount; ++i) {
+			if (shown.size() == 8) {
+				shown << QStringLiteral("…");
+				break;
+			}
+			const auto element = view.index(i);
+			shown << (element ? valueText(schema, element.value).text : QStringLiteral("?"));
+		}
+		return QLatin1Char('[') + shown.join(QStringLiteral(", ")) + QLatin1Char(']');
+	}
+	return {};
+}
+
 } // namespace telemetry::ux::schema_text

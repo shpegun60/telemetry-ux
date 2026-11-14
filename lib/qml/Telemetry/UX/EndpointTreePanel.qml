@@ -50,45 +50,67 @@ Pane {
     property string watchStatusFull: ""
     readonly property string pollingShort: qsTr("Stop polling to change the Watchlist.")
     readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
-    property bool previewValues: true
+    // Off until the user turns it on: a preview reads the device in the
+    // background, which nobody asked for by opening the tree.
+    property bool previewValues: false
     readonly property bool previewsSupported: !!provider && typeof provider.previewsSupported === "boolean" && provider.previewsSupported &&
         typeof provider.setPreviewDemand === "function" && typeof provider.clearPreviewDemand === "function"
     readonly property bool previewDemandActive: previewsSupported && previewValues && visible && width > 0 && height > 0 &&
         searchInput.text.trim().length === 0 && !!panel.Window.window && panel.Window.window.visible &&
         panel.Window.window.visibility !== Window.Minimized
     property var previewDemandProvider: null
-    readonly property var columnTitles: [qsTr("Name"), qsTr("Value"), qsTr("Type"), qsTr("Access")]
-    readonly property var defaultColumnUnits: [14, 11, 6, 5]
-    readonly property var minimumColumnUnits: [8, 6, 4, 4]
-    property var columnUnits: [14, 11, 6, 5]
-    property bool nameColumnResized: false
-    readonly property real tableWidth: columnWidth(0) + columnWidth(1) + columnWidth(2) + columnWidth(3)
-    function columnWidth(index) {
-        const width = columnUnits[index] * Type.bodyPixels
-        if (index !== 0 || nameColumnResized) return width
-        return Math.max(width, endpointTree.width - (columnUnits[1] + columnUnits[2] + columnUnits[3]) * Type.bodyPixels)
+    readonly property var columnTitles: [qsTr("Name"), qsTr("Value"), qsTr("Type"), qsTr("rw")]
+    // The row family's columns (family_spec A3). Value is there only while
+    // previews are shown; it and Type are as wide as the widest text the rows
+    // have shown, growing only, so a refresh never moves them. When the names
+    // of a second-level row run short, Access gives way first, then Type
+    // narrows, then Type goes. Never a horizontal scroll.
+    readonly property bool valueColumnShown: previewsSupported && previewValues
+    readonly property real columnGap: Math.round(Type.bodyPixels * 0.9)
+    property real valueSeen: 0
+    property real typeSeen: 0
+    function noteMeasured(value, type) {
+        if (value > valueSeen) valueSeen = Math.ceil(value)
+        if (type > typeSeen) typeSeen = Math.ceil(type)
     }
-    function resizeColumn(index, width) {
-        const next = columnUnits.slice()
-        next[index] = Math.max(minimumColumnUnits[index], Math.min(96, width / Type.bodyPixels))
-        if (index === 0) nameColumnResized = true
-        columnUnits = next
-        endpointTree.forceLayout()
+    function forgetMeasured() { valueSeen = 0; typeSeen = 0 }
+    onValueColumnShownChanged: forgetMeasured()
+    Connections { target: Type; function onBodyPixelsChanged() { panel.forgetMeasured() } }
+    TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
+    readonly property real scrollInset: endpointScroll.visible ? endpointScroll.width : 0
+    readonly property real valueColumn: valueColumnShown
+        ? Math.max(Math.round(Type.bodyPixels * 4.2), Math.min(valueSeen, Math.round(Type.bodyPixels * 16.5), endpointTree.width * 0.4))
+        : 0
+    readonly property real typeFull: Math.max(Math.round(Type.bodyPixels * 3), Math.min(typeSeen, Math.round(Type.bodyPixels * 9.6)))
+    readonly property real accessFull: Math.ceil(accessMetrics.advanceWidth)
+    // Where a second-level row's name starts: padding, two indents, the
+    // chevron, the box's slot and its gap.
+    readonly property real nameStart: Type.padding + Type.indent * 3 + Type.rowHeight + Type.tight
+    function nameRoom(access, type) {
+        return endpointTree.width - scrollInset - Type.padding - nameStart
+            - (valueColumn > 0 ? valueColumn + columnGap : 0)
+            - (type > 0 ? type + columnGap : 0) - (access > 0 ? access + columnGap : 0)
     }
-    function resetColumn(index) {
-        const next = columnUnits.slice()
-        next[index] = defaultColumnUnits[index]
-        if (index === 0) nameColumnResized = false
-        columnUnits = next
-        endpointTree.forceLayout()
+    readonly property real accessColumn: nameRoom(accessFull, typeFull) >= Type.bodyPixels * 10.5 ? accessFull : 0
+    readonly property real typeColumn: nameRoom(accessColumn, typeFull) >= Type.bodyPixels * 9 ? typeFull
+        : nameRoom(accessColumn, Math.round(Type.bodyPixels * 3)) >= Type.bodyPixels * 7.2 ? Math.round(Type.bodyPixels * 3) : 0
+    // The columns' left edges in the tree's coordinates, right to left.
+    readonly property real accessLeft: endpointTree.width - scrollInset - Type.padding - accessColumn
+    readonly property real typeLeft: accessLeft - (accessColumn > 0 ? columnGap : 0) - typeColumn
+    readonly property real valueLeft: typeLeft - (typeColumn > 0 ? columnGap : 0) - valueColumn
+    // A category's bare number, a group's endpoints in words.
+    function countText(count, category, depth) {
+        if (!(count > 0)) return ""
+        if (depth === 0) return qsTr("%L1").arg(count)
+        if (category === 2) return count === 1 ? qsTr("1 Command") : qsTr("%L1 Commands").arg(count)
+        if (category === 3) return count === 1 ? qsTr("1 Service") : qsTr("%L1 Services").arg(count)
+        return fieldsText(count)
     }
-    function showColumn(index) {
-        let left = 0
-        for (let i = 0; i < index; ++i) left += columnWidth(i)
-        const right = left + columnWidth(index)
-        if (left < endpointTree.contentX) endpointTree.contentX = left
-        else if (right > endpointTree.contentX + endpointTree.width)
-            endpointTree.contentX = right - endpointTree.width
+    // Why a Field, a member or a group of them has its box off: the
+    // provider's words where it says, none from older providers.
+    function refusalOf(index, revision) {
+        return watchApi && index && index.valid && typeof provider.watchRefusal === "function"
+            ? provider.watchRefusal(index) : ""
     }
 
     function clearPreviews() {
@@ -106,9 +128,9 @@ Pane {
         // Only loaded cells intersecting the viewport, never a model traversal.
         for (let row = endpointTree.topRow; row >= 0 && row <= endpointTree.bottomRow; ++row) {
             const cell = endpointTree.itemAtCell(Qt.point(0, row))
+            // A folded struct is read too: its summary is its value.
             if (!cell || !cell.visible || cell.y + cell.height <= endpointTree.contentY ||
-                cell.y >= endpointTree.contentY + endpointTree.height || !cell.previewEligible ||
-                (cell.previewAggregate && cell.hasChildren && !cell.previewChild && !cell.expanded))
+                cell.y >= endpointTree.contentY + endpointTree.height || !cell.previewEligible)
                 continue
             const index = cell.sourceIndex
             if (index && index.valid)
@@ -754,82 +776,48 @@ Pane {
             visible: searchInput.text.trim().length === 0
             Layout.fillWidth: true
             Layout.preferredHeight: Type.rowHeight
-            clip: true
-            Row {
-                x: -endpointTree.contentX
+            component ColumnTitle: Label {
                 height: parent.height
-                Repeater {
-                    model: panel.columnTitles
-                    delegate: FocusScope {
-                        id: columnHeader
-                        required property int index
-                        required property string modelData
-                        objectName: "endpointColumnHeader_" + index
-                        width: panel.columnWidth(index)
-                        height: Type.rowHeight
-                        activeFocusOnTab: true
-                        onActiveFocusChanged: if (activeFocus && !columnResize.pressed) panel.showColumn(index)
-                        Accessible.role: Accessible.ColumnHeader
-                        Accessible.name: modelData
-                        Accessible.description: qsTr("Drag the right edge or use Left and Right to resize. Home resets this column.")
-                        Keys.onLeftPressed: panel.resizeColumn(index, width - Type.bodyPixels)
-                        Keys.onRightPressed: panel.resizeColumn(index, width + Type.bodyPixels)
-                        Keys.onPressed: function(event) {
-                            if (event.key === Qt.Key_Home) {
-                                panel.resetColumn(index)
-                                event.accepted = true
-                            }
-                        }
-                        Label {
-                            anchors.fill: parent
-                            leftPadding: Type.padding
-                            rightPadding: Type.padding
-                            verticalAlignment: Text.AlignVCenter
-                            horizontalAlignment: columnHeader.index === 1 ? Text.AlignRight : Text.AlignLeft
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            font.pointSize: Type.caption
-                            color: Theme.textSecondary
-                            text: columnHeader.modelData
-                        }
-                        Rectangle {
-                            anchors.fill: parent
-                            color: "transparent"
-                            border.width: columnHeader.activeFocus ? 2 : 0
-                            border.color: Theme.focusRing
-                            Accessible.ignored: true
-                        }
-                        Rectangle {
-                            anchors.right: parent.right
-                            width: 1
-                            height: parent.height
-                            color: Theme.outlineVariant
-                            Accessible.ignored: true
-                        }
-                        MouseArea {
-                            id: columnResize
-                            objectName: "endpointColumnResize_" + columnHeader.index
-                            anchors.right: parent.right
-                            anchors.rightMargin: -3
-                            width: 7
-                            height: parent.height
-                            cursorShape: Qt.SizeHorCursor
-                            preventStealing: true
-                            property real origin: 0
-                            property real originalWidth: 0
-                            onPressed: function(mouse) {
-                                columnHeader.forceActiveFocus(Qt.MouseFocusReason)
-                                origin = mapToGlobal(mouse.x, mouse.y).x
-                                originalWidth = columnHeader.width
-                            }
-                            onPositionChanged: function(mouse) {
-                                if (pressed)
-                                    panel.resizeColumn(columnHeader.index, originalWidth + mapToGlobal(mouse.x, mouse.y).x - origin)
-                            }
-                            onDoubleClicked: panel.resetColumn(columnHeader.index)
-                        }
-                    }
-                }
+                verticalAlignment: Text.AlignVCenter
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                Accessible.role: Accessible.ColumnHeader
+                Accessible.name: text
+            }
+            ColumnTitle {
+                objectName: "endpointColumnHeader_0"
+                x: Type.padding
+                width: Math.max(0, (panel.valueColumn > 0 ? panel.valueLeft : panel.typeColumn > 0 ? panel.typeLeft
+                                    : panel.accessLeft) - panel.columnGap - x)
+                text: panel.columnTitles[0]
+            }
+            ColumnTitle {
+                objectName: "endpointColumnHeader_1"
+                visible: panel.valueColumn > 0
+                x: panel.valueLeft
+                width: panel.valueColumn
+                horizontalAlignment: Text.AlignRight
+                text: panel.columnTitles[1]
+            }
+            ColumnTitle {
+                objectName: "endpointColumnHeader_2"
+                visible: panel.typeColumn > 0
+                x: panel.typeLeft
+                width: panel.typeColumn
+                text: panel.columnTitles[2]
+            }
+            ColumnTitle {
+                objectName: "endpointColumnHeader_3"
+                visible: panel.accessColumn > 0
+                x: panel.accessLeft
+                width: panel.accessColumn
+                font.family: Type.fixedFamily
+                text: panel.columnTitles[3]
+                Accessible.name: qsTr("Access")
+                HoverHandler { id: accessTitleHover }
+                PlainToolTip { visible: accessTitleHover.hovered; text: qsTr("Access: r can be read, w can be written"); delay: 700 }
             }
             Rectangle {
                 anchors.bottom: parent.bottom
@@ -900,9 +888,10 @@ Pane {
                 if (cell && panel.openEndpointMenu(index, cell.isEndpoint, cell))
                     event.accepted = true
             }
-            // Trees are not striped: stripes blur the indentation.
+            // Striped by the rows themselves (family_spec A9): the eye
+            // crosses a wide gap from a name to its value.
             alternatingRows: false
-            columnWidthProvider: function() { return Math.max(endpointTree.width, panel.tableWidth) }
+            columnWidthProvider: function() { return endpointTree.width }
             rowHeightProvider: function() { return Type.rowHeight }
             onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
             // A retired model may have no role data before its reset; the row
@@ -910,10 +899,15 @@ Pane {
             delegate: EndpointTreeRow {
                 id: endpointDelegate
                 tableMode: true
-                nameColumnWidth: panel.columnWidth(0)
-                valueColumnWidth: panel.columnWidth(1)
-                typeColumnWidth: panel.columnWidth(2)
-                accessColumnWidth: panel.columnWidth(3)
+                nameColumnWidth: endpointTree.width
+                valueColumnWidth: panel.valueColumn
+                typeColumnWidth: panel.typeColumn
+                accessColumnWidth: panel.accessColumn
+                columnGap: panel.columnGap
+                rightClearance: panel.scrollInset
+                countText: typeof model.count === "number" ? panel.countText(model.count, model.category, depth) : ""
+                watchRefusal: panel.refusalOf(sourceIndex, panel.watchRevision)
+                onMeasured: function(value, type) { panel.noteMeasured(value, type) }
                 typeText: typeof model.typeText === "string" ? model.typeText : ""
                 accessText: typeof model.accessText === "string" ? model.accessText : ""
                 accessMark: isEndpoint && !previewChild && model.category === 1 &&
@@ -933,14 +927,13 @@ Pane {
                 highlighted: isEndpoint && panel.selectedEndpointIndex !== undefined
                     && sourceIndex === panel.selectedEndpointIndex
                 readonly property int boxState: panel.stateOf(sourceIndex, panel.watchRevision)
-                watchable: panel.watchApi ? boxState >= 0 : panel.canMarkWatch(sourceIndex)
+                // A row the Watchlist cannot hold yet keeps a box, off, with its reason.
+                watchable: panel.watchApi ? boxState >= 0 || watchRefusal.length > 0 : panel.canMarkWatch(sourceIndex)
                 watchState: panel.watchApi ? Math.max(0, boxState)
                           : panel.isWatchMarked(sourceIndex) ? Qt.Checked : Qt.Unchecked
                 watchEnabled: !panel.watchApi || !panel.watchLocked
                 watchOffReason: panel.pollingFull
-                // A group with nothing the Watchlist can hold says so.
-                hint: panel.watchApi && boxState < 0 && hasChildren
-                      ? qsTr("Nothing in %1 can be watched.").arg(name) : detail
+                hint: detail
                 watchName: !panel.watchApi ? "Select " + name + " for Watchlist"
                          : hasChildren ? qsTr("Watch every Field in %1").arg(name) : qsTr("Watch %1").arg(name)
                 onWatchToggled: {
@@ -957,11 +950,7 @@ Pane {
                     panel.openEndpointMenu(sourceIndex, isEndpoint, endpointDelegate, x, y)
                 }
             }
-            ScrollBar.vertical: ScrollBar {}
-            ScrollBar.horizontal: ScrollBar {
-                objectName: "endpointHorizontalScroll"
-                policy: endpointTree.contentWidth > endpointTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
-            }
+            ScrollBar.vertical: ScrollBar { id: endpointScroll }
             // Not connected, the tree says how it fills, on the view itself.
             Label {
                 objectName: "endpointTreeEmpty"
@@ -1149,13 +1138,22 @@ Pane {
             Item { Layout.fillWidth: true }
         }
     }
+    // The groups opened after a reset, on the next turn of the event loop. A
+    // timer of the panel's own dies with it; a callLater closure outlived an
+    // unloaded panel and ran in its destroyed context.
+    Timer {
+        id: initialGroups
+        interval: 0
+        onTriggered: panel.openInitialGroups()
+    }
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
         function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onModelReset() {
+            panel.forgetMeasured()
             panel.scheduleSearch()
-            Qt.callLater(function() { if (endpointTree) panel.openInitialGroups() })
+            initialGroups.restart()
         }
         function onRowsAboutToBeRemoved() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
         function onRowsRemoved() { panel.scheduleSearch() }

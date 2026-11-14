@@ -136,6 +136,11 @@ public:
 	// (a Command, a Service, a Field the Watchlist cannot hold, a stale index);
 	// otherwise Qt::Unchecked, Qt::PartiallyChecked or Qt::Checked as an int.
 	Q_INVOKABLE int watchState(const QModelIndex& index) const;
+	// Why a Field row's box is off while watchState is -1, in words: a
+	// struct or array, one of its members, a write-only Field, or a group with
+	// nothing the Watchlist can hold. Empty where the box is on, for Commands
+	// and Services, and while the tree is changing.
+	Q_INVOKABLE QString watchRefusal(const QModelIndex& index) const;
 	// Watches, or stops watching, every Field the Watchlist can hold at or
 	// under each index, in tree order, as one change: {status: ok, refused,
 	// invalid, stale or capacity, changed, unchanged, fields, room}. At

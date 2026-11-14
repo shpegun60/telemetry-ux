@@ -131,8 +131,12 @@ void EndpointPreviews::setSource(EndpointPreviewSource source) {
     for (auto& lease : p->leases) QObject::disconnect(lease.destroyed);
     p->leases.clear(); p->demanded.clear(); p->entries.clear(); p->fields.clear();
     p->source = std::move(source); p->turn = 0;
-    if (p->current()) for (const auto& field : p->schema().endpoints(descriptor::Category::Field))
-        p->fields.insert(field.id, field);
+    // The schema outlives the loop: endpoints() refers into it.
+    if (p->current()) {
+        const auto schema = p->schema();
+        for (const auto& field : schema.endpoints(descriptor::Category::Field))
+            p->fields.insert(field.id, field);
+    }
     Q_EMIT sourceChanged();
     if (p->q) Q_EMIT p->q->changed();
 }
@@ -210,11 +214,16 @@ QString EndpointPreviews::value(quint32 id, TypeId typeId, quint32 offset) const
     const auto schema = p->schema();
     const auto* type = schema.type(typeId);
     if (!type || offset > quint32(it->bytes.size()) || type->wireBytes > quint32(it->bytes.size()) - offset) return {};
-    if (type->kind == TypeKind::Struct) return type->memberCount == 1 ? tr("1 member") : tr("%1 members").arg(type->memberCount);
-    if (type->kind == TypeKind::Array) return tr("%1 elements").arg(type->elementCount);
     const runtime::Input bytes{reinterpret_cast<const std::byte*>(it->bytes.constData()) + offset, type->wireBytes};
     const auto view = runtime::DynamicValueView::create(schema, typeId, bytes);
-    return view ? schema_text::valueText(schema, view.value).text : QString{};
+    if (!view) return {};
+    // A struct or array folded onto one line, as values.bin writes it; an
+    // array of structs, which has none, by its size.
+    if (type->kind == TypeKind::Struct || type->kind == TypeKind::Array) {
+        const auto summary = schema_text::summaryText(schema, view.value);
+        return !summary.isEmpty() ? summary : tr("%1 elements").arg(type->elementCount);
+    }
+    return schema_text::valueText(schema, view.value).text;
 }
 int EndpointPreviews::cachedFields() const { return int(d->entries.size()); }
 int EndpointPreviews::cachedBytes() const { return d->bytes(); }
@@ -242,7 +251,12 @@ void EndpointPreviews::poll() {
                     if (auto* entry = p->ensure(pending.id, int(result.bytes.size()))) {
                         entry->bytes = std::move(result.bytes); entry->ready = true;
                         entry->state = QStringLiteral("Current"); entry->received = p->now();
-                    } else found->state = QStringLiteral("Preview limit");
+                    } else {
+                        // ensure() may have erased entries: QHash moves those
+                        // after an erased one, so the entry is found again.
+                        found = p->entries.find(pending.id);
+                        if (found != p->entries.end()) found->state = QStringLiteral("Preview limit");
+                    }
                 } else found->reason = tr("Invalid preview payload.");
             }
             tell = true;

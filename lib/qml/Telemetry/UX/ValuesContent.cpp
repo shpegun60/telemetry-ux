@@ -159,6 +159,8 @@ QVariant ValuesTreeModel::data(const QModelIndex& index, int role) const
 			return at->count;
 		case ChangedFieldsRole:
 			return at->changedFields;
+		case AccessRole:
+			return at->access;
 		case PathRole:
 			// A range's rows are its array's: it has no path of its own.
 			return at->kind == QStringLiteral("range") ? QString{} : at->path;
@@ -177,7 +179,7 @@ QHash<int, QByteArray> ValuesTreeModel::roleNames() const
 	return {{NameRole, "name"},   {KindRole, "kind"},         {TypeRole, "typeText"},
 	        {ValueRole, "value"}, {UnavailableRole, "unavailable"}, {ChangedRole, "changed"},
 	        {CountRole, "count"}, {PathRole, "path"},           {NumericRole, "numeric"},
-	        {ChangedFieldsRole, "changedFields"}};
+	        {ChangedFieldsRole, "changedFields"}, {AccessRole, "access"}};
 }
 
 // ---- The content ----------------------------------------------------------
@@ -249,47 +251,15 @@ bool leafType(const rt::RuntimeSchema& schema, std::uint32_t typeId)
 	return type && (type->kind == TypeKind::Scalar || type->kind == TypeKind::Enum);
 }
 
-// A struct on its own row: its members by name, the first four, then "…".
+// A struct on its own row, an array of plain values: SchemaText's summary.
 QString structSummary(const rt::RuntimeSchema& schema, const rt::DynamicValueView& view)
 {
-	const auto members = schema.members(view.typeId());
-	QStringList shown;
-	for (std::uint32_t i = 0; i < members.size(); ++i) {
-		if (shown.size() == 4) {
-			shown << QStringLiteral("…");
-			break;
-		}
-		const auto name = schema_text::text(members[i].name);
-		const auto member = view.member(i);
-		if (!member) {
-			shown << name + QStringLiteral(" ?");
-			continue;
-		}
-		const auto* type = schema.type(members[i].typeId);
-		shown << name + QLatin1Char(' ') +
-		             (leafType(schema, members[i].typeId) ? schema_text::valueText(schema, member.value).text
-		              : type && type->kind == TypeKind::Array ? QStringLiteral("[…]")
-		                                                       : QStringLiteral("{…}"));
-	}
-	return QLatin1Char('{') + shown.join(QStringLiteral(", ")) + QLatin1Char('}');
+	return schema_text::summaryText(schema, view);
 }
 
-// An array of plain values on its own row: the first eight, then "…".
 QString arrayPreview(const rt::RuntimeSchema& schema, const rt::DynamicValueView& view)
 {
-	const auto* type = schema.type(view.typeId());
-	if (!type || !leafType(schema, type->relatedTypeId))
-		return {};
-	QStringList shown;
-	for (std::uint32_t i = 0; i < type->elementCount; ++i) {
-		if (shown.size() == 8) {
-			shown << QStringLiteral("…");
-			break;
-		}
-		const auto element = view.index(i);
-		shown << (element ? schema_text::valueText(schema, element.value).text : QStringLiteral("?"));
-	}
-	return QLatin1Char('[') + shown.join(QStringLiteral(", ")) + QLatin1Char(']');
+	return schema_text::summaryText(schema, view);
 }
 
 // Writes one snapshot's values into the rows made so far; records what changed.
@@ -615,6 +585,12 @@ QString ValuesContent::adopt(const QByteArray& descriptor)
 			fieldNode->kind = QStringLiteral("field");
 			fieldNode->path = group.path + QLatin1Char('.') + fieldNode->name;
 			fieldNode->type = schema_text::typeText(schema, endpoint.typeId);
+			{
+				const bool read = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Readable);
+				const bool write = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Writable);
+				fieldNode->access = QString(read ? QLatin1Char('r') : QLatin1Char('-')) +
+				                    (write ? QLatin1Char('w') : QLatin1Char('-'));
+			}
 			fieldNode->typeId = endpoint.typeId;
 			fieldNode->total = childCount(schema, endpoint.typeId);
 			fieldNode->field = static_cast<int>(fieldNodes.size());

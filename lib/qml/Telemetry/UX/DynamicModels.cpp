@@ -9,6 +9,7 @@
 #include "SchemaText.hpp"
 #include "ScalarEditorMetadata.hpp"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
 #include <QtCore/QString>
@@ -94,6 +95,8 @@ struct Row {
 	Row* parent = nullptr;
 	int row = 0;
 	QString name, detail, value, type, path, editorText, accessText, responseTypeText;
+	// A Command's arguments or a Service's signature: "(bool)", "(f32, f32) -> f32".
+	QString signature;
 	QString canonicalText;
 	QString editorKind = QStringLiteral("text");
 	QVariantList valuePath;
@@ -102,6 +105,8 @@ struct Row {
 	std::uint32_t wireBytes = 0, responseWireBytes = 0;
 	std::uint32_t previewFieldId = 0, previewOffset = 0, previewFieldBytes = 0;
 	std::uint32_t rangeFirst = 0, rangeCount = 0;
+	// A category's or group's endpoints.
+	std::uint32_t count = 0;
 	int category = 0;
 	bool readable = false, writable = false, endpoint = false, aggregate = false;
 	bool previewOwner = false, previewReadable = false, previewChild = false, previewRange = false;
@@ -135,24 +140,39 @@ bool previewEligible(const Row& row)
 	       row.previewFieldBytes <= EndpointPreviews::fieldBytesLimit;
 }
 
+// The row in words, for its tooltip and a screen reader - never internal ids:
+// "Field · f32 · 4 bytes · read only", "Command · (bool) · 1-byte argument",
+// "Service · (f32, f32) -> f32 · 8-byte request".
 QString endpointDetail(const Row& row)
 {
-	auto detail = QStringLiteral("ID ") + integerText(row.endpointId);
-	if (!row.type.isEmpty()) {
-		detail += QStringLiteral(" · ");
-		if (row.category != static_cast<int>(Category::Field))
-			detail += QStringLiteral("Request: ");
-		detail += row.type + QStringLiteral(" (#") + integerText(row.typeId) +
-		          QStringLiteral(", ") + integerText(row.wireBytes) + QStringLiteral(" B)");
-		if (row.category == static_cast<int>(Category::Service))
-			detail += QStringLiteral(" → Response: ") + row.responseTypeText +
-			          QStringLiteral(" (#") + integerText(row.responseTypeId) +
-			          QStringLiteral(", ") + integerText(row.responseWireBytes) +
-			          QStringLiteral(" B)");
+	const auto bytes = [](std::uint64_t count, const char* one, const char* many) {
+		return count == 1 ? QCoreApplication::translate("EndpointModel", one)
+		                  : QCoreApplication::translate("EndpointModel", many).arg(count);
+	};
+	QStringList parts;
+	if (row.category == static_cast<int>(Category::Field)) {
+		parts << QCoreApplication::translate("EndpointModel", "Field");
+		if (!row.type.isEmpty())
+			parts << row.type << bytes(row.wireBytes, "1 byte", "%1 bytes");
+		parts << (row.readable && row.writable ? QCoreApplication::translate("EndpointModel", "read and write")
+		          : row.readable               ? QCoreApplication::translate("EndpointModel", "read only")
+		          : row.writable               ? QCoreApplication::translate("EndpointModel", "write only")
+		                                       : QCoreApplication::translate("EndpointModel", "no access"));
+	} else {
+		const bool service = row.category == static_cast<int>(Category::Service);
+		parts << (service ? QCoreApplication::translate("EndpointModel", "Service")
+		                  : QCoreApplication::translate("EndpointModel", "Command"));
+		// Until its types are known a Command says nothing of its arguments.
+		if (!row.signature.isEmpty()) {
+			parts << row.signature;
+			if (row.wireBytes == 0)
+				parts << QCoreApplication::translate("EndpointModel", "no arguments");
+			else
+				parts << (service ? bytes(row.wireBytes, "1-byte request", "%1-byte request")
+				                  : bytes(row.wireBytes, "1-byte argument", "%1-byte argument"));
+		}
 	}
-	if (!row.accessText.isEmpty())
-		detail += QStringLiteral(" · ") + row.accessText;
-	return detail;
+	return parts.join(QStringLiteral(" \u00b7 "));
 }
 
 // A QModelIndex stores only an integer token. Clear never reuses a token, so an
@@ -534,6 +554,9 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 			row->responseTypeText = response.label;
 			row->responseWireBytes = response.wireBytes;
 		}
+		if (row->category != static_cast<int>(Category::Field))
+			row->signature = schema_text::signatureText(schema, row->typeId, row->responseTypeId,
+			                                            row->category == static_cast<int>(Category::Service));
 		if (row->category == static_cast<int>(Category::Field)) {
 			row->previewOwner = true;
 			row->previewFieldId = row->endpointId;
@@ -659,12 +682,22 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 			if (!parent)
 				break;
 			const auto endpoints = impl_->inspector.endpoints(category);
+			parent->count = static_cast<std::uint32_t>(endpoints.size());
 			for (const auto& catalog : impl_->inspector.catalogs(category)) {
 				auto catalogRow = std::make_unique<Row>();
 				catalogRow->category = static_cast<int>(category);
 				catalogRow->name = text(catalog.name);
-				catalogRow->detail =
-				    integerText(catalog.endpointCount) + QStringLiteral(" endpoints");
+				catalogRow->count = catalog.endpointCount;
+				const bool one = catalog.endpointCount == 1;
+				const auto words = category == Category::Field
+				    ? (one ? QCoreApplication::translate("EndpointModel", "1 Field")
+				           : QCoreApplication::translate("EndpointModel", "%1 Fields"))
+				    : category == Category::Command
+				    ? (one ? QCoreApplication::translate("EndpointModel", "1 Command")
+				           : QCoreApplication::translate("EndpointModel", "%1 Commands"))
+				    : (one ? QCoreApplication::translate("EndpointModel", "1 Service")
+				           : QCoreApplication::translate("EndpointModel", "%1 Services"));
+				catalogRow->detail = one ? words : words.arg(integerText(catalog.endpointCount));
 				auto* group = impl_->tree.append(std::move(catalogRow), parent);
 				if (!group)
 					break;
@@ -814,6 +847,8 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			return row->endpointId;
 		case CategoryRole:
 			return row->category;
+		case CountRole:
+			return row->count;
 		case ReadableRole:
 			return row->readable;
 		case IsEndpointRole:
@@ -821,7 +856,8 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 		case WritableRole:
 			return row->writable;
 		case TypeTextRole:
-			return row->type;
+			return row->endpoint && row->category != static_cast<int>(Category::Field) && !row->signature.isEmpty()
+			           ? row->signature : row->type;
 		case AccessTextRole:
 			return row->accessText;
 		case UnitRole:
@@ -881,7 +917,8 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {PreviewEligibleRole, "previewEligible"}, {PreviewFieldIdRole, "previewFieldId"},
 	        {PreviewAggregateRole, "previewAggregate"}, {PreviewChildRole, "previewChild"},
 	        {PreviewValueRole, "previewValue"}, {PreviewStateRole, "previewState"},
-	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"}};
+	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"},
+	        {CountRole, "count"}};
 }
 
 bool EndpointModel::canFetchMore(const QModelIndex& parent) const

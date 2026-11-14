@@ -50,9 +50,13 @@ FocusScope {
     readonly property var live: content ? content.live : null
     readonly property bool running: !!live && live.running
 
-    readonly property real valueWidth: Math.min(260, Math.max(140, width * 0.3))
-    readonly property real typeWidth: Math.min(180, Math.max(100, width * 0.2))
-    readonly property bool typeShown: width >= 520
+    readonly property real valueWidth: Math.min(260, Math.max(Math.round(Type.bodyPixels * 6), width * 0.3))
+    // Type as narrow as its short words allow, so it stays at most widths;
+    // the access two letters under "rw", the first to go (family_spec A3).
+    readonly property real typeWidth: Math.min(Math.round(Type.bodyPixels * 9.6), Math.max(Math.round(Type.bodyPixels * 4.5), width * 0.16))
+    readonly property bool typeShown: width >= Type.bodyPixels * 22
+    readonly property real accessWidth: width >= Type.bodyPixels * 28 ? Math.ceil(accessMetrics.advanceWidth) + 2 : 0
+    TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
     // For enabling the menu only; actions read current() when they run.
     readonly property bool hasCurrent: tree.currentRow >= 0
     property alias findText: findField.text
@@ -416,8 +420,10 @@ FocusScope {
                 maximumLineCount: 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
-                color: view.stoppedBecause.length > 0 || (view.live && view.live.problem.length > 0) ? Theme.warning
-                                                                                                       : Theme.textSecondary
+                // Live stopped by itself is worth a warning; waiting for the
+                // device to come back is routine.
+                color: view.stoppedBecause.length > 0 || (view.live && view.live.problem.length > 0 && !view.live.waitingForDevice)
+                       ? Theme.warning : Theme.textSecondary
                 text: {
                     const shown = view.timeText(view.decoded.shownAt)
                     if (!view.live)
@@ -519,6 +525,15 @@ FocusScope {
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
             }
+            Label {
+                visible: view.accessWidth > 0
+                Layout.preferredWidth: view.accessWidth
+                text: qsTr("rw")
+                font.family: Type.fixedFamily
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                Accessible.name: qsTr("Access")
+            }
         }
 
         TreeView {
@@ -575,6 +590,8 @@ FocusScope {
                 valueWidth: view.valueWidth
                 typeWidth: view.typeWidth
                 typeShown: view.typeShown
+                accessWidth: view.accessWidth
+                access: typeof model.access === "string" ? model.access : ""
                 onContextMenuRequested: function(index, x, y) { view.openMenu(index, this, x, y) }
             }
             ScrollBar.vertical: ScrollBar {}

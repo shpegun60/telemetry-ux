@@ -30,6 +30,18 @@ Pane {
     readonly property var selectionInfo: typeof provider.selectionInfo === "object" && provider.selectionInfo ? provider.selectionInfo : ({})
     property int valueModelRevision: 0
     property int responseModelRevision: 0
+    // Changes are off: what the selection would need them for, in words.
+    readonly property bool changesOff: typeof provider.allowMutations === "boolean" && !provider.allowMutations
+    readonly property string refusalText: !showSelection || !hasSelection || disconnected || !changesOff ? ""
+        : provider.commandSelected ? qsTr("Changes are off. Allow changes to execute this Command.")
+        : provider.serviceSelected ? qsTr("Changes are off. Allow changes to call this Service.")
+        : selectionInfo.writable === true ? qsTr("Changes are off. Allow changes to edit this Field.") : ""
+    // A Command or Service that takes nothing: a caption, not an empty table.
+    readonly property bool noArguments: {
+        void valueModelRevision
+        return showSelection && hasSelection && (provider.commandSelected || provider.serviceSelected) && !provider.busy
+            && !!provider.values && typeof provider.values.rowCount === "function" && provider.values.rowCount() === 0
+    }
     readonly property bool showMetadata: {
         void valueModelRevision
         if (!showSelection || disconnected || !hasSelection || selectedCategory !== 1 || provider.editing ||
@@ -108,6 +120,8 @@ Pane {
         property string cellValue: ""
         property string cellHint: ""
         property Component valueComponent
+        // The row tooltip's name, so a host's check can find it per tree.
+        property string toolTipName: ""
         readonly property var valueItem: valueCell.item
         // Deep DTOs keep both a usable disclosure target and a readable name.
         // Indentation stops inside Name instead of covering Value's editor.
@@ -122,8 +136,9 @@ Pane {
         highlighted: current
         Accessible.name: cellName
         Accessible.description: [cellType, cellValue, cellHint].filter(function(part) { return part.length > 0 }).join("\n")
-        onImplicitHeightChanged: Qt.callLater(function() { if (cellRow.treeView) cellRow.treeView.forceLayout() })
-        PlainToolTip { visible: cellRow.hovered && cellRow.cellHint.length > 0; text: cellRow.cellHint }
+        // The row may be gone by the next turn of the event loop.
+        onImplicitHeightChanged: Qt.callLater(function() { if (cellRow && cellRow.treeView) cellRow.treeView.forceLayout() })
+        PlainToolTip { objectName: cellRow.toolTipName; visible: cellRow.hovered && cellRow.cellHint.length > 0; text: cellRow.cellHint }
         Rectangle {
             anchors.fill: parent; color: "transparent"
             border.width: 2; border.color: Theme.focusRing
@@ -163,7 +178,10 @@ Pane {
     ColumnLayout {
         anchors.fill: parent
         spacing: Type.spacing
-        Loader { Layout.fillWidth: true; active: panel.showSelection && panel.headerComponent !== null; sourceComponent: panel.headerComponent }
+        // The host's own header and footer follow the selection, not the
+        // connection: they are its chrome, shown while the panel shows its
+        // kind, connected or not.
+        Loader { Layout.fillWidth: true; active: panel.selectionMatches && panel.headerComponent !== null; sourceComponent: panel.headerComponent }
         GridLayout {
             id: selectionHeader
             Layout.fillWidth: true
@@ -211,17 +229,17 @@ Pane {
                     ToolTip.text: qsTr("Write once, then read the device again")
                 }
                 Button {
-                    objectName: "executeButton"; text: qsTr("Execute once")
+                    objectName: "executeButton"; text: qsTr("Execute")
                     visible: panel.provider.commandSelected; enabled: panel.provider.canExecute
                     onClicked: panel.provider.executeCommand()
                 }
                 Button {
-                    objectName: "callServiceButton"; text: qsTr("Call once")
+                    objectName: "callServiceButton"; text: qsTr("Call")
                     visible: panel.provider.serviceSelected; enabled: panel.provider.canCallService
                     onClicked: panel.provider.callService()
                 }
                 Button {
-                    objectName: "refreshButton"; text: panel.showMetadata ? qsTr("Read") : qsTr("Refresh")
+                    objectName: "refreshButton"; text: qsTr("Read")
                     visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
                     enabled: panel.provider.canRefresh; onClicked: panel.provider.refresh()
                     ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Read this Field from the device")
@@ -279,6 +297,43 @@ Pane {
                 }
             }
         }
+        // Why an action is off, with the way to turn it on: a routine state,
+        // in the neutral container, read out as an alert.
+        Rectangle {
+            id: refusalStrip
+            objectName: "endpointRefusal"
+            visible: panel.refusalText.length > 0
+            Layout.fillWidth: true
+            implicitHeight: Math.max(Type.controlHeight, refusalRow.implicitHeight + 2 * Type.tight)
+            radius: Type.radius
+            color: Theme.neutralContainer
+            Accessible.role: Accessible.AlertMessage
+            Accessible.name: panel.refusalText
+            RowLayout {
+                id: refusalRow
+                anchors.fill: parent
+                anchors.leftMargin: Type.groupSpacing
+                anchors.rightMargin: Type.tight
+                spacing: Type.padding
+                // No pictogram: a host that embeds this panel need not
+                // register the library's C++ types (ToolIcon) for it.
+                Label {
+                    objectName: "endpointRefusalText"
+                    Layout.fillWidth: true
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: Theme.textPrimary
+                    text: panel.refusalText
+                }
+                Button {
+                    objectName: "endpointAllowChanges"
+                    text: qsTr("Allow changes")
+                    flat: true
+                    enabled: !panel.provider.busy
+                    onClicked: panel.provider.allowMutations = true
+                }
+            }
+        }
         GridLayout {
             id: valueColumns
             visible: panel.showSelection && panel.hasSelection
@@ -297,9 +352,20 @@ Pane {
                     : Type.rowHeight * 8
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
                 spacing: 0
+                Label {
+                    objectName: "noArgumentsLabel"
+                    visible: panel.noArguments
+                    Layout.fillWidth: true
+                    leftPadding: Type.padding
+                    textFormat: Text.PlainText
+                    font.pointSize: Type.caption
+                    color: Theme.textMuted
+                    text: qsTr("No arguments.")
+                }
                 TableHeading {
                     id: valueHeading
                     objectName: "valueTableHeader"
+                    visible: !panel.noArguments
                     Layout.fillWidth: true
                     view: panel.showMetadata ? metadataLoader.item : valueTree
                 }
@@ -343,7 +409,7 @@ Pane {
                 TreeView {
                     id: valueTree
                     objectName: "valueTree"
-                    visible: !panel.showMetadata
+                    visible: !panel.showMetadata && !panel.noArguments
                     Layout.fillWidth: true; Layout.fillHeight: true
                     clip: true; model: panel.provider.values; alternatingRows: false
                     activeFocusOnTab: true
@@ -356,6 +422,7 @@ Pane {
                     delegate: DetailRow {
                         id: valueDelegate
                         objectName: "valueRow"
+                        toolTipName: "valueToolTip"
                         required property string name
                         required property string detail
                         required property string value
@@ -397,6 +464,9 @@ Pane {
                                 id: scalarEditorHost
                                 objectName: "valueEditor"
                                 visible: valueDelegate.editable
+                                // Changes off: the value shows, nothing takes input,
+                                // and the strip above says why.
+                                enabled: !panel.changesOff
                                 Layout.fillWidth: true
                                 spacing: Type.tight
                                 property bool manualCode: false
@@ -515,7 +585,7 @@ Pane {
                             }
                             Label {
                                 objectName: "valueEncodedCaption"
-                                visible: valueDelegate.editable && (!scalarInput.inputValid ||
+                                visible: valueDelegate.editable && !panel.changesOff && (!scalarInput.inputValid ||
                                     (valueDelegate.floatEditor && scalarInput.inputDirty && scalarInput.text !== valueDelegate.canonicalText))
                                 Layout.fillWidth: true; Layout.minimumWidth: 0
                                 textFormat: Text.PlainText; wrapMode: Text.Wrap
@@ -545,8 +615,8 @@ Pane {
                         horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; textFormat: Text.PlainText
                         visible: valueTree.rows === 0
                         text: panel.provider.busy ? qsTr("Waiting\u2026")
-                            : panel.provider.serviceSelected || panel.provider.commandSelected ? qsTr("No arguments")
-                            : panel.hasSelection ? qsTr("Not read") : qsTr("Select an endpoint in the Device tree")
+                            : panel.provider.serviceSelected || panel.provider.commandSelected ? qsTr("No arguments.")
+                            : panel.hasSelection ? qsTr("Not read") : qsTr("Select a Field, Command or Service in the Device tree.")
                         color: Theme.textMuted
                     }
                 }
@@ -575,7 +645,7 @@ Pane {
                     Label {
                         visible: !responseSection.hasRows
                         objectName: "emptyResponseLabel"
-                        text: panel.provider.busy ? qsTr("Waiting\u2026") : qsTr("No response")
+                        text: panel.provider.busy ? qsTr("Waiting\u2026") : qsTr("Call to see the response.")
                         font.pointSize: Type.caption; color: Theme.textMuted
                     }
                 }
@@ -596,6 +666,7 @@ Pane {
                     delegate: DetailRow {
                         id: responseDelegate
                         objectName: "responseRow"
+                        toolTipName: "responseToolTip"
                         required property string name
                         required property string detail
                         required property string value
@@ -636,7 +707,7 @@ Pane {
             Layout.minimumHeight: implicitHeight
             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             wrapMode: Text.Wrap; textFormat: Text.PlainText
-            text: qsTr("Select an endpoint in the Device tree")
+            text: qsTr("Select a Field, Command or Service in the Device tree.")
             color: Theme.textMuted
         }
         Item {
@@ -677,7 +748,7 @@ Pane {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
-        Loader { Layout.fillWidth: true; active: panel.showSelection && panel.footerComponent !== null; sourceComponent: panel.footerComponent }
+        Loader { Layout.fillWidth: true; active: panel.selectionMatches && panel.footerComponent !== null; sourceComponent: panel.footerComponent }
         Item { visible: !panel.showSelection; Layout.fillHeight: true }
     }
     Label {

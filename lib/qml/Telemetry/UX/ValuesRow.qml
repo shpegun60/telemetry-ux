@@ -27,6 +27,9 @@ TreeViewDelegate {
     required property int count
     required property bool numeric
     required property int changedFields
+    // The Field's access, letter by letter; empty on other rows.
+    property string access: ""
+    property real accessWidth: 0
 
     property real valueWidth: 200
     property real typeWidth: 140
@@ -99,7 +102,7 @@ TreeViewDelegate {
         Item { Layout.preferredWidth: 8 }
         Label {
             objectName: "valuesRowType"
-            visible: row.typeShown
+            visible: row.typeShown && !row.group
             Layout.preferredWidth: row.typeWidth
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -110,6 +113,22 @@ TreeViewDelegate {
             HoverHandler { id: typeHover }
             ToolTip.visible: typeHover.hovered && truncated
             ToolTip.text: row.typeText
+        }
+        Row {
+            objectName: "valuesRowAccess"
+            visible: row.accessWidth > 0
+            Layout.preferredWidth: row.accessWidth
+            readonly property string text: row.access
+            Repeater {
+                model: row.access.length
+                Label {
+                    required property int index
+                    text: row.access.charAt(index)
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: row.highlighted ? Theme.selectedForeground : text === "-" ? Theme.textDisabled : Theme.textSecondary
+                }
+            }
         }
     }
 

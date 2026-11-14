@@ -657,7 +657,8 @@ FocusScope {
                 Layout.maximumWidth: pane.width / 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
-                color: pane.saveProblem.length > 0 ? Theme.error : editState ? Theme.warning : Theme.info
+                // Editing is routine, not a warning; a failed save is an error.
+                color: pane.saveProblem.length > 0 ? Theme.error : editState ? Theme.textSecondary : Theme.info
                 text: {
                     if (pane.saveProblem.length > 0)
                         return pane.saveProblem

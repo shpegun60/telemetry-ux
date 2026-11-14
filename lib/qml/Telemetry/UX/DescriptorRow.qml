@@ -27,10 +27,17 @@ TreeViewDelegate {
     property real typeWidth: 160
     property real accessWidth: 120
     property bool accessShown: true
+    // A category's bare number; a group's count in its kind's word.
+    readonly property string headingCount: kind === "category" ? qsTr("%L1").arg(count) : countText
 
     readonly property bool container: kind === "category" || kind === "group"
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
+    // The access words the model carries, drawn as the Device tree's marks.
+    readonly property string mark: access === "read, write" ? "rw" : access === "read" ? "r-"
+                                 : access === "write" ? "-w" : access === "no access" ? "--" : ""
+    readonly property string accessWords: mark === "rw" ? qsTr("read and write") : mark === "r-" ? qsTr("read only")
+                                        : mark === "-w" ? qsTr("write only") : mark === "--" ? qsTr("no access") : ""
 
     signal contextMenuRequested(var index, real x, real y)
 
@@ -41,7 +48,7 @@ TreeViewDelegate {
     highlighted: current
 
     Accessible.name: container ? qsTr("%1, %2").arg(name).arg(countText)
-                               : access.length > 0 ? qsTr("%1, %2, %3").arg(name).arg(typeText).arg(access)
+                               : access.length > 0 ? qsTr("%1, %2, %3").arg(name).arg(typeText).arg(accessWords)
                                : qsTr("%1, %2").arg(name).arg(typeText)
 
     contentItem: RowLayout {
@@ -52,10 +59,19 @@ TreeViewDelegate {
             elide: Text.ElideRight
             text: row.name
             color: row.textColor
-            font.weight: row.kind === "category" ? Type.headingWeight : Font.Normal
+            font.weight: row.container ? Type.headingWeight : Font.Normal
+        }
+        // A container's count stands at the right edge, over the columns it spans.
+        Label {
+            objectName: "descriptorRowCount"
+            visible: row.container
+            font.pointSize: Type.caption
+            color: row.highlighted ? Theme.selectedForeground : Theme.textMuted
+            text: row.headingCount
         }
         Label {
             objectName: "descriptorRowType"
+            visible: !row.container
             Layout.preferredWidth: row.typeWidth
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -64,15 +80,24 @@ TreeViewDelegate {
             color: row.detailColor
             text: row.typeText
         }
-        Label {
+        // The Field's access, letter by letter, a dash for what it lacks.
+        Row {
             objectName: "descriptorRowAccess"
-            visible: row.accessShown
+            visible: row.accessShown && !row.container
             Layout.preferredWidth: row.accessWidth
-            horizontalAlignment: row.container ? Text.AlignRight : Text.AlignLeft
-            elide: Text.ElideRight
-            font.pointSize: Type.caption
-            color: row.container ? (row.highlighted ? Theme.selectedForeground : Theme.textMuted) : row.detailColor
-            text: row.container ? row.countText : row.access
+            readonly property string text: row.mark
+            Repeater {
+                model: row.mark.length
+                Label {
+                    required property int index
+                    text: row.mark.charAt(index)
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: row.highlighted ? Theme.selectedForeground : text === "-" ? Theme.textDisabled : Theme.textSecondary
+                }
+            }
+            HoverHandler { id: accessHover }
+            PlainToolTip { visible: accessHover.hovered && row.accessWords.length > 0; text: row.accessWords; delay: 700 }
         }
     }
 

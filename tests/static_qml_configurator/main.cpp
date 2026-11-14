@@ -560,9 +560,11 @@ static void qmlInput(const QString& image, bool standalone = false)
 	select(p, "Config");
 	events();
 	QTest::qWait(30);
+	// A Service's response belongs to that Service's Details: with a Field
+	// selected neither view shows it, and the provider still keeps it.
 	auto* responseTree = root->findChild<QQuickItem*>(QStringLiteral("responseTree"));
-	check(responseTree && responseTree->isVisible() == !standalone,
-	      "standalone Field hides unrelated Service response; full view retains history");
+	check(responseTree && !responseTree->isVisible() && !p.serviceResponseEndpoint().isEmpty(),
+	      "a selected Field hides the unrelated Service response; the response is kept");
 	select(p, "Reset");
 	events();
 	QTest::qWait(30);

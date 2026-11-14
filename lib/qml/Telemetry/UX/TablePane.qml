@@ -271,8 +271,10 @@ FocusScope {
                     x: heading.numeric ? 6 : parent.width - width - 6
                     anchors.verticalCenter: parent.verticalCenter
                     visible: heading.sorted
-                    color: Theme.accent
-                    text: pane.rows && pane.rows.descending ? "▼" : "▲"
+                    // Quiet: the accent belongs to the current file tab.
+                    color: Theme.textSecondary
+                    font.pointSize: Type.caption
+                    text: pane.rows && pane.rows.descending ? "▾" : "▴"
                     Accessible.ignored: true
                 }
                 HoverHandler { id: hover }

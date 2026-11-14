@@ -171,7 +171,9 @@ void schedulingAndOwnedValues() {
 	CHECK(state(previews, 0) == "Reading" && !hasValue(previews, 0));
 	previews.poll();
 	CHECK(hasValue(previews, 0) && state(previews, 0) == "Current");
-	CHECK(previews.value(0, peer.type(0), 0) == "7 members");
+	// A folded struct reads as its first members, as values.bin writes it.
+	const auto summary = previews.value(0, peer.type(0), 0);
+	CHECK(summary.startsWith(QLatin1Char('{')) && summary.endsWith(QLatin1Char('}')) && summary.contains(QStringLiteral("…")));
 	const auto* structure = peer.schema.type(peer.type(0));
 	CHECK(structure && structure->memberCount == 7);
 	bool serial = false, mode = false;
@@ -233,7 +235,7 @@ void refusalAndPayloadValidation() {
 	peer.finish({}, true);
 	previews.poll();
 	CHECK(hasValue(previews, bounds_fixture::emptyId));
-	CHECK(previews.value(bounds_fixture::emptyId, peer.type(bounds_fixture::emptyId), 0) == "0 members");
+	CHECK(previews.value(bounds_fixture::emptyId, peer.type(bounds_fixture::emptyId), 0) == "{}");
 	previews.invalidateValues();
 	peer.now += 500; previews.poll(); peer.finish({}, false); previews.poll();
 	CHECK(!hasValue(previews, bounds_fixture::emptyId));
