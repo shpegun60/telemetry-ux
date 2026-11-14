@@ -16,6 +16,7 @@
 #include <QtTest/QTest>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 namespace {
 int checks = 0, warnings = 0;
@@ -142,6 +143,18 @@ QQuickItem* named(QQuickItem* root, const char* name)
 			return found;
 	return nullptr;
 }
+// An item that must be shown: a failure names it, never a null dereference.
+QQuickItem* shown(QQuickItem* root, const char* name)
+{
+	auto* found = root ? named(root, name) : nullptr;
+	if (!found)
+		throw std::runtime_error(std::string("not shown: ") + name);
+	return found;
+}
+QString textOf(QQuickItem* root, const char* name)
+{
+	return shown(root, name)->property("text").toString();
+}
 QQuickItem* rowAt(QQuickItem* root, int row)
 {
 	if (root->objectName() == QLatin1String("watchlistRow") && root->property("index").toInt() == row)
@@ -150,6 +163,13 @@ QQuickItem* rowAt(QQuickItem* root, int row)
 		if (auto* found = rowAt(child, row))
 			return found;
 	return nullptr;
+}
+QQuickItem* rowShown(QQuickItem* root, int row)
+{
+	auto* found = rowAt(root, row);
+	if (!found)
+		throw std::runtime_error("row not shown: " + std::to_string(row));
+	return found;
 }
 QString leaf(QQuickItem* list, int row)
 {
@@ -233,7 +253,7 @@ int main(int argc, char** argv)
 			// The list, as added: whole paths, the prefix muted.
 			CHECK(list->property("count").toInt() == 5);
 			CHECK(named(content, "watchViewList") && named(content, "watchViewTree"));
-			CHECK(named(content, "watchViewList")->property("checked").toBool());
+			CHECK(shown(content, "watchViewList")->property("checked").toBool());
 			CHECK(leaf(list, 1) == QStringLiteral("Enabled"));
 			CHECK(!named(content, "watchRowChevron"));
 			shot(window, argc, argv, QStringLiteral("watch-list-480"));
@@ -249,7 +269,7 @@ int main(int argc, char** argv)
 				CHECK(leaf(list, row) == leaves[row]);
 			auto* group = rowAt(list, 0);
 			CHECK(group && named(group, "watchGroupCount") &&
-			      named(group, "watchGroupCount")->property("text").toString() == QStringLiteral("3 watched"));
+			      textOf(group, "watchGroupCount") == QStringLiteral("3 watched"));
 			CHECK(!named(group, "watchValueText") && named(group, "watchRowChevron"));
 			CHECK(!named(rowAt(list, 1), "watchRowChevron") && named(rowAt(list, 2), "watchRowChevron"));
 			// A member sits one indent deeper than its Field.
@@ -259,9 +279,9 @@ int main(int argc, char** argv)
 			};
 			CHECK(x(3) > x(2) && x(2) > x(0) && x(1) == x(2));
 			// Inside a Field: no status or rw of its own; the Field has its type.
-			CHECK(rowAt(list, 3)->property("accessText").toString().isEmpty());
-			CHECK(rowAt(list, 2)->property("accessText").toString() == QStringLiteral("rw"));
-			CHECK(rowAt(list, 2)->property("typeText").toString() == QStringLiteral("struct (3)"));
+			CHECK(rowShown(list, 3)->property("accessText").toString().isEmpty());
+			CHECK(rowShown(list, 2)->property("accessText").toString() == QStringLiteral("rw"));
+			CHECK(rowShown(list, 2)->property("typeText").toString() == QStringLiteral("struct (3)"));
 			shot(window, argc, argv, QStringLiteral("watch-tree-480"));
 
 			// The number format (WL-3): the Watchlist's from its segments, a
@@ -269,10 +289,10 @@ int main(int argc, char** argv)
 			window->setWidth(720);  // room for every control, whatever the fonts
 			settle();
 			auto* formats = named(content, "watchFormatSegments");
-			CHECK(formats && named(content, "watchFormat_original")->property("checked").toBool());
+			CHECK(formats && shown(content, "watchFormat_original")->property("checked").toBool());
 			click(window, named(content, "watchFormat_hex"));
 			CHECK(panel->property("format").toString() == QStringLiteral("hex"));
-			CHECK(named(content, "watchFormat_hex")->property("checked").toBool());
+			CHECK(shown(content, "watchFormat_hex")->property("checked").toBool());
 			click(window, named(content, "watchFormat_original"));
 			list->setProperty("currentIndex", 2);  // Config
 			list->forceActiveFocus();
@@ -305,7 +325,7 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(QGuiApplication::clipboard()->text() ==
 			      QStringLiteral("device.Config.Gain = 1.5\ndevice.Config.Enabled = true"));
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Copied 2 values"));
+			CHECK(textOf(content, "watchNotice") == QStringLiteral("Copied 2 values"));
 			CHECK(!named(content, "watchUndo"));
 			QTest::keyClick(window, Qt::Key_C, Qt::AltModifier | Qt::ShiftModifier);
 			settle();
@@ -314,7 +334,7 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
 			settle();
 			CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("device.Voltage = 230"));
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Copied device.Voltage"));
+			CHECK(textOf(content, "watchNotice") == QStringLiteral("Copied device.Voltage"));
 
 			// The Device tree's keys: Left folds, then steps out; Right opens,
 			// then steps in. Folded, a node shows its values in brief.
@@ -322,7 +342,7 @@ int main(int argc, char** argv)
 			list->forceActiveFocus();
 			const auto column = panel->property("valueColumn").toDouble();
 			key(window, Qt::Key_Left);
-			CHECK(list->property("count").toInt() == 7 && !rowAt(list, 2)->property("expanded").toBool());
+			CHECK(list->property("count").toInt() == 7 && !rowShown(list, 2)->property("expanded").toBool());
 			// The summary in the name's spare room, ending on the numbers'
 			// edge; the Value column does not move.
 			CHECK(summary(list, 2) == QStringLiteral("{Gain 1.5, Enabled true}") && value(list, 2).isEmpty());
@@ -372,7 +392,7 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(gain->property("editing").toBool());
 			CHECK(rowAt(list, 4) == gain);
-			CHECK(named(gain, "watchValueEditor")->property("text").toString() == QStringLiteral("2"));
+			CHECK(textOf(gain, "watchValueEditor") == QStringLiteral("2"));
 			key(window, Qt::Key_Return);
 			CHECK(calls.writes == 1 && calls.writeRow == 3 && calls.writeText == QStringLiteral("2"));
 
@@ -453,16 +473,16 @@ int main(int argc, char** argv)
 			CHECK(addField->property("text").toString() == QStringLiteral("device.Config."));
 			typeText(window, "Gain");
 			settle();
-			CHECK(named(content, "watchAddCheck")->property("text").toString() == QStringLiteral("Adds device.Config.Gain"));
+			CHECK(textOf(content, "watchAddCheck") == QStringLiteral("Adds device.Config.Gain"));
 			key(window, Qt::Key_Return);
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain")}));
 			CHECK(addField->property("text").toString().isEmpty() && addField->hasActiveFocus());
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added device.Config.Gain"));
+			CHECK(textOf(content, "watchNotice") == QStringLiteral("Added device.Config.Gain"));
 			CHECK(named(content, "watchUndo"));
 			// A Command is refused in words, and Enter adds nothing.
 			typeText(window, "control.Execute");
 			settle();
-			CHECK(named(content, "watchAddCheck")->property("text").toString() ==
+			CHECK(textOf(content, "watchAddCheck") ==
 			      QStringLiteral("control.Execute is a Command. Only Fields can be watched."));
 			calls.addedLines.clear();
 			key(window, Qt::Key_Return);
@@ -474,7 +494,7 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_V, Qt::ControlModifier);
 			settle();
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.Voltage = 230")}));
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added 2"));
+			CHECK(textOf(content, "watchNotice") == QStringLiteral("Added 2"));
 			// A path this device lacks: said quietly, and Enter keeps it as a row.
 			typeText(window, "device.Nope");
 			settle();
@@ -482,13 +502,14 @@ int main(int argc, char** argv)
 			CHECK(nopeCheck->property("text").toString() == QStringLiteral("device.Nope is not on this device."));
 			key(window, Qt::Key_Return);
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Nope")}));
-			CHECK(named(content, "watchNotice")->property("text").toString() == QStringLiteral("Added device.Nope, not on this device"));
+			CHECK(textOf(content, "watchNotice") == QStringLiteral("Added device.Nope, not on this device"));
 			CHECK(addField->property("text").toString().isEmpty() && named(content, "watchUndo"));
 			// Half typed, the suggestions going on from it: Enter takes the first,
 			// never keeps the half as a row the device lacks.
-			typeText(window, "device.Config.G");
-			settle();
+			// Enter at once, before the suggestions settle: made again first.
 			calls.addedLines.clear();
+			for (const char* at = "device.Config.G"; *at; ++at)
+				QTest::keyClick(window, *at);
 			key(window, Qt::Key_Return);
 			CHECK(calls.addedLines.isEmpty() && addField->property("text").toString() == QStringLiteral("device.Config.Gain"));
 			key(window, Qt::Key_Return);
@@ -504,7 +525,7 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(!rows.tree() && list->property("count").toInt() == 5);
 			const int current = list->property("currentIndex").toInt();
-			CHECK(current >= 0 && rowAt(list, current)->property("name").toString() == QStringLiteral("device.Config.Gain"));
+			CHECK(current >= 0 && rowShown(list, current)->property("name").toString() == QStringLiteral("device.Config.Gain"));
 			// A row for a path this device lacks: a quiet word, no value, no access.
 			model.put(5, QStringLiteral("device.Nope"), 0, 0, QString{}, {QString{}}, false);
 			model.item(5)->setData(QStringLiteral("Missing"), Status);
@@ -514,7 +535,8 @@ int main(int argc, char** argv)
 			settle();
 			auto* nope = rowAt(list, 5);
 			CHECK(nope && nope->property("missing").toBool() && !nope->property("problem").toBool());
-			CHECK(named(nope, "watchRowStatus")->property("text").toString() == QStringLiteral("Not on device"));
+			// The word, whether the status shows as a word or (narrow) as a mark.
+			CHECK(nope->property("statusText").toString() == QStringLiteral("Not on device"));
 			CHECK(value(list, 5) == QStringLiteral("–"));
 			shot(window, argc, argv, QStringLiteral("watch-missing-480"));
 			model.removeRow(5);

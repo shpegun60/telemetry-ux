@@ -212,7 +212,13 @@ FocusScope {
                         addRow.refresh()
                         event.accepted = true
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        settleTimer.stop()
+                        // Typed since the suggestions were made: make them again,
+                        // so Enter never decides on the text before.
+                        if (settleTimer.running) {
+                            settleTimer.stop()
+                            addRow.candidates = provider.watchPathCandidates(text)
+                            addRow.highlighted = -1
+                        }
                         addRow.recheck()
                         if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
@@ -303,7 +309,7 @@ FocusScope {
                                 text: candidate.modelData.path
                             }
                             Text {
-                                visible: candidate.modelData.watched
+                                visible: candidate.modelData.watched === true
                                 text: qsTr("watched")
                                 font.pointSize: Type.caption
                                 color: candidate.index === addRow.highlighted ? Theme.selectedForeground : Theme.textMuted
@@ -319,7 +325,7 @@ FocusScope {
                         }
                         Accessible.role: Accessible.ListItem
                         Accessible.name: [candidate.modelData.path, candidate.modelData.typeText,
-                                          candidate.modelData.watched ? qsTr("watched") : ""].filter(part => part.length > 0).join(", ")
+                                          candidate.modelData.watched === true ? qsTr("watched") : ""].filter(part => (part || "").length > 0).join(", ")
                     }
                 }
             }
