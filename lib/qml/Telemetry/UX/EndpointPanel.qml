@@ -70,7 +70,8 @@ Pane {
     function typeWidth() { return Type.bodyPixels * 5 }
     function valueWidth(width) { return Math.max(Type.bodyPixels * 14, width * 0.48) }
     function nameWidth(width) { return width - typeWidth() - valueWidth(width) }
-    function numericType(type) { return /^(?:[us](?:8|16|32|64)|f(?:32|64))$/.test(type) }
+    // Numbers and true/false stand right, as the Device tree's do.
+    function numericType(type) { return /^(?:[usi](?:8|16|32|64)|f(?:32|64)|bool)$/.test(type) }
     function outcomeColor(needsAttention) {
         return typeof needsAttention === "boolean" && !needsAttention ? Theme.textSecondary : Theme.warning
     }
@@ -278,24 +279,6 @@ Pane {
                 font.pointSize: Type.caption; color: Theme.textSecondary
                 Accessible.description: panel.contextHelp
             }
-            ToolButton {
-                id: helpButton
-                objectName: "endpointHelp"
-                text: "?"
-                implicitWidth: Type.controlHeight; implicitHeight: Type.controlHeight
-                Accessible.name: qsTr("About this operation"); Accessible.description: panel.contextHelp
-                ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: panel.contextHelp
-                onClicked: operationHelp.open()
-                Popup {
-                    id: operationHelp
-                    x: Math.min(0, helpButton.width - width)
-                    y: helpButton.height
-                    width: Math.min(360, panel.width - panel.padding * 2)
-                    padding: Type.groupSpacing
-                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                    contentItem: Label { textFormat: Text.PlainText; text: panel.contextHelp; wrapMode: Text.Wrap }
-                }
-            }
         }
         // Why an action is off, with the way to turn it on: a routine state,
         // in the neutral container, read out as an alert.
@@ -330,7 +313,14 @@ Pane {
                     text: qsTr("Allow changes")
                     flat: true
                     enabled: !panel.provider.busy
-                    onClicked: panel.provider.allowMutations = true
+                    // A provider may refuse, or keep the switch to itself.
+                    onClicked: {
+                        try {
+                            panel.provider.allowMutations = true
+                        } catch (error) {
+                            console.warn("Changes could not be allowed: " + error)
+                        }
+                    }
                 }
             }
         }

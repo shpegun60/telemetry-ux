@@ -75,15 +75,18 @@ TreeViewDelegate {
             color: row.textColor
             font.weight: row.group ? Type.headingWeight : Font.Normal
         }
-        // The value; a changed one is drawn in the info colour.
+        // The value; a changed one is drawn in the info colour. A group's
+        // count spans Value, Type and rw, to the row's right edge.
         Item {
-            Layout.preferredWidth: 10 + row.valueWidth
+            readonly property real groupExtra: 8 + (row.typeShown ? row.typeWidth + Type.padding : 0)
+                                              + (row.accessWidth > 0 ? row.accessWidth + Type.padding : 0)
+            Layout.preferredWidth: 10 + row.valueWidth + (row.group ? groupExtra : 0)
             Layout.fillHeight: true
             Label {
                 id: valueLabel
                 objectName: "valuesRowValue"
                 x: 10
-                width: row.valueWidth
+                width: parent.width - 10
                 anchors.verticalCenter: parent.verticalCenter
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
@@ -99,7 +102,7 @@ TreeViewDelegate {
             }
         }
         // A wider gap: "230 f32" must not read as one word.
-        Item { Layout.preferredWidth: 8 }
+        Item { visible: !row.group; Layout.preferredWidth: 8 }
         Label {
             objectName: "valuesRowType"
             visible: row.typeShown && !row.group
@@ -116,7 +119,7 @@ TreeViewDelegate {
         }
         Row {
             objectName: "valuesRowAccess"
-            visible: row.accessWidth > 0
+            visible: row.accessWidth > 0 && !row.group
             Layout.preferredWidth: row.accessWidth
             readonly property string text: row.access
             Repeater {

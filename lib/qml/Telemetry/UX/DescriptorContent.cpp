@@ -118,6 +118,8 @@ QVariant DescriptorTreeModel::data(const QModelIndex& index, int role) const
 			return at->category;
 		case PathRole:
 			return at->path;
+		case AccessMarkRole:
+			return at->mark;
 		default:
 			return {};
 	}
@@ -126,7 +128,8 @@ QVariant DescriptorTreeModel::data(const QModelIndex& index, int role) const
 QHash<int, QByteArray> DescriptorTreeModel::roleNames() const
 {
 	return {{NameRole, "name"},   {KindRole, "kind"},         {TypeRole, "typeText"}, {AccessRole, "access"},
-	        {CountRole, "count"}, {CategoryRole, "category"}, {PathRole, "path"}};
+	        {CountRole, "count"}, {CategoryRole, "category"}, {PathRole, "path"},
+	        {AccessMarkRole, "accessMark"}};
 }
 
 namespace {
@@ -160,6 +163,16 @@ QString accessText(descriptor::Category category, const rt::RuntimeEndpoint& end
 	     : read          ? DescriptorContent::tr("read")
 	     : write         ? DescriptorContent::tr("write")
 	                     : DescriptorContent::tr("no access");
+}
+
+// The same access as the Device tree's marks; empty for a call.
+QString accessMark(descriptor::Category category, const rt::RuntimeEndpoint& endpoint)
+{
+	if (category != descriptor::Category::Field)
+		return {};
+	const bool read = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Readable);
+	const bool write = endpoint.capabilities & static_cast<std::uint8_t>(descriptor::Capability::Writable);
+	return QString(read ? QLatin1Char('r') : QLatin1Char('-')) + (write ? QLatin1Char('w') : QLatin1Char('-'));
 }
 
 // A Field's type; a Command's arguments, a Service's whole signature, as the
@@ -268,6 +281,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 				item->kind = QStringLiteral("endpoint");
 				item->type = typeOf(category, schema, endpoint);
 				item->access = accessText(category, endpoint);
+				item->mark = accessMark(category, endpoint);
 				item->parent = group.get();
 				item->row = static_cast<int>(group->children.size());
 				item->category = static_cast<int>(c);

@@ -53,6 +53,9 @@ Pane {
     // Off until the user turns it on: a preview reads the device in the
     // background, which nobody asked for by opening the tree.
     property bool previewValues: false
+    // Said while the tree has no rows; a host words it for its state
+    // ("Reconnect to see…" after a dropped connection).
+    property string emptyText: qsTr("Connect to see the device's Fields, Commands and Services.")
     readonly property bool previewsSupported: !!provider && typeof provider.previewsSupported === "boolean" && provider.previewsSupported &&
         typeof provider.setPreviewDemand === "function" && typeof provider.clearPreviewDemand === "function"
     readonly property bool previewDemandActive: previewsSupported && previewValues && visible && width > 0 && height > 0 &&
@@ -69,13 +72,40 @@ Pane {
     readonly property real columnGap: Math.round(Type.bodyPixels * 0.9)
     property real valueSeen: 0
     property real typeSeen: 0
+    // Rows report while the tree lays them out, possibly in the middle of
+    // working out a column: their widths are gathered and applied on the
+    // next turn of the event loop, never during that work.
+    property real valuePending: 0
+    property real typePending: 0
     function noteMeasured(value, type) {
-        if (value > valueSeen) valueSeen = Math.ceil(value)
-        if (type > typeSeen) typeSeen = Math.ceil(type)
+        if (value > valuePending) valuePending = value
+        if (type > typePending) typePending = type
+        applyMeasured.restart()
     }
-    function forgetMeasured() { valueSeen = 0; typeSeen = 0 }
-    onValueColumnShownChanged: forgetMeasured()
+    Timer {
+        id: applyMeasured
+        interval: 0
+        onTriggered: {
+            if (panel.valuePending > panel.valueSeen) panel.valueSeen = Math.ceil(panel.valuePending)
+            if (panel.typePending > panel.typeSeen) panel.typeSeen = Math.ceil(panel.typePending)
+        }
+    }
+    // Forgotten widths are collected again from the rows already laid out:
+    // a row reports only when its texts change.
+    function forgetMeasured() { valueSeen = 0; typeSeen = 0; valuePending = 0; typePending = 0; remeasureLater.restart() }
+    onValueColumnShownChanged: { valueSeen = 0; valuePending = 0; remeasureLater.restart() }
     Connections { target: Type; function onBodyPixelsChanged() { panel.forgetMeasured() } }
+    Timer {
+        id: remeasureLater
+        interval: 0
+        onTriggered: {
+            for (let row = endpointTree.topRow; row >= 0 && row <= endpointTree.bottomRow; ++row) {
+                const cell = endpointTree.itemAtCell(Qt.point(0, row))
+                if (cell && typeof cell.remeasure === "function")
+                    cell.remeasure()
+            }
+        }
+    }
     TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
     readonly property real scrollInset: endpointScroll.visible ? endpointScroll.width : 0
     readonly property real valueColumn: valueColumnShown
@@ -658,7 +688,8 @@ Pane {
     // The defaults are the Theme's roles; a host may still set the palette.
     palette.window: Theme.surfaceWindow
     palette.windowText: Theme.textPrimary
-    palette.base: Theme.surface
+    // The docks' surface, as descriptor.bin's; a host may set its own.
+    palette.base: Theme.surfaceWindow
     palette.alternateBase: Theme.surfaceAlternate
     palette.text: Theme.textPrimary
     palette.button: Theme.buttonFill
@@ -699,14 +730,16 @@ Pane {
                 Accessible.name: "Clear selected Watchlist fields"
             }
         }
+        // Nothing to find before the tree has rows: the empty text says why.
         RowLayout {
             Layout.fillWidth: true
+            visible: endpointTree.rows > 0 || searchInput.text.length > 0
             spacing: Type.spacing
             TextField {
                 id: searchInput
                 objectName: "endpointSearch"
                 Layout.fillWidth: true
-                placeholderText: qsTr("Find by name (Ctrl+K)")
+                placeholderText: qsTr("Find by name or path (Ctrl+F)")
                 maximumLength: 256
                 // Room for the clear button inside the field.
                 rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
@@ -773,7 +806,7 @@ Pane {
         }
         Item {
             objectName: "endpointColumnHeaders"
-            visible: searchInput.text.trim().length === 0
+            visible: searchInput.text.trim().length === 0 && endpointTree.rows > 0
             Layout.fillWidth: true
             Layout.preferredHeight: Type.rowHeight
             component ColumnTitle: Label {
@@ -872,6 +905,12 @@ Pane {
             }
             // The Menu key or Shift+F10 opens the actions of the current row.
             Keys.onPressed: function(event) {
+                // Ctrl+F finds, as in the file views; a host's Ctrl+K too.
+                if (event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier)) {
+                    panel.find()
+                    event.accepted = true
+                    return
+                }
                 if (event.key !== Qt.Key_Menu && !(event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)))
                     return
                 const index = endpointTree.selectionModel.currentIndex
@@ -962,7 +1001,7 @@ Pane {
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
                 color: Theme.textMuted
-                text: qsTr("Connect to see the device's Fields, Commands and Services.")
+                text: panel.emptyText
             }
             Component.onCompleted: Qt.callLater(function() {
                 if (!endpointTree) return

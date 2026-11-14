@@ -433,7 +433,8 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 		row->editorText = scalarNumberText(scalar.value);
 		row->canonicalText = row->editorText;
 	}
-	row->detail = row->type + QStringLiteral(" #") + integerText(info.value.type);
+	// The type in words; an internal type id says nothing to a person.
+	row->detail = row->type;
 	return row;
 }
 } // namespace

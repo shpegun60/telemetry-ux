@@ -670,8 +670,8 @@ FocusScope {
                         // Short, so it fits beside the cursor's place; when the
                         // device's bytes were read is in the tooltip.
                         return pane.content.referenceDiffers === 1
-                               ? qsTr("Saved here · 1 byte differs from the device")
-                               : qsTr("Saved here · %L1 bytes differ from the device").arg(pane.content.referenceDiffers)
+                               ? qsTr("Saved locally · 1 byte differs from device")
+                               : qsTr("Saved locally · %L1 bytes differ from device").arg(pane.content.referenceDiffers)
                     const edited = pane.content.editedBytes
                     const state = pane.content.editing ? qsTr("Editing") : qsTr("Not saved")
                     return edited === 0 ? state

@@ -48,8 +48,18 @@ TreeViewDelegate {
     property string countText: ""
     // Why the box is off when the Watchlist cannot hold this row (yet).
     property string watchRefusal: ""
-    // Measured texts, so the panel can size its columns to them.
+    // Measured texts, so the panel can size its columns to them: each label's
+    // own width, reported again when the row is reused or the panel asks.
     signal measured(real valueWidth, real typeWidth)
+    function remeasure() {
+        const cells = rowBody.item
+        if (!tableMode || !cells)
+            return
+        const value = cells.valueLabel ? cells.valueLabel.implicitWidth : 0
+        const type = cells.typeLabel ? cells.typeLabel.implicitWidth : 0
+        measured(value, type)
+    }
+    TableView.onReused: remeasure()
 
     // What the box shows and whether it takes a click; the panel decides.
     property bool watchable: false
@@ -72,7 +82,9 @@ TreeViewDelegate {
         void treeRow.detail
         return treeView.modelIndex(Qt.point(0, treeRow.row))
     }
-    readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
+    // Palette roles, the Theme's by default: a host's palette restyles the rows.
+    readonly property color textColor: highlighted ? palette.highlightedText : palette.buttonText
+    readonly property color selectedText: palette.highlightedText
     // A category or a group: DemiBold, its count at the right.
     readonly property bool container: !isEndpoint && !previewChild && hasChildren
     // The slot the box sits in, kept on every row.
@@ -114,7 +126,7 @@ TreeViewDelegate {
     readonly property string secondaryText: [metadataText, stateText].filter(function(part) { return part.length > 0 }).join(" · ")
     readonly property string fullDescription: [hint, metadataText, shownValue, stateText, previewReason]
         .filter(function(part) { return part.length > 0 }).join("\n")
-    readonly property color secondaryColor: highlighted ? Theme.selectedForeground
+    readonly property color secondaryColor: highlighted ? palette.highlightedText
         : failed ? Theme.warning : Theme.textSecondary
 
     // The box's reason while it is off: the row's own first, then polling.
@@ -124,9 +136,13 @@ TreeViewDelegate {
     signal contextMenuRequested(real x, real y)
 
     background: Rectangle {
-        color: treeRow.highlighted ? (treeRow.treeView.activeFocus ? Theme.stateSelected : Theme.stateSelectedInactive)
-             : treeRow.hovered ? Theme.stateHover
-             : treeRow.tableMode && treeRow.row % 2 === 1 ? Theme.surfaceAlternate : "transparent"
+        // The selection quieter while the tree has no keyboard, unless a host
+        // chose its own highlight; hover a tint of the text over any base.
+        color: treeRow.highlighted
+               ? (treeRow.treeView.activeFocus || !Qt.colorEqual(treeRow.palette.highlight, Theme.stateSelected)
+                  ? treeRow.palette.highlight : Theme.stateSelectedInactive)
+             : treeRow.hovered ? Qt.rgba(treeRow.palette.text.r, treeRow.palette.text.g, treeRow.palette.text.b, 0.07)
+             : treeRow.tableMode && treeRow.row % 2 === 1 ? treeRow.palette.alternateBase : "transparent"
     }
     implicitWidth: treeView.width
     implicitHeight: twoLines ? Math.max(Type.rowHeight, nameMetrics.height + metadataMetrics.height + Type.tight * 2) : Type.rowHeight
@@ -184,6 +200,8 @@ TreeViewDelegate {
             Item {
                 id: cells
                 implicitHeight: Type.rowHeight
+                readonly property Item valueLabel: tableValue
+                readonly property Item typeLabel: tableType
                 // In the content item's coordinates: its right edge, then each
                 // column's left edge, right to left.
                 readonly property real rightEdge: treeRow.width - treeRow.leftPadding - Type.padding - treeRow.rightClearance
@@ -220,7 +238,7 @@ TreeViewDelegate {
                     textFormat: Text.PlainText
                     font.pointSize: Type.caption
                     text: treeRow.countText
-                    color: treeRow.highlighted ? Theme.selectedForeground : Theme.textMuted
+                    color: treeRow.highlighted ? treeRow.selectedText : Theme.textMuted
                 }
                 Label {
                     id: tableValue
@@ -236,15 +254,14 @@ TreeViewDelegate {
                     font.family: Type.fixedFamily
                     font.italic: treeRow.stale || treeRow.failed
                     text: treeRow.shownValue
-                    color: treeRow.highlighted ? Theme.selectedForeground
+                    color: treeRow.highlighted ? treeRow.selectedText
                         : treeRow.stale || treeRow.failed || treeRow.previewValue.length === 0 ? Theme.textMuted
                         : treeRow.textColor
-                    onImplicitWidthChanged: treeRow.measured(implicitWidth, typeMetrics.advanceWidth)
+                    onImplicitWidthChanged: treeRow.remeasure()
                     HoverHandler { id: tableValueHover }
                     Accessible.description: treeRow.fullDescription
                     PlainToolTip { visible: tableValueHover.hovered; text: treeRow.fullDescription; delay: 700 }
                 }
-                TextMetrics { id: typeMetrics; font: tableType.font; text: treeRow.typeText }
                 Label {
                     id: tableType
                     objectName: "endpointRowType"
@@ -257,9 +274,9 @@ TreeViewDelegate {
                     font.family: Type.fixedFamily
                     font.pointSize: Type.caption
                     text: treeRow.typeText
-                    color: treeRow.highlighted ? Theme.selectedForeground : Theme.textSecondary
-                    Component.onCompleted: treeRow.measured(tableValue.implicitWidth, typeMetrics.advanceWidth)
-                    onTextChanged: treeRow.measured(tableValue.implicitWidth, typeMetrics.advanceWidth)
+                    color: treeRow.highlighted ? treeRow.selectedText : Theme.textSecondary
+                    Component.onCompleted: treeRow.remeasure()
+                    onImplicitWidthChanged: treeRow.remeasure()
                     HoverHandler { id: tableTypeHover }
                     PlainToolTip { visible: tableTypeHover.hovered && tableType.truncated; text: treeRow.typeText; delay: 700 }
                 }
@@ -284,7 +301,7 @@ TreeViewDelegate {
                                 text: treeRow.accessMark.charAt(index)
                                 font.family: Type.fixedFamily
                                 font.pointSize: Type.caption
-                                color: treeRow.highlighted ? Theme.selectedForeground
+                                color: treeRow.highlighted ? treeRow.selectedText
                                     : text === "-" ? Theme.textDisabled : Theme.textSecondary
                                 Accessible.ignored: true
                             }

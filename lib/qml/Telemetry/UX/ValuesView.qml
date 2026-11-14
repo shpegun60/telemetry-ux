@@ -263,7 +263,7 @@ FocusScope {
                                 : qsTr("%1 · read %2").arg(view.decoded.summary).arg(view.timeText(view.decoded.shownAt))
             }
             Label {
-                text: view.decoded.valid ? qsTr("· descriptor") : qsTr("Descriptor")
+                text: view.decoded.valid ? qsTr("· fingerprint") : qsTr("Fingerprint")
                 font.pointSize: Type.caption
                 color: Theme.textSecondary
             }
@@ -436,7 +436,7 @@ FocusScope {
                     // The values shown stay; say how old they are, and what happens next.
                     if (view.live.problem.length > 0 && view.live.running)
                         return view.live.waitingForDevice
-                            ? qsTr("Not connected · showing values read at %1 · Live resumes when the device is back").arg(shown)
+                            ? qsTr("Not connected · values from %1 · live again on reconnect").arg(shown)
                             : qsTr("Read failed: %1 · showing values read at %2").arg(view.live.problem).arg(shown)
                     if (view.decoded.held)
                         return view.decoded.waiting === 0 ? qsTr("Held at %1 · H to release").arg(shown)

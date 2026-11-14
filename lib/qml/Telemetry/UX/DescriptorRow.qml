@@ -17,6 +17,8 @@ TreeViewDelegate {
     required property string kind
     required property string typeText
     required property string access
+    // The model's mark, never derived from the (translatable) words.
+    required property string accessMark
     required property int count
     required property int category
     // The count in its category's word, as the header counts.
@@ -33,9 +35,7 @@ TreeViewDelegate {
     readonly property bool container: kind === "category" || kind === "group"
     readonly property color textColor: highlighted ? Theme.selectedForeground : Theme.textPrimary
     readonly property color detailColor: highlighted ? Theme.selectedForeground : Theme.textSecondary
-    // The access words the model carries, drawn as the Device tree's marks.
-    readonly property string mark: access === "read, write" ? "rw" : access === "read" ? "r-"
-                                 : access === "write" ? "-w" : access === "no access" ? "--" : ""
+    readonly property string mark: accessMark
     readonly property string accessWords: mark === "rw" ? qsTr("read and write") : mark === "r-" ? qsTr("read only")
                                         : mark === "-w" ? qsTr("write only") : mark === "--" ? qsTr("no access") : ""
 

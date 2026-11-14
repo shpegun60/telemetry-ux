@@ -1273,8 +1273,9 @@ int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
 QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) const
 {
 	auto p = d;
+	// Until the Watchlist can tell what it holds, a box is not refused yet.
 	if (!p->current() || p->updating || p->endpoints.changing() || !index.isValid() ||
-	    index.model() != &p->endpoints || watchState(index) >= 0)
+	    index.model() != &p->endpoints || !p->watch.canTellHoldable() || watchState(index) >= 0)
 		return {};
 	using Role = EndpointModel::Role;
 	if (index.data(Role::CategoryRole).toInt() != static_cast<int>(telemetry::descriptor::Category::Field))
