@@ -34,5 +34,5 @@ set_target_properties(telemetry_endpoint_previews_check
 
 # Geometry over the same installed Session/view, without opening a connection.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml_layout" layout)
-set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers telemetry_qml_bulk_selection telemetry_qml_trend PROPERTIES
+set_target_properties(telemetry_qml_layout_check telemetry_qml_search_providers telemetry_qml_bulk_selection telemetry_qml_trend telemetry_qml_typed_watch PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

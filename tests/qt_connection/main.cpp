@@ -54,14 +54,16 @@ bool await(const std::function<bool()>& ready)
 	return ready();
 }
 
-QModelIndex endpoint(QAbstractItemModel* model, const QString& name, const QModelIndex& parent = {})
+QModelIndex endpoint(QAbstractItemModel* model, const QString& name, const QModelIndex& parent = {},
+                    int category = 0)
 {
 	for (int row = 0; row < model->rowCount(parent); ++row) {
 		const auto index = model->index(row, 0, parent);
 		if (model->data(index, ux::EndpointModel::IsEndpointRole).toBool() &&
-		    model->data(index, ux::EndpointModel::NameRole).toString() == name)
+		    model->data(index, ux::EndpointModel::NameRole).toString() == name &&
+		    (!category || model->data(index, ux::EndpointModel::CategoryRole).toInt() == category))
 			return index;
-		const auto child = endpoint(model, name, index);
+		const auto child = endpoint(model, name, index, category);
 		if (child.isValid())
 			return child;
 	}
@@ -139,9 +141,25 @@ void click(QQuickWindow& window, QQuickItem& item)
 		chain.prepend(level);
 	for (auto* level : chain)
 		level->ensurePolished();
-	const auto point = item.mapToScene({item.width() / 2, item.height() / 2}).toPoint();
-	CHECK(item.isEnabled() && point.x() >= 0 && point.y() >= 0 && point.x() < window.width() &&
-	      point.y() < window.height());
+	// A table row keeps its logical width while only its Name column may be
+	// visible. Its centre can therefore lie beyond the clipped TreeView and
+	// hit another panel. Click the user's visible Name text, not hidden cells.
+	auto* target = &item;
+	if (item.objectName() == QStringLiteral("endpointRow") && item.property("tableMode").toBool()) {
+		target = visual(&item, QStringLiteral("endpointRowName"));
+		CHECK(target);
+	}
+	QRectF visible = target->mapRectToScene(target->boundingRect());
+	for (auto* level = target->parentItem(); level; level = level->parentItem())
+		if (level->clip()) visible = visible.intersected(level->mapRectToScene(level->boundingRect()));
+	visible = visible.intersected(QRectF(QPointF{}, window.size()));
+	const auto point = visible.center().toPoint();
+	if (!target->isEnabled() || visible.isEmpty())
+		std::fprintf(stderr, "Unreachable native click: %s target=%s visible=%.1f,%.1f %.1fx%.1f\n",
+		    qPrintable(item.objectName()), qPrintable(target->objectName()), visible.x(), visible.y(),
+		    visible.width(), visible.height());
+	CHECK(target->isEnabled() && !visible.isEmpty() && point.x() >= 0 && point.y() >= 0 &&
+	      point.x() < window.width() && point.y() < window.height());
 	QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
 }
 
@@ -1076,12 +1094,15 @@ void disconnectedPanels()
 	CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")), QStringLiteral("2")));
 	CHECK(provider->apply() && await([&] { return !provider->busy(); }));
 	CHECK(!provider->writeOutcome().isEmpty());
+	CHECK(!provider->writeOutcomeNeedsAttention());
 	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
 	CHECK(provider->executeCommand() && await([&] { return !provider->busy(); }));
 	CHECK(!provider->commandOutcome().isEmpty());
+	CHECK(!provider->commandOutcomeNeedsAttention());
 	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Transform"))));
 	CHECK(provider->callService() && await([&] { return !provider->busy(); }));
 	CHECK(!provider->serviceOutcome().isEmpty());
+	CHECK(!provider->serviceOutcomeNeedsAttention());
 	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Config"))));
 	QQmlEngine engine;
 	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
@@ -1110,6 +1131,8 @@ ApplicationWindow {
 	CHECK(!visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
 	const auto writes = peer.nativeWrites(), commands = peer.nativeCommands(), services = peer.nativeServices();
 	connection.disconnect();
+	CHECK(!provider->writeOutcomeNeedsAttention() && !provider->commandOutcomeNeedsAttention() &&
+	      !provider->serviceOutcomeNeedsAttention());
 	CHECK(await([&] {
 		return visual(window->contentItem(), QStringLiteral("writeOutcomeLabel")) &&
 		       visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")) &&
@@ -1123,6 +1146,94 @@ ApplicationWindow {
 	      !visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
 	CHECK(peer.nativeWrites() == writes && peer.nativeCommands() == commands && peer.nativeServices() == services);
 	connection.disconnect();
+}
+
+void outcomeAttention()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	CHECK(!provider->writeOutcomeNeedsAttention() && !provider->commandOutcomeNeedsAttention() &&
+	      !provider->serviceOutcomeNeedsAttention());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Accept"))));
+	CHECK(provider->executeCommand() && !provider->commandOutcomeNeedsAttention());
+	CHECK(await([&] { return !provider->busy(); }));
+	CHECK(peer.acceptedCommands() == 1 && provider->commandOutcomeNeedsAttention());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
+	CHECK(provider->executeCommand() && !provider->commandOutcomeNeedsAttention());
+	CHECK(await([&] { return !provider->busy(); }));
+	CHECK(peer.executedCommands() == 1 && !provider->commandOutcomeNeedsAttention());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Reject"))));
+	CHECK(provider->callService() && !provider->serviceOutcomeNeedsAttention());
+	CHECK(await([&] { return !provider->busy(); }));
+	CHECK(provider->serviceOutcomeNeedsAttention());
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Ping"), {}, 3)));
+	QSignalSpy serviceDone(provider, &ux::DynamicConfiguratorProvider::serviceFinished);
+	CHECK(provider->callService() && !provider->serviceOutcomeNeedsAttention());
+	CHECK(await([&] { return serviceDone.size() == 1 && !provider->busy(); }));
+	CHECK(serviceDone.last().at(0).toBool() && !serviceDone.last().at(1).toBool() &&
+	      !provider->serviceOutcomeNeedsAttention()); // Successful Void has no response to publish.
+	readConfig(*provider);
+	CHECK(provider->beginEdit());
+	CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")), QStringLiteral("3.5")));
+	CHECK(provider->canApply());
+	peer.setNextFieldReadUnavailable();
+	QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+	CHECK(provider->apply());
+	CHECK(!provider->writeOutcomeNeedsAttention());
+	CHECK(await([&] { return applied.size() == 1 && !provider->busy(); }));
+	CHECK(peer.nativeWrites() == 1 && !applied.last().at(0).toBool() && provider->writeOutcomeNeedsAttention());
+	connection.disconnect();
+	CHECK(provider->writeOutcomeNeedsAttention() && !provider->commandOutcomeNeedsAttention() &&
+	      !provider->serviceOutcomeNeedsAttention());
+	connect(connection, peer);
+	CHECK(provider->writeOutcomeNeedsAttention() && !provider->commandOutcomeNeedsAttention() &&
+	      !provider->serviceOutcomeNeedsAttention());
+}
+
+enum class OutcomePhase : std::uint8_t {
+	Prepared,
+	Executed,
+};
+
+void unknownOutcomeAttention(cl::Operation operation, OutcomePhase phase)
+{
+	const bool service = operation == cl::Operation::Service;
+	const bool executed = phase == OutcomePhase::Executed;
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), service ? QStringLiteral("Transform") : QStringLiteral("Execute"))));
+	if (executed)
+		peer.setDropNextEncodedReply();
+	CHECK(service ? provider->callService() : provider->executeCommand());
+	CHECK(service ? !provider->serviceOutcomeNeedsAttention() : !provider->commandOutcomeNeedsAttention());
+	if (executed) {
+		CHECK(await([&] { return service ? peer.nativeServices() == 1 : peer.nativeCommands() == 1; }));
+	} else {
+		auto* owner = connection.workbench();
+		owner->process(connection.storage()->now());
+		const auto packet = owner->nextPacket();
+		CHECK(bool(packet) && owner->prepareHandoff(packet.session, packet.requestId));
+	}
+	connection.disconnect();
+	CHECK(service ? provider->serviceOutcomeNeedsAttention() : provider->commandOutcomeNeedsAttention());
+	const auto mutations = service ? peer.nativeServices() : peer.nativeCommands();
+	connect(connection, peer);
+	CHECK(service ? provider->serviceOutcomeNeedsAttention() : provider->commandOutcomeNeedsAttention());
+	CHECK((service ? peer.nativeServices() : peer.nativeCommands()) == mutations);
 }
 
 void phase(const QString& name)
@@ -1145,6 +1256,7 @@ void phase(const QString& name)
 	if (name == QStringLiteral("executed"))
 		peer.setDropNextEncodedReply();
 	CHECK(provider->apply());
+	CHECK(!provider->writeOutcomeNeedsAttention());
 	if (name == QStringLiteral("offered") || name == QStringLiteral("prepared")) {
 		auto* owner = connection.workbench();
 		owner->process(connection.storage()->now());
@@ -1157,6 +1269,7 @@ void phase(const QString& name)
 			return peer.nativeWrites() == 1;
 		}));
 	connection.disconnect();
+	CHECK(provider->writeOutcomeNeedsAttention());
 	CHECK(facts.count() == 1);
 	const auto fact = facts.last().at(0).toMap();
 	const bool possible = name == QStringLiteral("prepared") || name == QStringLiteral("executed");
@@ -1166,6 +1279,7 @@ void phase(const QString& name)
 	const auto writes = peer.nativeWrites();
 	connect(connection, peer);
 	CHECK(!connection.recoveryRequired());
+	CHECK(provider->writeOutcomeNeedsAttention());
 	CHECK(peer.nativeWrites() == writes && facts.count() == 1);
 	std::printf("Qt Session phase=%s status=%u writes=%llu\n", qPrintable(name),
 	            fact.value(QStringLiteral("status")).toUInt(),
@@ -1295,6 +1409,11 @@ int main(int argc, char** argv)
 	watchRowSignedZero();
 	presentationPanels();
 	disconnectedPanels();
+	outcomeAttention();
+	unknownOutcomeAttention(cl::Operation::Command, OutcomePhase::Prepared);
+	unknownOutcomeAttention(cl::Operation::Command, OutcomePhase::Executed);
+	unknownOutcomeAttention(cl::Operation::Service, OutcomePhase::Prepared);
+	unknownOutcomeAttention(cl::Operation::Service, OutcomePhase::Executed);
 	phase(QStringLiteral("queued"));
 	phase(QStringLiteral("offered"));
 	phase(QStringLiteral("prepared"));

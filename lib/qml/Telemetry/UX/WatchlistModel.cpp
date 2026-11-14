@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchlistModel.hpp"
+#include "ScalarEditorMetadata.hpp"
 #include <QtCore/QSet>
 #include <array>
 #include <algorithm>
@@ -14,6 +15,56 @@
 
 namespace telemetry::ux {
 namespace {
+std::optional<ScalarCode> scalarCode(WatchScalar code)
+{
+	switch (code) {
+		case WatchScalar::Unknown: return {};
+		case WatchScalar::Boolean: return ScalarCode::Bool;
+		case WatchScalar::U8: return ScalarCode::U8;
+		case WatchScalar::S8: return ScalarCode::S8;
+		case WatchScalar::U16: return ScalarCode::U16;
+		case WatchScalar::S16: return ScalarCode::S16;
+		case WatchScalar::U32: return ScalarCode::U32;
+		case WatchScalar::S32: return ScalarCode::S32;
+		case WatchScalar::U64: return ScalarCode::U64;
+		case WatchScalar::S64: return ScalarCode::S64;
+		case WatchScalar::F32: return ScalarCode::F32;
+		case WatchScalar::F64: return ScalarCode::F64;
+	}
+	return {};
+}
+
+QString canonicalText(const WatchValueBits& value)
+{
+	if (!value.type.valid() || value.size != value.type.width) return {};
+	const auto code = scalarCode(value.type.scalar);
+	if (!code) return {};
+	std::uint64_t bits = 0;
+	for (unsigned i = 0; i < value.size; ++i)
+		bits |= std::uint64_t(std::to_integer<unsigned char>(value.bytes[i])) << (8 * i);
+	return detail::scalarEditorBits(bits, *code);
+}
+
+QString fallbackTypeText(const WatchValueType& type)
+{
+	QString text;
+	switch (type.scalar) {
+		case WatchScalar::Unknown: return {};
+		case WatchScalar::Boolean: text = QStringLiteral("bool"); break;
+		case WatchScalar::U8: text = QStringLiteral("u8"); break;
+		case WatchScalar::S8: text = QStringLiteral("s8"); break;
+		case WatchScalar::U16: text = QStringLiteral("u16"); break;
+		case WatchScalar::S16: text = QStringLiteral("s16"); break;
+		case WatchScalar::U32: text = QStringLiteral("u32"); break;
+		case WatchScalar::S32: text = QStringLiteral("s32"); break;
+		case WatchScalar::U64: text = QStringLiteral("u64"); break;
+		case WatchScalar::S64: text = QStringLiteral("s64"); break;
+		case WatchScalar::F32: text = QStringLiteral("f32"); break;
+		case WatchScalar::F64: text = QStringLiteral("f64"); break;
+	}
+	return type.enumeration ? QStringLiteral("enum ") + text : text;
+}
+
 struct Mutation {
 	bool& changing;
 
@@ -32,7 +83,7 @@ template<class T>
 QString number(T value)
 {
 	if constexpr (std::is_same_v<T, bool>)
-		return value ? QStringLiteral("true") : QStringLiteral("false");
+		return value ? QStringLiteral("true (1)") : QStringLiteral("false (0)");
 	else if constexpr (std::is_signed_v<T>)
 		return QString::number(static_cast<qlonglong>(value));
 	else
@@ -67,13 +118,27 @@ QString floating(T value, telemetry::runtime::Input bytes)
 }
 } // namespace
 
-WatchlistModel::WatchlistModel(QObject* parent) : QAbstractListModel(parent)
+WatchlistModel::WatchlistModel(QObject* parent)
+    : QAbstractListModel(parent), metadata_(std::make_unique<detail::ScalarEditorMetadata>())
 {}
+
+WatchlistModel::~WatchlistModel() = default;
+
+void WatchlistModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema)
+{
+	if (changing_) return;
+	metadata_->reset(schema);
+	if (count_)
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
+		                   {EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
+		                    TypeTextRole, CategoricalRole});
+}
 
 void WatchlistModel::bind(const Workbench& owner) noexcept
 {
 	if (!changing_) {
 		++sampleEpoch_;
+		metadata_->reset({});
 		current_ = {};
 		owner_ = &owner;
 		session_ = owner.session();
@@ -85,6 +150,7 @@ void WatchlistModel::bind(std::function<bool()> current)
 {
 	if (!changing_) {
 		++sampleEpoch_;
+		metadata_->reset({});
 		owner_ = nullptr;
 		current_ = std::move(current);
 	}
@@ -266,10 +332,11 @@ void WatchlistModel::invalidateValues()
 	}
 	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
 	                   {StatusRole, TextRole, SampleTextRole, SampleValueRole, SampleExactRole,
-	                    StatusCodeRole});
+	                    StatusCodeRole, EditorTextRole});
 }
 
-bool WatchlistModel::setResult(int row, QString status, QString text, WatchSample sample)
+bool WatchlistModel::setResult(int row, QString status, QString text, WatchSample sample,
+                               WatchValueBits value)
 {
 	if (changing_ || row < 0 || row >= count_)
 		return false;
@@ -280,11 +347,14 @@ bool WatchlistModel::setResult(int row, QString status, QString text, WatchSampl
 	    rows_[row].sampleRevision != std::numeric_limits<quint64>::max()) {
 		rows_[row].sampleText = rows_[row].text;
 		rows_[row].sample = sample;
+		rows_[row].value = value;
 		++rows_[row].sampleRevision;
 	}
 	Q_EMIT dataChanged(index(row, 0), index(row, 0),
 	                   {StatusRole, TextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
-	                    SampleValueRole, SampleExactRole, StatusCodeRole});
+	                    SampleValueRole, SampleExactRole, StatusCodeRole, EditorTextRole,
+	                    EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
+	                    TypeTextRole, CategoricalRole});
 	return true;
 }
 
@@ -334,7 +404,14 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return role == SampleTextRole ? QVariant(QString{}) : QVariant();
 		if (role == SampleExactRole)
 			return false;
+		if (role >= EditorTextRole && role <= CategoricalRole)
+			return {};
 	}
+	const auto* metadata = metadata_->field(row.id);
+	const auto kind = metadata ? metadata->kind
+	                  : row.value.type.enumeration ? QStringLiteral("enum")
+	                  : row.value.type.scalar == WatchScalar::Boolean ? QStringLiteral("bool")
+	                  : QStringLiteral("text");
 	switch (role) {
 		case EndpointIdRole:
 			return row.id;
@@ -359,6 +436,19 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return static_cast<int>(watchStatusCode(row.status));
 		case WritableRole:
 			return row.writable;
+		case EditorTextRole:
+			return row.status == QStringLiteral("Ok") ? canonicalText(row.value) : QString{};
+		case EditorKindRole:
+			return kind;
+		case EditorChoicesRole:
+			if (metadata) return metadata->choices;
+			return kind == QStringLiteral("bool") ? detail::booleanEditorChoices() : QVariantList{};
+		case EditorChoicesTruncatedRole:
+			return metadata && metadata->truncated;
+		case TypeTextRole:
+			return metadata ? metadata->label : fallbackTypeText(row.value.type);
+		case CategoricalRole:
+			return kind == QStringLiteral("bool") || kind == QStringLiteral("enum");
 		default:
 			return {};
 	}
@@ -376,7 +466,13 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {SampleValueRole, "sampleValue"},
 	        {SampleExactRole, "sampleExact"},
 	        {StatusCodeRole, "statusCode"},
-	        {WritableRole, "writable"}};
+	        {WritableRole, "writable"},
+	        {EditorTextRole, "editorText"},
+	        {EditorKindRole, "editorKind"},
+	        {EditorChoicesRole, "editorChoices"},
+	        {EditorChoicesTruncatedRole, "editorChoicesTruncated"},
+	        {TypeTextRole, "typeText"},
+	        {CategoricalRole, "categorical"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)

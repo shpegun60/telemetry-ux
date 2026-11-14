@@ -122,6 +122,19 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		++portion;
 	}
 
+	bool copySchemaMetadata()
+	{
+		const auto binding = sourceBinding;
+		const auto epoch = revision;
+		// A user-supplied callback can retire/replace its source. Retain the
+		// callable itself, then reject its returned schema if that happened.
+		const auto schema = source.schema;
+		const auto metadata = current() && schema ? schema() : runtime::RuntimeSchema{};
+		if (!context || binding != sourceBinding || epoch != revision) return false;
+		model.setSchemaMetadata(metadata);
+		return context && binding == sourceBinding && epoch == revision;
+	}
+
 	void attach(WatchlistSource value)
 	{
 		if (sourceBinding == (std::numeric_limits<qint64>::max)()) {
@@ -138,6 +151,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			const auto p = weak.lock();
 			return p && p->current();
 		});
+		if (!copySchemaMetadata()) return;
 		status =
 		    current() ? QStringLiteral("ReadMany; not started") : QStringLiteral("Not connected");
 	}
@@ -499,7 +513,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				    result.rows[0].id == completed->ids[0]) {
 					publishing = true;
 					model.setResult(row, std::move(result.rows[0].status),
-					                std::move(result.rows[0].text), result.rows[0].sample);
+					                std::move(result.rows[0].text), result.rows[0].sample,
+					                result.rows[0].value);
 					publishing = false;
 				} else if (running) {
 					rerun = true; // the next cycle reads it again at once
@@ -523,7 +538,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 					publishing = true;
 					for (int i = 0; context && i < result.count; ++i)
 						model.setResult(cursor + i, std::move(result.rows[i].status),
-						                std::move(result.rows[i].text), result.rows[i].sample);
+						                std::move(result.rows[i].text), result.rows[i].sample,
+						                result.rows[i].value);
 					publishing = false;
 					cursor += result.count;
 				}
@@ -766,6 +782,7 @@ void DynamicWatchlist::clear()
 			const auto state = weak.lock();
 			return state && state->current();
 		});
+		if (!p->copySchemaMetadata()) return;
 		++p->revision;
 		p->changed();
 	}

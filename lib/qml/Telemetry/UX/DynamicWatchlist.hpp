@@ -44,6 +44,8 @@ struct WatchlistSource {
 	// The completion slot receives owned copies only; it cannot publish Qt signals.
 	std::function<client::Submission(std::span<const std::uint32_t>, Completion)> readMany;
 	std::function<client::Submission(quint32, Completion)> readField;
+	// Optional admitted metadata, copied once on attachment. No read is sent.
+	std::function<runtime::RuntimeSchema()> schema;
 };
 
 class DynamicWatchlist final {

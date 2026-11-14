@@ -10,6 +10,7 @@
 
 #include "DynamicModels.hpp"
 #include "WatchSample.hpp"
+#include "WatchFrame.hpp"
 #include <telemetry/runtime/DynamicValueView.hpp>
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QSet>
@@ -18,6 +19,7 @@
 #include <functional>
 
 namespace telemetry::ux {
+namespace detail { class ScalarEditorMetadata; }
 class WatchlistModel final : public QAbstractListModel {
 	Q_OBJECT
 public:
@@ -32,11 +34,20 @@ public:
 		SampleValueRole, // double of the last Ok reading when exact, else no value
 		SampleExactRole, // whether that reading is a finite number a double holds exactly
 		StatusCodeRole,  // int(WatchStatus), stable across providers
-		WritableRole     // the Field can be written from its row
+		WritableRole,    // the Field can be written from its row
+		EditorTextRole,  // canonical typed value; never reconstructed from a double/display text
+		EditorKindRole,
+		EditorChoicesRole,
+		EditorChoicesTruncatedRole,
+		TypeTextRole,
+		CategoricalRole  // Boolean/enum observations use step presentation
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
 	explicit WatchlistModel(QObject* parent = nullptr);
+	~WatchlistModel() override;
+	// Metadata is copied before the first reading. No descriptor borrow remains.
+	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
 	void bind(const Workbench& owner) noexcept;
 	void bind(std::function<bool()> current);
 	// Asked once per row as it is added: whether the Field accepts writes.
@@ -62,7 +73,8 @@ public:
 	void invalidateValues();
 	// The sample is required: a reading published without its typed number would
 	// be shown but never plotted. Pass sampleOf() of the value formatted as text.
-	bool setResult(int row, QString status, QString text, WatchSample sample);
+	bool setResult(int row, QString status, QString text, WatchSample sample,
+	               WatchValueBits value = {});
 	[[nodiscard]] quint32 id(int row) const noexcept;
 	[[nodiscard]] int count() const noexcept;
 	[[nodiscard]] bool changing() const noexcept;
@@ -84,8 +96,10 @@ private:
 		quint64 sampleRevision = 0;
 		WatchSample sample;
 		bool writable = false;
+		WatchValueBits value;
 	};
 
+	std::unique_ptr<detail::ScalarEditorMetadata> metadata_;
 	QVector<Row> rows_;
 	int count_ = 0;
 	quintptr nextToken_ = 1;

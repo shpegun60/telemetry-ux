@@ -303,6 +303,7 @@ struct DynamicConfiguratorProvider::Impl {
 	DynamicBatch batch;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
+	bool writeAttention = false, commandAttention = false, serviceAttention = false;
 	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
 	int category = 0;
 	quint32 responseId = 0;
@@ -566,6 +567,7 @@ struct DynamicConfiguratorProvider::Impl {
 				applyDone = result.writeCompleted && result.write.succeeded() &&
 				            result.refreshCompleted && result.refresh.operation.succeeded() &&
 				            result.refresh.published;
+				writeAttention = !*applyDone;
 				write = *applyDone ? QStringLiteral("Applied - confirmed by fresh Field read")
 				        : result.writeCompleted && result.write.succeeded()
 				            ? QStringLiteral("Applied - readback unconfirmed")
@@ -577,6 +579,7 @@ struct DynamicConfiguratorProvider::Impl {
 				state->commanded.reset();
 				state->action = DynamicViewState::Action::None;
 				command = status = operationText(result);
+				commandAttention = !result.executed();
 				commandDone = {result.executed(), result.accepted()};
 			}
 			if (state->serviced) {
@@ -584,6 +587,10 @@ struct DynamicConfiguratorProvider::Impl {
 				state->serviced.reset();
 				state->action = DynamicViewState::Action::None;
 				serviceDone = {result.operation.succeeded(), result.published};
+				serviceAttention = !result.operation.succeeded() ||
+				                   (!result.published &&
+				                    (result.valueStatus != integration::dynamic::ValueStatus::NoValue ||
+				                     result.modelStatus != ins::ModelStatus::Ok));
 				service = status = result.operation.succeeded()
 				                       ? result.published
 				                             ? QStringLiteral("Completed - response published")
@@ -1550,6 +1557,21 @@ QString DynamicConfiguratorProvider::serviceOutcome() const
 	return d->history(d->service, d->serviceSession);
 }
 
+bool DynamicConfiguratorProvider::writeOutcomeNeedsAttention() const
+{
+	return d->writeAttention;
+}
+
+bool DynamicConfiguratorProvider::commandOutcomeNeedsAttention() const
+{
+	return d->commandAttention;
+}
+
+bool DynamicConfiguratorProvider::serviceOutcomeNeedsAttention() const
+{
+	return d->serviceAttention;
+}
+
 QString DynamicConfiguratorProvider::statusText() const
 {
 	return d->status;
@@ -1687,6 +1709,7 @@ bool DynamicConfiguratorProvider::apply()
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
 	p->write = p->status = QStringLiteral("Write pending");
+	p->writeAttention = false;
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -1719,6 +1742,7 @@ bool DynamicConfiguratorProvider::executeCommand()
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
 	p->command = p->status = QStringLiteral("Command pending");
+	p->commandAttention = false;
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -1754,6 +1778,7 @@ bool DynamicConfiguratorProvider::callService()
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
 	p->service = p->status = QStringLiteral("Service pending");
+	p->serviceAttention = false;
 	p->updating = true;
 	p->present(false);
 	p->values.clear();

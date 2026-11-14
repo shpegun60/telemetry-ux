@@ -11,6 +11,7 @@
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQml/QQmlExpression>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
@@ -67,7 +68,12 @@ void click(QQuickWindow& window, QQuickItem* item) {
 	QList<QQuickItem*> ancestors;
 	for (auto* p = item; p; p = p->parentItem()) ancestors.prepend(p);
 	for (auto* p : ancestors) p->ensurePolished();
-	const auto point = item->mapToScene({item->width() / 2, item->height() / 2}).toPoint();
+	auto visible = item->mapRectToScene(item->boundingRect());
+	for (auto* p = item->parentItem(); p; p = p->parentItem())
+		if (p->clip()) visible = visible.intersected(p->mapRectToScene(p->boundingRect()));
+	visible = visible.intersected(QRectF(QPointF{}, window.size()));
+	CHECK(!visible.isEmpty());
+	const auto point = visible.center().toPoint();
 	CHECK(item->isVisible() && item->isEnabled());
 	CHECK(point.x() >= 0 && point.x() < window.width());
 	CHECK(point.y() >= 0 && point.y() < window.height());
@@ -169,15 +175,59 @@ ApplicationWindow {
 		// same member names can remain visible until that turn has completed.
 		// Real input arrives after that turn too. Never retain those old rows.
 		settle();
-		return control(details, "valueRow", "name", QString::fromLatin1(name));
+		auto* tree = control(details, "valueTree");
+		auto* row = control(details, "valueRow", "name", QString::fromLatin1(name));
+		const auto animate = tree->property("animate").toBool();
+		CHECK(tree->setProperty("animate", false));
+		// Service requests deliberately have a bounded viewport. A materialized
+		// row can still be clipped below it; reveal it as a user would before
+		// hitting its input, then reacquire any delegate reused by scrolling.
+		QQmlExpression reveal(qmlContext(tree), tree,
+		    QStringLiteral("forceLayout(); positionViewAtRow(%1, TableView.AlignVCenter)")
+		        .arg(row->property("row").toInt()));
+		reveal.evaluate();
+		CHECK(!reveal.hasError());
+		const bool exposed = await([&] {
+			row = visual(tree, QStringLiteral("valueRow"), QStringLiteral("name"), QString::fromLatin1(name));
+			if (!row) return false;
+			const auto area = row->mapRectToItem(tree, row->boundingRect());
+			return area.top() >= -.75 && area.bottom() <= tree->height() + .75;
+		}); // positionViewAtRow animates by default: wait for actual geometry.
+		if (!exposed) {
+			const auto area = row ? row->mapRectToItem(tree, row->boundingRect()) : QRectF{};
+			std::fprintf(stderr, "Endpoint reveal failed: name=%s row=%d rowRect=%.1f,%.1f %.1fx%.1f viewport=%.1fx%.1f contentHeight=%.1f contentY=%.1f atEnd=%d moving=%d\n",
+			    name, row ? row->property("row").toInt() : -1, area.x(), area.y(), area.width(), area.height(),
+			    tree->width(), tree->height(), tree->property("contentHeight").toDouble(),
+			    tree->property("contentY").toDouble(), tree->property("atYEnd").toBool(), tree->property("moving").toBool());
+		}
+		CHECK(exposed);
+		CHECK(tree->setProperty("animate", animate));
+		return row;
 	}
 	void choose(const char* name, int index, const char* expectedLabel) {
-		auto* choice = control(valueRow(name), "valueChoice");
+		const QPointer<QQuickItem> choice = control(valueRow(name), "valueChoice");
+		auto* tree = control(details, "valueTree");
+		const auto choiceRect = choice->mapRectToScene(choice->boundingRect());
+		const auto viewport = tree->mapRectToScene(tree->boundingRect());
+		const auto beforeClick = window->grabWindow();
 		click(*window, choice);
+		const QPointer<QObject> popup = choice ? choice->property("popup").value<QObject*>() : nullptr;
+		const bool opened = popup && await([&] { return popup && popup->property("visible").toBool(); });
+		if (!opened) {
+			std::fprintf(stderr, "Endpoint choice failed to open: name=%s expected=%s alive=%d choiceRect=%.1f,%.1f %.1fx%.1f viewport=%.1f,%.1f %.1fx%.1f contentY=%.1f focus=%s\n",
+			    name, expectedLabel, bool(choice), choiceRect.x(), choiceRect.y(), choiceRect.width(), choiceRect.height(),
+			    viewport.x(), viewport.y(), viewport.width(), viewport.height(), tree->property("contentY").toDouble(),
+			    window->activeFocusItem() ? qPrintable(window->activeFocusItem()->objectName()) : "(none)");
+			if (!screenshots.isEmpty()) {
+				beforeClick.save(QDir(screenshots).filePath(QStringLiteral("choice-before-failure.png")));
+				window->grabWindow().save(QDir(screenshots).filePath(QStringLiteral("choice-after-failure.png")));
+			}
+		}
+		CHECK(opened);
 		QTest::keyClick(window, Qt::Key_Home);
 		for (int n = 0; n < index; ++n) QTest::keyClick(window, Qt::Key_Down);
 		QTest::keyClick(window, Qt::Key_Return); settle();
-		CHECK(await([&] { return choice->property("currentText").toString() == QString::fromLatin1(expectedLabel); }));
+		CHECK(await([&] { return choice && choice->property("currentText").toString() == QString::fromLatin1(expectedLabel); }));
 	}
 	void enter(const char* name, const char* text) {
 		type(*window, control(valueRow(name), "scalarEditor"), QString::fromLatin1(text));
@@ -185,6 +235,12 @@ ApplicationWindow {
 };
 
 void editorBounds(Window& ui) {
+	// A narrow tree-table preserves real columns. Reveal its Value column;
+	// shortening the input to fit would hide exact integer/enum codes instead.
+	auto* tree = control(ui.details, "valueTree");
+	CHECK(tree->setProperty("contentX", std::max(0.0,
+	    tree->property("contentWidth").toDouble() - tree->width())));
+	settle();
 	for (const auto& name : {"Gain", "Counter", "Offset", "Enabled", "OperatingMode"}) {
 		auto* row = ui.valueRow(name);
 		auto* input = control(row, (QString::fromLatin1(name) == "Enabled" ||
@@ -268,14 +324,85 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
 		CHECK(!row->property("typeText").toString().isEmpty());
 		CHECK(row->property("previewChild").toBool());
 		CHECK(row->property("previewState").toString() == "Current");
+		CHECK(row->property("stateText").toString().isEmpty());
 		CHECK(!row->property("previewValue").toString().isEmpty());
-		geometry(*ui.window, row);
+        CHECK(row->property("tableMode").toBool() && !row->property("twoLines").toBool());
+        CHECK(std::abs(row->height() - row->implicitHeight()) < 0.5);
+        CHECK(row->height() > 0 && row->width() >= tree->width());
 	}
 	CHECK(provider.values()->rowCount() == 0); // previews never publish a Details snapshot.
 	ui.capture("tree-preview-480");
 	ui.page("tree", 320, 820);
-	CHECK(control(tree, "endpointRow", "name", QStringLiteral("Counter"))->property("twoLines").toBool());
+    CHECK(!control(tree, "endpointRow", "name", QStringLiteral("Counter"))->property("twoLines").toBool());
 	ui.capture("tree-preview-320");
+    for (const int width : {320,600,900}) {
+        ui.page("tree", width, 820);
+        CHECK(tree->setProperty("contentX", 0)); settle();
+        auto* header = control(ui.treePanel, "endpointColumnHeaders");
+        geometry(*ui.window, header);
+        auto* configRow = control(tree, "endpointRow", "name", QStringLiteral("Config"));
+        auto* counterRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
+        CHECK(configRow->property("accessMark").toString() == QStringLiteral("rw"));
+        CHECK(control(configRow, "endpointRowAccess")->property("text").toString() == QStringLiteral("rw"));
+        CHECK(counterRow->property("accessMark").toString().isEmpty());
+        CHECK(!counterRow->property("twoLines").toBool());
+        CHECK(std::abs(counterRow->height() - configRow->height()) < 0.5);
+        for (const auto& name : {"endpointRowValue", "endpointRowType", "endpointRowAccess"}) {
+            auto* parentCell = control(configRow, name);
+            auto* childCell = control(counterRow, name);
+            CHECK(std::abs(parentCell->mapToScene({0,0}).x() - childCell->mapToScene({0,0}).x()) < 0.5);
+            CHECK(childCell->width() > 0 && childCell->height() <= counterRow->height());
+        }
+        auto* valueHeader = control(header, "endpointColumnHeader_1");
+        auto* valueCell = control(counterRow, "endpointRowValue");
+        CHECK(valueCell->mapToScene({0,0}).x() > valueHeader->mapToScene({0,0}).x());
+        if (width == 320) CHECK(tree->property("contentWidth").toDouble() > tree->width());
+        if (width == 900) {
+            auto* horizontal = visual(tree, QStringLiteral("endpointHorizontalScroll"), {}, {}, false);
+            CHECK(horizontal && horizontal->property("policy").toInt() == Qt::ScrollBarAlwaysOff && !horizontal->isVisible());
+        }
+        const auto capture = QStringLiteral("tree-table-%1").arg(width).toLatin1();
+        ui.capture(capture.constData());
+    }
+    // Resizing, keyboard navigation and horizontal scrolling only rearrange
+    // presentation. Stop the lease to distinguish them from normal TTL reads.
+    CHECK(ui.treePanel->setProperty("previewValues", false));
+    CHECK(await([&] { return !session.busy(); }));
+    const auto beforeLayoutReads = peer.fieldReads();
+    auto* valueHeader = control(ui.treePanel, "endpointColumnHeader_1");
+    const auto originalWidth = valueHeader->width();
+    valueHeader->forceActiveFocus(); QTest::keyClick(ui.window, Qt::Key_Right); settle();
+    CHECK(valueHeader->width() > originalWidth);
+    QTest::keyClick(ui.window, Qt::Key_Home); settle();
+    CHECK(std::abs(valueHeader->width() - originalWidth) < 0.5);
+    auto* resize = control(ui.treePanel, "endpointColumnResize_1");
+    const auto origin = resize->mapToScene({resize->width()/2,resize->height()/2}).toPoint();
+    QTest::mousePress(ui.window, Qt::LeftButton, Qt::NoModifier, origin);
+    QTest::mouseMove(ui.window, origin + QPoint(32,0));
+    QTest::mouseRelease(ui.window, Qt::LeftButton, Qt::NoModifier, origin + QPoint(32,0)); settle();
+    CHECK(valueHeader->width() >= originalWidth + 30);
+    QTest::keyClick(ui.window, Qt::Key_Home); settle();
+    auto* nameHeader = control(ui.treePanel, "endpointColumnHeader_0");
+    nameHeader->forceActiveFocus();
+    for (int n = 0; n < 40; ++n) QTest::keyClick(ui.window, Qt::Key_Left);
+    settle();
+    auto* narrowRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
+    auto* narrowName = control(narrowRow, "endpointRowName");
+    auto* narrowValue = control(narrowRow, "endpointRowValue");
+    CHECK(narrowName->width() >= narrowRow->height() * 2);
+    CHECK(narrowName->mapRectToScene(narrowName->boundingRect()).right() <= narrowValue->mapToScene({0,0}).x());
+    auto* matrix = control(tree, "endpointRow", "name", QStringLiteral("Matrix"));
+    auto* chevron = matrix->property("indicator").value<QQuickItem*>();
+    CHECK(chevron && chevron->mapRectToItem(matrix,chevron->boundingRect()).right() < matrix->property("nameColumnWidth").toDouble());
+    QTest::keyClick(ui.window, Qt::Key_Home); settle();
+    ui.page("tree", 320, 820);
+    auto* access = control(ui.treePanel, "endpointColumnHeader_3");
+    access->forceActiveFocus(Qt::TabFocusReason); settle();
+    CHECK(tree->property("contentX").toDouble() > 0);
+    geometry(*ui.window, access);
+    ui.capture("tree-table-320-scrolled");
+    CHECK(peer.fieldReads() == beforeLayoutReads && provider.values()->rowCount() == 0);
+    CHECK(ui.treePanel->setProperty("previewValues", true));
 	ui.page("details", 480, 820);
 	CHECK(await([&] { return !session.busy(); }));
 	const auto hiddenReads = peer.fieldReads(); settle(5600);
@@ -319,8 +446,8 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(ui.treePanel->setProperty("previewValues", false)); ui.page("details", 480, 820);
 	ui.capture("details-edit-480");
 	ui.page("details", 320, 820);
-	geometry(*ui.window, control(ui.valueRow("Gain"), "valueEncodedCaption"));
 	editorBounds(ui);
+	geometry(*ui.window, control(ui.valueRow("Gain"), "valueEncodedCaption"));
 	ui.capture("details-edit-320");
 	ui.page("details", 880, 820);
 	const auto writes = peer.nativeWrites();

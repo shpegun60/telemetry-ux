@@ -512,41 +512,73 @@ Pane {
                 readonly property bool writable: model.writable === true &&
                                                  panel.provider.canWriteWatch === true
                 property bool editing: false
+                property bool manualCode: false
+                property string draftText: ""
+                readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
+                readonly property bool choices: editorKind === "bool" || editorKind === "enum"
+                readonly property bool choicesTruncated: model.editorChoicesTruncated === true
+                readonly property var choiceOptions: {
+                    const rows = []
+                    const source = model.editorChoices
+                    if (source && typeof source.length === "number") {
+                        for (let i = 0; i < source.length; ++i) {
+                            const item = source[i]
+                            if (item && typeof item.label === "string" && typeof item.text === "string")
+                                rows.push({label: item.label, text: item.text, manual: false})
+                        }
+                    }
+                    if (editorKind === "enum") {
+                        if (draftText.length > 0 && !rows.some(item => item.text === draftText))
+                            rows.unshift({label: (choicesTruncated ? qsTr("Code (%1)") : qsTr("Unknown (%1)"))
+                                .arg(draftText), text: draftText, manual: false})
+                        rows.push({label: qsTr("Enter code…"), text: "", manual: true})
+                    }
+                    return rows
+                }
+                readonly property int choiceIndex: choiceOptions.findIndex(item => !item.manual && item.text === draftText)
                 function startEdit() {
                     if (!writable || editing)
                         return
+                    manualCode = false
+                    // New providers own the exact typed text, including enum codes.
+                    // Keep the legacy fallback only when the role is absent.
+                    draftText = typeof model.editorText === "string" ? model.editorText
+                        : model.sampleExact === true
+                            ? (model.sampleValue === 0 && 1 / model.sampleValue < 0 ? "-0" : String(model.sampleValue))
+                            : watchRow.text
+                    valueEditor.text = draftText
                     editing = true
-                    // String(-0) loses the sign, although the typed sample is exact.
-                    valueEditor.text = model.sampleExact === true
-                        ? (model.sampleValue === 0 && 1 / model.sampleValue < 0 ? "-0" : String(model.sampleValue))
-                        : watchRow.text
-                    valueEditor.forceActiveFocus()
-                    valueEditor.selectAll()
+                    if (choices) valueChoice.forceActiveFocus()
+                    else { valueEditor.forceActiveFocus(); valueEditor.selectAll() }
                 }
                 function commitEdit() {
-                    if (!editing)
+                    if (!editing || !writable || draftText.length === 0)
                         return
-                    const value = valueEditor.text
+                    const value = draftText
                     finishEdit()
                     panel.provider.writeWatch(watchRow.index, value)
                 }
                 // The list is a focus scope: the editor lets go of its focus
                 // first, or the list would hand it back to the hidden editor.
-                function finishEdit() {
+                function finishEdit(restoreFocus = true) {
                     editing = false
+                    valueChoice.popup.close()
                     valueEditor.focus = false
-                    watchList.forceActiveFocus()
+                    valueChoice.focus = false
+                    editorScope.focus = false
+                    if (restoreFocus) watchList.forceActiveFocus()
                 }
                 // Narrow panels give a Field two lines - its name and ×, then
                 // its value and status - and wide ones one table row.
-                readonly property bool compact: !panel.tableRows
+                readonly property bool compact: !panel.tableRows || editing
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
                 readonly property bool problem: !ok && status !== "" && status !== "Pending" && status !== "Not read" && status !== "NotRead"
                 readonly property bool current: ListView.isCurrentItem && watchList.activeFocus
                 readonly property bool removeShown: compact || rowHover.hovered || current
                 readonly property color foreground: current ? Theme.selectedForeground : Theme.textPrimary
-                height: compact ? 2 * Type.rowHeight : Type.rowHeight
+                readonly property real valueHeight: editing ? Math.max(Type.rowHeight, editorScope.implicitHeight) : Type.rowHeight
+                height: compact ? Type.rowHeight + valueHeight : valueHeight
                 Rectangle {
                     anchors.fill: parent
                     anchors.rightMargin: panel.scrollReserve
@@ -630,37 +662,155 @@ Pane {
                             ToolTip.text: qsTr("Write a new value (F2, or double-click the value)")
                         }
                     }
-                    TextField {
-                        id: valueEditor
-                        objectName: "watchValueEditor"
+                    FocusScope {
+                        id: editorScope
                         visible: watchRow.editing
                         Layout.row: watchRow.compact ? 1 : 0
                         Layout.column: watchRow.compact ? 0 : 1
+                        Layout.columnSpan: watchRow.compact ? 2 : 1
                         Layout.fillWidth: true
                         Layout.minimumWidth: Type.bodyPixels * 4.5
-                        Layout.preferredHeight: Type.rowHeight
-                        font.family: Type.fixedFamily
-                        horizontalAlignment: watchRow.compact ? TextInput.AlignLeft : TextInput.AlignRight
-                        topPadding: Type.tight
-                        bottomPadding: Type.tight
-                        // Enter is taken here: a text field passes it on after
-                        // accepting, and the list would open the editor again.
-                        Keys.onReturnPressed: watchRow.commitEdit()
-                        Keys.onEnterPressed: watchRow.commitEdit()
-                        Keys.onEscapePressed: watchRow.finishEdit()
-                        // Clicking elsewhere cancels: nothing is written by accident.
-                        // The list is a focus scope: the hidden editor lets go of
-                        // its focus too, or the list would give the keys back to it.
-                        onActiveFocusChanged: if (!activeFocus && watchRow.editing) {
-                            watchRow.editing = false
-                            focus = false
+                        Layout.preferredHeight: implicitHeight
+                        implicitHeight: editorLine.implicitHeight
+                        onActiveFocusChanged: if (!activeFocus && watchRow.editing) cancelEdit.restart()
+                        Timer {
+                            id: cancelEdit
+                            interval: 0
+                            onTriggered: if (watchRow.editing && !editorScope.activeFocus && !valueChoice.popup.visible)
+                                watchRow.finishEdit(false)
                         }
-                        Accessible.name: qsTr("New value for %1").arg(watchRow.name)
+                        Timer {
+                            id: manualFocus
+                            interval: 0
+                            onTriggered: if (watchRow.editing && watchRow.manualCode) {
+                                valueEditor.forceActiveFocus()
+                                valueEditor.selectAll()
+                            }
+                        }
+                        RowLayout {
+                            id: editorLine
+                            anchors.fill: parent
+                            spacing: Type.tight
+                            ComboBox {
+                                id: valueChoice
+                                objectName: "watchValueChoice"
+                                visible: watchRow.choices && !watchRow.manualCode
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                model: watchRow.choiceOptions
+                                textRole: "label"
+                                valueRole: "text"
+                                currentIndex: watchRow.choiceIndex
+                                displayText: currentIndex < 0 ? qsTr("Choose a value") : currentText
+                                palette.button: Theme.buttonFill
+                                palette.buttonText: Theme.textPrimary
+                                palette.text: Theme.textPrimary
+                                palette.base: Theme.surface
+                                palette.light: Theme.stateSelected
+                                palette.midlight: Theme.stateHover
+                                palette.mid: Theme.buttonFillPressed
+                                palette.dark: Theme.textSecondary
+                                palette.highlight: Theme.stateSelected
+                                palette.highlightedText: Theme.selectedForeground
+                                delegate: ItemDelegate {
+                                    id: choiceOption
+                                    required property var model
+                                    required property int index
+                                    width: ListView.view ? ListView.view.width : implicitWidth
+                                    text: model.label
+                                    highlighted: valueChoice.highlightedIndex === index
+                                    font.weight: valueChoice.currentIndex === index ? Type.headingWeight : Type.bodyWeight
+                                    palette.text: Theme.textPrimary
+                                    palette.highlightedText: Theme.selectedForeground
+                                    palette.light: Theme.stateSelected
+                                    palette.midlight: Theme.stateHover
+                                    palette.highlight: Theme.stateSelected
+                                    PlainToolTip { visible: choiceOption.hovered; text: choiceOption.text; delay: 700 }
+                                }
+                                Accessible.name: qsTr("New value for %1").arg(watchRow.name)
+                                Accessible.description: currentIndex < 0
+                                    ? qsTr("Choose a value, then Write or press Enter. Escape cancels.")
+                                    : qsTr("%1. Choose a value, then Write or press Enter. Escape cancels.").arg(currentText)
+                                PlainToolTip {
+                                    objectName: "watchValueChoiceToolTip"
+                                    visible: (valueChoice.hovered || valueChoice.visualFocus) && !valueChoice.popup.visible
+                                    delay: 700
+                                    text: valueChoice.Accessible.description
+                                }
+                                onActivated: function(index) {
+                                    const item = watchRow.choiceOptions[index]
+                                    if (!item) return
+                                    if (item.manual) {
+                                        valueEditor.text = watchRow.draftText
+                                        watchRow.manualCode = true
+                                        manualFocus.restart()
+                                    } else watchRow.draftText = item.text
+                                    currentIndex = Qt.binding(() => watchRow.choiceIndex)
+                                }
+                                Keys.onReturnPressed: event => {
+                                    if (popup.visible) event.accepted = false
+                                    else watchRow.commitEdit()
+                                }
+                                Keys.onEnterPressed: event => {
+                                    if (popup.visible) event.accepted = false
+                                    else watchRow.commitEdit()
+                                }
+                                Keys.onEscapePressed: watchRow.finishEdit()
+                                Connections {
+                                    target: valueChoice.popup
+                                    function onClosed() { cancelEdit.restart() }
+                                }
+                            }
+                            TextField {
+                                id: valueEditor
+                                objectName: "watchValueEditor"
+                                visible: !watchRow.choices || watchRow.manualCode
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                Layout.preferredHeight: Math.max(Type.rowHeight, implicitHeight)
+                                font.family: Type.fixedFamily
+                                horizontalAlignment: watchRow.compact ? TextInput.AlignLeft : TextInput.AlignRight
+                                placeholderText: watchRow.manualCode ? qsTr("Numeric code") : ""
+                                topPadding: Type.tight
+                                bottomPadding: Type.tight
+                                onTextEdited: watchRow.draftText = text
+                                Keys.onReturnPressed: watchRow.commitEdit()
+                                Keys.onEnterPressed: watchRow.commitEdit()
+                                Keys.onEscapePressed: watchRow.finishEdit()
+                                Accessible.name: qsTr("New value for %1").arg(watchRow.name)
+                                Accessible.description: qsTr("%1. Write or press Enter to send this value once. Escape cancels.").arg(watchRow.draftText)
+                                PlainToolTip {
+                                    objectName: "watchValueEditorToolTip"
+                                    visible: valueEditor.hovered || valueEditor.activeFocus
+                                    delay: 700
+                                    text: valueEditor.Accessible.description
+                                }
+                            }
+                            ToolButton {
+                                objectName: "watchValueChoiceReturn"
+                                visible: watchRow.manualCode
+                                text: "⌄"
+                                Accessible.name: qsTr("Choose a named value for %1").arg(watchRow.name)
+                                onClicked: {
+                                    watchRow.manualCode = false
+                                    valueChoice.forceActiveFocus()
+                                    valueChoice.popup.open()
+                                }
+                            }
+                            Button {
+                                objectName: "watchValueWrite"
+                                Layout.preferredWidth: implicitContentWidth + leftPadding + rightPadding
+                                text: qsTr("Write")
+                                enabled: watchRow.writable && watchRow.draftText.length > 0
+                                Accessible.name: qsTr("Write %1 once").arg(watchRow.name)
+                                onClicked: watchRow.commitEdit()
+                            }
+                        }
                     }
                     // A good reading is a quiet dot; anything else is its word,
                     // the provider's own in the tooltip.
                     Item {
-                        visible: watchRow.ok
+                        visible: !watchRow.editing && watchRow.ok
                         Layout.row: watchRow.compact ? 1 : 0
                         Layout.column: watchRow.compact ? 1 : 2
                         Layout.preferredWidth: panel.statusColumnWidth
@@ -677,7 +827,7 @@ Pane {
                     }
                     Label {
                         objectName: "watchRowStatus"
-                        visible: !watchRow.ok
+                        visible: !watchRow.editing && !watchRow.ok
                         Layout.row: watchRow.compact ? 1 : 0
                         Layout.column: watchRow.compact ? 1 : 2
                         Layout.minimumWidth: 1

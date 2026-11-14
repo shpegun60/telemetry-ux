@@ -196,6 +196,8 @@ def main():
         preview_ui_images = [preview_ui_output / name for name in (
             'details-unread-320.png', 'details-unread-480.png',
             'tree-preview-480.png', 'tree-preview-320.png',
+            'tree-table-320.png', 'tree-table-600.png', 'tree-table-900.png',
+            'tree-table-320-scrolled.png',
             'details-edit-480.png', 'details-edit-320.png',
             'service-request-response-880.png')]
         report['endpoint_preview_ui'] = dict(checks=int(preview_ui_checks[1]), warnings=0,
@@ -229,6 +231,20 @@ def main():
             raise RuntimeError('Trend did not reach its warning-free assertion floor')
         report['trend'] = dict(checks=int(trend_checks[1]), warnings=0,
             executable_sha256=digest(trend_executable))
+        typed_watch_executable = build / ('telemetry_qml_typed_watch.exe' if os.name == 'nt' else 'telemetry_qml_typed_watch')
+        typed_watch_output = output / 'typed-watch'
+        typed_watch_output.mkdir()
+        typed_watch_log = run('typed-watch-runtime', [typed_watch_executable, typed_watch_output])
+        typed_watch_checks = re.search(r'Typed Watch checks=(\d+) warnings=0', typed_watch_log)
+        if not typed_watch_checks or int(typed_watch_checks[1]) < 52:
+            raise RuntimeError('Typed Watch editing did not reach its warning-free assertion floor')
+        typed_watch_images = [typed_watch_output / (name + '-' + str(width) + '.png')
+                              for name in ('watch-typed', 'watch-enum-popup', 'watch-enum-manual')
+                              for width in (320, 480)]
+        report['typed_watch'] = dict(checks=int(typed_watch_checks[1]), warnings=0,
+            executable_sha256=digest(typed_watch_executable),
+            screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
+                                for image in typed_watch_images})
         layout_images = [output / (size + suffix + '.png')
                          for size in ('1160x800', '820x620')
                          for suffix in ('-collapsed', '-top', '')]

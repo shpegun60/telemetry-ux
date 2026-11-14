@@ -57,6 +57,39 @@ Pane {
         searchInput.text.trim().length === 0 && !!panel.Window.window && panel.Window.window.visible &&
         panel.Window.window.visibility !== Window.Minimized
     property var previewDemandProvider: null
+    readonly property var columnTitles: [qsTr("Name"), qsTr("Value"), qsTr("Type"), qsTr("Access")]
+    readonly property var defaultColumnUnits: [14, 11, 6, 5]
+    readonly property var minimumColumnUnits: [8, 6, 4, 4]
+    property var columnUnits: [14, 11, 6, 5]
+    property bool nameColumnResized: false
+    readonly property real tableWidth: columnWidth(0) + columnWidth(1) + columnWidth(2) + columnWidth(3)
+    function columnWidth(index) {
+        const width = columnUnits[index] * Type.bodyPixels
+        if (index !== 0 || nameColumnResized) return width
+        return Math.max(width, endpointTree.width - (columnUnits[1] + columnUnits[2] + columnUnits[3]) * Type.bodyPixels)
+    }
+    function resizeColumn(index, width) {
+        const next = columnUnits.slice()
+        next[index] = Math.max(minimumColumnUnits[index], Math.min(96, width / Type.bodyPixels))
+        if (index === 0) nameColumnResized = true
+        columnUnits = next
+        endpointTree.forceLayout()
+    }
+    function resetColumn(index) {
+        const next = columnUnits.slice()
+        next[index] = defaultColumnUnits[index]
+        if (index === 0) nameColumnResized = false
+        columnUnits = next
+        endpointTree.forceLayout()
+    }
+    function showColumn(index) {
+        let left = 0
+        for (let i = 0; i < index; ++i) left += columnWidth(i)
+        const right = left + columnWidth(index)
+        if (left < endpointTree.contentX) endpointTree.contentX = left
+        else if (right > endpointTree.contentX + endpointTree.width)
+            endpointTree.contentX = right - endpointTree.width
+    }
 
     function clearPreviews() {
         const prior = previewDemandProvider
@@ -716,6 +749,96 @@ Pane {
                   panel.searchResults.length === 0 ? "No matching endpoints" :
                   panel.searchResults.length + " matching endpoints" + panel.enterHint()
         }
+        Item {
+            objectName: "endpointColumnHeaders"
+            visible: searchInput.text.trim().length === 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: Type.rowHeight
+            clip: true
+            Row {
+                x: -endpointTree.contentX
+                height: parent.height
+                Repeater {
+                    model: panel.columnTitles
+                    delegate: FocusScope {
+                        id: columnHeader
+                        required property int index
+                        required property string modelData
+                        objectName: "endpointColumnHeader_" + index
+                        width: panel.columnWidth(index)
+                        height: Type.rowHeight
+                        activeFocusOnTab: true
+                        onActiveFocusChanged: if (activeFocus && !columnResize.pressed) panel.showColumn(index)
+                        Accessible.role: Accessible.ColumnHeader
+                        Accessible.name: modelData
+                        Accessible.description: qsTr("Drag the right edge or use Left and Right to resize. Home resets this column.")
+                        Keys.onLeftPressed: panel.resizeColumn(index, width - Type.bodyPixels)
+                        Keys.onRightPressed: panel.resizeColumn(index, width + Type.bodyPixels)
+                        Keys.onPressed: function(event) {
+                            if (event.key === Qt.Key_Home) {
+                                panel.resetColumn(index)
+                                event.accepted = true
+                            }
+                        }
+                        Label {
+                            anchors.fill: parent
+                            leftPadding: Type.padding
+                            rightPadding: Type.padding
+                            verticalAlignment: Text.AlignVCenter
+                            horizontalAlignment: columnHeader.index === 1 ? Text.AlignRight : Text.AlignLeft
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            font.pointSize: Type.caption
+                            color: Theme.textSecondary
+                            text: columnHeader.modelData
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "transparent"
+                            border.width: columnHeader.activeFocus ? 2 : 0
+                            border.color: Theme.focusRing
+                            Accessible.ignored: true
+                        }
+                        Rectangle {
+                            anchors.right: parent.right
+                            width: 1
+                            height: parent.height
+                            color: Theme.outlineVariant
+                            Accessible.ignored: true
+                        }
+                        MouseArea {
+                            id: columnResize
+                            objectName: "endpointColumnResize_" + columnHeader.index
+                            anchors.right: parent.right
+                            anchors.rightMargin: -3
+                            width: 7
+                            height: parent.height
+                            cursorShape: Qt.SizeHorCursor
+                            preventStealing: true
+                            property real origin: 0
+                            property real originalWidth: 0
+                            onPressed: function(mouse) {
+                                columnHeader.forceActiveFocus(Qt.MouseFocusReason)
+                                origin = mapToGlobal(mouse.x, mouse.y).x
+                                originalWidth = columnHeader.width
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (pressed)
+                                    panel.resizeColumn(columnHeader.index, originalWidth + mapToGlobal(mouse.x, mouse.y).x - origin)
+                            }
+                            onDoubleClicked: panel.resetColumn(columnHeader.index)
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Theme.outlineVariant
+                Accessible.ignored: true
+            }
+        }
         TreeView {
             id: endpointTree
             // A zoom changes the row height: the rows already laid out follow it.
@@ -779,14 +902,23 @@ Pane {
             }
             // Trees are not striped: stripes blur the indentation.
             alternatingRows: false
-            columnWidthProvider: function() { return Math.max(1, endpointTree.width) }
+            columnWidthProvider: function() { return Math.max(endpointTree.width, panel.tableWidth) }
+            rowHeightProvider: function() { return Type.rowHeight }
             onWidthChanged: Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() })
             // A retired model may have no role data before its reset; the row
             // reads its required roles, never model.display.
             delegate: EndpointTreeRow {
                 id: endpointDelegate
+                tableMode: true
+                nameColumnWidth: panel.columnWidth(0)
+                valueColumnWidth: panel.columnWidth(1)
+                typeColumnWidth: panel.columnWidth(2)
+                accessColumnWidth: panel.columnWidth(3)
                 typeText: typeof model.typeText === "string" ? model.typeText : ""
                 accessText: typeof model.accessText === "string" ? model.accessText : ""
+                accessMark: isEndpoint && !previewChild && model.category === 1 &&
+                    typeof model.readable === "boolean" && typeof model.writable === "boolean"
+                    ? (model.readable ? "r" : "-") + (model.writable ? "w" : "-") : ""
                 unit: typeof model.unit === "string" ? model.unit : ""
                 previewEligible: model.previewEligible === true
                 previewAggregate: model.previewAggregate === true
@@ -826,6 +958,10 @@ Pane {
                 }
             }
             ScrollBar.vertical: ScrollBar {}
+            ScrollBar.horizontal: ScrollBar {
+                objectName: "endpointHorizontalScroll"
+                policy: endpointTree.contentWidth > endpointTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
             // Not connected, the tree says how it fills, on the view itself.
             Label {
                 objectName: "endpointTreeEmpty"

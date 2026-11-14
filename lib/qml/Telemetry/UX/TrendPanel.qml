@@ -59,7 +59,22 @@ Pane {
             readonly property color axis: Theme.outline
             readonly property color label: Theme.textSecondary
             readonly property color line: Theme.accent
+            // At most 512 received samples and 511 held corners. Corners are
+            // display geometry only; markers and exact text belong to samples.
+            readonly property var vertices: {
+                const source = panel.history.points
+                const result = []
+                const first = Math.max(0, source.length - 512)
+                for (let i = first; i < source.length; ++i) {
+                    const point = source[i]
+                    if (i > first && point.step === true && !point.breakBefore)
+                        result.push({ms: point.ms, value: source[i - 1].value, breakBefore: false, sample: false})
+                    result.push({ms: point.ms, value: point.value, breakBefore: i === first || point.breakBefore, sample: true})
+                }
+                return result
+            }
             Accessible.name: qsTr("Trend chart, this computer's time")
+            Accessible.description: qsTr("Boolean and enum readings use steps between received samples. Gaps are not connected.")
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
             onLabelPixelsChanged: requestPaint()
@@ -72,6 +87,7 @@ Pane {
             ToolTip.visible: plotHover.hovered && !plot.empty
             ToolTip.delay: 700
             ToolTip.text: qsTr("Time is this computer's, not the device's. The last 512 readings.")
+                + (panel.history.step === true ? qsTr("\nSteps hold the last received state until the next reading. Transitions between readings are not known.") : "")
             onPaint: {
                 const ctx = getContext("2d")
                 ctx.reset()
@@ -104,14 +120,17 @@ Pane {
                 const endLabel = String(xmax) + " ms"
                 ctx.fillText(endLabel, Math.max(left + 65, right - ctx.measureText(endLabel).width), height - 4)
                 ctx.strokeStyle = line; ctx.lineWidth = 2; ctx.beginPath()
-                for (let i = 0; i < p.length; ++i) {
-                    const x = left + (p[i].ms - xmin) / Math.max(1, xmax - xmin) * (right - left)
-                    const normalized = rangeY === 0 ? 0.5 : (p[i].value / scale - minY) / rangeY
+                const path = vertices
+                for (let i = 0; i < path.length; ++i) {
+                    const x = left + (path[i].ms - xmin) / Math.max(1, xmax - xmin) * (right - left)
+                    const normalized = rangeY === 0 ? 0.5 : (path[i].value / scale - minY) / rangeY
                     const y = bottom - normalized * (bottom - top)
-                    if (i === 0 || p[i].breakBefore) ctx.moveTo(x, y)
+                    if (i === 0 || path[i].breakBefore) ctx.moveTo(x, y)
                     else ctx.lineTo(x, y)
                     // Single samples are visible too.
-                    ctx.moveTo(x + 2, y); ctx.arc(x, y, 2, 0, 2 * Math.PI); ctx.moveTo(x, y)
+                    if (path[i].sample) {
+                        ctx.moveTo(x + 2, y); ctx.arc(x, y, 2, 0, 2 * Math.PI); ctx.moveTo(x, y)
+                    }
                 }
                 ctx.stroke()
             }

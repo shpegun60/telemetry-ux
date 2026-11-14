@@ -23,28 +23,33 @@ and selection/focus treatment. No additional cards, status badges or per-row
 buttons. Names and values are plain text. Values use `Type.fixedFamily`, arrive
 as exact strings and are never converted through a QML number.
 
-- At a wider panel, name and value/unit share one compact line; type/access and
-  age/status form quiet secondary information alongside them. They are not six
-  independently squeezed table columns.
-- At 320 px, endpoint rows use two short lines: name and value/unit first,
-  type/access and age/status below. Their height follows the two font metrics
-  and `Type.tight`; group rows stay at `Type.rowHeight`. At larger font zoom,
-  this narrow arrangement is selected sooner rather than shrinking the text.
-- At 480 px, use the single-line arrangement only if the same text budget fits.
+- Every width uses one compact row with **Name, Value, Type, Access**
+  columns, matching the Values viewer's table hierarchy. Only Name contains
+  depth indentation, the chevron and Watch checkbox. Deep indentation is
+  bounded within Name so it cannot cover Value or consume all label space.
+- Header separators resize columns with the mouse; a focused header supports
+  Left/Right to resize and Home to reset. Double-clicking a separator also
+  restores that column. Name absorbs spare space until explicitly resized.
+- Narrow panels scroll the same logical table horizontally instead of
+  wrapping every Field into multiple lines. Headers and rows scroll together.
   A long name, type or value is elided, with its full plain text available in
-  the row's accessible description and the existing tooltip/Details route.
-- Type names use the same schema formatter as Values/Descriptor. Access is
-  stated explicitly, such as RO, RW or write-only. Unit comes from presentation
+  the cell tooltip, accessible description and existing Details route.
+- Type names use the same schema formatter as Values/Descriptor. Field access
+  uses the two-letter marks `r-`, `rw`, `-w` or `--`, derived from descriptor
+  permissions. The full words remain in the tooltip and accessible description;
+  Commands and Services retain their operation names. Unit comes from presentation
   metadata, and is empty when unknown. None is inferred from the value's text.
 - Commands and Services show their schema type/signature and category. They
   never receive a preview demand or an execute/call action from this view.
 
 **States.** Never-read values show an em dash with **Not read**. Waiting and
 in-flight work say **Queued…** and **Reading…**, without a spinner on every row.
-An available value has its received age; a stale cached value remains visible
-with **Stale** and its age. Refusal/error text explains an unavailable value;
+An available cached value stays legible while this deliberately slow preview
+waits for its next refresh. Cache age and TTL are not displayed, and TTL alone
+does not dim a valid value. Refusal/error text explains an unavailable value;
 zero, an empty success cell or a green dot must not stand in for missing data.
-Use status words as well as the existing semantic colors. Detailed IDs, byte
+Read/error states and refusal reasons remain in the Value tooltip and accessible
+description rather than a permanent status column. Detailed IDs, byte
 counts, enum codes, limits and help belong in Details or the row description,
 not in a permanent column on every row.
 
@@ -75,7 +80,7 @@ implicit editor activation. The preview toggle is reachable by Tab, exposes its
 checked state and has a visible focus treatment. State/type/value descriptions
 are available without hovering.
 
-**Acceptance.** Inspect actual native captures at 320 and 480 px and enlarged
+**Acceptance.** Inspect actual native captures at 320, 600 and 900 px and enlarged
 font zoom, with exact U64/S64, unknown enum, long names, unavailable/stale values,
 nested structures and a large array. Check that groups retain compact height,
 no text overlaps, focus and watch-box geometry stay legible, and the Details
@@ -95,8 +100,12 @@ switches to the existing numeric text input; the return-to-list action explicitl
 discards that entered code. A limited choice list says that another code can be
 entered. No enum is treated as closed merely because its name is absent.
 
-Name, value and type use the same quiet hierarchy as Values. Narrow Details
-puts the editor on its own line so a full U64/S64 or floating value has room.
+Definitions, request drafts and owned responses use **Name, Value, Type**
+columns with the same quiet hierarchy as Values. Narrow Details scrolls a
+minimum-width table horizontally so exact U64/S64 and floating editors retain
+usable space; editor rows reserve the native control's height. Access, byte
+size and the draft/read state appear once above the table. Request and Response
+stack in narrow panels; the uncalled response remains compact.
 The backend's `canonicalText` provides **Encoded: … (f32/f64)** beneath a float
 editor. This is the prepared typed representation, not a claim of successful
 transmission or storage. The user's original text, including incomplete input,
@@ -114,7 +123,6 @@ not appear on a Service or Command request. Disconnected panels retain relevant
 historical mutation outcomes, including OutcomeUnknown, with the existing
 Previous connection caption; they expose no mutation actions or response body.
 
-Later design work may use step interpolation for Boolean/enum graphs and add
-enum names beside historical exact codes. Neither is part of this tree/editor
-slice; numeric graph coordinates must never be presented as completed commands
-or a replacement for exact raw history.
+Typed Watch editing and bounded Boolean/enum graph presentation are described
+in [Categorical signals](CategoricalSignals.md). Numeric graph coordinates
+never imply completed commands or replace exact raw history.

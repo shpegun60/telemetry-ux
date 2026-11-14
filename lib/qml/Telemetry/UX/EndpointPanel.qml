@@ -1,7 +1,5 @@
-// Shared Field/Command/Service renderer; host-owned provider and I/O. With
-// nothing selected it is one line; with a selection, the name and its actions
-// on one row, a caption line for a draft's, a Command's or a Service's note,
-// and the values a row high. `framed: false` drops the card for a dock. MIT.
+// Field/Command/Service Details: schema and owned values in the same compact
+// tree-table as Values. The host owns the provider, buffers and all I/O. MIT.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -31,6 +29,7 @@ Pane {
     readonly property bool disconnected: typeof provider.connected === "boolean" && !provider.connected
     readonly property var selectionInfo: typeof provider.selectionInfo === "object" && provider.selectionInfo ? provider.selectionInfo : ({})
     property int valueModelRevision: 0
+    property int responseModelRevision: 0
     readonly property bool showMetadata: {
         void valueModelRevision
         if (!showSelection || disconnected || !hasSelection || selectedCategory !== 1 || provider.editing ||
@@ -54,6 +53,113 @@ Pane {
         color: panel.framed ? Theme.surface : Theme.surfaceWindow
         radius: panel.framed ? Type.radius * 2 : 0
     }
+    readonly property real minimumTableWidth: Type.bodyPixels * 27
+    function tableWidth(view) { return Math.max(minimumTableWidth, view ? view.width : 0) }
+    function typeWidth() { return Type.bodyPixels * 5 }
+    function valueWidth(width) { return Math.max(Type.bodyPixels * 14, width * 0.48) }
+    function nameWidth(width) { return width - typeWidth() - valueWidth(width) }
+    function numericType(type) { return /^(?:[us](?:8|16|32|64)|f(?:32|64))$/.test(type) }
+    function outcomeColor(needsAttention) {
+        return typeof needsAttention === "boolean" && !needsAttention ? Theme.textSecondary : Theme.warning
+    }
+    readonly property string contextHelp: provider.serviceSelected
+        ? qsTr("Request values start at zero, not at device defaults. Call sends one request. The response is kept until the next accepted change or session.")
+        : provider.commandSelected
+        ? qsTr("Arguments start at zero, not at device defaults. Execute sends the Command once. Accepted does not confirm that the device completed it.")
+        : provider.editing
+        ? qsTr("You are editing a local draft. Apply writes it once, then reads the device again. Floating-point values show the exact encoded value below the input.")
+        : qsTr("The type and structure come from the Descriptor. Refresh reads the Field; expanding its definition does not send requests.")
+
+    component TableHeading: Item {
+        required property var view
+        implicitHeight: Math.max(24, Type.rowHeight)
+        clip: true
+        Item {
+            x: view ? -view.contentX : 0
+            width: panel.tableWidth(view)
+            height: parent.height
+            Label {
+                x: Type.padding; width: panel.nameWidth(parent.width) - Type.padding * 2
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption
+            }
+            Label {
+                x: panel.nameWidth(parent.width) + Type.padding
+                width: panel.valueWidth(parent.width) - Type.padding * 2
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("Value"); color: Theme.textSecondary; font.pointSize: Type.caption
+                horizontalAlignment: Text.AlignRight
+            }
+            Label {
+                x: parent.width - panel.typeWidth() + Type.padding
+                width: panel.typeWidth() - Type.padding * 2
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("Type"); color: Theme.textSecondary; font.pointSize: Type.caption
+            }
+        }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.outlineVariant }
+    }
+    // Indentation belongs to Name only. Value/Type line up at every depth;
+    // the actual style's editor size determines the height of an editable row.
+    component DetailRow: TreeViewDelegate {
+        id: cellRow
+        property string cellName: ""
+        property string cellType: ""
+        property string cellValue: ""
+        property string cellHint: ""
+        property Component valueComponent
+        readonly property var valueItem: valueCell.item
+        // Deep DTOs keep both a usable disclosure target and a readable name.
+        // Indentation stops inside Name instead of covering Value's editor.
+        readonly property real nameIndent: Math.min((depth + 1) * Type.indent,
+            Math.max(Type.indent, panel.nameWidth(width) - Type.bodyPixels * 4 - Type.padding * 2))
+        indentation: Type.indent
+        leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+        indicator: TreeChevron { row: cellRow; x: cellRow.nameIndent - Type.indent }
+        implicitWidth: panel.tableWidth(treeView)
+        implicitHeight: Math.max(Type.rowHeight, valueCell.implicitHeight + Type.tight * 2)
+        text: cellName
+        highlighted: current
+        Accessible.name: cellName
+        Accessible.description: [cellType, cellValue, cellHint].filter(function(part) { return part.length > 0 }).join("\n")
+        onImplicitHeightChanged: Qt.callLater(function() { if (cellRow.treeView) cellRow.treeView.forceLayout() })
+        PlainToolTip { visible: cellRow.hovered && cellRow.cellHint.length > 0; text: cellRow.cellHint }
+        Rectangle {
+            anchors.fill: parent; color: "transparent"
+            border.width: 2; border.color: Theme.focusRing
+            visible: cellRow.current && cellRow.treeView && cellRow.treeView.activeFocus
+            Accessible.ignored: true
+        }
+        contentItem: Item {
+            Label {
+                objectName: "detailCellName"
+                x: Type.padding + cellRow.nameIndent
+                width: Math.max(0, panel.nameWidth(cellRow.width) - x - Type.padding)
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText; text: cellRow.cellName; elide: Text.ElideRight
+                color: cellRow.highlighted ? Theme.selectedForeground : Theme.textPrimary
+            }
+            Loader {
+                id: valueCell
+                x: panel.nameWidth(cellRow.width) + Type.padding
+                width: Math.max(1, panel.valueWidth(cellRow.width) - Type.padding * 2)
+                anchors.verticalCenter: parent.verticalCenter
+                sourceComponent: cellRow.valueComponent
+            }
+            Label {
+                id: typeCellLabel
+                objectName: "detailCellType"
+                x: cellRow.width - panel.typeWidth() + Type.padding
+                width: panel.typeWidth() - Type.padding * 2
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText; text: cellRow.cellType; elide: Text.ElideRight
+                font.family: Type.fixedFamily; font.pointSize: Type.caption
+                color: cellRow.highlighted ? Theme.selectedForeground : Theme.textSecondary
+                HoverHandler { id: typeHover }
+                PlainToolTip { visible: typeHover.hovered && typeCellLabel.truncated; text: cellRow.cellType }
+            }
+        }
+    }
     ColumnLayout {
         anchors.fill: parent
         spacing: Type.spacing
@@ -61,21 +167,14 @@ Pane {
         GridLayout {
             id: selectionHeader
             Layout.fillWidth: true
-            // Nothing selected: the value area's one line says what to do.
             visible: panel.showSelection && panel.hasSelection
             columns: width < 560 ? 1 : 2
-            columnSpacing: Type.spacing
-            rowSpacing: Type.tight
+            columnSpacing: Type.spacing; rowSpacing: Type.tight
             Label {
                 objectName: "endpointSelectionTitle"
-                textFormat: Text.PlainText
-                text: panel.provider.selection
-                font.weight: Type.headingWeight
-                Layout.fillWidth: true
-                elide: Text.ElideMiddle
+                textFormat: Text.PlainText; text: panel.provider.selection
+                font.weight: Type.headingWeight; Layout.fillWidth: true; elide: Text.ElideMiddle
             }
-            // One row beside the title when the panel is wide; in a narrow dock
-            // the actions wrap under the title so every button stays inside it.
             Flow {
                 id: selectionActions
                 objectName: "endpointSelectionActions"
@@ -83,10 +182,7 @@ Pane {
                 readonly property real rowWidth: {
                     let total = 0, shown = 0
                     for (let i = 0; i < children.length; ++i) {
-                        if (children[i].visible) {
-                            total += children[i].implicitWidth
-                            ++shown
-                        }
+                        if (children[i].visible) { total += children[i].implicitWidth; ++shown }
                     }
                     return total + Math.max(0, shown - 1) * spacing
                 }
@@ -94,239 +190,206 @@ Pane {
                 Layout.preferredWidth: selectionHeader.columns === 1 ? -1 : rowWidth
                 BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: Type.controlHeight; implicitHeight: Type.controlHeight }
                 Button {
-                    objectName: "editButton"
-                    text: "Edit"
+                    objectName: "editButton"; text: qsTr("Edit")
                     visible: !panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                    enabled: panel.provider.canEdit
-                    onClicked: panel.provider.beginEdit()
+                        && panel.selectionInfo.writable !== false
+                    enabled: panel.provider.canEdit; onClicked: panel.provider.beginEdit()
+                    ToolTip.visible: hovered; ToolTip.delay: 700
+                    ToolTip.text: panel.showMetadata ? qsTr("Read the Field before editing")
+                        : panel.provider.allowMutations === false ? qsTr("Enable writes to edit this Field") : qsTr("Edit a local draft")
                 }
                 Button {
-                    objectName: "cancelEditButton"
-                    text: "Cancel"
+                    objectName: "cancelEditButton"; text: qsTr("Cancel")
                     visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                    enabled: !panel.provider.busy
-                    onClicked: panel.provider.cancelEdit()
+                    enabled: !panel.provider.busy; onClicked: panel.provider.cancelEdit()
                 }
                 Button {
-                    objectName: "applyButton"
-                    text: qsTr("Apply")
+                    objectName: "applyButton"; text: qsTr("Apply")
                     visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                    enabled: panel.provider.canApply
-                    onClicked: panel.provider.apply()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 700
+                    enabled: panel.provider.canApply; onClicked: panel.provider.apply()
+                    ToolTip.visible: hovered; ToolTip.delay: 700
                     ToolTip.text: qsTr("Write once, then read the device again")
                 }
                 Button {
-                    objectName: "executeButton"
-                    text: "Execute once"
-                    visible: panel.provider.commandSelected
-                    enabled: panel.provider.canExecute
+                    objectName: "executeButton"; text: qsTr("Execute once")
+                    visible: panel.provider.commandSelected; enabled: panel.provider.canExecute
                     onClicked: panel.provider.executeCommand()
                 }
                 Button {
-                    objectName: "callServiceButton"
-                    text: "Call once"
-                    visible: panel.provider.serviceSelected
-                    enabled: panel.provider.canCallService
+                    objectName: "callServiceButton"; text: qsTr("Call once")
+                    visible: panel.provider.serviceSelected; enabled: panel.provider.canCallService
                     onClicked: panel.provider.callService()
                 }
                 Button {
-                    objectName: "refreshButton"
-                    text: "Refresh"
+                    objectName: "refreshButton"; text: panel.showMetadata ? qsTr("Read") : qsTr("Refresh")
                     visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
-                    enabled: panel.provider.canRefresh
-                    onClicked: panel.provider.refresh()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 700
-                    ToolTip.text: qsTr("Read the device again. The values shown are from the last completed read; arrays load in batches as you expand them.")
+                    enabled: panel.provider.canRefresh; onClicked: panel.provider.refresh()
+                    ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Read this Field from the device")
                 }
             }
         }
-        Label {
+        RowLayout {
             objectName: "endpointSelectionInfo"
-            visible: panel.showSelection && panel.hasSelection && text.length > 0
+            visible: panel.showSelection && panel.hasSelection
             Layout.fillWidth: true
-            textFormat: Text.PlainText
-            font.pointSize: Type.caption
-            color: Theme.textSecondary
-            wrapMode: Text.Wrap
-            text: {
-                const info = panel.selectionInfo
-                const parts = []
-                if (typeof info.typeText === "string" && info.typeText.length > 0)
-                    parts.push(info.typeText + (typeof info.responseTypeText === "string" && info.responseTypeText.length > 0
-                        ? " → " + info.responseTypeText : ""))
-                if (typeof info.accessText === "string" && info.accessText.length > 0)
-                    parts.push(info.accessText)
-                if (typeof info.wireBytes === "number" && info.wireBytes >= 0)
-                    parts.push(qsTr("%L1 bytes").arg(info.wireBytes))
-                return parts.join(" · ")
+            spacing: Type.groupSpacing
+            Label {
+                id: accessLabel
+                objectName: "endpointAccess"
+                readonly property string words: typeof panel.selectionInfo.accessText === "string" ? panel.selectionInfo.accessText : ""
+                text: panel.selectedCategory === 1 && typeof panel.selectionInfo.readable === "boolean" && typeof panel.selectionInfo.writable === "boolean"
+                    ? (panel.selectionInfo.readable ? "r" : "-") + (panel.selectionInfo.writable ? "w" : "-") : words
+                visible: text.length > 0
+                Accessible.name: words
+                font.family: Type.fixedFamily
+                font.pointSize: Type.caption; color: Theme.textSecondary
+                HoverHandler { id: accessHover }
+                PlainToolTip { visible: accessHover.hovered; text: accessLabel.words }
             }
-        }
-        // A draft's, a Command's or a Service's note, one caption line under the name.
-        Label {
-            objectName: "endpointNote"
-            visible: panel.showSelection && panel.hasSelection && text.length > 0
-            textFormat: Text.PlainText
-            text: panel.provider.serviceSelected
-                ? qsTr("Request values start at zero. Call sends one request; the response stays until the next accepted change or session.")
-                : panel.provider.commandSelected
-                ? qsTr("Arguments start at zero; the device's defaults may differ. Accepted does not confirm it ran.")
-                : panel.provider.editing
-                ? qsTr("A local draft. Apply writes it once and reads the device again.")
-                : ""
-            color: Theme.textMuted
-            font.pointSize: Type.caption
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-        Label {
-            objectName: "definitionUnreadNote"
-            visible: panel.showMetadata
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            text: qsTr("Not read. Refresh reads the Field.")
-            Accessible.description: qsTr("Expanding this definition does not read device values.")
-            font.pointSize: Type.caption
-            color: Theme.textSecondary
-            wrapMode: Text.Wrap
+            Label {
+                text: typeof panel.selectionInfo.wireBytes === "number" && panel.selectionInfo.wireBytes >= 0
+                    ? panel.selectionInfo.wireBytes === 1 ? qsTr("1 byte") : qsTr("%L1 bytes").arg(panel.selectionInfo.wireBytes) : ""
+                visible: text.length > 0
+                font.pointSize: Type.caption; color: Theme.textMuted
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                objectName: "definitionUnreadNote"
+                text: panel.showMetadata ? qsTr("Not read") : panel.provider.editing ? qsTr("Local draft") : ""
+                visible: text.length > 0
+                font.pointSize: Type.caption; color: Theme.textSecondary
+                Accessible.description: panel.contextHelp
+            }
+            ToolButton {
+                id: helpButton
+                objectName: "endpointHelp"
+                text: "?"
+                implicitWidth: Type.controlHeight; implicitHeight: Type.controlHeight
+                Accessible.name: qsTr("About this operation"); Accessible.description: panel.contextHelp
+                ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: panel.contextHelp
+                onClicked: operationHelp.open()
+                Popup {
+                    id: operationHelp
+                    x: Math.min(0, helpButton.width - width)
+                    y: helpButton.height
+                    width: Math.min(360, panel.width - panel.padding * 2)
+                    padding: Type.groupSpacing
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    contentItem: Label { textFormat: Text.PlainText; text: panel.contextHelp; wrapMode: Text.Wrap }
+                }
+            }
         }
         GridLayout {
             id: valueColumns
             visible: panel.showSelection
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            columns: panel.showResponse && width >= 650 ? 2 : 1
-            Loader {
-                active: panel.showMetadata
-                visible: active
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+            Layout.fillHeight: !panel.showResponse || responseSection.hasRows
+            columns: panel.showResponse && responseSection.hasRows && width >= panel.minimumTableWidth * 2 + Type.spacing ? 2 : 1
+            columnSpacing: Type.groupSpacing; rowSpacing: Type.groupSpacing
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumWidth: 160
-                sourceComponent: Component {
-                    TreeView {
-                        id: metadataTree
-                        objectName: "metadataTree"
-                        clip: true
-                        model: panel.provider.definitions
-                        rootIndex: panel.provider.definitionRootIndex
-                        activeFocusOnTab: true
-                        alternatingRows: false
-                        selectionModel: ItemSelectionModel { model: metadataTree.model }
-                        columnWidthProvider: function() { return Math.max(1, metadataTree.width) }
-                        onWidthChanged: forceLayout()
-                        delegate: EndpointTreeRow {
-                            reserveWatchSpace: false
-                            typeText: typeof model.typeText === "string" ? model.typeText : ""
-                            accessText: typeof model.accessText === "string" ? model.accessText : ""
-                            previewChild: model.previewChild === true
-                            hint: qsTr("Not read. Refresh reads the Field; expanding its definition reads nothing.")
-                        }
-                        ScrollBar.vertical: ScrollBar {}
-                        Connections {
-                            target: Type
-                            function onRowHeightChanged() { metadataTree.forceLayout() }
-                        }
-                    }
-                }
-            }
-            TreeView {
-                id: valueTree
-                visible: !panel.showMetadata
-                // A zoom changes the row height: the rows already laid out follow it.
-                Connections {
-                    target: Type
-                    function onRowHeightChanged() { Qt.callLater(function() { if (valueTree) valueTree.forceLayout() }) }
-                }
-                objectName: "valueTree"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                // Fits a 280 px dock (256 px of content); two columns appear only
-                // from 650 px, where each is wider than this anyway.
-                Layout.minimumWidth: 160
+                Layout.minimumHeight: Type.rowHeight * 3
+                Layout.preferredHeight: panel.showResponse && !responseSection.hasRows
+                    ? Math.min(Type.rowHeight * 10 + valueHeading.implicitHeight,
+                        Math.max(Type.rowHeight * 3, valueTree.contentHeight) + valueHeading.implicitHeight
+                        + (panel.minimumTableWidth > valueTree.width + 1 ? valueHorizontal.implicitHeight : 0))
+                    : Type.rowHeight * 8
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
-                clip: true
-                model: panel.provider.values
-                Component.onCompleted: Qt.callLater(function() {
-                    if (!valueTree) return
-                    valueTree.forceLayout()
-                    valueTree.expand(0)
-                })
-                columnWidthProvider: function() { return Math.max(1, valueTree.width) }
-                onWidthChanged: Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
-                delegate: TreeViewDelegate {
-                    id: valueDelegate
-                    indentation: Type.indent
-                    indicator: TreeChevron { row: valueDelegate }
-                    objectName: "valueRow"
-                    required property string name
-                    required property string detail
-                    required property string value
-                    required property bool isAggregate
-                    required property int childCount
-                    required property int loadedCount
-                    required property bool editable
-                    required property string editorText
-                    readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
-                    readonly property string canonicalText: typeof model.canonicalText === "string" ? model.canonicalText : ""
-                    readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
-                    readonly property var editorChoices: model.editorChoices !== undefined ? model.editorChoices : []
-                    readonly property bool choicesTruncated: model.editorChoicesTruncated === true
-                    readonly property bool narrow: valueTree.width < Type.bodyPixels * 30
-                    readonly property bool floatEditor: editable && (typeText === "f32" || typeText === "f64") && canonicalText.length > 0
-                    TableView.onReused: {
-                        scalarInput.inputValid = true
-                        scalarInput.inputDirty = false
-                        scalarEditorHost.manualCode = false
-                    }
-                    implicitWidth: valueTree.width
-                    implicitHeight: Math.max(editable ? Type.controlHeight + Type.tight : Type.rowHeight, valueGrid.implicitHeight + Type.tight)
-                    text: name
-                    PlainToolTip {
-                        objectName: "valueToolTip"
-                        visible: valueDelegate.hovered && valueDelegate.detail.length > 0
-                        text: valueDelegate.detail
-                    }
-                    contentItem: GridLayout {
-                        id: valueGrid
-                        columns: valueDelegate.narrow ? 1 : 3
-                        columnSpacing: Type.groupSpacing
-                        rowSpacing: Type.tight
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            Label { textFormat: Text.PlainText; text: valueDelegate.name; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0 }
-                            Label {
-                                visible: valueDelegate.narrow && valueDelegate.typeText.length > 0
-                                Layout.maximumWidth: Math.max(0, valueTree.width * 0.45)
-                                Layout.minimumWidth: 0
-                                textFormat: Text.PlainText
-                                elide: Text.ElideRight
-                                text: valueDelegate.typeText
-                                color: Theme.textSecondary
-                                font.pointSize: Type.caption
-                                font.family: Type.fixedFamily
+                spacing: 0
+                TableHeading {
+                    id: valueHeading
+                    objectName: "valueTableHeader"
+                    Layout.fillWidth: true
+                    view: panel.showMetadata ? metadataLoader.item : valueTree
+                }
+                Loader {
+                    id: metadataLoader
+                    active: panel.showMetadata; visible: active
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    sourceComponent: Component {
+                        TreeView {
+                            id: metadataTree
+                            objectName: "metadataTree"
+                            clip: true; model: panel.provider.definitions; rootIndex: panel.provider.definitionRootIndex
+                            activeFocusOnTab: true; alternatingRows: false
+                            selectionModel: ItemSelectionModel { model: metadataTree.model }
+                            contentWidth: panel.tableWidth(metadataTree)
+                            columnWidthProvider: function() { return panel.tableWidth(metadataTree) }
+                            onWidthChanged: forceLayout()
+                            delegate: DetailRow {
+                                id: metadataDelegate
+                                objectName: "endpointRow"
+                                required property string name
+                                required property string detail
+                                required property bool isEndpoint
+                                readonly property bool twoLines: false
+                                readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
+                                cellName: name; cellType: typeText; cellValue: qsTr("Not read")
+                                cellHint: detail + "\n" + panel.contextHelp
+                                valueComponent: Label {
+                                    text: "\u2014"; color: metadataDelegate.highlighted ? Theme.selectedForeground : Theme.textMuted
+                                    Accessible.description: qsTr("Not read")
+                                }
                             }
+                            ScrollBar.vertical: ScrollBar {}
+                            ScrollBar.horizontal: ScrollBar { policy: panel.minimumTableWidth > metadataTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
+                            Connections { target: Type; function onRowHeightChanged() { metadataTree.forceLayout() } }
                         }
-                        ColumnLayout {
-                            Layout.fillWidth: valueDelegate.narrow
-                            Layout.minimumWidth: 0
-                            Layout.preferredWidth: valueDelegate.narrow ? -1 : Math.min(230, Math.max(120, valueTree.width * 0.45))
+                    }
+                }
+                TreeView {
+                    id: valueTree
+                    objectName: "valueTree"
+                    visible: !panel.showMetadata
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    clip: true; model: panel.provider.values; alternatingRows: false
+                    activeFocusOnTab: true
+                    selectionModel: ItemSelectionModel { model: valueTree.model }
+                    contentWidth: panel.tableWidth(valueTree)
+                    Component.onCompleted: Qt.callLater(function() { if (valueTree) { valueTree.forceLayout(); valueTree.expand(0) } })
+                    columnWidthProvider: function() { return panel.tableWidth(valueTree) }
+                    onWidthChanged: Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
+                    Connections { target: Type; function onRowHeightChanged() { Qt.callLater(function() { if (valueTree) valueTree.forceLayout() }) } }
+                    delegate: DetailRow {
+                        id: valueDelegate
+                        objectName: "valueRow"
+                        required property string name
+                        required property string detail
+                        required property string value
+                        required property bool isAggregate
+                        required property int childCount
+                        required property int loadedCount
+                        required property bool editable
+                        required property string editorText
+                        readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
+                        readonly property string canonicalText: typeof model.canonicalText === "string" ? model.canonicalText : ""
+                        readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
+                        readonly property var editorChoices: model.editorChoices !== undefined ? model.editorChoices : []
+                        readonly property bool choicesTruncated: model.editorChoicesTruncated === true
+                        readonly property bool floatEditor: editable && (typeText === "f32" || typeText === "f64") && canonicalText.length > 0
+                        cellName: name; cellType: typeText; cellHint: detail; cellValue: value
+                        TableView.onReused: {
+                            if (valueItem && typeof valueItem.resetEditor === "function") valueItem.resetEditor()
+                        }
+                        valueComponent: ColumnLayout {
+                            function resetEditor() {
+                                scalarInput.inputValid = true
+                                scalarInput.inputDirty = false
+                                scalarEditorHost.manualCode = false
+                            }
                             spacing: Type.tight
                             Label {
+                                id: scalarValueLabel
                                 visible: !valueDelegate.editable
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                textFormat: Text.PlainText
-                                elide: Text.ElideRight
+                                Layout.fillWidth: true; Layout.minimumWidth: 0
+                                textFormat: Text.PlainText; elide: Text.ElideRight
                                 text: valueDelegate.value
-                                color: Theme.textPrimary
-                                font.family: Type.fixedFamily
-                                horizontalAlignment: valueDelegate.narrow ? Text.AlignLeft : Text.AlignRight
+                                color: valueDelegate.highlighted ? Theme.selectedForeground : valueDelegate.isAggregate ? Theme.textMuted : Theme.textPrimary
+                                font.family: valueDelegate.isAggregate ? Qt.application.font.family : Type.fixedFamily
+                                horizontalAlignment: panel.numericType(valueDelegate.typeText) ? Text.AlignRight : Text.AlignLeft
                                 HoverHandler { id: scalarValueHover }
-                                ToolTip.visible: scalarValueHover.hovered && truncated
-                                ToolTip.text: valueDelegate.value
+                                PlainToolTip { visible: scalarValueHover.hovered && scalarValueLabel.truncated; text: valueDelegate.value }
                             }
                             RowLayout {
                                 id: scalarEditorHost
@@ -359,6 +422,14 @@ Pane {
                                 ComboBox {
                                     id: valueChoice
                                     objectName: "valueChoice"
+                                    palette.light: Theme.stateSelected
+                                    palette.midlight: Theme.stateHover
+                                    palette.mid: Theme.buttonFillPressed
+                                    palette.dark: Theme.textSecondary
+                                    palette.text: Theme.textPrimary
+                                    palette.buttonText: Theme.textPrimary
+                                    palette.highlight: Theme.stateSelected
+                                    palette.highlightedText: Theme.selectedForeground
                                     visible: scalarEditorHost.choices && !scalarEditorHost.manualCode
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
@@ -442,101 +513,86 @@ Pane {
                             }
                             Label {
                                 objectName: "valueEncodedCaption"
-                                visible: valueDelegate.editable && (valueDelegate.floatEditor || !scalarInput.inputValid)
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                textFormat: Text.PlainText
-                                wrapMode: Text.Wrap
+                                visible: valueDelegate.editable && (!scalarInput.inputValid ||
+                                    (valueDelegate.floatEditor && scalarInput.inputDirty && scalarInput.text !== valueDelegate.canonicalText))
+                                Layout.fillWidth: true; Layout.minimumWidth: 0
+                                textFormat: Text.PlainText; wrapMode: Text.Wrap
                                 font.pointSize: Type.caption
                                 color: scalarInput.inputValid ? Theme.textSecondary : Theme.error
                                 text: scalarInput.inputValid
                                     ? qsTr("Encoded: %1 (%2)").arg(valueDelegate.canonicalText).arg(valueDelegate.typeText)
                                     : qsTr("Enter a valid value.")
                             }
-                        }
-                        Label {
-                            objectName: "valueType"
-                            visible: !valueDelegate.narrow && valueDelegate.typeText.length > 0
-                            Layout.preferredWidth: Type.bodyPixels * 6
-                            Layout.maximumWidth: Type.bodyPixels * 6
-                            Layout.minimumWidth: 0
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            text: valueDelegate.typeText
-                            color: Theme.textSecondary
-                            font.family: Type.fixedFamily
-                            font.pointSize: Type.caption
-                            HoverHandler { id: valueTypeHover }
-                            ToolTip.visible: valueTypeHover.hovered && truncated
-                            ToolTip.text: valueDelegate.typeText
-                        }
-                        Button {
-                            visible: isAggregate && childCount > 128
-                            Layout.columnSpan: valueGrid.columns
-                            enabled: loadedCount < childCount
-                            text: "Load next 128 · " + loadedCount + "/" + childCount
-                            onClicked: panel.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, row)))
+                            Button {
+                                visible: valueDelegate.isAggregate && valueDelegate.childCount > 128
+                                enabled: valueDelegate.loadedCount < valueDelegate.childCount
+                                text: qsTr("Load next 128 \u00b7 %1/%2").arg(valueDelegate.loadedCount).arg(valueDelegate.childCount)
+                                onClicked: panel.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, valueDelegate.row)))
+                            }
                         }
                     }
-                }
-                ScrollBar.vertical: ScrollBar {}
-                Label {
-                    parent: valueTree
-                    objectName: "emptyValueLabel"
-                    textFormat: Text.PlainText
-                    anchors.centerIn: parent
-                    width: Math.max(0, parent.width - 24)
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.Wrap
-                    visible: valueTree.rows === 0
-                    text: panel.provider.busy
-                        ? panel.provider.serviceSelected ? "Waiting for the Service result…" : panel.provider.commandSelected ? "Waiting for the Command result…" : "Reading the selected Field…"
-                        : panel.provider.serviceSelected ? "No argument values to edit. Call submits one Service request."
-                        : panel.provider.commandSelected ? "No argument values to edit. Execute sends the Command once."
-                        : panel.hasSelection ? qsTr("Not read yet. Refresh reads it.")
-                        : qsTr("Select a Field, Command or Service in the Device tree.")
-                    color: Theme.textSecondary
+                    ScrollBar.vertical: ScrollBar {}
+                    ScrollBar.horizontal: ScrollBar {
+                        id: valueHorizontal
+                        policy: panel.minimumTableWidth > valueTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                    }
+                    Label {
+                        objectName: "emptyValueLabel"
+                        anchors.centerIn: parent
+                        width: Math.max(0, parent.width - Type.padding * 2)
+                        horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                        visible: valueTree.rows === 0
+                        text: panel.provider.busy ? qsTr("Waiting\u2026")
+                            : panel.provider.serviceSelected || panel.provider.commandSelected ? qsTr("No arguments")
+                            : panel.hasSelection ? qsTr("Not read") : qsTr("Select an endpoint in the Device tree")
+                        color: Theme.textMuted
+                    }
                 }
             }
             ColumnLayout {
+                id: responseSection
                 visible: panel.showResponse
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                // Fits a 280 px dock (256 px of content); two columns appear only
-                // from 650 px, where each is wider than this anyway.
-                Layout.minimumWidth: 160
-                Layout.preferredWidth: valueColumns.width / valueColumns.columns
-                Label {
-                    textFormat: Text.PlainText
-                    text: panel.provider.serviceResponseEndpoint.length
-                        ? "Last response · " + panel.provider.serviceResponseEndpoint : "Last response"
-                    color: Theme.textSecondary
-                    Layout.fillWidth: true
-                    elide: Text.ElideMiddle
+                readonly property bool hasRows: {
+                    void panel.responseModelRevision
+                    return !!panel.provider.responses && typeof panel.provider.responses.rowCount === "function"
+                        && panel.provider.responses.rowCount() > 0
                 }
+                Layout.fillWidth: true; Layout.fillHeight: hasRows
+                Layout.minimumWidth: 160
+                Layout.minimumHeight: hasRows ? Type.rowHeight * 3 : Type.rowHeight
+                Layout.preferredHeight: hasRows ? Type.rowHeight * 8 : Type.rowHeight
+                Layout.preferredWidth: valueColumns.width / valueColumns.columns
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        text: qsTr("Response"); font.weight: Type.headingWeight; color: Theme.textSecondary
+                        Accessible.description: panel.provider.serviceResponseEndpoint
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        visible: !responseSection.hasRows
+                        objectName: "emptyResponseLabel"
+                        text: panel.provider.busy ? qsTr("Waiting\u2026") : qsTr("No response")
+                        font.pointSize: Type.caption; color: Theme.textMuted
+                    }
+                }
+                TableHeading { objectName: "responseTableHeader"; visible: responseSection.hasRows; Layout.fillWidth: true; view: responseTree }
                 TreeView {
                     id: responseTree
-                    // A zoom changes the row height: the rows already laid out follow it.
-                    Connections {
-                        target: Type
-                        function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) }
-                    }
                     objectName: "responseTree"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: panel.provider.responses
-                    Component.onCompleted: Qt.callLater(function() {
-                        if (!responseTree) return
-                        responseTree.forceLayout()
-                        responseTree.expand(0)
-                    })
-                    columnWidthProvider: function() { return Math.max(1, responseTree.width) }
+                    visible: responseSection.hasRows
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    clip: true; model: panel.provider.responses; alternatingRows: false
+                    activeFocusOnTab: true
+                    selectionModel: ItemSelectionModel { model: responseTree.model }
+                    contentWidth: panel.tableWidth(responseTree)
+                    Component.onCompleted: Qt.callLater(function() { if (responseTree) { responseTree.forceLayout(); responseTree.expand(0) } })
+                    columnWidthProvider: function() { return panel.tableWidth(responseTree) }
                     onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
-                    delegate: TreeViewDelegate {
+                    Connections { target: Type; function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) } }
+                    delegate: DetailRow {
                         id: responseDelegate
-                        indentation: Type.indent
-                        indicator: TreeChevron { row: responseDelegate }
                         objectName: "responseRow"
                         required property string name
                         required property string detail
@@ -545,89 +601,35 @@ Pane {
                         required property int childCount
                         required property int loadedCount
                         readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
-                        readonly property bool narrow: responseTree.width < Type.bodyPixels * 30
-                        implicitWidth: responseTree.width
-                        implicitHeight: Math.max(Type.rowHeight, responseGrid.implicitHeight + Type.tight)
-                        text: name
-                        PlainToolTip {
-                            objectName: "responseToolTip"
-                            visible: responseDelegate.hovered && responseDelegate.detail.length > 0
-                            text: responseDelegate.detail
-                        }
-                        contentItem: GridLayout {
-                            id: responseGrid
-                            columns: responseDelegate.narrow ? 1 : 3
-                            columnSpacing: Type.groupSpacing
-                            rowSpacing: Type.tight
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                Label { textFormat: Text.PlainText; text: responseDelegate.name; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0 }
-                                Label {
-                                    visible: responseDelegate.narrow && responseDelegate.typeText.length > 0
-                                    Layout.maximumWidth: Math.max(0, responseTree.width * 0.45)
-                                    Layout.minimumWidth: 0
-                                    textFormat: Text.PlainText
-                                    elide: Text.ElideRight
-                                    text: responseDelegate.typeText
-                                    color: Theme.textSecondary
-                                    font.family: Type.fixedFamily
-                                    font.pointSize: Type.caption
-                                }
-                            }
+                        cellName: name; cellType: typeText; cellHint: detail; cellValue: value
+                        valueComponent: ColumnLayout {
+                            spacing: Type.tight
                             Label {
-                                textFormat: Text.PlainText
-                                text: responseDelegate.value
-                                elide: Text.ElideRight
-                                Layout.minimumWidth: 0
-                                Layout.fillWidth: responseDelegate.narrow
-                                Layout.maximumWidth: responseDelegate.narrow ? responseTree.width : Math.max(120, responseTree.width * 0.45)
-                                color: Theme.textPrimary
-                                font.family: Type.fixedFamily
+                                id: responseValueLabel
+                                textFormat: Text.PlainText; text: responseDelegate.value; elide: Text.ElideRight
+                                Layout.fillWidth: true; Layout.minimumWidth: 0
+                                color: responseDelegate.highlighted ? Theme.selectedForeground : responseDelegate.isAggregate ? Theme.textMuted : Theme.textPrimary
+                                font.family: responseDelegate.isAggregate ? Qt.application.font.family : Type.fixedFamily
+                                horizontalAlignment: panel.numericType(responseDelegate.typeText) ? Text.AlignRight : Text.AlignLeft
                                 HoverHandler { id: responseValueHover }
-                                ToolTip.visible: responseValueHover.hovered && truncated
-                                ToolTip.text: responseDelegate.value
-                            }
-                            Label {
-                                objectName: "responseType"
-                                visible: !responseDelegate.narrow && responseDelegate.typeText.length > 0
-                                Layout.preferredWidth: Type.bodyPixels * 6
-                                Layout.maximumWidth: Type.bodyPixels * 6
-                                Layout.minimumWidth: 0
-                                textFormat: Text.PlainText
-                                elide: Text.ElideRight
-                                text: responseDelegate.typeText
-                                color: Theme.textSecondary
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.caption
-                                HoverHandler { id: responseTypeHover }
-                                ToolTip.visible: responseTypeHover.hovered && truncated
-                                ToolTip.text: responseDelegate.typeText
+                                PlainToolTip { visible: responseValueHover.hovered && responseValueLabel.truncated; text: responseDelegate.value }
                             }
                             Button {
-                                visible: isAggregate && childCount > 128
-                                Layout.columnSpan: responseGrid.columns
-                                enabled: loadedCount < childCount
-                                text: "Load next 128 · " + loadedCount + "/" + childCount
-                                onClicked: panel.provider.responses.fetchMore(responseTree.modelIndex(Qt.point(0, row)))
+                                visible: responseDelegate.isAggregate && responseDelegate.childCount > 128
+                                enabled: responseDelegate.loadedCount < responseDelegate.childCount
+                                text: qsTr("Load next 128 \u00b7 %1/%2").arg(responseDelegate.loadedCount).arg(responseDelegate.childCount)
+                                onClicked: panel.provider.responses.fetchMore(responseTree.modelIndex(Qt.point(0, responseDelegate.row)))
                             }
                         }
                     }
                     ScrollBar.vertical: ScrollBar {}
-                    Label {
-                        parent: responseTree
-                        objectName: "emptyResponseLabel"
-                        textFormat: Text.PlainText
-                        anchors.centerIn: parent
-                        width: Math.max(0, parent.width - 24)
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.Wrap
-                        visible: responseTree.rows === 0
-                        text: panel.provider.busy ? "Waiting for a response…" : "No owned response value."
-                        color: Theme.textSecondary
-                    }
+                    ScrollBar.horizontal: ScrollBar { policy: panel.minimumTableWidth > responseTree.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
                 }
             }
+        }
+        Item {
+            visible: panel.showSelection && panel.showResponse && !responseSection.hasRows
+            Layout.fillHeight: true
         }
         Label {
             visible: panel.disconnected && panel.hasOutcome
@@ -641,7 +643,7 @@ Pane {
             objectName: "writeOutcomeLabel"
             visible: panel.outcomeVisible(1, panel.provider.writeOutcome)
             text: qsTr("Last write: %1").arg(panel.provider.writeOutcome)
-            color: Theme.warning
+            color: panel.outcomeColor(panel.provider.writeOutcomeNeedsAttention)
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
@@ -650,7 +652,7 @@ Pane {
             objectName: "commandOutcomeLabel"
             visible: panel.outcomeVisible(2, panel.provider.commandOutcome)
             text: qsTr("Last command: %1").arg(panel.provider.commandOutcome)
-            color: Theme.warning
+            color: panel.outcomeColor(panel.provider.commandOutcomeNeedsAttention)
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
@@ -659,7 +661,7 @@ Pane {
             objectName: "serviceOutcomeLabel"
             visible: panel.outcomeVisible(3, panel.provider.serviceOutcome)
             text: qsTr("Last service: %1").arg(panel.provider.serviceOutcome)
-            color: Theme.warning
+            color: panel.outcomeColor(panel.provider.serviceOutcomeNeedsAttention)
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
@@ -688,12 +690,15 @@ Pane {
     Connections {
         target: panel.provider.responses
         function onModelReset() {
+            ++panel.responseModelRevision
             Qt.callLater(function() {
                 if (!responseTree) return
                 responseTree.forceLayout()
                 responseTree.expand(0)
             })
         }
+        function onRowsInserted() { ++panel.responseModelRevision }
+        function onRowsRemoved() { ++panel.responseModelRevision }
     }
     Connections {
         target: panel.provider

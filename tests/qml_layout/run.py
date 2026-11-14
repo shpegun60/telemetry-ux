@@ -109,6 +109,12 @@ def main():
         if not trend_match or int(trend_match[1]) < 20:
             raise RuntimeError('missing trend UI contract')
         report['trend'] = dict(checks=int(trend_match[1]), executable_sha256=digest(trend_binary))
+        typed_binary = output / 'build' / ('telemetry_qml_typed_watch.exe' if os.name == 'nt' else 'telemetry_qml_typed_watch')
+        typed_text = run('typed-watch', [typed_binary, output])
+        typed_match = re.search(r'Typed Watch checks=(\d+) warnings=0', typed_text)
+        if not typed_match or int(typed_match[1]) < 45:
+            raise RuntimeError('missing typed Watch explicit-commit and layout contract')
+        report['typed_watch'] = dict(checks=int(typed_match[1]), executable_sha256=digest(typed_binary))
         actions_binary = output / 'build' / ('telemetry_qml_tree_actions.exe' if os.name == 'nt' else 'telemetry_qml_tree_actions')
         actions_text = run('tree-actions', [actions_binary])
         actions_match = re.search(r'QML tree-actions checks=(\d+) warnings=0', actions_text)

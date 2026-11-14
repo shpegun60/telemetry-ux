@@ -71,6 +71,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString writeOutcome READ writeOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString commandOutcome READ commandOutcome NOTIFY stateChanged)
 	Q_PROPERTY(QString serviceOutcome READ serviceOutcome NOTIFY stateChanged)
+	Q_PROPERTY(bool writeOutcomeNeedsAttention READ writeOutcomeNeedsAttention NOTIFY stateChanged)
+	Q_PROPERTY(bool commandOutcomeNeedsAttention READ commandOutcomeNeedsAttention NOTIFY stateChanged)
+	Q_PROPERTY(bool serviceOutcomeNeedsAttention READ serviceOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
 	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 public:
@@ -172,6 +175,9 @@ public:
 	QString writeOutcome() const;
 	QString commandOutcome() const;
 	QString serviceOutcome() const;
+	bool writeOutcomeNeedsAttention() const;
+	bool commandOutcomeNeedsAttention() const;
+	bool serviceOutcomeNeedsAttention() const;
 	QString statusText() const;
 	Q_INVOKABLE bool setPresentation(const QByteArray& json);
 	QString presentationError() const;

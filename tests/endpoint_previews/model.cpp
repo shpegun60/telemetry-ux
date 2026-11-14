@@ -1,5 +1,7 @@
 // Real endpoint/value models over parsed metadata and the native Encoded client. MIT.
 #include <Telemetry/UX/EndpointPreviews.hpp>
+#include <Telemetry/UX/WatchlistModel.hpp>
+#include <Telemetry/UX/DynamicWatchlist.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
 #include <integration/read_many/Workbench.hpp>
 #include <QtCore/QPersistentModelIndex>
@@ -319,6 +321,25 @@ void definitionsBeforeRead() {
 
 void smallSignedBooleanAndExpansionBound() {
 	auto storage = std::make_unique<local::Backing>();
+	ux::WatchlistModel watched;
+	bool current = true;
+	watched.bind([&] { return current; });
+	watched.setSchemaMetadata(storage->schema);
+	CHECK(watched.add(0, "Flag") && watched.add(1, "Mode"));
+	const auto watchedFlag = watched.index(0, 0), watchedMode = watched.index(1, 0);
+	CHECK(watched.data(watchedFlag, ux::WatchlistModel::EditorKindRole) == "bool" &&
+	      watched.data(watchedMode, ux::WatchlistModel::EditorKindRole) == "enum");
+	CHECK(watched.data(watchedFlag, ux::WatchlistModel::CategoricalRole).toBool() &&
+	      watched.data(watchedMode, ux::WatchlistModel::CategoricalRole).toBool());
+	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorTextRole).toString().isEmpty() &&
+	      storage->packets == 0); // Metadata/choices never require a getter.
+	const auto* booleanField = storage->schema.findField("local", "Flag"); CHECK(booleanField);
+	for (const auto flag : {false, true}) {
+		const auto bytes = encode(flag);
+		const auto value = storage->schema.view(booleanField->typeId,
+		    {reinterpret_cast<const std::byte*>(bytes.constData()), std::size_t(bytes.size())});
+		CHECK(value && ux::WatchlistModel::formatValue(value.value) == (flag ? "true (1)" : "false (0)"));
+	}
 	ux::ValueModel values; values.setSchemaMetadata(storage->schema);
 	storage->read(0); values.resetSnapshot(storage->inspector);
 	const auto flag = values.index(0, 0);
@@ -332,6 +353,19 @@ void smallSignedBooleanAndExpansionBound() {
 	const auto choices = values.data(values.index(0, 0), ux::ValueModel::EditorChoicesRole).toList();
 	CHECK(choices.size() == 2 && choices[0].toMap().value("label") == "Negative (-1)" &&
 	      choices[0].toMap().value("text") == "-1");
+	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).toList() == choices);
+	CHECK(watched.data(watchedFlag, ux::WatchlistModel::EditorChoicesRole).toList() == booleanChoices);
+	// Both editors own the copied descriptor labels; none retain an enum-name borrow.
+	storage->enums[0].name = "Replacement";
+	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).toList() == choices &&
+	      values.data(values.index(0, 0), ux::ValueModel::EditorChoicesRole).toList() == choices);
+	current = false;
+	CHECK(!watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).isValid());
+	auto rebound = std::make_unique<local::Backing>();
+	rebound->enums[0].name = "New session name";
+	watched.bind([&] { return rebound->schema.valid(); }); // same Field ID, different admission storage.
+	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).toList().isEmpty() &&
+	      watched.data(watchedMode, ux::WatchlistModel::TypeTextRole).toString().isEmpty());
 	Source source; source.schema = storage->schema;
 	ux::EndpointPreviews previews(nullptr, [&] { return source.now; }); previews.setSource(source.source());
 	ux::EndpointModel model; model.setPreviews(&previews); model.rebuild(storage->inspector);
@@ -377,6 +411,49 @@ void publicationLifetimeAndWrongSource() {
 	model.rebuild(unrelated->owner);
 	CHECK(model.previewDemandField(endpoint(model, 1, 0)).isValid());
 }
+
+void schemaSourceReplacement() {
+	// Both descriptors have a scalar Field 1; their declared types differ:
+	// the local source has an enum, the other source a u64. No device I/O.
+	auto first = std::make_unique<local::Backing>();
+	auto replacement = std::make_shared<f::Backing>();
+	const auto source = [](const rt::RuntimeSchema& schema) {
+		ux::WatchlistSource result;
+		result.current = [schema] { return schema.valid(); };
+		result.fieldBytes = [](quint32 id) -> std::optional<unsigned> {
+			return id == 1 ? std::optional<unsigned>{8} : std::nullopt;
+		};
+		result.schema = [schema] { return schema; };
+		return result;
+	};
+	QObject context;
+	ux::DynamicWatchlist watch(&context);
+	const auto next = source(replacement->schema);
+	auto original = source(first->schema);
+	original.schema = [&] {
+		watch.setSource(next);
+		return first->schema;
+	};
+	watch.setSource(std::move(original));
+	CHECK(watch.add(1, "Scalar"));
+	CHECK(watch.model()->index(0, 0).data(ux::WatchlistModel::EditorKindRole) == "text" &&
+	      watch.model()->index(0, 0).data(ux::WatchlistModel::TypeTextRole) == "u64");
+	bool replaceOnClear = false;
+	original = source(first->schema);
+	original.schema = [&] {
+		if (replaceOnClear) watch.setSource(next);
+		return first->schema;
+	};
+	watch.setSource(std::move(original));
+	CHECK(watch.add(1, "Mode"));
+	CHECK(watch.model()->index(0, 0).data(ux::WatchlistModel::EditorKindRole) == "enum");
+	replaceOnClear = true;
+	watch.clear();
+	CHECK(watch.count() == 0 && watch.add(1, "Scalar"));
+	CHECK(watch.model()->index(0, 0).data(ux::WatchlistModel::EditorKindRole) == "text" &&
+	      watch.model()->index(0, 0).data(ux::WatchlistModel::TypeTextRole) == "u64");
+	CHECK(first->packets == 0 && replacement->packets == 0);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -402,6 +479,8 @@ int main(int argc, char** argv) {
 	smallSignedBooleanAndExpansionBound();
 	currentScenario = "publication lifetime/source identity";
 	publicationLifetimeAndWrongSource();
+	currentScenario = "metadata callback source replacement";
+	schemaSourceReplacement();
 	CHECK(f::warnings == 0);
 	std::printf("Endpoint preview model checks=%u warnings=%u Qt=%s\n", f::checks, f::warnings, qVersion());
 }

@@ -23,6 +23,7 @@ TreeViewDelegate {
     // Optional schema/cache roles keep third-party providers compatible.
     property string typeText: ""
     property string accessText: ""
+    property string accessMark: ""
     property string unit: ""
     property bool previewEligible: false
     property bool previewAggregate: false
@@ -33,6 +34,11 @@ TreeViewDelegate {
     property string previewReason: ""
     property bool previewsShown: false
     property bool reserveWatchSpace: true
+    property bool tableMode: false
+    property real nameColumnWidth: 190
+    property real valueColumnWidth: 150
+    property real typeColumnWidth: 85
+    property real accessColumnWidth: 70
 
     // What the box shows and whether it takes a click; the panel decides.
     property bool watchable: false
@@ -60,7 +66,7 @@ TreeViewDelegate {
     readonly property int boxSlot: reserveWatchSpace ? Type.rowHeight : 0
     readonly property bool hasMetadata: typeText.length > 0 || accessText.length > 0
     readonly property bool narrow: contentItem.width < Type.bodyPixels * 28
-    readonly property bool twoLines: hasMetadata && (isEndpoint || previewChild) && narrow
+    readonly property bool twoLines: !tableMode && hasMetadata && (isEndpoint || previewChild) && narrow
     readonly property bool detailsOnly: previewState === "Open Details" || previewState === "OpenDetails"
     readonly property bool limitReached: previewState === "Preview limit" || previewState === "Previewlimit"
     readonly property bool valueShown: previewsShown && (previewEligible || previewChild || detailsOnly || limitReached)
@@ -68,13 +74,6 @@ TreeViewDelegate {
     readonly property bool stale: previewState === "Stale"
     readonly property bool failed: previewState === "Unavailable" || previewState === "Previewlimit" || previewState === "Preview limit"
     readonly property string metadataText: [typeText, accessText].filter(function(part) { return part.length > 0 }).join(" · ")
-    readonly property string ageText: {
-        if (previewAgeMs < 0 || !isFinite(previewAgeMs)) return ""
-        if (previewAgeMs < 1000) return qsTr("<1 s")
-        if (previewAgeMs < 60000) return qsTr("%1 s").arg(Math.floor(previewAgeMs / 1000))
-        if (previewAgeMs < 3600000) return qsTr("%1 min").arg(Math.floor(previewAgeMs / 60000))
-        return qsTr("%1 h").arg(Math.floor(previewAgeMs / 3600000))
-    }
     readonly property string stateText: {
         if (!valueShown) return ""
         if (detailsOnly) return qsTr("Open Details")
@@ -83,8 +82,10 @@ TreeViewDelegate {
         switch (previewState) {
         case "Queued": return qsTr("Queued…")
         case "Reading": return qsTr("Reading…")
-        case "Current": return ageText
-        case "Stale": return ageText.length ? qsTr("Stale · %1").arg(ageText) : qsTr("Stale")
+        // Tree previews are deliberately slow. Cache TTL is a scheduling detail,
+        // not a warning or an age label on an otherwise valid cached value.
+        case "Current":
+        case "Stale": return ""
         case "Unavailable": return qsTr("Unavailable")
         case "Previewlimit":
         case "Preview limit": return qsTr("Preview limit")
@@ -108,7 +109,10 @@ TreeViewDelegate {
 
     implicitWidth: treeView.width
     implicitHeight: twoLines ? Math.max(Type.rowHeight, nameMetrics.height + metadataMetrics.height + Type.tight * 2) : Type.rowHeight
-    indentation: Type.indent
+    rightPadding: tableMode ? 0 : Type.padding
+    readonly property real indentRoom: Math.max(0, nameColumnWidth - boxSlot - Type.tight - Type.padding
+        - Type.bodyPixels * 4 - Type.indent - spacing)
+    indentation: tableMode && depth > 0 ? Math.min(Type.indent, indentRoom / depth) : Type.indent
     // The panel's padding is the margin; Device files' rows line up with these.
     leftMargin: 0
     indicator: TreeChevron { row: treeRow }
@@ -116,15 +120,17 @@ TreeViewDelegate {
     Accessible.role: Accessible.TreeItem
     Accessible.name: name
     Accessible.description: fullDescription
+    FontMetrics { id: nameMetrics; font: treeRow.font }
+    FontMetrics { id: metadataMetrics; font.family: treeRow.font.family; font.pointSize: Type.caption }
 
     contentItem: Item {
-        implicitHeight: rowContent.implicitHeight
+        implicitHeight: rowBody.item ? rowBody.item.implicitHeight : Type.rowHeight
         RowCheckBox {
             id: watchBox
             objectName: "endpointWatchCheck"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            visible: treeRow.watchable
+            visible: treeRow.watchable && (!treeRow.tableMode || treeRow.leftPadding + treeRow.boxSlot < treeRow.nameColumnWidth)
             enabled: treeRow.watchEnabled
             tristate: true
             checkState: treeRow.watchState
@@ -146,7 +152,110 @@ TreeViewDelegate {
                 delay: 700
             }
         }
-        ColumnLayout {
+        Loader {
+            id: rowBody
+            anchors.fill: parent
+            sourceComponent: treeRow.tableMode ? tableContent : legacyContent
+        }
+        Component {
+            id: tableContent
+            Item {
+                implicitHeight: Type.rowHeight
+                Item {
+                    x: -treeRow.leftPadding
+                    width: treeRow.nameColumnWidth
+                    height: parent.height
+                    clip: true
+                    Label {
+                        id: tableName
+                        objectName: "endpointRowName"
+                        x: treeRow.leftPadding + treeRow.boxSlot + Type.tight
+                        width: Math.max(0, parent.width - x - Type.padding)
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        text: treeRow.name
+                        color: treeRow.textColor
+                        HoverHandler { id: tableNameHover }
+                        PlainToolTip { visible: tableNameHover.hovered; text: treeRow.fullDescription; delay: 700 }
+                    }
+                }
+                Label {
+                    id: tableValue
+                    objectName: "endpointRowValue"
+                    x: treeRow.nameColumnWidth - treeRow.leftPadding + Type.padding
+                    width: Math.max(0, treeRow.valueColumnWidth - 2 * Type.padding)
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignRight
+                    font.family: Type.fixedFamily
+                    text: treeRow.shownValue
+                    color: treeRow.highlighted ? treeRow.palette.highlightedText
+                        : treeRow.failed ? Theme.textMuted : treeRow.textColor
+                    HoverHandler { id: tableValueHover }
+                    Accessible.description: treeRow.fullDescription
+                    PlainToolTip { visible: tableValueHover.hovered; text: treeRow.fullDescription; delay: 700 }
+                }
+                Label {
+                    id: tableType
+                    objectName: "endpointRowType"
+                    x: treeRow.nameColumnWidth + treeRow.valueColumnWidth - treeRow.leftPadding + Type.padding
+                    width: Math.max(0, treeRow.typeColumnWidth - 2 * Type.padding)
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    text: treeRow.typeText
+                    color: treeRow.highlighted ? treeRow.palette.highlightedText : Theme.textSecondary
+                    HoverHandler { id: tableTypeHover }
+                    PlainToolTip { visible: tableTypeHover.hovered && tableType.truncated; text: treeRow.typeText; delay: 700 }
+                }
+                Item {
+                    id: tableAccess
+                    objectName: "endpointRowAccess"
+                    x: treeRow.nameColumnWidth + treeRow.valueColumnWidth + treeRow.typeColumnWidth - treeRow.leftPadding + Type.padding
+                    width: Math.max(0, treeRow.accessColumnWidth - 2 * Type.padding)
+                    height: parent.height
+                    readonly property string text: treeRow.accessMark.length > 0 ? treeRow.accessMark : treeRow.accessText
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: treeRow.accessText
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: treeRow.accessMark.length > 0
+                        Repeater {
+                            model: 2
+                            Label {
+                                required property int index
+                                text: treeRow.accessMark.charAt(index)
+                                font.family: Type.fixedFamily
+                                font.pointSize: Type.caption
+                                color: treeRow.highlighted ? treeRow.palette.highlightedText
+                                    : text === "-" ? Theme.textDisabled : Theme.textSecondary
+                                Accessible.ignored: true
+                            }
+                        }
+                    }
+                    Label {
+                        anchors.fill: parent
+                        visible: treeRow.accessMark.length === 0
+                        verticalAlignment: Text.AlignVCenter
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        font.pointSize: Type.caption
+                        text: treeRow.accessText
+                        color: treeRow.highlighted ? treeRow.palette.highlightedText : Theme.textSecondary
+                        Accessible.ignored: true
+                    }
+                    HoverHandler { id: tableAccessHover }
+                    PlainToolTip { visible: tableAccessHover.hovered; text: treeRow.accessText; delay: 700 }
+                }
+            }
+        }
+        Component {
+            id: legacyContent
+            ColumnLayout {
             id: rowContent
             anchors.left: parent.left
             anchors.leftMargin: treeRow.boxSlot + Type.tight
@@ -177,7 +286,7 @@ TreeViewDelegate {
                     font.family: Type.fixedFamily
                     text: treeRow.shownValue
                     color: treeRow.highlighted ? treeRow.palette.highlightedText
-                         : treeRow.stale || treeRow.failed ? Theme.textMuted : treeRow.textColor
+                         : treeRow.failed ? Theme.textMuted : treeRow.textColor
                 }
                 Label {
                     id: inlineMetadata
@@ -204,9 +313,8 @@ TreeViewDelegate {
                 text: treeRow.secondaryText
                 color: treeRow.secondaryColor
             }
+            }
         }
-        FontMetrics { id: nameMetrics; font: nameLabel.font }
-        FontMetrics { id: metadataMetrics; font: stackedMetadata.font }
     }
 
     Rectangle {
@@ -221,7 +329,7 @@ TreeViewDelegate {
     // Under the row it describes, not over it.
     PlainToolTip {
         objectName: "endpointToolTip"
-        visible: treeRow.hovered && treeRow.fullDescription.length > 0
+        visible: !treeRow.tableMode && treeRow.hovered && treeRow.fullDescription.length > 0
         text: treeRow.fullDescription
         y: treeRow.height + 2
         delay: 700

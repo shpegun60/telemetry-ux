@@ -32,6 +32,79 @@ void events()
 	QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 }
 
+ux::WatchValueBits bits(ux::WatchScalar scalar, quint8 width, quint64 number, bool enumeration = false)
+{
+	ux::WatchValueBits result;
+	result.type = {1, scalar, width, enumeration};
+	std::array<std::byte, 8> bytes{};
+	for (unsigned i = 0; i < width; ++i) bytes[i] = std::byte((number >> (i * 8)) & 0xff);
+	CHECK(result.assign(bytes.data(), width));
+	bytes.fill(std::byte{0x55}); // The model must own the exact payload, including unplottable values.
+	return result;
+}
+
+void typedEditors()
+{
+	ux::WatchlistModel model;
+	bool current = true;
+	model.bind([&] { return current; });
+	CHECK(model.add(0, QStringLiteral("Typed")));
+	const auto row = model.index(0, 0);
+	const auto data = [&](int role) { return model.data(row, role); };
+	CHECK(data(ux::WatchlistModel::EditorTextRole).toString().isEmpty());
+	CHECK(!data(ux::WatchlistModel::CategoricalRole).toBool());
+	// Legacy sources may omit bytes; their existing sample contract is unchanged.
+	CHECK(model.setResult(0, "Ok", "legacy display", ux::WatchSample::ofSigned(12)));
+	CHECK(data(ux::WatchlistModel::SampleValueRole).toDouble() == 12 &&
+	      data(ux::WatchlistModel::EditorTextRole).toString().isEmpty() &&
+	      !data(ux::WatchlistModel::CategoricalRole).toBool());
+	CHECK(model.setResult(0, "Ok", "true (display decoration)", ux::WatchSample::ofUnsigned(1),
+	                      bits(ux::WatchScalar::Boolean, 1, 1)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "true" &&
+	      data(ux::WatchlistModel::EditorKindRole) == "bool" &&
+	      data(ux::WatchlistModel::CategoricalRole).toBool());
+	const auto boolean = data(ux::WatchlistModel::EditorChoicesRole).toList();
+	CHECK(boolean.size() == 2 && boolean[0].toMap().value("label") == "false (0)" &&
+	      boolean[0].toMap().value("text") == "false" &&
+	      boolean[1].toMap().value("label") == "true (1)" &&
+	      boolean[1].toMap().value("text") == "true");
+	CHECK(model.setResult(0, "Ok", "false", ux::WatchSample::ofUnsigned(0),
+	                      bits(ux::WatchScalar::Boolean, 1, 0)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "false");
+	CHECK(model.setResult(0, "Ok", "rounded display must not be parsed", {},
+	                      bits(ux::WatchScalar::U64, 8, UINT64_MAX)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "18446744073709551615" &&
+	      !data(ux::WatchlistModel::SampleValueRole).isValid() &&
+	      !data(ux::WatchlistModel::CategoricalRole).toBool());
+	CHECK(model.setResult(0, "Ok", "rounded display", {},
+	                      bits(ux::WatchScalar::S64, 8, UINT64_C(0x8000000000000000))));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "-9223372036854775808");
+	CHECK(model.setResult(0, "Ok", "Negative (-1)", ux::WatchSample::ofSigned(-1),
+	                      bits(ux::WatchScalar::S8, 1, 0xff, true)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "-1" &&
+	      data(ux::WatchlistModel::EditorKindRole) == "enum" &&
+	      data(ux::WatchlistModel::CategoricalRole).toBool() &&
+	      data(ux::WatchlistModel::EditorChoicesRole).toList().isEmpty());
+	CHECK(model.setResult(0, "Ok", "unknown enum", {}, bits(ux::WatchScalar::U64, 8, UINT64_MAX, true)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "18446744073709551615" &&
+	      data(ux::WatchlistModel::CategoricalRole).toBool() &&
+	      !data(ux::WatchlistModel::SampleExactRole).toBool());
+	CHECK(model.setResult(0, "Ok", "0.1", ux::WatchSample::ofFloating(0.1f),
+	                      bits(ux::WatchScalar::F32, 4, 0x3dcccccd)));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "0.100000001" &&
+	      !data(ux::WatchlistModel::CategoricalRole).toBool());
+	CHECK(model.setResult(0, "Ok", "negative zero", ux::WatchSample::ofFloating(-0.0),
+	                      bits(ux::WatchScalar::F64, 8, UINT64_C(0x8000000000000000))));
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "-0");
+	CHECK(model.setResult(0, "Failed", "No reading", {}));
+	CHECK(data(ux::WatchlistModel::EditorTextRole).toString().isEmpty());
+	CHECK(model.setResult(0, "Ok", "large enum", {}, bits(ux::WatchScalar::U64, 8, UINT64_MAX, true)));
+	current = false;
+	CHECK(data(ux::WatchlistModel::EditorTextRole).toString().isEmpty() &&
+	      !data(ux::WatchlistModel::EditorChoicesRole).isValid() &&
+	      !data(ux::WatchlistModel::CategoricalRole).toBool());
+}
+
 QString text(ux::DynamicWatchlist& watch, int row)
 {
 	auto* model = watch.model();
@@ -772,6 +845,7 @@ void exactCompletionFrames()
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	typedEditors();
 	exactCompletionFrames();
 	bulkPublication();
 	rowLimit();

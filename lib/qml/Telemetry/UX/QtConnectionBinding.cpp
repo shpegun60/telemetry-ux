@@ -148,6 +148,9 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 		       storage->inspector.isCurrent();
 	};
 	const auto current = source.current;
+	source.schema = [storage, current] {
+		return current() ? storage->schema : runtime::RuntimeSchema{};
+	};
 	source.busy = [session] {
 		return !session || session->busy();
 	};

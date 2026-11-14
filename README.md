@@ -32,6 +32,10 @@ build leaves the application disabled and does not discover the SDK.
 
 ## Embed the Configurator in your application
 
+The [typed-value and tree-table guide](doc/CategoricalSignals.md) describes the
+shared Device-tree/Details columns, bool/enum editors, exact float input and
+bounded categorical trends.
+
 To start from a complete application instead of assembling examples, use the
 [project creator](doc/ProjectStarter.md):
 

@@ -152,7 +152,7 @@ void formattingChecks()
 	};
 	CHECK(text("wide", "U64_0") == "18446744073709551615");
 	CHECK(text("signed", "S64_0") == "-9223372036854775808");
-	CHECK(text("flags", "Bool_0") == "true" && text("flags", "Bool_1") == "false");
+	CHECK(text("flags", "Bool_0") == "true (1)" && text("flags", "Bool_1") == "false (0)");
 	CHECK(text("modes", "Enum_0") == "-2 (unknown)");
 	CHECK(text("real", "F32_0") == "NaN (0x7fc12345)");
 	CHECK(text("real", "F32_1") == "-0 (0x80000000)");

@@ -7,6 +7,7 @@
 #include "DynamicModels.hpp"
 #include "EndpointPreviews.hpp"
 #include "SchemaText.hpp"
+#include "ScalarEditorMetadata.hpp"
 
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
@@ -43,43 +44,10 @@ QString integerText(T value)
 	                                : QString{};
 }
 
-template<class T>
-QString floatText(T value)
-{
-	using Bits = std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>;
-	constexpr int fraction = sizeof(T) == 4 ? 23 : 52;
-	constexpr Bits exponent = sizeof(T) == 4 ? Bits{0xff} : Bits{0x7ff};
-	const auto bits = std::bit_cast<Bits>(value);
-	const auto magnitude = bits & (std::numeric_limits<Bits>::max() >> 1);
-	const bool negative = (bits >> (sizeof(T) * 8 - 1)) != 0;
-	if (magnitude == 0)
-		return negative ? QStringLiteral("-0") : QStringLiteral("0");
-	if ((magnitude >> fraction) == exponent) {
-		if ((magnitude & ((Bits{1} << fraction) - 1)) != 0)
-			return QStringLiteral("NaN");
-		return negative ? QStringLiteral("-inf") : QStringLiteral("inf");
-	}
-	std::array<char, 64> buffer{};
-	const auto result =
-	    std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
-	                  std::chars_format::general, std::numeric_limits<T>::max_digits10);
-	return result.ec == std::errc{} ? QString::fromLatin1(buffer.data(), result.ptr - buffer.data())
-	                                : QString{};
-}
-
 QString scalarNumberText(const ins::ScalarValue& scalar)
 {
-	return std::visit(
-	    [](const auto& number) -> QString {
-		    using T = std::decay_t<decltype(number)>;
-		    if constexpr (std::is_same_v<T, bool>)
-			    return number ? QStringLiteral("true") : QStringLiteral("false");
-		    else if constexpr (std::is_floating_point_v<T>)
-			    return floatText(number);
-		    else
-			    return integerText(number);
-	    },
-	    scalar.value);
+	return std::visit([](const auto& number) { return detail::scalarEditorText(number); },
+	                  scalar.value);
 }
 
 QString scalarText(const ins::ScalarValue& scalar)
@@ -185,25 +153,6 @@ QString endpointDetail(const Row& row)
 	if (!row.accessText.isEmpty())
 		detail += QStringLiteral(" · ") + row.accessText;
 	return detail;
-}
-
-QString enumCode(std::uint64_t bits, Code code)
-{
-	switch (code) {
-		case Code::U8: return integerText(static_cast<std::uint8_t>(bits));
-		case Code::S8: return integerText(std::bit_cast<std::int8_t>(static_cast<std::uint8_t>(bits)));
-		case Code::U16: return integerText(static_cast<std::uint16_t>(bits));
-		case Code::S16: return integerText(std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(bits)));
-		case Code::U32: return integerText(static_cast<std::uint32_t>(bits));
-		case Code::S32: return integerText(std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(bits)));
-		case Code::U64: return integerText(bits);
-		case Code::S64: return integerText(std::bit_cast<std::int64_t>(bits));
-		case Code::Bool:
-		case Code::F32:
-		case Code::F64:
-			return {};
-	}
-	return {};
 }
 
 // A QModelIndex stores only an integer token. Clear never reuses a token, so an
@@ -449,7 +398,8 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 	if (row->aggregate) {
 		row->type =
 		    info.value.kind == Kind::Struct ? QStringLiteral("struct") : QStringLiteral("array");
-		row->value = integerText(info.value.children) + QStringLiteral(" children");
+		row->value = integerText(info.value.children) +
+		             (info.value.children == 1 ? QStringLiteral(" child") : QStringLiteral(" children"));
 	} else if (info.value.kind == Kind::Void) {
 		row->type = QStringLiteral("void");
 	} else {
@@ -1047,15 +997,7 @@ struct ValueModel::Impl {
 	QString fingerprint, role;
 	int category = 0;
 	quint32 endpointId = 0;
-	struct EnumChoices {
-		QVariantList choices;
-		bool truncated = false;
-	};
-	QHash<TypeId, EnumChoices> enums;
-	QHash<TypeId, QString> typeLabels;
-	// Identity tokens only, never dereferenced: copied metadata cannot be used
-	// by another admitted descriptor with coincident TypeIds.
-	std::array<std::pair<quintptr, std::size_t>, 3> metadataEndpoints{};
+	detail::ScalarEditorMetadata metadata;
 
 	bool current() const
 	{
@@ -1069,15 +1011,13 @@ struct ValueModel::Impl {
 	{
 		if (!inspector || inspector.snapshot || !inspector.isCurrent())
 			return false;
+		detail::ScalarEditorMetadata::EndpointIdentity identity{};
 		std::size_t n = 0;
 		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
 			const auto endpoints = inspector.endpoints(category);
-			const auto& [address, count] = metadataEndpoints[n++];
-			if (endpoints.size() != count ||
-			    (!endpoints.empty() && reinterpret_cast<quintptr>(endpoints.data()) != address))
-				return false;
+			identity[n++] = {reinterpret_cast<quintptr>(endpoints.data()), endpoints.size()};
 		}
-		return true;
+		return metadata.matches(identity);
 	}
 };
 
@@ -1128,39 +1068,7 @@ void ValueModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& sche
 {
 	if (changing())
 		return;
-	QHash<TypeId, Impl::EnumChoices> enums;
-	QHash<TypeId, QString> typeLabels;
-	std::array<std::pair<quintptr, std::size_t>, 3> endpointTokens{};
-	if (schema.valid()) {
-		std::size_t n = 0;
-		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
-			const auto endpoints = schema.endpoints(category);
-			endpointTokens[n++] = {reinterpret_cast<quintptr>(endpoints.data()), endpoints.size()};
-		}
-		for (TypeId id = 0; const auto* type = schema.type(id); ++id) {
-			typeLabels.insert(id, schema_text::typeText(schema, id));
-			if (type->kind != Kind::Enum)
-				continue;
-			const auto* underlying = schema.type(type->relatedTypeId);
-			if (!underlying)
-				continue;
-			const auto entries = schema.enumEntries(id);
-			Impl::EnumChoices copied;
-			copied.truncated = entries.size() > 256;
-			for (const auto& entry : entries.first(std::min<std::size_t>(entries.size(), 256))) {
-				const auto number = enumCode(entry.codeBits, underlying->scalarCode);
-				if (number.isEmpty())
-					continue;
-				copied.choices.append(QVariantMap{
-				    {QStringLiteral("label"), text(entry.name) + QStringLiteral(" (") + number + QLatin1Char(')')},
-				    {QStringLiteral("text"), number}});
-			}
-			enums.insert(id, std::move(copied));
-		}
-	}
-	impl_->enums = std::move(enums);
-	impl_->typeLabels = std::move(typeLabels);
-	impl_->metadataEndpoints = endpointTokens;
+	impl_->metadata.reset(schema);
 	QVector<QModelIndex> indices;
 	for (const auto* row : std::as_const(impl_->tree.rows))
 		indices.append(createIndex(row->row, 0, row->token));
@@ -1275,8 +1183,9 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return row->aggregate ? row->value : hints.displayValue(row->value);
 		case TypeRole:
 		case TypeTextRole:
-			return impl_->metadataCurrent() ? impl_->typeLabels.value(row->typeId, row->type)
-			                                : row->type;
+			if (const auto* type = impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
+				return type->label;
+			return row->type;
 		case AggregateRole:
 			return row->aggregate;
 		case ChildCountRole:
@@ -1292,18 +1201,17 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return row->canonicalText;
 		case EditorKindRole:
 			return row->editorKind == QStringLiteral("enum") &&
-			               (!impl_->metadataCurrent() || !impl_->enums.contains(row->typeId))
+			               (!impl_->metadataCurrent() || !impl_->metadata.type(row->typeId))
 			           ? QStringLiteral("text") : row->editorKind;
 		case EditorChoicesRole:
-			if (row->editorKind == QStringLiteral("bool"))
-				return QVariantList{
-				    QVariantMap{{QStringLiteral("label"), QStringLiteral("false (0)")},
-				                {QStringLiteral("text"), QStringLiteral("false")}},
-				    QVariantMap{{QStringLiteral("label"), QStringLiteral("true (1)")},
-				                {QStringLiteral("text"), QStringLiteral("true")}}};
-			return impl_->metadataCurrent() ? impl_->enums.value(row->typeId).choices : QVariantList{};
+			if (row->editorKind == QStringLiteral("bool")) return detail::booleanEditorChoices();
+			if (const auto* type = impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
+				return type->choices;
+			return QVariantList{};
 		case EditorChoicesTruncatedRole:
-			return impl_->metadataCurrent() && impl_->enums.value(row->typeId).truncated;
+			if (const auto* type = impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
+				return type->truncated;
+			return false;
 		default:
 			return {};
 	}

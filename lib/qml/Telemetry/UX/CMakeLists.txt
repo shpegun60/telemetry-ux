@@ -72,7 +72,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
         WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp
         DynamicBatch.cpp DynamicBatch.hpp EndpointPreviews.cpp EndpointPreviews.hpp
-        SchemaText.cpp SchemaText.hpp)
+        SchemaText.cpp SchemaText.hpp ScalarEditorMetadata.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
     set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
         EXPORT_NAME dynamic_configurator AUTOMOC ON)

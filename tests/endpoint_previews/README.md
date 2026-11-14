@@ -119,12 +119,15 @@ hashes before and after the run, executable/log hashes, and UI captures.
   demand and narrow layouts, with strict warnings and captured output supplied
   as its first argument.
 
-The complete installed-package runner passed on Windows with Qt 6.12.0 and
+Before the tree-table follow-up, the complete installed-package runner passed
+on Windows with Qt 6.12.0 and
 MinGW 15.1, including **1,020 core checks**, **897 model checks** and **478 native
 UI checks**, all with zero warnings. It also retained the existing two-panel
 TCP, scheduling, Batch, layout, search, group Watchlist and Trend checks and built
 the standalone connection example. The run preserved identical source and
 installed-package hashes and recorded seven endpoint UI captures. The README's
-result paragraph was updated after that run; production code did not change.
+result paragraph records that earlier preview foundation, not the current
+tree-table/editor acceptance. The maintained runner writes current check
+counts, source hashes and captures in its own `summary.json`.
 These are local host results, separate from CI, STM32, DMA or physical-transport
 qualification.

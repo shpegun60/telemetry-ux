@@ -14,6 +14,7 @@ class TrendHistory : public QObject {
     Q_PROPERTY(int row READ row WRITE setRow NOTIFY rowChanged)
     Q_PROPERTY(QVariantList points READ points NOTIFY pointsChanged)
     Q_PROPERTY(QString state READ state NOTIFY stateChanged)
+    Q_PROPERTY(bool step READ step NOTIFY stepChanged)
 public:
     explicit TrendHistory(QObject* parent = nullptr);
     QAbstractItemModel* source() const { return source_; }
@@ -22,18 +23,21 @@ public:
     void setRow(int row);
     QVariantList points() const { return points_; }
     QString state() const { return state_; }
+    bool step() const { return step_; }
     Q_INVOKABLE void clear();
 Q_SIGNALS:
     void sourceChanged();
     void rowChanged();
     void pointsChanged();
     void stateChanged();
+    void stepChanged();
 private:
     void inspect();
     void detachSelection();
     // With nothing chosen: what to do next, by whether anything is watched.
     QString idleText() const;
     bool setState(const QString& state);
+    bool updateStep();
     void publish(unsigned flags);
     int role(const QByteArray& name) const;
     QPointer<QAbstractItemModel> source_;
@@ -41,10 +45,10 @@ private:
     QElapsedTimer clock_;
     QVariantList points_;
     QString revision_, epoch_, state_ = QStringLiteral("Watch a Field to plot it.");
-    bool gap_ = true;
+    bool gap_ = true, step_ = false;
     unsigned pendingSignals_ = 0;
     bool publishing_ = false;
-    enum Signal : unsigned { StateChanged = 1, PointsChanged = 2, RowChanged = 4, SourceChanged = 8 };
+    enum Signal : unsigned { StateChanged = 1, PointsChanged = 2, RowChanged = 4, SourceChanged = 8, StepChanged = 16 };
     static constexpr int capacity_ = 512;
 };
 }

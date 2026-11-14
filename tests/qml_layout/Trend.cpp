@@ -6,6 +6,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQml/QJSValue>
 #include <QtTest/QTest>
 #include <cstdio>
 using telemetry::ux::TrendHistory;
@@ -17,6 +18,10 @@ void messages(QtMsgType type, const QMessageLogContext&, const QString& message)
     std::fprintf(stderr, "%s\n", qPrintable(message));
 }
 #define CHECK(x) do { ++checks; if (!(x)) { qCritical() << "Trend failure" << __LINE__ << #x; return 1; } } while (false)
+QVariantList list(QVariant value) {
+    if (value.metaType() == QMetaType::fromType<QJSValue>()) value = value.value<QJSValue>().toVariant();
+    return value.toList();
+}
 // A provider model supplies typed sample facts beside its display text; the fake
 // derives them from the test's literal the way a provider derives them from a value.
 telemetry::ux::WatchSample sampleFrom(const QString& text) {
@@ -29,8 +34,8 @@ telemetry::ux::WatchSample sampleFrom(const QString& text) {
 }
 class Source : public QAbstractListModel {
 public:
-    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); telemetry::ux::WatchSample sample; QVariant code; };
-    enum { Name = Qt::UserRole + 1, Status, Text, Revision, Epoch, Value, Exact, Code };
+    struct Row { QString name, status = QStringLiteral("NotRead"), text, rev = QStringLiteral("0"), epoch = QStringLiteral("1"); telemetry::ux::WatchSample sample; QVariant code; bool categorical = false; };
+    enum { Name = Qt::UserRole + 1, Status, Text, Revision, Epoch, Value, Exact, Code, Categorical };
     QList<Row> rows{{QStringLiteral("First"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}, {}},
                     {QStringLiteral("Second"), QStringLiteral("NotRead"), {}, QStringLiteral("0"), QStringLiteral("1"), {}, {}}};
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : int(rows.size()); }
@@ -41,11 +46,12 @@ public:
                         case Revision: return r.rev; case Epoch: return r.epoch;
                         case Value: return r.sample.role(); case Exact: return r.sample.exact;
                         case Code: return r.code.isValid() ? r.code : QVariant(int(telemetry::ux::watchStatusCode(r.status)));
+                         case Categorical: return r.categorical;
                         default: return {}; }
     }
     QHash<int,QByteArray> roleNames() const override {
         return {{Name,"name"},{Status,"status"},{Text,"sampleText"},{Revision,"sampleRevision"},{Epoch,"sampleEpoch"},
-                {Value,"sampleValue"},{Exact,"sampleExact"},{Code,"statusCode"}};
+                {Value,"sampleValue"},{Exact,"sampleExact"},{Code,"statusCode"},{Categorical,"categorical"}};
     }
     void publish(int i, QString status, QString value, QString revision, QString epoch = QStringLiteral("1")) {
         publishSample(i, status, value, sampleFrom(value), revision, epoch);
@@ -67,6 +73,10 @@ public:
         endMoveRows();
     }
     void reset() { beginResetModel(); endResetModel(); }
+    void categorical(int row, bool value) {
+        rows[row].categorical = value;
+        Q_EMIT dataChanged(index(row, 0), index(row, 0), {Categorical});
+    }
 };
 class Provider : public QObject {
     Q_OBJECT
@@ -150,6 +160,37 @@ int main(int argc, char** argv) {
     CHECK(real.setResult(0, "Ok", "18446744073709551615", WatchSample::ofUnsigned(18446744073709551615ULL)));
     CHECK(native.points().size() == 3 && !real.data(real.index(0, 0), exactRole).toBool());
     CHECK(!real.data(real.index(0, 0), valueRole).isValid());
+    {
+        Source typed;
+        typed.categorical(0, true);
+        TrendHistory states;
+        states.setSource(&typed); states.setRow(0);
+        CHECK(states.step() && states.points().isEmpty());
+        typed.publishSample(0, "Ok", "false (0)", WatchSample::ofUnsigned(0), "1");
+        typed.publishSample(0, "Ok", "true (1)", WatchSample::ofUnsigned(1), "2");
+        CHECK(states.points().size() == 2 && states.points().last().toMap().value("step").toBool());
+        CHECK(states.points().last().toMap().value("text") == "true (1)");
+        CHECK(!states.points().last().toMap().value("breakBefore").toBool());
+        typed.publish(0, "Unavailable", {}, "2");
+        typed.publishSample(0, "Ok", "Idle (-2)", WatchSample::ofSigned(-2), "3");
+        CHECK(states.points().last().toMap().value("breakBefore").toBool());
+        typed.publishSample(0, "Ok", "18446744073709551615 (unknown)",
+            WatchSample::ofUnsigned(18446744073709551615ULL), "4");
+        CHECK(states.points().size() == 3 && states.state().contains("18446744073709551615"));
+        typed.publishSample(0, "Ok", "Active (7)", WatchSample::ofSigned(7), "5");
+        CHECK(states.points().last().toMap().value("breakBefore").toBool());
+        typed.categorical(0, false);
+        CHECK(!states.step());
+        typed.publish(0, "Ok", "0.25", "6");
+        CHECK(!states.points().last().toMap().value("step").toBool());
+        CHECK(states.points().last().toMap().value("breakBefore").toBool());
+        typed.categorical(0, true);
+        for (int i = 7; i < 540; ++i)
+            typed.publishSample(0, "Ok", i % 2 ? "true (1)" : "false (0)", WatchSample::ofUnsigned(i % 2), QString::number(i));
+        CHECK(states.points().size() == 512);
+        states.clear(); CHECK(states.points().isEmpty() && states.step());
+        typed.reset(); CHECK(states.row() == -1 && !states.step());
+    }
     // Slots may destroy or replace a history synchronously during publication.
     {
         auto* doomed = new TrendHistory;
@@ -252,6 +293,27 @@ int main(int argc, char** argv) {
     provider.source.publish(0, "Ok", "-1.7976931348623157e308", "1");
     provider.source.publish(0, "Ok", "1.7976931348623157e308", "2");
     CHECK(panelHistory.points().size() == 2);
+    auto* plot = engine.rootObjects().first()->findChild<QObject*>("trendPlot");
+    CHECK(plot);
+    panelHistory.clear();
+    provider.source.categorical(0, true);
+    provider.source.publishSample(0, "Ok", "false (0)", WatchSample::ofUnsigned(0), "3");
+    provider.source.publishSample(0, "Ok", "true (1)", WatchSample::ofUnsigned(1), "4");
+    provider.source.publishSample(0, "Ok", "false (0)", WatchSample::ofUnsigned(0), "5");
+    auto vertices = list(plot->property("vertices"));
+    CHECK(vertices.size() == 5);
+    CHECK(vertices[0].toMap().value("sample").toBool() && vertices[0].toMap().value("breakBefore").toBool());
+    CHECK(!vertices[1].toMap().value("sample").toBool() && vertices[1].toMap().value("value").toDouble() == 0);
+    CHECK(vertices[1].toMap().value("ms") == vertices[2].toMap().value("ms"));
+    CHECK(vertices[2].toMap().value("value").toDouble() == 1);
+    CHECK(vertices[3].toMap().value("value").toDouble() == 1 && vertices[4].toMap().value("value").toDouble() == 0);
+    provider.source.publish(0, "Unavailable", {}, "5");
+    provider.source.publishSample(0, "Ok", "Active (7)", WatchSample::ofUnsigned(7), "6");
+    vertices = list(plot->property("vertices"));
+    CHECK(vertices.size() == 6 && vertices.last().toMap().value("breakBefore").toBool());
+    for (int i = 7; i < 540; ++i)
+        provider.source.publishSample(0, "Ok", i % 2 ? "true (1)" : "false (0)", WatchSample::ofUnsigned(i % 2), QString::number(i));
+    CHECK(panelHistory.points().size() == 512 && list(plot->property("vertices")).size() == 1023);
     QTest::qWait(30);
     CHECK(warnings == 0);
     qInfo().noquote() << QStringLiteral("Trend checks=%1 warnings=%2").arg(checks).arg(warnings);

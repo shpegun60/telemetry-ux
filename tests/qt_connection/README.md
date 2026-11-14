@@ -13,6 +13,13 @@ same-peer fresh admission, removing accepted panels, factory self-deletion,
 reentrant disconnect and deleting Session from model reset. The same shipped
 example QML is loaded with zero tolerated warnings.
 
+The maintained outcome assertions also cover the optional typed attention flags:
+confirmed Write/readback and Executed are neutral; Accepted, unknown results and
+unconfirmed readback require attention; successful Void is neutral. Terminal
+classifications survive disconnect with their historical text. These checks
+must not infer severity from an English substring. The reusable QML keeps the
+warning-colour fallback when a legacy provider omits the optional properties.
+
 The actual Watchlist row editor opens F32/F64 negative zero with F2 and accepts
 it unchanged with Enter: the unchanged draft must not become a device write.
 It then types +0 and -0, checking one device write per deliberate change, exact

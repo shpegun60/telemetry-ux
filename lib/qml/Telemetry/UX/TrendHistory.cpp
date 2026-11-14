@@ -19,6 +19,16 @@ bool TrendHistory::setState(const QString& value)
     state_ = value;
     return true;
 }
+bool TrendHistory::updateStep()
+{
+    const int categorical = role("categorical");
+    const bool value = source_ && selected_.isValid() && categorical >= 0 &&
+        source_->data(selected_, categorical).toBool();
+    if (step_ == value) return false;
+    step_ = value;
+    gap_ = true;
+    return true;
+}
 void TrendHistory::publish(unsigned flags)
 {
     pendingSignals_ |= flags;
@@ -33,6 +43,7 @@ void TrendHistory::publish(unsigned flags)
             case PointsChanged: Q_EMIT pointsChanged(); break;
             case RowChanged: Q_EMIT rowChanged(); break;
             case SourceChanged: Q_EMIT sourceChanged(); break;
+            case StepChanged: Q_EMIT stepChanged(); break;
             default: break;
         }
         if (!alive) return;
@@ -63,7 +74,7 @@ void TrendHistory::setSource(QAbstractItemModel* source)
         // says what to do next once the list is back.
         connect(source_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
             selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
-            publish(RowChanged);
+            publish(RowChanged | (updateStep() ? StepChanged : 0u));
         });
         connect(source_, &QAbstractItemModel::modelReset, this, [this] {
             if (!selected_.isValid() && setState(idleText())) publish(StateChanged);
@@ -86,11 +97,13 @@ void TrendHistory::setSource(QAbstractItemModel* source)
             source_ = nullptr;
             selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
             unsigned flags = RowChanged | SourceChanged;
+            if (updateStep()) flags |= StepChanged;
             if (setState(idleText())) flags |= StateChanged;
             publish(flags);
         });
     }
     unsigned flags = PointsChanged | RowChanged | SourceChanged;
+    if (updateStep()) flags |= StepChanged;
     if (setState(wrongThread ? QStringLiteral("Watchlist must share the Trend owner thread")
                              : idleText())) flags |= StateChanged;
     publish(flags);
@@ -104,6 +117,7 @@ void TrendHistory::detachSelection()
 {
     selected_ = QModelIndex{}; revision_.clear(); epoch_.clear(); gap_ = true;
     unsigned flags = RowChanged;
+    if (updateStep()) flags |= StepChanged;
     if (setState(QStringLiteral("This Field is no longer watched."))) flags |= StateChanged;
     publish(flags);
 }
@@ -119,7 +133,8 @@ void TrendHistory::setRow(int row)
         epoch_ = source_->data(selected_, role("sampleEpoch")).toString();
         changed = setState(QStringLiteral("No readings yet. Read once or Start."));
     } else changed = setState(idleText());
-    publish(PointsChanged | RowChanged | (changed ? StateChanged : 0u));
+    publish(PointsChanged | RowChanged | (changed ? StateChanged : 0u) |
+            (updateStep() ? StepChanged : 0u));
 }
 void TrendHistory::clear()
 {
@@ -130,6 +145,7 @@ void TrendHistory::clear()
 void TrendHistory::inspect()
 {
     if (!source_ || !selected_.isValid()) return;
+    const unsigned typedFlags = updateStep() ? StepChanged : 0u;
     // The number comes from the typed value (sampleValue/sampleExact), never from
     // the display text, and the status from its stable code, never its wording.
     const int statusRole = role("status"), codeRole = role("statusCode"),
@@ -139,7 +155,7 @@ void TrendHistory::inspect()
     if (statusRole < 0 || codeRole < 0 || revisionRole < 0 || epochRole < 0 || textRole < 0 ||
         valueRole < 0 || exactRole < 0) {
         gap_ = true;
-        if (setState(QStringLiteral("This provider has no sample history support"))) publish(StateChanged);
+        publish(typedFlags | (setState(QStringLiteral("This provider has no sample history support")) ? StateChanged : 0u));
         return;
     }
     // A missing or unknown code counts as a failure, so it breaks the line.
@@ -151,19 +167,19 @@ void TrendHistory::inspect()
     if (code != WatchStatus::Ok) {
         if (code != WatchStatus::Pending && code != WatchStatus::NotRead) gap_ = true;
         const QString status = source_->data(selected_, statusRole).toString();
-        if (setState(status.isEmpty() ? QStringLiteral("No reading") : status)) publish(StateChanged);
+        publish(typedFlags | (setState(status.isEmpty() ? QStringLiteral("No reading") : status) ? StateChanged : 0u));
         return;
     }
     const QString revision = source_->data(selected_, revisionRole).toString();
     const QString epoch = source_->data(selected_, epochRole).toString();
-    if (revision.isEmpty() || (revision == revision_ && epoch == epoch_)) return;
+    if (revision.isEmpty() || (revision == revision_ && epoch == epoch_)) { publish(typedFlags); return; }
     if (epoch != epoch_) gap_ = true;
     revision_ = revision; epoch_ = epoch;
     const QString raw = source_->data(selected_, textRole).toString();
     const QVariant sample = source_->data(selected_, valueRole);
     if (!source_->data(selected_, exactRole).toBool() || !sample.isValid()) {
         gap_ = true;
-        if (setState(QStringLiteral("Not plotted: not a finite number a chart can show exactly: ") + raw)) publish(StateChanged);
+        publish(typedFlags | (setState(QStringLiteral("Not plotted: not a finite number a chart can show exactly: ") + raw) ? StateChanged : 0u));
         return;
     }
     const double value = sample.toDouble();
@@ -171,9 +187,10 @@ void TrendHistory::inspect()
     points_.push_back(QVariantMap{{QStringLiteral("ms"), clock_.elapsed()},
                                   {QStringLiteral("value"), value},
                                   {QStringLiteral("text"), raw},
+                                  {QStringLiteral("step"), step_},
                                   {QStringLiteral("breakBefore"), gap_}});
     gap_ = false;
     const bool changed = setState(QStringLiteral("Latest reading — host presentation time; ") + raw);
-    publish(PointsChanged | (changed ? StateChanged : 0u));
+    publish(typedFlags | PointsChanged | (changed ? StateChanged : 0u));
 }
 }

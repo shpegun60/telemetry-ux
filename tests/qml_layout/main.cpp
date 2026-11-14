@@ -109,9 +109,23 @@ void click(QQuickWindow* window, QQuickItem* target)
 	for (auto* current : ancestors)
 		current->ensurePolished();
 	QCoreApplication::processEvents();
+	// Table delegates retain a logical width beyond a narrow dock. Activate
+	// the visible Name cell; the centre of the whole row may hit a neighbour.
+	if (target->objectName() == QStringLiteral("endpointRow") && target->property("tableMode").toBool()) {
+		target = item(target, QStringLiteral("endpointRowName"));
+		CHECK(target);
+	}
+	auto visible = rectangle(target);
+	for (auto* parent = target->parentItem(); parent; parent = parent->parentItem())
+		if (parent->clip()) visible = visible.intersected(rectangle(parent));
+	visible = visible.intersected(QRectF(QPointF{}, window->size()));
+	if (!target->isEnabled() || visible.isEmpty())
+		std::fprintf(stderr, "Unreachable native click: %s visible=%.1f,%.1f %.1fx%.1f\n",
+		    qPrintable(target->objectName()), visible.x(), visible.y(), visible.width(), visible.height());
+	CHECK(target->isEnabled() && !visible.isEmpty());
 	QTest::mouseClick(
 	    window, Qt::LeftButton, Qt::NoModifier,
-	    target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint());
+	    visible.center().toPoint());
 	settle();
 }
 } // namespace
