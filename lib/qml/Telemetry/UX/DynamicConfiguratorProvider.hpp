@@ -141,6 +141,19 @@ public:
 	// nothing the Watchlist can hold. Empty where the box is on, for Commands
 	// and Services, and while the tree is changing.
 	Q_INVOKABLE QString watchRefusal(const QModelIndex& index) const;
+	// setWatchMany's map also holds `values` (a struct's or array's values were
+	// asked) and, when adding, `adding`: how many rows it would add.
+	// What a row's box counts, for its words: {watched, total, kind}, kind
+	// "members", "elements", "values" (a struct or an array, or a group with
+	// one below) or "fields"; empty where there is no box.
+	Q_INVOKABLE QVariantMap watchTally(const QModelIndex& index) const;
+	// The Watchlist as a project saves it: each row in order as {group, name}
+	// (a whole Field) or {group, name, member} (a value inside one); empty
+	// when it cannot tell. addWatchBindings puts such rows back in one change:
+	// {status, added, duplicate, capacity, missing: [positions of entries no
+	// Field or value of this device matches, or it can't hold]}.
+	Q_INVOKABLE QVariantList watchBindings() const;
+	Q_INVOKABLE QVariantMap addWatchBindings(const QVariantList& bindings);
 	// Watches, or stops watching, every Field the Watchlist can hold at or
 	// under each index, in tree order, as one change: {status: ok, refused,
 	// invalid, stale or capacity, changed, unchanged, fields, room}. At

@@ -68,6 +68,10 @@ TreeViewDelegate {
     property string watchName: ""
     // Said on the box while it is off.
     property string watchOffReason: ""
+    // A partly ticked box: what it counts ("2 of 3 members watched"), and the
+    // tooltip that says what a click does.
+    property string watchTally: ""
+    property string watchTallyHint: ""
     // The row's tooltip; the detail by default.
     property string hint: detail
 
@@ -131,6 +135,11 @@ TreeViewDelegate {
 
     // The box's reason while it is off: the row's own first, then polling.
     readonly property string boxReason: watchRefusal.length > 0 ? watchRefusal : watchOffReason
+    // What the box says to a keyboard or screen reader user, who never hovers it.
+    readonly property string boxWords: !watchable ? ""
+        : !watchBox.enabled ? boxReason
+        : watchTally.length > 0 ? watchTally
+        : watchState === Qt.Checked ? qsTr("watched") : qsTr("not watched")
     signal watchToggled()
     // A right click on the row: the panel opens its menu there.
     signal contextMenuRequested(real x, real y)
@@ -156,7 +165,7 @@ TreeViewDelegate {
     text: name
     Accessible.role: Accessible.TreeItem
     Accessible.name: name
-    Accessible.description: fullDescription
+    Accessible.description: [boxWords, fullDescription].filter(function(part) { return part.length > 0 }).join("\n")
     FontMetrics { id: nameMetrics; font: treeRow.font }
     FontMetrics { id: metadataMetrics; font.family: treeRow.font.family; font.pointSize: Type.caption }
 
@@ -178,14 +187,15 @@ TreeViewDelegate {
                 checkState = Qt.binding(function() { return treeRow.watchState })
             }
             Accessible.name: treeRow.watchName
-            Accessible.description: watchBox.enabled ? "" : treeRow.boxReason
+            Accessible.description: watchBox.enabled ? treeRow.watchTally : treeRow.boxReason
             edgeColor: treeRow.textColor
             indicator.objectName: "endpointWatchBox"
             HoverHandler { id: boxHover }
             PlainToolTip {
                 objectName: "endpointWatchReason"
-                visible: boxHover.hovered && !watchBox.enabled && treeRow.boxReason.length > 0
-                text: treeRow.boxReason
+                visible: boxHover.hovered && (watchBox.enabled ? treeRow.watchTallyHint.length > 0
+                                                               : treeRow.boxReason.length > 0)
+                text: watchBox.enabled ? treeRow.watchTallyHint : treeRow.boxReason
                 y: treeRow.height + 2
                 delay: 700
             }

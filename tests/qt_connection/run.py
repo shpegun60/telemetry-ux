@@ -155,11 +155,11 @@ def main():
             headless_environment['LSAN_OPTIONS'] = 'exitcode=86:print_suppressions=1'
         scheduling_executable = build / ('telemetry_dynamic_watchlist_check.exe' if os.name == 'nt' else 'telemetry_dynamic_watchlist_check')
         scheduling = run('watchlist-scheduling-runtime', [scheduling_executable], env=headless_environment)
-        scheduled_checks = re.search(r'Dynamic Watchlist checks=(\d+) chunks=32,32,1 no_native_callback_signals=1', scheduling)
-        if not scheduled_checks or int(scheduled_checks[1]) < 280:
+        scheduled_checks = re.search(r'Dynamic Watchlist checks=(\d+) chunks=32,32,1 member_frames=10 no_native_callback_signals=1', scheduling)
+        if not scheduled_checks or int(scheduled_checks[1]) < 2200:
             raise RuntimeError('Controlled Watchlist scheduling did not reach its assertion floor')
         report['watchlist_scheduling'] = dict(checks=int(scheduled_checks[1]),
-            executable_sha256=digest(scheduling_executable), chunks=[32,32,1],
+            executable_sha256=digest(scheduling_executable), chunks=[32,32,1], member_frames=10,
             signals_in_native_callback=False, controlled_ticks=True)
         batch_executable = build / ('telemetry_dynamic_batch_check.exe' if os.name == 'nt' else 'telemetry_dynamic_batch_check')
         batch_log = run('batch-presentation-runtime', [batch_executable], env=headless_environment)

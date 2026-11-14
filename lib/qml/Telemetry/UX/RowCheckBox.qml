@@ -14,6 +14,7 @@ T.CheckBox {
     padding: 0
     spacing: 0
     focusPolicy: Qt.NoFocus
+    Accessible.checkStateMixed: checkState === Qt.PartiallyChecked
     contentItem: Item {}
     indicator: Rectangle {
         objectName: "rowCheckBoxMark"

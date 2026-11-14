@@ -4,7 +4,9 @@
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "ScalarEditor.hpp"
+#include "ScalarEditorMetadata.hpp"
 #include "WatchCoverage.hpp"
+#include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
@@ -15,6 +17,7 @@
 #include <charconv>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace telemetry::ux {
@@ -290,6 +293,10 @@ struct DynamicConfiguratorProvider::Impl {
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
 	QString writeText, writeName, watchWrite;
+	// A value inside a struct or array Field: where it is, so the write walks
+	// to it in the Field just read; and the value as it will be written.
+	std::optional<WatchLeaves::Leaf> writeLeaf;
+	QString writeIntended;
 	bool watchWroteLast = false;
 	EndpointModel endpoints;
 	EndpointDefinitionModel definitions;
@@ -325,7 +332,7 @@ struct DynamicConfiguratorProvider::Impl {
 	quint64 heldMembership = ~quint64{0};
 	struct WatchUndo {
 		bool valid = false, added = false;
-		QSet<quint32> addedIds;
+		QSet<WatchKey> addedIds;
 		QVector<WatchlistModel::Removed> removed;
 		quint64 membership = 0, treeEpoch = 0;
 	} undo;
@@ -368,17 +375,25 @@ struct DynamicConfiguratorProvider::Impl {
 		if (!answer)
 			return;
 		const auto& holdable = *answer;
-		coverage.build(endpoints, [this, &holdable](const QModelIndex& index)
-		                              -> std::optional<WatchCoverage::Holdable> {
-			if (!endpoints.data(index, EndpointModel::IsEndpointRole).toBool() ||
-			    endpoints.data(index, EndpointModel::CategoryRole).toInt() != 1 ||
-			    !endpoints.data(index, EndpointModel::ReadableRole).toBool())
-				return std::nullopt;
-			const auto id = endpoints.data(index, EndpointModel::EndpointIdRole).toUInt();
-			if (!holdable.contains(id))
-				return std::nullopt;
-			return WatchCoverage::Holdable{id, endpoints.endpoint(index).value(QStringLiteral("path")).toString()};
-		});
+		// A struct or array Field counts its values from the schema, opened or
+		// not, so the walk stops at every endpoint.
+		coverage.build(
+		    endpoints,
+		    [this, &holdable](const QModelIndex& index) -> std::optional<WatchCoverage::Holdable> {
+			    if (!endpoints.data(index, EndpointModel::IsEndpointRole).toBool() ||
+			        endpoints.data(index, EndpointModel::CategoryRole).toInt() != 1 ||
+			        !endpoints.data(index, EndpointModel::ReadableRole).toBool())
+				    return std::nullopt;
+			    const auto id = endpoints.data(index, EndpointModel::EndpointIdRole).toUInt();
+			    const auto found = holdable.constFind(id);
+			    if (found == holdable.cend())
+				    return std::nullopt;
+			    return WatchCoverage::Holdable{watch_key::whole(id), endpoints.pathOf(index), found->leaves,
+			                                   found->aggregate};
+		    },
+		    [this](const QModelIndex& index) {
+			    return !endpoints.data(index, EndpointModel::IsEndpointRole).toBool();
+		    });
 	}
 
 	void treeChanged()
@@ -536,17 +551,28 @@ struct DynamicConfiguratorProvider::Impl {
 			const auto result = *writer->applied;
 			writer->applied.reset();
 			writer->action = DynamicViewState::Action::None;
-			watchWriteDone = result.writeCompleted && result.write.succeeded() &&
-			                 result.refreshCompleted && result.refresh.operation.succeeded() &&
+			const bool written = result.writeCompleted && result.write.succeeded();
+			watchWriteDone = written && result.refreshCompleted && result.refresh.operation.succeeded() &&
 			                 result.refresh.published;
-			watchWrite = *watchWriteDone ? writeName + QStringLiteral(" = ") + writeText +
-			                                   QStringLiteral(": written, confirmed by a fresh read")
-			             : result.writeCompleted && result.write.succeeded()
-			                 ? writeName + QStringLiteral(": written, readback unconfirmed")
-			                 : writeName + (result.write.status == cl::Status::OutcomeUnknown
-			                                    ? QStringLiteral(": ")
-			                                    : QStringLiteral(" not written: ")) +
-			                       operationText(result.write);
+			const auto back = *watchWriteDone ? readBack() : QString{};
+			const auto words = [](const char* text) {
+				return QCoreApplication::translate("DynamicConfiguratorProvider", text);
+			};
+			if (written && !back.isEmpty())
+				watchWrite = (back == writeIntended ? words("Wrote %1 = %2 · read back %3.")
+				                                    : words("Wrote %1 = %2; the device reads back %3."))
+				                 .arg(writeName, writeIntended, back);
+			else if (written)
+				watchWrite = words("Wrote %1 = %2; it could not be read back.").arg(writeName, writeIntended);
+			else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
+			                       result.write.status == cl::Status::BufferTooSmall))
+				watchWrite = words("%1 is larger than one write, so a value in it can't be written on its own.")
+				                 .arg(endpoints.fieldPath(writeId));
+			else
+				watchWrite = writeName + (result.write.status == cl::Status::OutcomeUnknown
+				                              ? QStringLiteral(": ")
+				                              : QStringLiteral(" not written: ")) +
+				             operationText(result.write);
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
 		if (state) {
@@ -670,6 +696,64 @@ struct DynamicConfiguratorProvider::Impl {
 			Q_EMIT alive->watchWriteFinished(*watchWriteDone);
 	}
 
+	// The written value in the writer's current snapshot: the Field itself,
+	// or the value the leaf's steps lead to.
+	std::optional<ins::NodeHandle> nodeOf() const
+	{
+		if (!writer)
+			return std::nullopt;
+		const auto& view = writer->view;
+		auto node = view.root();
+		if (!node)
+			return std::nullopt;
+		auto handle = node.value;
+		if (writeLeaf)
+			for (std::size_t step = 0; step < writeLeaf->depth; ++step) {
+				const auto next = view.child(handle, writeLeaf->steps[step].index);
+				if (!next)
+					return std::nullopt;
+				handle = next.value;
+			}
+		return handle;
+	}
+
+	// The value read back after a write, as the editor writes numbers.
+	QString readBack() const
+	{
+		const auto node = nodeOf();
+		if (!node)
+			return {};
+		const auto scalar = writer->view.scalar(*node);
+		return scalar ? std::visit([](const auto& number) { return detail::scalarEditorText(number); },
+		                           scalar.value.value)
+		              : QString{};
+	}
+
+	// What a typed text writes, in the same words readBack uses: "2.0" -> "2".
+	static QString canonicalScalarText(ScalarCode code, const QString& text)
+	{
+		QString canonical;
+		const auto as = [&]<class T>() {
+			T number{};
+			if (detail::parseScalar(text, number))
+				canonical = detail::scalarEditorText(number);
+		};
+		switch (code) {
+			case ScalarCode::Bool: as.template operator()<bool>(); break;
+			case ScalarCode::U8: as.template operator()<std::uint8_t>(); break;
+			case ScalarCode::S8: as.template operator()<std::int8_t>(); break;
+			case ScalarCode::U16: as.template operator()<std::uint16_t>(); break;
+			case ScalarCode::S16: as.template operator()<std::int16_t>(); break;
+			case ScalarCode::U32: as.template operator()<std::uint32_t>(); break;
+			case ScalarCode::S32: as.template operator()<std::int32_t>(); break;
+			case ScalarCode::U64: as.template operator()<std::uint64_t>(); break;
+			case ScalarCode::S64: as.template operator()<std::int64_t>(); break;
+			case ScalarCode::F32: as.template operator()<float>(); break;
+			case ScalarCode::F64: as.template operator()<double>(); break;
+		}
+		return canonical.isEmpty() ? text.trimmed() : canonical;
+	}
+
 	void failWatchWrite(QString text)
 	{
 		if (writer && writer->view.editing())
@@ -698,9 +782,14 @@ struct DynamicConfiguratorProvider::Impl {
 		}
 		bool parsed = false;
 		auto set = rt::Status::TypeMismatch;
-		if (const auto root = view.root()) {
-			if (const auto info = view.info(root.value))
-				set = detail::setScalarText(view, root.value, info.value.code, writeText, parsed);
+		const auto node = nodeOf();
+		if (!node) {
+			failWatchWrite(writeName + QStringLiteral(" not written: the Field changed since it was watched"));
+			return;
+		}
+		if (const auto info = view.info(*node)) {
+			set = detail::setScalarText(view, *node, info.value.code, writeText, parsed);
+			writeIntended = parsed ? canonicalScalarText(info.value.code, writeText) : QString{};
 		}
 		if (!parsed || set != rt::Status::Ok) {
 			failWatchWrite(writeName + QStringLiteral(" not written: \"") + writeText +
@@ -751,9 +840,21 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		if (const auto p = weak.lock(); p && p->q)
 			Q_EMIT p->q->watchCompleted(frame);
 	});
-	d->watch.setWritable([weak](quint32 id) {
+	// A value inside a struct or array Field is written by writing its whole
+	// Field, which one write must hold.
+	d->watch.setWritable([weak](WatchKey key) {
 		const auto p = weak.lock();
-		return p && p->endpoints.fieldWritable(id);
+		const auto field = watch_key::field(key);
+		return p && p->endpoints.fieldWritable(field) &&
+		       (watch_key::isWhole(key) || p->endpoints.fieldWireBytes(field) <= workbenchPayloadBytes);
+	});
+	d->watch.setWriteRefusal([weak](WatchKey key) -> QString {
+		const auto p = weak.lock();
+		const auto field = watch_key::field(key);
+		if (!p || watch_key::isWhole(key) || !p->endpoints.fieldWritable(field))
+			return {};
+		return tr("%1 is larger than one write, so a value in it can't be written on its own.")
+		    .arg(p->endpoints.fieldPath(field));
 	});
 	d->batch.setNotify(
 	    [weak] {
@@ -781,8 +882,18 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 			p->treeChanged();
 	};
 	connect(&d->endpoints, &QAbstractItemModel::modelReset, this, treeChanged);
-	connect(&d->endpoints, &QAbstractItemModel::rowsInserted, this, treeChanged);
-	connect(&d->endpoints, &QAbstractItemModel::rowsRemoved, this, treeChanged);
+	// Opening a struct or an array adds its value rows; the boxes count values
+	// from the schema, so nothing they cover changed and Undo stays.
+	const auto rowsChanged = [treeChanged](const QModelIndex& parent) {
+		if (parent.isValid() && (parent.data(EndpointModel::IsEndpointRole).toBool() ||
+		                         parent.data(EndpointModel::PreviewChildRole).toBool()))
+			return;
+		treeChanged();
+	};
+	connect(&d->endpoints, &QAbstractItemModel::rowsInserted, this,
+	        [rowsChanged](const QModelIndex& parent, int, int) { rowsChanged(parent); });
+	connect(&d->endpoints, &QAbstractItemModel::rowsRemoved, this,
+	        [rowsChanged](const QModelIndex& parent, int, int) { rowsChanged(parent); });
 	connect(&d->endpoints, &QAbstractItemModel::rowsMoved, this, treeChanged);
 	connect(&d->endpoints, &QAbstractItemModel::layoutChanged, this, treeChanged);
 	setBinding(binding);
@@ -1267,7 +1378,92 @@ int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
 	    index.model() != &p->endpoints)
 		return -1;
 	p->ensureCoverage();
+	using Role = EndpointModel::Role;
+	if (index.data(Role::PreviewChildRole).toBool())
+		return p->coverage.memberState(index.data(Role::PreviewFieldIdRole).toUInt(),
+		                               index.data(Role::WatchLeafFirstRole).toUInt(),
+		                               index.data(Role::WatchLeafCountRole).toUInt(), p->held(),
+		                               p->watch.membership());
 	return p->coverage.state(index, p->held(), p->watch.membership());
+}
+
+QVariantList DynamicConfiguratorProvider::watchBindings() const
+{
+	auto p = d;
+	QVariantList saved;
+	if (!p->current() || !p->watch.canTellHoldable())
+		return saved;
+	for (int row = 0; row < p->watch.count(); ++row) {
+		const auto binding = p->watch.binding(row);
+		if (binding.isEmpty())
+			return {};
+		saved.push_back(binding);
+	}
+	return saved;
+}
+
+QVariantMap DynamicConfiguratorProvider::addWatchBindings(const QVariantList& bindings)
+{
+	auto p = d;
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
+	                   {QStringLiteral("added"), 0}, {QStringLiteral("duplicate"), 0},
+	                   {QStringLiteral("capacity"), 0}, {QStringLiteral("missing"), QVariantList{}}};
+	if (!p->current() || p->updating || p->watch.active() || !p->watch.canTellHoldable())
+		return result;
+	QVector<WatchEntry> entries;
+	QVariantList missing;
+	for (int at = 0; at < bindings.size(); ++at) {
+		const auto saved = bindings[at].toMap();
+		const auto [found, entry] = p->watch.resolve(saved.value(QStringLiteral("group")).toString(),
+		                                             saved.value(QStringLiteral("name")).toString(),
+		                                             saved.value(QStringLiteral("member")).toString());
+		if (found == DynamicWatchlist::Resolution::Ok)
+			entries.push_back(entry);
+		else
+			missing.push_back(at);
+	}
+	if (!entries.isEmpty()) {
+		const auto added = p->watch.addEntries(entries);
+		for (const auto& name : {QStringLiteral("status"), QStringLiteral("added"), QStringLiteral("duplicate"),
+		                         QStringLiteral("capacity")})
+			result[name] = added.value(name);
+	} else {
+		result[QStringLiteral("status")] = QStringLiteral("ok");
+	}
+	result[QStringLiteral("missing")] = missing;
+	return result;
+}
+
+QVariantMap DynamicConfiguratorProvider::watchTally(const QModelIndex& index) const
+{
+	auto p = d;
+	if (!p->current() || p->updating || p->endpoints.changing() || !index.isValid() ||
+	    index.model() != &p->endpoints)
+		return {};
+	p->ensureCoverage();
+	using Role = EndpointModel::Role;
+	qint64 watched = 0, total = 0;
+	QString kind = index.data(Role::WatchLeafKindRole).toString();
+	if (index.data(Role::PreviewChildRole).toBool()) {
+		const auto field = index.data(Role::PreviewFieldIdRole).toUInt();
+		const auto first = index.data(Role::WatchLeafFirstRole).toUInt();
+		total = index.data(Role::WatchLeafCountRole).toUInt();
+		if (total == 0 || !p->coverage.aggregate(field))
+			return {};
+		watched = p->coverage.countIn(field, first, quint32(total), p->held(), p->watch.membership());
+	} else {
+		const auto tally = p->coverage.tally(index, p->held(), p->watch.membership());
+		if (!tally)
+			return {};
+		watched = tally->watched;
+		total = tally->total;
+		if (!index.data(Role::IsEndpointRole).toBool())
+			kind = tally->aggregates > 0 ? QStringLiteral("values") : QStringLiteral("fields");
+	}
+	if (kind.isEmpty())
+		kind = QStringLiteral("values");
+	return {{QStringLiteral("watched"), watched}, {QStringLiteral("total"), total},
+	        {QStringLiteral("kind"), kind}};
 }
 
 QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) const
@@ -1290,20 +1486,25 @@ QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) cons
 		const auto name = at.data(Role::NameRole).toString();
 		return group.isEmpty() ? name : group + QLatin1Char('.') + name;
 	};
-	if (index.data(Role::PreviewChildRole).toBool())
-		return field.isValid()
-		    ? tr("The Watchlist can't hold a struct's member yet: read %1 in Details.").arg(path(field))
-		    : QString{};
-	if (index.data(Role::IsEndpointRole).toBool()) {
-		if (!index.data(Role::ReadableRole).toBool())
-			return tr("A write-only Field can't be read, so it can't be watched.");
-		if (index.data(Role::PreviewAggregateRole).toBool() || index.data(Role::WireBytesRole).toUInt() > 8)
-			return tr("The Watchlist can't hold a struct yet: read %1 in Details.").arg(path(index));
+	// A Field's reason; a value row inside it gives its Field's.
+	const auto reason = [&p, &path](const QModelIndex& at) -> QString {
+		if (!at.data(Role::ReadableRole).toBool())
+			return tr("%1 is write only, so it can't be watched.").arg(path(at));
+		if (!at.data(Role::PreviewAggregateRole).toBool())
+			return {};
+		if (at.data(Role::WatchLeafCountRole).toUInt() == 0)
+			return tr("%1 has no values to watch.").arg(path(at));
+		if (at.data(Role::WireBytesRole).toUInt() > workbenchSnapshotBytes)
+			return tr("%1 is larger than the Watchlist reads at once (64 KiB), so it can't be watched.").arg(path(at));
+		if (!p->watch.readsMembers())
+			return tr("This connection can't read struct members, so %1 can't be watched.").arg(path(at));
 		return {};
-	}
+	};
+	if (index.data(Role::PreviewChildRole).toBool() || index.data(Role::IsEndpointRole).toBool())
+		return field.isValid() ? reason(field) : QString{};
 	// A group or the Fields themselves, with nothing the Watchlist can hold.
 	return p->endpoints.rowCount(index) > 0
-	    ? tr("Nothing in %1 can be watched yet.").arg(index.data(Role::NameRole).toString())
+	    ? tr("Nothing in %1 can be watched.").arg(index.data(Role::NameRole).toString())
 	    : QString{};
 }
 
@@ -1312,49 +1513,131 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 	auto p = d;
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
 	                   {QStringLiteral("changed"), 0}, {QStringLiteral("unchanged"), 0},
-	                   {QStringLiteral("fields"), 0}, {QStringLiteral("room"), 0}};
+	                   {QStringLiteral("fields"), 0}, {QStringLiteral("room"), 0},
+	                   {QStringLiteral("values"), false}};
 	// A read or a write in Details does not hold the tree's boxes; polling,
 	// a model update and a stale connection do.
 	if (!p->current() || p->updating || p->endpoints.changing() || p->watch.active())
 		return result;
 	p->ensureCoverage();
-	QVector<WatchCoverage::Holdable> fields;
+	using Role = EndpointModel::Role;
+	// Whole Fields by key, and per struct or array Field the ranges of its
+	// values asked for, merged so a value counts once.
+	QVector<WatchCoverage::Holdable> whole;
 	QSet<quint64> seen;
+	struct Span {
+		quint32 first = 0, count = 0;
+	};
+	QHash<quint32, std::vector<Span>> spans;
+	QVector<quint32> order;
+	// Tree order: a whole Field (its place in whole) or a struct's values
+	// (its id), as each is first met.
+	QVector<std::pair<bool, quint32>> items;
+	const auto span = [&spans, &order, &items](quint32 field, quint32 first, quint32 count) {
+		if (count == 0)
+			return;
+		if (!spans.contains(field)) {
+			order.push_back(field);
+			items.push_back({false, field});
+		}
+		spans[field].push_back({first, count});
+	};
 	for (const auto& value : indexes) {
 		const auto index = value.value<QModelIndex>();
 		if (!value.canConvert<QModelIndex>() || !index.isValid() || index.model() != &p->endpoints) {
 			result[QStringLiteral("status")] = QStringLiteral("invalid");
 			return result;
 		}
+		if (index.data(Role::PreviewChildRole).toBool()) {
+			const auto field = index.data(Role::PreviewFieldIdRole).toUInt();
+			if (!p->coverage.aggregate(field)) {
+				result[QStringLiteral("status")] = QStringLiteral("stale");
+				return result;
+			}
+			span(field, index.data(Role::WatchLeafFirstRole).toUInt(),
+			     index.data(Role::WatchLeafCountRole).toUInt());
+			continue;
+		}
 		// An index of a tree since replaced, or past the walk's bounds.
 		if (!p->coverage.contains(index)) {
 			result[QStringLiteral("status")] = QStringLiteral("stale");
 			return result;
 		}
-		for (const auto& field : p->coverage.holdableUnder(index))
-			if (!seen.contains(field.key)) {
+		for (const auto& field : p->coverage.holdableUnder(index)) {
+			if (field.aggregate)
+				span(watch_key::field(field.key), 0, field.leaves);
+			else if (!seen.contains(field.key)) {
 				seen.insert(field.key);
-				fields.push_back(field);
+				items.push_back({true, quint32(whole.size())});
+				whole.push_back(field);
 			}
+		}
+	}
+	qint64 total = whole.size();
+	for (auto& ranges : spans) {
+		std::sort(ranges.begin(), ranges.end(),
+		          [](const Span& a, const Span& b) { return a.first < b.first; });
+		std::vector<Span> merged;
+		for (const auto& range : ranges) {
+			if (!merged.empty() && range.first <= quint64{merged.back().first} + merged.back().count) {
+				const auto end = (std::max)(quint64{merged.back().first} + merged.back().count,
+				                            quint64{range.first} + range.count);
+				merged.back().count = quint32(end - merged.back().first);
+			} else {
+				merged.push_back(range);
+			}
+		}
+		ranges = std::move(merged);
+		for (const auto& range : ranges)
+			total += range.count;
 	}
 	const auto& held = p->held();
+	const auto membership = p->watch.membership();
 	const int room = watchlistRowLimit - p->watch.count();
-	result[QStringLiteral("fields")] = static_cast<int>(fields.size());
+	result[QStringLiteral("fields")] = total;
 	result[QStringLiteral("room")] = room;
+	result[QStringLiteral("values")] = !spans.isEmpty();
+	const auto watchedIn = [&](quint32 field, const Span& range) {
+		return p->coverage.watchedIn(field, range.first, range.count, held, membership);
+	};
 	if (watched) {
-		QVector<QPair<quint32, QString>> add;
-		for (const auto& field : fields)
-			if (!held.contains(field.key))
-				add.push_back({static_cast<quint32>(field.key), field.name});
-		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - add.size());
+		qint64 adding = 0;
+		for (const auto& field : whole)
+			adding += held.contains(field.key) ? 0 : 1;
+		for (const auto field : order)
+			for (const auto& range : spans.value(field))
+				adding += qint64(range.count) -
+				          p->coverage.countIn(field, range.first, range.count, held, membership);
+		result[QStringLiteral("unchanged")] = total - adding;
+		result[QStringLiteral("adding")] = adding;
 		// All of them or none: a part would leave the box partly ticked, and the
-		// next tick would try again.
-		if (add.size() > room) {
+		// next tick would try again. Counted before any row is made.
+		if (adding > room) {
 			result[QStringLiteral("status")] = QStringLiteral("capacity");
 			return result;
 		}
+		QVector<WatchEntry> add;
+		for (const auto& [isWhole, at] : items) {
+			if (isWhole) {
+				const auto& field = whole[qsizetype(at)];
+				if (!held.contains(field.key))
+					add.push_back(WatchEntry::of(field.key, field.name));
+				continue;
+			}
+			const auto field = at;
+			const auto holdable = p->coverage.aggregate(field);
+			for (const auto& range : spans.value(field)) {
+				const auto entries =
+				    holdable ? p->watch.entries(field, range.first, range.count, holdable->name) : std::nullopt;
+				if (!entries) {
+					result[QStringLiteral("status")] = QStringLiteral("stale");
+					return result;
+				}
+				add += *entries;
+			}
+		}
 		if (!add.isEmpty()) {
-			const auto added = p->watch.addMany(add);
+			const auto added = p->watch.addEntries(add);
 			if (added.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
 				result[QStringLiteral("status")] = added.value(QStringLiteral("status"));
 				return result;
@@ -1366,19 +1649,23 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 				p->undo.valid = true;
 				p->undo.added = true;
 				for (const auto& entry : add)
-					p->undo.addedIds.insert(entry.first);
+					p->undo.addedIds.insert(entry.key);
 				p->undo.membership = p->watch.membership();
 				p->undo.treeEpoch = p->treeEpoch;
 			}
 		}
 	} else {
-		QSet<quint32> ids;
-		for (const auto& field : fields)
+		QSet<WatchKey> keys;
+		for (const auto& field : whole)
 			if (held.contains(field.key))
-				ids.insert(static_cast<quint32>(field.key));
-		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - ids.size());
-		if (!ids.isEmpty()) {
-			const auto removed = p->watch.removeMany(ids);
+				keys.insert(field.key);
+		for (const auto field : order)
+			for (const auto& range : spans.value(field))
+				for (const auto ordinal : watchedIn(field, range))
+					keys.insert(watch_key::member(field, ordinal));
+		result[QStringLiteral("unchanged")] = total - keys.size();
+		if (!keys.isEmpty()) {
+			const auto removed = p->watch.removeMany(keys);
 			if (removed.isEmpty())
 				return result;
 			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
@@ -1452,7 +1739,14 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto index = model->index(row, 0);
 	if (!model->data(index, WatchlistModel::WritableRole).toBool())
 		return false;
-	const auto id = model->data(index, WatchlistModel::EndpointIdRole).toUInt();
+	const auto key = WatchKey(model->data(index, WatchlistModel::WatchKeyRole).toULongLong());
+	const auto id = watch_key::field(key);
+	std::optional<WatchLeaves::Leaf> leaf;
+	if (!watch_key::isWhole(key) && !(leaf = p->watch.leaf(key))) {
+		p->watchWrite = QStringLiteral("Write refused: the Field is not available");
+		p->notify();
+		return false;
+	}
 	auto& view = p->writer->view;
 	p->watchWriteSession = view.session();
 	if (view.editing())
@@ -1480,6 +1774,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writer->sequence = submitted.handle.sequence;
 	p->writer->eventReported = false;
 	p->writeId = id;
+	p->writeLeaf = std::move(leaf);
+	p->writeIntended = text.trimmed();
 	p->writeText = text.trimmed();
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;

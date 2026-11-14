@@ -18,7 +18,7 @@ set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configura
 target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp PresentationOverlay.hpp TrendHistory.cpp TrendHistory.hpp WatchSample.hpp WatchFrame.hpp
     FileContent.cpp FileContent.hpp FileTextModels.cpp FileTextModels.hpp HexView.cpp HexView.hpp QmlTypes.cpp QmlTypes.hpp
     Clipboard.cpp Clipboard.hpp JsonContent.cpp JsonContent.hpp TreeFilter.cpp TreeFilter.hpp ToolIcon.cpp ToolIcon.hpp
-    DeviceBytes.cpp DeviceBytes.hpp WatchCoverage.cpp WatchCoverage.hpp EventLog.cpp EventLog.hpp)
+    DeviceBytes.cpp DeviceBytes.hpp WatchCoverage.cpp WatchCoverage.hpp EventLog.cpp EventLog.hpp WatchKey.hpp)
 target_compile_features(telemetry_ux_configurator PUBLIC cxx_std_17)
 target_include_directories(telemetry_ux_configurator PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
@@ -58,7 +58,7 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
 install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp FileContent.hpp FileTextModels.hpp HexView.hpp QmlTypes.hpp Clipboard.hpp
-    WatchSample.hpp WatchFrame.hpp JsonContent.hpp TreeFilter.hpp ToolIcon.hpp DeviceBytes.hpp WatchCoverage.hpp EventLog.hpp
+    WatchSample.hpp WatchFrame.hpp JsonContent.hpp TreeFilter.hpp ToolIcon.hpp DeviceBytes.hpp WatchCoverage.hpp EventLog.hpp WatchKey.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 
 # Runtime providers are a separate optional export. Pure Qt/static consumers
@@ -72,7 +72,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
         DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp
         WatchlistModel.cpp WatchlistModel.hpp DynamicWatchlist.cpp DynamicWatchlist.hpp
         DynamicBatch.cpp DynamicBatch.hpp EndpointPreviews.cpp EndpointPreviews.hpp
-        SchemaText.cpp SchemaText.hpp ScalarEditorMetadata.hpp)
+        SchemaText.cpp SchemaText.hpp ScalarEditorMetadata.hpp WatchLeaves.cpp WatchLeaves.hpp)
     add_library(TelemetryUX::dynamic_configurator ALIAS telemetry_ux_dynamic_configurator)
     set_target_properties(telemetry_ux_dynamic_configurator PROPERTIES
         EXPORT_NAME dynamic_configurator AUTOMOC ON)
@@ -89,7 +89,7 @@ if(TELEMETRY_UX_BUILD_DYNAMIC_CONFIGURATOR)
     install(EXPORT TelemetryUXDynamicTargets NAMESPACE TelemetryUX::
         DESTINATION "${_telemetry_ux_package_dir}")
     install(FILES DynamicModels.hpp DynamicConfiguratorProvider.hpp DynamicConfiguratorBinding.hpp ScalarEditor.hpp
-        WatchlistModel.hpp DynamicWatchlist.hpp DynamicBatch.hpp EndpointPreviews.hpp
+        WatchlistModel.hpp DynamicWatchlist.hpp DynamicBatch.hpp EndpointPreviews.hpp WatchLeaves.hpp
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 endif()
 

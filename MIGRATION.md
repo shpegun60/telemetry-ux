@@ -191,3 +191,26 @@ while it converts the argument.
   caller. No request leaves.
 - A getter that changes the session: it runs before the method looks. The
   refusal is `Schema` instead of `Validation`, and again nothing is sent.
+
+## Watchlist keys (S3-A, November 2026)
+
+The Watchlist holds values inside struct and array Fields. C++ consumers of the
+installed headers see these source changes; QML and the provider's invokables
+only gain members.
+
+| Before | Now |
+| --- | --- |
+| `WatchlistModel::Removed{row, id, name}` | `Removed{row, entry}`, `entry` a `WatchEntry` (`key`, `name`, `member`, `type`, write scope) |
+| `WatchlistModel::removeIds(QSet<quint32>)`, `DynamicWatchlist::removeMany(QSet<quint32>)` | take `QSet<WatchKey>`; a whole Field's key is its id |
+| `DynamicWatchlist::held() -> QSet<quint32>` | `QSet<WatchKey>` |
+| `DynamicWatchlist::holdable(ids) -> std::optional<QSet<quint32>>` | `std::optional<QHash<quint32, WatchHolding>>`: `{aggregate, leaves}` per Field |
+| `setWritable(std::function<bool(quint32)>)` | `std::function<bool(WatchKey)>`; `setWriteRefusal` added |
+| `WatchCoverage::Holdable{key, name}`, `build(model, holdableOf)` | adds `leaves` and `aggregate`; `build` takes an optional descend predicate |
+| `WatchFrameRow`, `WatchlistCompletion::Row` | gain `leaf`, last, so positional initialisers keep their meaning |
+
+New: `WatchKey.hpp`, `WatchLeaves.hpp`, `WatchlistSource::readMembers`,
+`WatchlistCompletion::members`, `DynamicWatchlist::addEntries`, `entries`,
+`resolve`, `binding`, `leaf`, `readsMembers`; `EndpointModel` roles `path`,
+`watchLeafFirst`, `watchLeafCount`, `watchLeafKind` and `pathOf`;
+`WatchlistModel` roles `watchKey`, `member`, `writeScope`, `writeRefusal`.
+A FieldRead `WatchFrame` may now hold up to 32 values of one Field.

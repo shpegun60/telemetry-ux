@@ -319,7 +319,8 @@ void EndpointPreviews::ingest(const WatchFrame& frame) {
     bool tell = false;
     for (int n = 0; n < frame.count; ++n) {
         const auto& row = frame.rows[n];
-        if (!p->demanded.contains(row.id)) continue;
+        // A value inside a struct or array Field is not its Field's preview.
+        if (row.leaf || !p->demanded.contains(row.id)) continue;
         const auto s = p->schema();
         const auto* field = p->fieldById(row.id);
         if (!field || field->typeId != row.value.type.typeId) continue;

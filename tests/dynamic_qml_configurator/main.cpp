@@ -1,5 +1,7 @@
 // Three independent installed QML panels over one actual native client/FIFO. MIT.
 #include "Fixture.hpp"
+#include <Telemetry/UX/WatchKey.hpp>
+#include <Telemetry/UX/WatchLeaves.hpp>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
 #include <QtGui/QGuiApplication>
@@ -751,6 +753,24 @@ static void injectedApplicationLeak()
 #endif
 }
 
+// Without a Watchlist source nothing can be watched yet: no box, no reason,
+// nothing saved and nothing restored. The S3-A headers stand on their own.
+void watchWithoutSource()
+{
+	Harness h;
+	Provider provider{h.binding.get()};
+	const auto config = endpoint(provider, "Config");
+	CHECK(config.isValid() && provider.watchState(config) == -1 && provider.watchRefusal(config).isEmpty());
+	CHECK(provider.watchTally(config).isEmpty() && provider.watchBindings().isEmpty());
+	CHECK(provider.addWatchBindings({QVariantMap{{"group", "device"}, {"name", "Config"}, {"member", "gain"}}})
+	          .value("status") == "refused");
+	static_assert(telemetry::ux::watch_key::member(1, 0) == (quint64{1} << 32 | 1));
+	telemetry::ux::WatchLeaves leaves;
+	leaves.reset(h.storage->schema);
+	const auto type = h.storage->schema.endpoints(telemetry::descriptor::Category::Field)[0].typeId;
+	CHECK(leaves.count(type) == 306 && leaves.ordinal(type, u"samples[3]") == 9u);
+}
+
 int main(int argc, char** argv)
 {
 	QGuiApplication application(argc, argv);
@@ -781,6 +801,8 @@ int main(int argc, char** argv)
 		actualExampleInputJourney();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("unknown"))
 		uncertainCommandFacts();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("watch"))
+		watchWithoutSource();
 	CHECK(warnings == 0);
 	if (application.arguments().contains(QStringLiteral("--application-leak-control")))
 		injectedApplicationLeak();
