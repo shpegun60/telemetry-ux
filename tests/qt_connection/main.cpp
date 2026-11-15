@@ -859,6 +859,18 @@ void batchPaths()
 	CHECK(arguments.size() == 1 && arguments.first().toMap().value("completion") == "control.Calibrate reference=" &&
 	      arguments.first().toMap().value("kindCode") == "argument" && arguments.first().toMap().value("typeText") == "f32");
 	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate reference=1 ")).isEmpty());
+	// Ctrl+Enter takes the typed value into the draft, as Details would; an
+	// edit made that way is then one to finish or cancel before the next.
+	secondPresentation.setMutationsAllowed(true);
+	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate")) && !calibrate->selectionRequiresDiscard());
+	calibrate->setAllowMutations(true);
+	CHECK(calibrate->allowMutations() && calibrate->selectBatchPath(QStringLiteral("Calibrate reference=0x3fc00000")));
+	CHECK(::member(calibrate->values(), QStringLiteral("reference")).data(ux::ValueModel::EditorTextRole) == "1.5" &&
+	      calibrate->selectionRequiresDiscard());
+	CHECK(!calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=2")));
+	calibrate->cancelEdit();
+	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=nope")) &&
+	      !calibrate->selectionRequiresDiscard());
 	second.disconnect();
 }
 

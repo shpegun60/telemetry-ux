@@ -34,21 +34,28 @@ PathAddRow {
         lastRefused = refused
         batchAdd.added(notice, false)
     }
-    // Selects what the line names in the Device tree, for Details.
-    function toDetails(text) {
+    // Selects what the line names in the Device tree, for Details; the
+    // provider puts the valid values typed into its draft when changes are
+    // allowed. byControl: Ctrl+Enter rather than Enter, for the words.
+    function toDetails(text, byControl) {
         const operation = batchAdd.check.operation
+        const path = batchAdd.check.path
+        const valued = batchAdd.provider.allowMutations === true &&
+                       (batchAdd.check.arguments || []).some(argument => argument.status === "ok")
         if (batchAdd.provider.selectBatchPath(text)) {
             batchAdd.selected(operation)
-            batchAdd.say(qsTr("Selected %1: fill it in Details, then Add selected draft.").arg(batchAdd.check.path), false)
+            batchAdd.say(valued ? qsTr("Selected %1 with the values typed here: finish it in Details, then Add selected draft.").arg(path)
+                                : qsTr("Selected %1: fill it in Details, then Add selected draft.").arg(path), false)
         } else {
-            batchAdd.say(qsTr("Finish or cancel the edit in Details first, then press Enter again."), true)
+            batchAdd.say(byControl ? qsTr("Finish or cancel the edit in Details first, then press Ctrl+Enter again.")
+                                   : qsTr("Finish or cancel the edit in Details first, then press Enter again."), true)
         }
     }
     adapter: QtObject {
         function select(text) {
             const status = batchAdd.check.status
             if (["adds", "needs", "error", "input", "unnamed"].indexOf(status) >= 0 && (batchAdd.check.path || "").length > 0)
-                batchAdd.toDetails(text)
+                batchAdd.toDetails(text, true)
         }
         function check(text) {
             return batchAdd.provider.checkBatchPath(text)
@@ -64,7 +71,7 @@ PathAddRow {
                 return true
             }
             if (status === "input") {
-                batchAdd.toDetails(text)
+                batchAdd.toDetails(text, false)
                 return true
             }
             // Values missing: Enter writes the next name, or goes to it.

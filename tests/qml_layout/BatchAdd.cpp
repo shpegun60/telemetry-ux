@@ -57,7 +57,10 @@ public:
 			        {"message", typed.endsWith('2') ? "control.Scale needs factor (f32) too. Enter writes factor=."
 			                                        : "control.Scale needs value (f32) and factor (f32). Enter writes value=; "
 			                                          "Ctrl+Enter fills it in Details."},
-			        {"next", typed.endsWith('2') ? "factor" : "value"}, {"path", "control.Scale"}, {"operation", "service"}};
+			        {"next", typed.endsWith('2') ? "factor" : "value"}, {"path", "control.Scale"}, {"operation", "service"},
+			        {"arguments", typed.endsWith('2') ? QVariantList{QVariantMap{{"name", "value"}, {"status", "ok"}},
+			                                                         QVariantMap{{"name", "factor"}, {"status", "missing"}}}
+			                                          : QVariantList{}}};
 		if (typed == QStringLiteral("control.Scale value="))
 			return {{"status", "needs"}, {"message", "value (f32) takes a number."}, {"next", "value"},
 			        {"path", "control.Scale"}, {"operation", "service"}};
@@ -270,6 +273,8 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_Return, Qt::ControlModifier);
 			settle();
 			CHECK(calls.selected.last() == QStringLiteral("control.Scale value=2") && calls.added.size() == 2);
+			CHECK(textOf(content, "batchAddNotice") ==
+			      QStringLiteral("Selected control.Scale with the values typed here: finish it in Details, then Add selected draft."));
 			clearField(window);
 
 			// A refusal in the error colour; Enter adds nothing.

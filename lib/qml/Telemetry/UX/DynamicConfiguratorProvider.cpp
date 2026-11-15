@@ -1794,7 +1794,32 @@ bool DynamicConfiguratorProvider::selectBatchPath(const QString& text)
 	if (pick.matches.size() != 1)
 		return false;
 	const auto index = p->endpoints.endpointIndex(pick.matches.first().category, pick.matches.first().id);
-	return index.isValid() && selectEndpoint(index);
+	if (!index.isValid() || !selectEndpoint(index))
+		return false;
+	// The values typed after the path go into the draft (BA-2), each valid one
+	// as Details takes it; the rest are left for Details. With changes off the
+	// draft takes none, and the endpoint is only selected.
+	if (!pick.hasTail || (!commandSelected() && !serviceSelected()))
+		return true;
+	const auto typed = typedArguments(p->batch, pick.matches.first(), pick.tail);
+	if (!typed)
+		return true;
+	const auto draftMember = [&values = p->values](const QString& name) {
+		const auto root = values.index(0, 0);
+		if (name.isEmpty())
+			return root;
+		if (values.canFetchMore(root))
+			values.fetchMore(root);
+		for (int row = 0; row < values.rowCount(root); ++row)
+			if (const auto at = values.index(row, 0, root); at.data(ValueModel::NameRole).toString() == name)
+				return at;
+		return QModelIndex{};
+	};
+	for (const auto& item : typed->items)
+		if (item.status == request_arguments::Item::Status::Ok)
+			if (const auto at = draftMember(item.name); at.isValid())
+				setScalarText(at, item.canonical);
+	return true;
 }
 
 bool DynamicConfiguratorProvider::removeBatch(int row)
