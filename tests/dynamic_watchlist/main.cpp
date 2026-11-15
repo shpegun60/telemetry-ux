@@ -1456,12 +1456,36 @@ void memberPlan()
 	}
 	CHECK(!watch.active() && watch.status() == "Individual FieldRead complete - 5 values");
 
-	// Taken out by key, put back in place.
+	// Taken out by key, put back in place by path (UR-1): kept by its path,
+	// then found on the device - the schema has device.Config.gain, not the
+	// Peer's whole Field 3, which stays a row that says so. (This fixture
+	// names its rows "device.Config #0"; a path is what is put back.)
 	const auto removed = watch.removeMany({ux::watch_key::member(members::config, 0), 3});
 	CHECK(removed.size() == 2 && removed[0].row == 2 && removed[1].row == 3 && watch.count() == 3);
 	CHECK(removed[1].entry.member == "gain" && removed[1].entry.type != 0);
-	CHECK(watch.restore(removed) && watch.count() == 5 &&
-	      model->data(model->index(3, 0), ux::WatchlistModel::MemberRole).toString() == "gain");
+	CHECK(watch.putBack({{removed[1].row, QStringLiteral("device.Config.gain")}, {removed[0].row, removed[0].entry.name}}) &&
+	      watch.count() == 5);
+	watch.rebindRows();
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::MemberRole).toString() == "gain" &&
+	      model->data(model->index(3, 0), ux::WatchlistModel::WatchKeyRole).toULongLong() ==
+	          ux::watch_key::member(members::config, 0));
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole).toString() == "device.Three" &&
+	      model->data(model->index(2, 0), ux::WatchlistModel::StatusRole).toString() == "Missing");
+	// Past the room: refused, nothing put back.
+	QVector<ux::DynamicWatchlist::PathRow> tooMany;
+	for (int at = 0; at <= ux::WatchlistModel::maxRows - watch.count(); ++at)
+		tooMany.push_back({at, QStringLiteral("device.X%1").arg(at)});
+	CHECK(!watch.putBack(tooMany) && watch.count() == 5);
+	// With no device, rows go back as a disconnect keeps them: by path,
+	// saying nothing of devices, at their places cut to the rows there.
+	watch.retire();
+	events();
+	CHECK(watch.putBack({{99, QStringLiteral("device.Config.enabled")}, {0, QStringLiteral("device.Five")}}) &&
+	      watch.count() == 7);
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole).toString() == "device.Five" &&
+	      model->data(model->index(6, 0), ux::WatchlistModel::NameRole).toString() == "device.Config.enabled" &&
+	      model->data(model->index(6, 0), ux::WatchlistModel::StatusRole).toString().isEmpty() &&
+	      ux::watch_key::isUnresolved(model->data(model->index(6, 0), ux::WatchlistModel::WatchKeyRole).toULongLong()));
 }
 
 // All 302 values of one struct: one read, published as ten frames of at most

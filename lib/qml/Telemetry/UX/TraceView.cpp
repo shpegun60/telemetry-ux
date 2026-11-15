@@ -2,6 +2,8 @@
 #include "TraceView.hpp"
 #include "WatchTraces.hpp"
 #include <QtCore/QDateTime>
+#include <QtCore/QSaveFile>
+#include <QtCore/QUrl>
 #include <QtCore/QLocale>
 #include <QtCore/QTime>
 #include <QtCore/QVector>
@@ -16,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace telemetry::ux {
 namespace {
@@ -121,9 +124,17 @@ void TraceView::setTraces(QObject* traces)
 	if (traces_)
 		disconnect(traces_, nullptr, this, nullptr);
 	traces_ = typed;
+	// Other readings: the values fit them afresh, and nothing pinned on the
+	// old ones stays.
+	range_ = {};
+	aggregated_.clear();
 	if (traces_) {
 		connect(traces_, &WatchTraces::appended, this, &TraceView::schedule);
-		connect(traces_, &WatchTraces::plottedChanged, this, [this] { update(); });
+		connect(traces_, &WatchTraces::plottedChanged, this, [this] {
+			// A curve on or off: the values fit what is plotted now.
+			range_ = {};
+			update();
+		});
 		connect(traces_, &WatchTraces::appearanceChanged, this, [this] {
 			// A new multiplier or offset is a new fit.
 			range_ = {};
@@ -181,6 +192,7 @@ int TraceView::preset() const
 
 void TraceView::choosePreset(int seconds)
 {
+	remember();
 	heldAllNs_ = 0;
 	if (seconds <= 0) {
 		showAll_ = true;
@@ -384,9 +396,203 @@ void TraceView::clearReference()
 	if (!referenceShown_)
 		return;
 	referenceShown_ = false;
+	endShown_ = false;
 	referenceValues_.clear();
 	Q_EMIT cursorChanged();
 	update();
+}
+
+void TraceView::pinEnd()
+{
+	if (!cursorShown_ || !traces_)
+		return;
+	// The reference first: a range needs both.
+	if (!referenceShown_) {
+		pinReference();
+		return;
+	}
+	endShown_ = true;
+	endNs_ = cursorNs_;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::clearEnd()
+{
+	if (!endShown_)
+		return;
+	endShown_ = false;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+qreal TraceView::endUtcMs() const
+{
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	return qreal(anchor.utcMs) + qreal(endNs_ - anchor.monotonicNs) / 1e6;
+}
+
+std::pair<qint64, qint64> TraceView::measuredNs() const
+{
+	if (referenceShown_ && endShown_)
+		return {std::min(referenceNs_, endNs_), std::max(referenceNs_, endNs_)};
+	const auto right = rightNs();
+	return {right - spanNs(), right};
+}
+
+QVariantMap TraceView::measureRange() const
+{
+	const auto [from, to] = measuredNs();
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	return {{QStringLiteral("fromUtcMs"), utc(from)}, {QStringLiteral("toUtcMs"), utc(to)},
+	        {QStringLiteral("seconds"), double(to - from) / 1e9}, {QStringLiteral("pinned"), referenceShown_ && endShown_},
+	        {QStringLiteral("readings"), readingsInRange()}};
+}
+
+QVariantMap TraceView::statistics(const QString& path) const
+{
+	const auto* readings = traces_ ? traces_->readings(path) : nullptr;
+	if (!readings)
+		return {};
+	const auto [from, to] = measuredNs();
+	const auto anchor = traces_->anchor();
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	auto it = std::lower_bound(readings->begin(), readings->end(), from,
+	                           [](const TraceReading& r, qint64 at) { return r.ns < at; });
+	int count = 0, failed = 0;
+	if (traces_->categorical(path)) {
+		// Shares by time: each reading holds until the next one, or the end.
+		QHash<qint64, qint64> held;
+		QList<qint64> order;
+		int changes = 0;
+		std::optional<double> previous;
+		qint64 total = 0;
+		for (; it != readings->end() && it->ns <= to; ++it) {
+			if (std::isnan(it->value)) {
+				++failed;
+				previous.reset();
+				continue;
+			}
+			++count;
+			const auto next = std::next(it);
+			const qint64 until = next != readings->end() && next->ns <= to ? next->ns : to;
+			const auto key = qint64(it->value);
+			if (!held.contains(key))
+				order << key;
+			held[key] += std::max<qint64>(0, until - it->ns);
+			total += std::max<qint64>(0, until - it->ns);
+			if (previous && *previous != it->value)
+				++changes;
+			previous = it->value;
+		}
+		std::sort(order.begin(), order.end(), [&](qint64 a, qint64 b) { return held.value(a) > held.value(b); });
+		QVariantList shares;
+		for (const auto key : order)
+			shares << QVariantMap{{QStringLiteral("name"), traces_->stateText(path, double(key))},
+			                      {QStringLiteral("share"), total > 0 ? double(held.value(key)) / double(total) : 0.0}};
+		return {{QStringLiteral("count"), count}, {QStringLiteral("failed"), failed},
+		        {QStringLiteral("changes"), changes}, {QStringLiteral("shares"), shares}};
+	}
+	// One pass: the extremes with their times, and Welford's mean and spread.
+	double low = 0, high = 0, mean = 0, squares = 0;
+	qint64 lowAt = 0, highAt = 0;
+	for (; it != readings->end() && it->ns <= to; ++it) {
+		if (std::isnan(it->value)) {
+			++failed;
+			continue;
+		}
+		++count;
+		if (count == 1 || it->value < low) {
+			low = it->value;
+			lowAt = it->ns;
+		}
+		if (count == 1 || it->value > high) {
+			high = it->value;
+			highAt = it->ns;
+		}
+		const double delta = it->value - mean;
+		mean += delta / count;
+		squares += delta * (it->value - mean);
+	}
+	if (!count)
+		return {{QStringLiteral("count"), 0}, {QStringLiteral("failed"), failed}};
+	return {{QStringLiteral("count"), count}, {QStringLiteral("failed"), failed},
+	        {QStringLiteral("min"), low}, {QStringLiteral("max"), high},
+	        {QStringLiteral("minUtcMs"), utc(lowAt)}, {QStringLiteral("maxUtcMs"), utc(highAt)},
+	        {QStringLiteral("mean"), mean}, {QStringLiteral("peakToPeak"), high - low},
+	        {QStringLiteral("deviation"), std::sqrt(squares / count)}};
+}
+
+void TraceView::putCursorAt(qreal utcMs)
+{
+	if (!traces_)
+		return;
+	const auto anchor = traces_->anchor();
+	const auto ns = anchor.monotonicNs + qint64((double(utcMs) - double(anchor.utcMs)) * 1e6);
+	const auto right = rightNs(), left = right - spanNs();
+	// Out of view: centred, held.
+	if (ns < left || ns > right) {
+		remember();
+		hold(ns + spanNs() / 2);
+	}
+	cursorShown_ = true;
+	cursorNs_ = ns;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+bool TraceView::stepChange(int direction)
+{
+	if (!traces_ || direction == 0)
+		return false;
+	QStringList lanes;
+	if (!focusedPath_.isEmpty() && traces_->categorical(focusedPath_))
+		lanes << focusedPath_;
+	else
+		for (const auto& path : traces_->plotted())
+			if (traces_->categorical(path))
+				lanes << path;
+	const auto right = rightNs(), left = right - spanNs();
+	const qint64 from = cursorShown_ ? cursorNs_ : direction > 0 ? left : right;
+	std::optional<qint64> found;
+	for (const auto& path : std::as_const(lanes)) {
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->size() < 2)
+			continue;
+		// A change is a reading whose value differs from the reading before it.
+		std::optional<double> previous;
+		std::optional<qint64> best;
+		for (const auto& reading : *readings) {
+			if (std::isnan(reading.value)) {
+				previous.reset();
+				continue;
+			}
+			if (previous && *previous != reading.value) {
+				if (direction > 0 && reading.ns > from) {
+					best = reading.ns;
+					break;
+				}
+				if (direction < 0 && reading.ns < from)
+					best = reading.ns;
+			}
+			previous = reading.value;
+		}
+		if (best && (!found || (direction > 0 ? *best < *found : *best > *found)))
+			found = best;
+	}
+	const auto anchor = traces_->anchor();
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	if (!found) {
+		const auto at = QDateTime::fromMSecsSinceEpoch(qint64(utc(from))).toString(QStringLiteral("HH:mm:ss.zzz"));
+		const auto what = lanes.size() == 1 ? lanes.first() : tr("any state");
+		Q_EMIT findFailed(lanes.isEmpty() ? tr("No booleans or enums are plotted to step through.")
+		                  : direction > 0 ? tr("No change of %1 after %2 in the readings kept.").arg(what, at)
+		                                  : tr("No change of %1 before %2 in the readings kept.").arg(what, at));
+		return false;
+	}
+	putCursorAt(utc(*found));
+	return true;
 }
 
 QVariant TraceView::valueAt(const QString& path) const
@@ -468,10 +674,179 @@ void TraceView::hold(qint64 right)
 	update();
 }
 
+void TraceView::remember()
+{
+	// A run of wheel steps or keys is one step back: 600 ms of quiet closes it.
+	const auto now = QDateTime::currentMSecsSinceEpoch();
+	const bool sameGesture = rememberedAtMs_ && now - rememberedAtMs_ < 600;
+	rememberedAtMs_ = now;
+	if (sameGesture && !back_.empty())
+		return;
+	back_.push_back({following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high});
+	if (back_.size() > 50)
+		back_.erase(back_.begin());
+	Q_EMIT viewChanged();
+}
+
+void TraceView::goBack()
+{
+	if (back_.empty())
+		return;
+	const auto state = back_.back();
+	back_.pop_back();
+	rememberedAtMs_ = 0;
+	following_ = state.following;
+	showAll_ = state.showAll;
+	heldAllNs_ = state.heldAllNs;
+	spanSeconds_ = state.spanSeconds;
+	if (!state.following)
+		frozenNs_ = state.frozenNs;
+	valueAuto_ = state.valueAuto;
+	manual_ = {state.manualLow, state.manualHigh};
+	if (valueAuto_)
+		range_ = {};
+	Q_EMIT viewChanged();
+	update();
+}
+
+namespace {
+// The rows of the readings between left and right: every reading time of any
+// path, and each path's reading at that time, if it has one.
+struct ValueRows {
+	std::vector<qint64> times;
+	std::vector<std::vector<std::optional<double>>> cells; // [path][row]
+};
+ValueRows rowsBetween(const WatchTraces& traces, const QStringList& paths, qint64 left, qint64 right)
+{
+	ValueRows out;
+	for (const auto& path : paths) {
+		const auto* readings = traces.readings(path);
+		if (!readings)
+			continue;
+		for (auto it = std::lower_bound(readings->begin(), readings->end(), left,
+		                                [](const TraceReading& r, qint64 at) { return r.ns < at; });
+		     it != readings->end() && it->ns <= right; ++it)
+			out.times.push_back(it->ns);
+	}
+	std::sort(out.times.begin(), out.times.end());
+	out.times.erase(std::unique(out.times.begin(), out.times.end()), out.times.end());
+	for (const auto& path : paths) {
+		std::vector<std::optional<double>> column(out.times.size());
+		if (const auto* readings = traces.readings(path)) {
+			auto it = std::lower_bound(readings->begin(), readings->end(), left,
+			                           [](const TraceReading& r, qint64 at) { return r.ns < at; });
+			for (std::size_t row = 0; row < out.times.size() && it != readings->end(); ++row) {
+				while (it != readings->end() && it->ns < out.times[row])
+					++it;
+				if (it != readings->end() && it->ns == out.times[row] && !std::isnan(it->value))
+					column[row] = it->value;
+			}
+		}
+		out.cells.push_back(std::move(column));
+	}
+	return out;
+}
+} // namespace
+
+int TraceView::readingsInRange() const
+{
+	if (!traces_)
+		return 0;
+	const auto [left, right] = measuredNs();
+	return int(rowsBetween(*traces_, traces_->plotted(), left, right).times.size());
+}
+
+QString TraceView::valuesText(bool csv) const
+{
+	if (!traces_)
+		return {};
+	const auto paths = traces_->plotted();
+	const auto [left, right] = measuredNs();
+	const auto rows = rowsBetween(*traces_, paths, left, right);
+	const auto anchor = traces_->anchor();
+	const QLocale locale = csv ? QLocale::c() : QLocale();
+	const QChar separator = csv ? QLatin1Char(',') : QLatin1Char('\t');
+	// A cell with the separator or a quote is quoted, as CSV wants.
+	const auto cell = [&](const QString& text) {
+		if (!csv || !(text.contains(separator) || text.contains(QLatin1Char('"')) || text.contains(QLatin1Char('\n'))))
+			return text;
+		auto quoted = text;
+		quoted.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+		return QLatin1Char('"') + quoted + QLatin1Char('"');
+	};
+	QStringList lines;
+	QStringList header{tr("Time of day"), tr("Seconds from start")};
+	for (const auto& path : paths)
+		header << cell(path);
+	lines << header.join(separator);
+	for (std::size_t row = 0; row < rows.times.size(); ++row) {
+		const auto ns = rows.times[row];
+		const auto utc = double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6;
+		QStringList fields{QDateTime::fromMSecsSinceEpoch(qint64(utc)).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
+		                   locale.toString(double(ns - rows.times.front()) / 1e9, 'f', 3)};
+		for (int column = 0; column < paths.size(); ++column) {
+			const auto& value = rows.cells[std::size_t(column)][row];
+			if (!value) {
+				fields << QString();
+				continue;
+			}
+			const auto words = traces_->categorical(paths[column]) ? traces_->stateText(paths[column], *value) : QString();
+			fields << cell(words.isEmpty() ? locale.toString(*value, 'g', 15) : words);
+		}
+		lines << fields.join(separator);
+	}
+	return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+}
+
+QString TraceView::saveValues(const QUrl& url) const
+{
+	const auto path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+	QSaveFile file(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+		return tr("%1 could not be written: %2").arg(path, file.errorString());
+	file.write(valuesText(true).toUtf8());
+	if (!file.commit())
+		return tr("%1 could not be written: %2").arg(path, file.errorString());
+	return {};
+}
+
+void TraceView::zoomToBox(QPointF from, QPointF to)
+{
+	const QRectF box = QRectF(from, to).normalized().intersected(plotArea_);
+	if (box.width() < 4 || plotArea_.width() <= 0)
+		return;
+	remember();
+	const auto span = spanNs();
+	const auto right = rightNs();
+	const auto left = right - span;
+	const auto nsAt = [&](qreal x) { return left + qint64(double(span) * (x - plotArea_.left()) / plotArea_.width()); };
+	const auto newLeft = nsAt(box.left()), newRight = nsAt(box.right());
+	showAll_ = false;
+	heldAllNs_ = 0;
+	spanSeconds_ = std::max(0.01, double(newRight - newLeft) / 1e9);
+	// The values too, from a box over the numbers at least 8 px tall.
+	if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
+	    box.top() <= valuesArea_.bottom()) {
+		const auto valueAt = [&](qreal y) {
+			return shown_.high - (y - valuesArea_.top()) / valuesArea_.height() * (shown_.high - shown_.low);
+		};
+		const double high = valueAt(std::max(box.top(), valuesArea_.top())), low = valueAt(std::min(box.bottom(), valuesArea_.bottom()));
+		if (high > low) {
+			valueAuto_ = false;
+			manual_ = {low, high};
+		}
+	}
+	following_ = false;
+	frozenNs_ = newRight;
+	Q_EMIT viewChanged();
+	update();
+}
+
 void TraceView::zoom(qreal factor, qreal at)
 {
 	if (!(factor > 0))
 		return;
+	remember();
 	const auto span = spanNs();
 	const auto right = rightNs();
 	at = std::clamp<qreal>(at, 0, 1);
@@ -497,6 +872,7 @@ void TraceView::zoom(qreal factor, qreal at)
 
 void TraceView::pan(qreal part)
 {
+	remember();
 	hold(rightNs() + qint64(double(spanNs()) * part));
 }
 
@@ -505,6 +881,7 @@ void TraceView::toOldest()
 	const auto [oldest, newest] = kept();
 	if (!newest)
 		return;
+	remember();
 	hold(oldest + spanNs());
 }
 
@@ -554,6 +931,7 @@ void TraceView::zoomValues(qreal factor, qreal at)
 {
 	if (!(factor > 0) || !shown_.valid())
 		return;
+	remember();
 	const double pinned = shown_.high - std::clamp<qreal>(at, 0, 1) * (shown_.high - shown_.low);
 	Range next{pinned - (pinned - shown_.low) * factor, pinned + (shown_.high - pinned) * factor};
 	if (!(next.high - next.low > std::abs(pinned) * 1e-12 + 1e-300) || next.low < -valueLimit || next.high > valueLimit)
@@ -568,6 +946,7 @@ void TraceView::panValues(qreal part)
 {
 	if (!shown_.valid())
 		return;
+	remember();
 	const double shift = (shown_.high - shown_.low) * part;
 	valueAuto_ = false;
 	manual_ = {shown_.low + shift, shown_.high + shift};
@@ -579,6 +958,7 @@ void TraceView::autoValues()
 {
 	if (valueAuto_)
 		return;
+	remember();
 	valueAuto_ = true;
 	range_ = {};
 	Q_EMIT viewChanged();
@@ -594,6 +974,8 @@ void TraceView::mousePressEvent(QMouseEvent* event)
 	pressRange_ = shown_;
 	valueDrag_ = event->position().x() < plotArea_.left();
 	dragging_ = false;
+	boxing_ = !valueDrag_ && (event->modifiers() & Qt::ControlModifier) && plotArea_.contains(event->position());
+	boxFrom_ = boxTo_ = event->position();
 	event->accept();
 }
 
@@ -607,13 +989,22 @@ void TraceView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TraceView::mouseMoveEvent(QMouseEvent* event)
 {
+	if (boxing_) {
+		boxTo_ = event->position();
+		Q_EMIT cursorChanged();
+		update();
+		event->accept();
+		return;
+	}
 	if (valueDrag_) {
 		// Over the value labels: the values follow the pointer up and down.
 		const qreal down = event->position().y() - pressY_;
 		if (!dragging_ && std::abs(down) < 4)
 			return;
-		if (!dragging_)
+		if (!dragging_) {
 			setCursor(Qt::ClosedHandCursor);
+			remember();
+		}
 		dragging_ = true;
 		if (pressRange_.valid() && valuesArea_.height() > 0) {
 			const double shift = (pressRange_.high - pressRange_.low) * down / valuesArea_.height();
@@ -629,8 +1020,10 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 	// A drag of more than a few pixels pans; less is a click.
 	if (!dragging_ && std::abs(moved) < 4)
 		return;
-	if (!dragging_)
+	if (!dragging_) {
 		setCursor(Qt::ClosedHandCursor);
+		remember();
+	}
 	dragging_ = true;
 	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
 	hold(pressRightNs_ - qint64(double(spanNs()) * moved / widthPx));
@@ -639,14 +1032,26 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 
 void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
+	if (boxing_) {
+		boxing_ = false;
+		zoomToBox(boxFrom_, event->position());
+		Q_EMIT cursorChanged();
+		update();
+		event->accept();
+		return;
+	}
 	if (dragging_) {
 		setCursor(Qt::CrossCursor);
 	} else if (!valueDrag_ && plotArea_.contains(event->position())) {
 		// A click: on the reference takes it away, anywhere else pins it
 		// where the cursor snapped.
 		setCursorAt(event->position().x());
-		if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
+		if (endShown_ && std::abs(event->position().x() - endX_) <= 4)
+			clearEnd();
+		else if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
 			clearReference();
+		else if (event->modifiers() & Qt::ShiftModifier)
+			pinEnd();
 		else
 			pinReference();
 	}
@@ -694,14 +1099,23 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 		case Qt::Key_A:
 			autoValues();
 			break;
+		case Qt::Key_Backspace:
+			goBack();
+			break;
 		case Qt::Key_Left:
-			if (shift)
+			if (event->modifiers() & Qt::AltModifier)
+				goBack();
+			else if (control)
+				stepChange(-1);
+			else if (shift)
 				stepCursor(-1);
 			else
 				pan(-0.1);
 			break;
 		case Qt::Key_Right:
-			if (shift)
+			if (control)
+				stepChange(1);
+			else if (shift)
 				stepCursor(1);
 			else
 				pan(0.1);
@@ -710,11 +1124,16 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 		case Qt::Key_Enter:
 			if (!cursorShown_)
 				stepCursor(0);
-			pinReference();
+			if (shift)
+				pinEnd();
+			else
+				pinReference();
 			break;
 		case Qt::Key_Escape:
-			// The reference first, then the keyboard's cursor.
-			if (referenceShown_)
+			// The end first, then the reference, then the keyboard's cursor.
+			if (endShown_)
+				clearEnd();
+			else if (referenceShown_)
 				clearReference();
 			else if (cursorShown_)
 				hideCursor();
@@ -1243,7 +1662,22 @@ void TraceView::paint(QPainter* painter)
 	// The reference, dashed, and the cursor with a dot on each number's
 	// reading at or before it.
 	const auto lineAt = [&](qint64 ns) { return std::round(xOf(ns)) + 0.5; };
-	qreal cursorX = -1, referenceX = -1;
+	qreal cursorX = -1, referenceX = -1, endX = -1;
+	if (referenceShown_ && endShown_) {
+		const auto from = std::max(std::min(referenceNs_, endNs_), left), to = std::min(std::max(referenceNs_, endNs_), right);
+		if (to > from) {
+			QColor band = referenceColor_;
+			band.setAlphaF(0.1);
+			painter->fillRect(QRectF(QPointF(xOf(from), area.top()), QPointF(xOf(to), area.bottom())), band);
+		}
+		if (endNs_ >= left && endNs_ <= right) {
+			endX = lineAt(endNs_);
+			QPen dashed(referenceColor_, 1, Qt::DashLine);
+			dashed.setCosmetic(true);
+			painter->setPen(dashed);
+			painter->drawLine(QPointF(endX, area.top()), QPointF(endX, area.bottom()));
+		}
+	}
 	if (referenceShown_ && referenceNs_ >= left && referenceNs_ <= right) {
 		referenceX = lineAt(referenceNs_);
 		QPen dashed(referenceColor_, 1, Qt::DashLine);
@@ -1282,6 +1716,29 @@ void TraceView::paint(QPainter* painter)
 	drawnPoints_ = points;
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
+	// The box being drawn (Ctrl and a drag): its frame, and its size in time
+	// and values.
+	if (boxing_) {
+		const QRectF box = QRectF(boxFrom_, boxTo_).normalized().intersected(area);
+		painter->save();
+		QColor fill = referenceColor_;
+		fill.setAlphaF(0.12);
+		painter->fillRect(box, fill);
+		QPen frame(referenceColor_, 1, Qt::DashLine);
+		frame.setCosmetic(true);
+		painter->setPen(frame);
+		painter->setBrush(Qt::NoBrush);
+		painter->drawRect(box);
+		const double seconds = double(span) / 1e9 * box.width() / std::max<qreal>(1, area.width());
+		QString size = QString::number(seconds, 'f', seconds < 10 ? 3 : 1) + QStringLiteral(" s");
+		if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0)
+			size += QStringLiteral(" × ") +
+			        QString::number((shown_.high - shown_.low) * box.height() / valuesArea_.height(), 'g', 3);
+		painter->setPen(labelColor_);
+		painter->setFont(font_);
+		painter->drawText(box.adjusted(pad / 2, pad / 2, -pad / 2, -pad / 2), Qt::AlignRight | Qt::AlignTop, size);
+		painter->restore();
+	}
 	plotArea_ = area;
 	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;
@@ -1296,6 +1753,7 @@ void TraceView::paint(QPainter* painter)
 	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2);
 	cursorX_ = cursorX;
 	referenceX_ = referenceX;
+	endX_ = endX;
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);

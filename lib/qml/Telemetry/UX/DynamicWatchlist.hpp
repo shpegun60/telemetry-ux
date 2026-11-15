@@ -218,7 +218,17 @@ public:
 	// while it polls: a change enters the list at once, and the reads follow
 	// it from the next portion on (the read in flight finishes as asked).
 	QVector<WatchlistModel::Removed> removeMany(const QSet<WatchKey>& keys);
-	bool restore(const QVector<WatchlistModel::Removed>& rows);
+	// Rows put back by path where they were (an Undo or a Redo, UR-1), as
+	// rows kept by their path: at is each row's place, ascending, cut to the
+	// rows there now. No device is needed: without one they are kept as a
+	// disconnect keeps rows (WL-4c); with one, rebindRows finds them on it.
+	// Refused (false), nothing changed, while the Watchlist cannot change or
+	// has no room for them all.
+	struct PathRow {
+		int at = 0;
+		QString path;
+	};
+	bool putBack(QVector<PathRow> rows);
 	int count() const;
 	// Some row is on the device attached: a read would read something.
 	bool readable() const;

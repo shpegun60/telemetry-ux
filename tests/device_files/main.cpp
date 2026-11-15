@@ -14,6 +14,7 @@
 #include <Telemetry/UX/FileContent.hpp>
 #include <Telemetry/UX/FileTextModels.hpp>
 #include <Telemetry/UX/TelemetryCodecs.hpp>
+#include "../helpers/UndoKinds.hpp"
 #include <integration/tcp/Server.hpp>
 #include <integration/telemetry/v3/IdentityFile.hpp>
 #include <integration/telemetry/v3/ValuesFile.hpp>
@@ -1227,9 +1228,9 @@ void deviceLayer(const QString& folder)
 	CHECK(content.overwrite(5, QByteArray("y")) && content.referenceDiffers() == 2);
 	CHECK(content.restoreReference().isEmpty() && content.referenceDiffers() == 0 &&
 	      content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 1);
-	content.undo();
+	content.history()->undo();
 	CHECK(content.referenceDiffers() == 2 && content.bytes() == QByteArray("AxCDEyGH"));
-	content.redo();
+	content.history()->redo();
 	CHECK(!content.restoreReference().isEmpty() && content.save().isEmpty());
 	{
 		QFile saved(local);
@@ -3825,15 +3826,15 @@ void fileEditing(const QString& folder)
 	content.setEditing(true);
 	CHECK(content.editing() && content.overwrite(0, "X", true) && content.isEdited(0) && content.editedBytes() == 1);
 	CHECK(content.overwrite(1, "Y", true) && content.editedBytes() == 2);
-	content.undo();
-	CHECK(content.bytes() == QByteArray("AB\x01" "DEFGH", 8) && !content.modified() && content.canRedo());
-	content.redo();
+	content.history()->undo();
+	CHECK(content.bytes() == QByteArray("AB\x01" "DEFGH", 8) && !content.modified() && content.history()->canRedo());
+	content.history()->redo();
 	CHECK(content.bytes().startsWith("XY") && content.editedBytes() == 2);
 	// Undo and Redo with editing off too: a toolbar offers them then.
 	content.setEditing(false);
-	content.undo();
-	CHECK(!content.modified() && content.canRedo());
-	content.redo();
+	content.history()->undo();
+	CHECK(!content.modified() && content.history()->canRedo());
+	content.history()->redo();
 	CHECK(content.editedBytes() == 2);
 	content.setEditing(true);
 	// Written back to its value: no longer a change.
@@ -3846,13 +3847,13 @@ void fileEditing(const QString& folder)
 	      onDisk(path) == QByteArray("XBCDEF12"));
 	// Typed after a save: a step of its own, so one Undo keeps what was saved.
 	CHECK(content.overwrite(3, "Q", true));
-	content.undo();
+	content.history()->undo();
 	CHECK(!content.modified() && content.bytes() == QByteArray("XBCDEF12"));
 	// Undo past the save: a change again, against what was saved.
-	content.undo();
+	content.history()->undo();
 	CHECK(content.modified() && content.isEdited(2));
 	content.discard();
-	CHECK(!content.modified() && !content.canUndo() && content.bytes() == QByteArray("XBCDEF12"));
+	CHECK(!content.modified() && !content.history()->canUndo() && content.bytes() == QByteArray("XBCDEF12"));
 	// Several places as one step (Replace all): heard of once, cut at the
 	// file's end, undone at once; nothing without editing.
 	{
@@ -3865,7 +3866,7 @@ void fileEditing(const QString& folder)
 		CHECK(runs.overwriteRuns({{0, QByteArray("x")}, {4, QByteArray("yz")}, {7, QByteArray("12")}, {99, QByteArray("Q")}},
 		                         QStringLiteral("Replace")));
 		CHECK(heard == 1 && runs.bytes() == QByteArray("xBCDyzG1") && runs.editedBytes() == 4);
-		runs.undo();
+		runs.history()->undo();
 		CHECK(heard == 2 && runs.bytes() == QByteArray("ABCDEFGH") && !runs.modified());
 		runs.setEditing(false);
 		CHECK(!runs.overwriteRuns({{0, QByteArray("x")}}, QString()) && runs.bytes() == QByteArray("ABCDEFGH"));
@@ -3877,7 +3878,7 @@ void fileEditing(const QString& folder)
 	      content.modified() && onDisk(path) == QByteArray("XBCDEF12"));
 	// Reload: the copy on disk again, editing off, nothing to undo.
 	content.reload();
-	CHECK(!content.modified() && !content.editing() && !content.canUndo() && content.bytes() == QByteArray("XBCDEF12"));
+	CHECK(!content.modified() && !content.editing() && !content.history()->canUndo() && content.bytes() == QByteArray("XBCDEF12"));
 
 	telemetry::ux::OpenFiles open;
 	const auto first = write(QStringLiteral("first.bin"), "11111111");
@@ -3911,6 +3912,101 @@ void fileEditing(const QString& folder)
 	for (int i = 1; i < 64; ++i)
 		big.overwrite(i * 4096, "B");
 	CHECK(big.bytes().constData() == buffer && big.editedBytes() == 64);
+}
+
+// The central Undo's property for a file's bytes (UR-1): every overwrite and
+// Replace all is a step of the file's own history, named with the file, done,
+// undone and redone the same - and none of it changes when the device goes,
+// or comes back with another descriptor: the steps are the copy's, in memory.
+// Typing on where it stopped is one step within two seconds; after a pause,
+// elsewhere, or after a save, a new one.
+void fileUndoKinds(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	const auto path = folder + QStringLiteral("/kinds.bin");
+	{
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write("ABCDEFGH") == 8);
+	}
+	FileContent content;
+	content.setDevicePath(QStringLiteral("/telemetry/values.bin"));
+	content.setLocalFile(path);
+	auto* history = content.history();
+	CHECK(content.loaded() && history->limit() == 1000 && history->count() == 0 && !history->canUndo());
+	qint64 now = 0;
+	history->setClock([&now] { return now; });
+	Peer first{withDescriptor.view()}, second{withoutDescriptor.view()};
+	qt::ConnectionSession session;
+	const auto leave = [&] {
+		session.disconnect();
+		CHECK(await([&] { return !session.ready() && !session.filesSupported(); }));
+	};
+	// The second device lists its files and serves no descriptor: files only.
+	const auto attach = [&](Peer& peer) {
+		if (session.ready() || session.filesSupported())
+			leave();
+		CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.listener.serverPort()));
+		CHECK(await([&] { return session.ready() || session.filesOnly(); }));
+	};
+	const auto start = [&] {
+		content.discard();
+		content.setEditing(true);
+		history->clear();
+		attach(first);
+		now += 10000;
+	};
+	const auto bytes = [&content] { return QVariant(content.bytes()); };
+	const auto done = [](const QString& outcome, const QString&) { return outcome == QStringLiteral("done"); };
+	std::vector<undo_kinds::Case> cases;
+	const auto bytesCase = [&](const char* name, std::function<void()> act) {
+		cases.push_back({QStringLiteral("file.bytes"), QString::fromLatin1(name), history, start, std::move(act), bytes,
+		                 leave, [&] { attach(first); }, [&] { attach(second); }, done});
+	};
+	bytesCase("type a byte's two digits", [&] {
+		CHECK(content.overwrite(1, QByteArray("\x01", 1), true) && content.overwrite(1, QByteArray("\x1F", 1), true));
+	});
+	bytesCase("paste bytes", [&] { CHECK(content.overwrite(2, QByteArray("PQ"))); });
+	bytesCase("replace all", [&] {
+		CHECK(content.overwriteRuns({{0, QByteArray("x")}, {4, QByteArray("yz")}}, QStringLiteral("Replace 2 places")));
+	});
+	const auto report = undo_kinds::run(QStringLiteral("device_files"), cases);
+	CHECK(report.cases == 3 && report.disconnects == 3 && report.descriptors == 3);
+	std::printf("Device files UndoKinds cases=%d disconnects=%d descriptors=%d\n", report.cases, report.disconnects,
+	            report.descriptors);
+	leave();
+
+	// The words: what was done, in which file.
+	start();
+	CHECK(content.overwrite(2, QByteArray("PQ")) && history->undoText() == QStringLiteral("Overwrite 2 bytes in values.bin"));
+	CHECK(content.overwriteRuns({{0, QByteArray("x")}, {4, QByteArray("yz")}}, QStringLiteral("Replace 2 places")) &&
+	      history->undoText() == QStringLiteral("Replace 2 places in values.bin"));
+	// Typing on where it stopped, within two seconds: one step that counts
+	// what it holds; after a pause, a step of its own; elsewhere, too.
+	start();
+	CHECK(content.overwrite(0, QByteArray("1"), true) && history->undoText() == QStringLiteral("Overwrite 1 byte in values.bin"));
+	now += 500;
+	CHECK(content.overwrite(1, QByteArray("2"), true) && history->count() == 1 &&
+	      history->undoText() == QStringLiteral("Overwrite 2 bytes in values.bin"));
+	now += 2500;
+	CHECK(content.overwrite(2, QByteArray("3"), true) && history->count() == 2 &&
+	      history->undoText() == QStringLiteral("Overwrite 1 byte in values.bin"));
+	now += 100;
+	CHECK(content.overwrite(6, QByteArray("4"), true) && history->count() == 3);
+	CHECK(content.save().isEmpty() && history->clean());
+	now += 100;
+	CHECK(content.overwrite(7, QByteArray("5"), true) && history->count() == 4 && !history->clean());
+	CHECK(history->undo() && history->clean() && content.bytes() == QByteArray("123DEF4H"));
+	CHECK(history->undo() && history->undo() && history->undo() && content.bytes() == QByteArray("ABCDEFGH") &&
+	      !history->canUndo() && history->canRedo() && history->redoText() == QStringLiteral("Overwrite 2 bytes in values.bin"));
+	// A read of the copy, Reload, or Discard: no step is left.
+	content.discard();
+	CHECK(history->count() == 0);
+	CHECK(content.overwrite(0, QByteArray("Z")) && history->count() == 1 && content.reload() && history->count() == 0);
+	// A file from disk is named by its own name.
+	FileContent plain;
+	plain.setLocalFile(path);
+	plain.setEditing(true);
+	CHECK(plain.overwrite(0, QByteArray("Q")) && plain.history()->undoText() == QStringLiteral("Overwrite 1 byte in kinds.bin"));
 }
 
 int main(int argc, char** argv)
@@ -3968,6 +4064,7 @@ int main(int argc, char** argv)
 	jsonCodec(folder.path());
 	capabilityCodec(folder.path());
 	fileEditing(folder.path());
+	fileUndoKinds(folder.path());
 	deviceLayer(folder.path());
 	deviceRecordSizes(folder.path());
 	uploads(folder.path());

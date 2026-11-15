@@ -1,4 +1,6 @@
 ﻿#include <Telemetry/UX/TrendHistory.hpp>
+#include <Telemetry/UX/QmlTypes.hpp>
+#include <Telemetry/UX/UndoHistory.hpp>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -13,6 +15,8 @@ public:
 };
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    // The installed module's C++ types, the central Undo's history among them.
+    telemetry::ux::registerQmlTypes();
     Provider p;
     p.model.setItemRoleNames({{Qt::UserRole + 1, "name"}, {Qt::UserRole + 2, "status"},
                               {Qt::UserRole + 3, "sampleRevision"}, {Qt::UserRole + 4, "sampleText"},
@@ -27,6 +31,10 @@ int main(int argc, char** argv) {
     if (engine.rootObjects().isEmpty() || history.source() != &p.model ||
         !engine.rootObjects().first()->findChild<QObject*>("trendPanel")) return 2;
     std::puts("Installed Trend source and window passed");
+    // A host makes its history in QML (UR-1): empty, 100 steps, nothing to undo.
+    auto* undo = engine.rootObjects().first()->findChild<telemetry::ux::UndoHistory*>("workspaceHistory");
+    if (!undo || undo->limit() != 100 || undo->canUndo() || undo->undo() || undo->undoSerial() != 0) return 3;
+    std::puts("Installed UndoHistory made in QML passed");
     return 0;
 }
 #include "TrendInstalled.moc"

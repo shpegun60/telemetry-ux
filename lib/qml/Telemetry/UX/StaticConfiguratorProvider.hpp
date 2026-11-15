@@ -2,6 +2,7 @@
 #pragma once
 
 #include "StaticConfiguratorBinding.hpp"
+#include "UndoHistory.hpp"
 #include "WatchSample.hpp"
 #include <QtCore/QAbstractItemModel>
 #include <memory>
@@ -55,8 +56,11 @@ class StaticConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
 	// The Device tree's watch boxes, as DynamicConfiguratorProvider has them.
 	Q_PROPERTY(int watchRevision READ watchRevision NOTIFY stateChanged)
-	Q_PROPERTY(bool canUndoWatch READ canUndoWatch NOTIFY stateChanged)
 	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
+	// Where the Watchlist's changes go as steps to undo (UR-1), as
+	// DynamicConfiguratorProvider's: rows added and removed ("watch.rows", by
+	// path, with their places). Null, the default, records nothing.
+	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
 public:
 	explicit StaticConfiguratorProvider(StaticConfiguratorBinding binding,
 	                                    QObject* parent = nullptr);
@@ -128,20 +132,25 @@ public:
 	Q_INVOKABLE bool watchCandidate(const QModelIndex& index) const;
 	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
+	// The rows given out as one step, as DynamicConfiguratorProvider's:
+	// {status: ok, invalid or refused, changed, serial}.
+	Q_INVOKABLE QVariantMap removeWatchRows(const QVariantList& rows);
+	// Every row out, as one step ("Clear the Watchlist").
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
-	bool canUndoWatch() const;
+	UndoHistory* history() const;
+	void setHistory(UndoHistory* history);
 	static constexpr int watchLimit() noexcept { return watchlistRowLimit; }
 	// The same contracts as DynamicConfiguratorProvider's.
 	Q_INVOKABLE int watchState(const QModelIndex& index) const;
 	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
-	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();
 
 Q_SIGNALS:
 	void stateChanged();
+	void historyChanged();
 	void readFinished(bool published);
 
 private:

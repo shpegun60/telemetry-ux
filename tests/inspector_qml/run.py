@@ -290,7 +290,7 @@ def main():
         report['screenshot'] = screenshot_record(screenshot)
         edit_screenshot = output / 'edit-window.png'
         edited = run('qml-edit-smoke', [app, '--edit-smoke', '--screenshot', edit_screenshot])
-        if 'Inspector QML edit smoke: writes=1 refreshed=1 gain=10 controls=Edit,TextField,Apply' not in edited:
+        if 'Inspector QML edit smoke: writes=1 refreshed=1 gain=10 controls=Cell,TextField,Apply' not in edited:
             raise RuntimeError('QML controls did not complete the actual Write and normalized readback')
         report['executions']['offscreen_edit_smoke'] = 1
         report['edit_screenshot'] = screenshot_record(edit_screenshot)

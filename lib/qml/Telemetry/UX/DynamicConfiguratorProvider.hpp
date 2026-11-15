@@ -1,6 +1,7 @@
 // Independent Qt panel over one borrowed native view. Ruslan Kovtun, codexAi. MIT.
 #pragma once
 #include "DynamicConfiguratorBinding.hpp"
+#include "UndoHistory.hpp"
 #include "WatchSample.hpp"
 #include "WatchFrame.hpp"
 #include <QtCore/QAbstractItemModel>
@@ -75,12 +76,16 @@ class DynamicConfiguratorProvider final : public QObject {
 	// The smallest interval accepted: 0 reads continuously at low priority.
 	Q_PROPERTY(int watchIntervalMinimumMs READ watchIntervalMinimumMs CONSTANT)
 	// The Device tree's watch boxes: a number that moves whenever a box may show
-	// something else (the Watchlist's Fields or the tree changed), whether the
-	// last change made through setWatchMany can be undone, and the most Fields
-	// the Watchlist holds.
+	// something else (the Watchlist's Fields or the tree changed), and the most
+	// Fields the Watchlist holds.
 	Q_PROPERTY(int watchRevision READ watchRevision NOTIFY stateChanged)
-	Q_PROPERTY(bool canUndoWatch READ canUndoWatch NOTIFY stateChanged)
 	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
+	// Where the Watchlist's changes go as steps to undo (UR-1): rows added and
+	// removed ("watch.rows", by path, with their places and own formats) and
+	// number formats chosen ("watch.format"), the live Plot's curves
+	// (watchTraces' "plot.*") and the Batch's items ("batch.items"). A host
+	// makes one UndoHistory and gives it; null, the default, records nothing.
+	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
 	// The Watchlist takes changes (boxes, add, remove, Undo, Clear) while it
 	// polls, between two reads. A provider without this property is locked
 	// while polling.
@@ -155,10 +160,10 @@ public:
 	// What may follow typed text: [{path, completion (what to put in the
 	// field), kind, typeText, operation, input, note, container, next}].
 	Q_INVOKABLE QVariantList batchPathCandidates(const QString& text) const;
-	// Every line, in order, or none: {status: ok, refused, unsupported,
-	// permission, previous, busy or full; added; first (the first new item);
-	// items: [{path, operation, what}]; refused: [{line, path, reason}];
-	// message}.
+	// Every line, in order, or none, as one step: {status: ok, refused,
+	// unsupported, permission, previous, busy or full; added; first (the first
+	// new item); items: [{path, operation, what}]; refused: [{line, path,
+	// reason}]; message; serial (the step's, 0 when none was recorded)}.
 	Q_INVOKABLE QVariantMap addBatchPaths(const QStringList& lines);
 	// The endpoint one line names, selected in the Device tree (for one that
 	// takes input). False when the line names none, or several.
@@ -190,18 +195,19 @@ public:
 	Q_INVOKABLE QVariantMap addWatchMany(const QVariantList& sourceIndexes);
 	Q_INVOKABLE void removeWatch(int row);
 	// Stops watching the Watchlist's rows given (a tree node's values) as one
-	// change, which undoWatch takes back: {status: ok, invalid or refused,
-	// changed}.
+	// step: {status: ok, invalid or refused, changed, serial (the step's, 0
+	// when none was recorded)}.
 	Q_INVOKABLE QVariantMap removeWatchRows(const QVariantList& rows);
 	QString watchFormat() const;
-	// The Watchlist's format as a project or host sets it: no Undo.
+	// The Watchlist's format as a project or host sets it: no step.
 	void setWatchFormat(const QString& format);
 	// The Watchlist's format as the panel's user chooses it (WL-2c): one
-	// change undoWatch takes back. false for an unknown format.
+	// step, merged with the next choice within two seconds. false for an
+	// unknown format.
 	Q_INVOKABLE bool chooseWatchFormat(const QString& format);
 	// Gives rows a format of their own ("original", "dec", "hex"), or "" to
-	// follow the Watchlist's, as one change undoWatch takes back; false, and
-	// nothing changed, for an unknown format or a row that is not one.
+	// follow the Watchlist's, as one step; false, and nothing changed, for an
+	// unknown format or a row that is not one.
 	Q_INVOKABLE bool setWatchRowFormat(const QVariantList& rows, const QString& format);
 	// The formats rows have of their own by path, {"device.Config.Gain":
 	// "hex"}, as a project saves them; setWatchRowFormats puts them back, for
@@ -213,10 +219,9 @@ public:
 	int watchOwnFormatCount() const;
 	// Every value back to Original (WL-3b): the Watchlist's format and every
 	// format of a row's own, those kept for paths not watched now too, as one
-	// change undoWatch takes back while no format has changed since.
-	// {status: ok, unchanged (nothing to reset) or refused, rows: the watched
-	// rows that were shown in a format of their own, as watchOwnFormatCount
-	// counts them}.
+	// step. {status: ok, unchanged (nothing to reset) or refused, rows: the
+	// watched rows that were shown in a format of their own, as
+	// watchOwnFormatCount counts them, serial}.
 	Q_INVOKABLE QVariantMap resetWatchFormats();
 	// The Watchlist's "+" row (WL-4b). What a typed path would add, in words
 	// for the line under it: {status: "adds", "watched", "missing", "error"
@@ -227,13 +232,13 @@ public:
 	Q_INVOKABLE QVariantList watchPathCandidates(const QString& text) const;
 	// Adds what each line names - a path ("device.Config.Gain", or a struct or
 	// array for all its values) or a line copied from the Watchlist
-	// ("path = value", "path<Tab>value") - as one change Undo takes back:
-	// {status: ok, capacity or refused, added, already, missing: [paths],
-	// refused: [{path, reason}]}.
+	// ("path = value", "path<Tab>value") - as one step: {status: ok, capacity
+	// or refused, added, already, missing: [paths], refused: [{path, reason}],
+	// serial}.
 	Q_INVOKABLE QVariantMap addWatchPaths(const QStringList& lines);
-	// A saved Watchlist back in its order, as one change (WL-4c): every row
-	// this device has, and the rest as rows that say they are not on it,
-	// found again on a device that has them. {status, added, missing:
+	// A saved Watchlist back in its order (WL-4c): every row this device has,
+	// and the rest as rows that say they are not on it, found again on a
+	// device that has them. A restore, never a step. {status, added, missing:
 	// [positions of the rows not on this device]}.
 	Q_INVOKABLE QVariantMap restoreWatchBindings(const QVariantList& bindings);
 	Q_INVOKABLE bool setWatchRowFormats(const QVariantMap& formats);
@@ -242,9 +247,12 @@ public:
 	// hex - or error: why it can't be, the type's range for a number past it}.
 	// Both empty before the row's first reading, for an enum and for nothing typed.
 	Q_INVOKABLE QVariantMap watchEditPreview(int row, const QString& text) const;
+	// Every row out, as one step ("Clear the Watchlist") that puts them back
+	// in their order with their formats.
 	Q_INVOKABLE void clearWatch();
 	int watchRevision() const;
-	bool canUndoWatch() const;
+	UndoHistory* history() const;
+	void setHistory(UndoHistory* history);
 	static constexpr int watchLimit() noexcept { return watchlistRowLimit; }
 	static constexpr bool watchChangesWhilePolling() noexcept { return true; }
 	// A tree row's watch box: -1 when nothing at or below it can be watched
@@ -267,20 +275,15 @@ public:
 	// when it cannot tell. addWatchBindings puts such rows after the others in
 	// one change: {status, added (values), duplicate, capacity, missing:
 	// [positions of entries this device has no value for]}; each of those is
-	// kept as a row by its path (WL-4c), saying why, once.
+	// kept as a row by its path (WL-4c), saying why, once. A restore, never a
+	// step.
 	Q_INVOKABLE QVariantList watchBindings() const;
 	Q_INVOKABLE QVariantMap addWatchBindings(const QVariantList& bindings);
 	// Watches, or stops watching, every Field the Watchlist can hold at or
-	// under each index, in tree order, as one change: {status: ok, refused,
-	// invalid, stale or capacity, changed, unchanged, fields, room}. At
-	// capacity nothing changes; room says how many more fit.
+	// under each index, in tree order, as one step: {status: ok, refused,
+	// invalid, stale or capacity, changed, unchanged, fields, room, serial}.
+	// At capacity nothing changes; room says how many more fit.
 	Q_INVOKABLE QVariantMap setWatchMany(const QVariantList& sourceIndexes, bool watched);
-	// Undoes the provider's last change: rows added or removed (setWatchMany,
-	// add by path, removeWatchRows) while nothing else has changed the
-	// Watchlist or the tree since; or formats (resetWatchFormats,
-	// chooseWatchFormat, setWatchRowFormat) while no format has changed
-	// since: {status, changed}.
-	Q_INVOKABLE QVariantMap undoWatch();
 	Q_INVOKABLE void refreshWatch();
 	Q_INVOKABLE void startWatch();
 	Q_INVOKABLE void stopWatch();
@@ -330,6 +333,7 @@ public:
 
 Q_SIGNALS:
 	void stateChanged();
+	void historyChanged();
 	// Direct owner-thread publication of one accepted terminal Watch request.
 	// Owns exact bytes; Current describes source validity, not atomic UI commit.
 	void watchCompleted(const telemetry::ux::WatchFrame& frame);

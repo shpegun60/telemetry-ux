@@ -26,7 +26,7 @@ def candidate_inputs():
     """Actual candidate sources; preserved unrelated Widgets work is not input."""
     paths = [ROOT / name for name in ('CMakeLists.txt', 'README.md', 'MIGRATION.md',
                                      'LICENSE', 'VERSION', 'MANIFEST.in', 'setup.py', 'pyproject.toml')]
-    for directory in ('lib/qml', 'python', 'tests/codegen_qml',
+    for directory in ('lib/qml', 'python', 'tests/codegen_qml', 'tests/helpers',
                       'tests/static_qml_configurator', 'examples/codegen_qml'):
         paths.extend((ROOT / directory).rglob('*'))
     return snapshot(paths, ROOT)
@@ -238,6 +238,8 @@ def main():
         contract = json.loads(text.strip())
         if not contract.get('passed') or contract.get('checks', 0) < CONTRACT_CHECK_FLOOR:
             raise RuntimeError('Presentation contracts did not meet their qualification floor')
+        if contract.get('undoCases', 0) < 6:
+            raise RuntimeError('The static Watchlist did not run every Undo kind case (UndoKinds)')
         report['contracts'] = contract
         png = image.read_bytes()
         if not png.startswith(b'\x89PNG\r\n\x1a\n') or len(png) < 24:

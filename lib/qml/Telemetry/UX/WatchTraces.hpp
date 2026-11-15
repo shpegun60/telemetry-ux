@@ -2,15 +2,18 @@
 #ifndef TELEMETRY_UX_WATCH_TRACES_HPP
 #define TELEMETRY_UX_WATCH_TRACES_HPP
 #pragma once
+#include "UndoHistory.hpp"
 #include "WatchFrame.hpp"
 #include <QtCore/QHash>
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QStringList>
 #include <QtCore/QVariant>
 #include <QtQml/qqmlregistration.h>
 #include <deque>
 #include <optional>
+#include <vector>
 
 namespace telemetry::ux {
 
@@ -44,6 +47,12 @@ class WatchTraces final : public QObject {
 	Q_PROPERTY(bool showPoints READ showPoints WRITE setShowPoints NOTIFY appearanceChanged)
 	// Bumped whenever a curve's colour, multiplier, offset or points change.
 	Q_PROPERTY(quint64 appearanceRevision READ appearanceRevision NOTIFY appearanceChanged)
+	// Where the Plot's changes go as steps (UR-1): curves plotted and taken
+	// off ("plot.curves", by path, with their place and colour), a curve's look
+	// ("plot.look", by path) and the Plot's points ("plot.points"). A
+	// provider gives its traces its own history; null records nothing.
+	// restore() is never a step.
+	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
 public:
 	static constexpr qint64 keptNs = 600'000'000'000; // ten minutes
 	static constexpr std::size_t keptReadings = 65'536;
@@ -71,7 +80,7 @@ public:
 	void append(const WatchFrame& frame);
 
 	[[nodiscard]] const std::deque<TraceReading>* readings(const QString& path) const;
-	[[nodiscard]] bool categorical(const QString& path) const;
+	Q_INVOKABLE bool categorical(const QString& path) const;
 	// A bool's or an enum's reading in words: "true", "Idle"; an enum code
 	// with no name "Code 7"; empty for a number.
 	Q_INVOKABLE QString stateText(const QString& path, const QVariant& value) const;
@@ -87,9 +96,19 @@ public:
 	int plotLimit() const noexcept { return limit; }
 	quint64 revision() const noexcept { return revision_; }
 
-	// Puts path on the Plot: empty when done, else why not, in words.
+	// Puts path on the Plot: empty when done, else why not, in words. One
+	// step: "Plot device.Voltage".
 	Q_INVOKABLE QString plot(const QString& path);
+	// Takes path off the Plot, its readings kept: "Remove device.Voltage
+	// from the Plot".
 	Q_INVOKABLE void unplot(const QString& path);
+	// Several on the Plot as one step, in order, up to the first one refused:
+	// {added, refusal (why that one could not be, or empty), last (the last
+	// one plotted)}. Paths on it already are passed over.
+	Q_INVOKABLE QVariantMap plotMany(const QStringList& paths);
+	// Several off it as one step; all of them is "Remove all curves from the
+	// Plot".
+	Q_INVOKABLE void unplotMany(const QStringList& paths);
 	Q_INVOKABLE bool isPlotted(const QString& path) const { return plotted_.contains(path); }
 	// Its colour's place in the plot palette: the first free one when it was
 	// first plotted, kept for the path.
@@ -100,25 +119,42 @@ public:
 	// Every ring emptied; what is plotted stays.
 	Q_INVOKABLE void clear();
 
+	// A recording shown with the same view (TR-2): the host gives a path's
+	// readings - one run's, in time order, NaN for a gap - in place of the
+	// frames, and the anchor that gives them this PC's time of day. The live
+	// rules do not apply to them: no ten minutes, no cap per path, and the
+	// path counts as watched, so its chip never says "not read since". A
+	// state value (a bool or an enum) is drawn in a lane, its names from
+	// setStates.
+	void setRecorded(const QString& path, std::vector<TraceReading> readings, bool states);
+	void setAnchor(const WatchTimestamp& anchor);
+
 	// A curve's look (LP-1f), kept for its path whether it is plotted or not:
 	// its own colour ("#rrggbb", or "" for its palette place), and the
 	// multiplier k and offset b it is drawn with, y = k x value + b - for
 	// display only, the readings stay as they were read. False, and nothing
-	// changed, for a colour that is not #rrggbb or a k or b not finite.
+	// changed, for a colour that is not #rrggbb or a k or b not finite. One
+	// step: "Change the curve of device.Voltage".
 	Q_INVOKABLE bool setAppearance(const QString& path, const QString& color, double multiplier, double offset);
 	Q_INVOKABLE QString color(const QString& path) const { return appearance_.value(path).color; }
 	Q_INVOKABLE double multiplier(const QString& path) const { return appearance_.value(path).multiplier; }
 	Q_INVOKABLE double offset(const QString& path) const { return appearance_.value(path).offset; }
-	// Its measurement points: 0 as the Plot, 1 shown, 2 hidden.
+	// Its measurement points: 0 as the Plot, 1 shown, 2 hidden. One step,
+	// "Change the points of device.Voltage", merged with the next for the
+	// same curve within two seconds.
 	Q_INVOKABLE void setPoints(const QString& path, int mode);
 	Q_INVOKABLE int points(const QString& path) const { return appearance_.value(path).points; }
 	// Whether its points are drawn, the Plot's setting applied.
 	Q_INVOKABLE bool pointsShown(const QString& path) const;
 	bool showPoints() const noexcept { return showPoints_; }
+	// One step: "Show measurement points", "Hide measurement points".
 	void setShowPoints(bool show);
 	quint64 appearanceRevision() const noexcept { return appearanceRevision_; }
+	UndoHistory* history() const { return history_; }
+	void setHistory(UndoHistory* history);
 	// What a project keeps of the Plot: the curves plotted, in order, and
-	// every curve's look, and the Plot's points; restore() plots them again.
+	// every curve's look, and the Plot's points; restore() plots them again,
+	// recording no step.
 	Q_INVOKABLE QVariantMap capture() const;
 	Q_INVOKABLE bool restore(const QVariantMap& state);
 	// Every line ends here - the Watchlist stopped, the device went - so
@@ -145,6 +181,7 @@ Q_SIGNALS:
 	void appended();
 	void plottedChanged();
 	void appearanceChanged();
+	void historyChanged();
 
 private:
 	struct Trace {
@@ -153,6 +190,16 @@ private:
 		bool categorical = false;
 	};
 	void push(Trace& trace, const TraceReading& reading);
+	// A curve on the Plot as a "plot.curves" fragment, and a look as a
+	// "plot.look" one ({color, k, b, points}; none for a plain look).
+	QVariantMap curveFragment(const QString& path) const;
+	QVariantMap lookState(const QString& path) const;
+	int record(const QString& text, const QString& kind, QVariantMap before, QVariantMap after,
+	           const QString& mergeKey = {});
+	// A step's states back, recording nothing.
+	UndoOutcome apply(const QString& kind, const QVariantMap& state, const QStringList& keys);
+	// The first colour no curve on the Plot uses.
+	int freeColor() const;
 	void enforceCap();
 	void announce();
 
@@ -173,6 +220,10 @@ private:
 	QHash<QString, Appearance> appearance_;
 	bool showPoints_ = false;
 	quint64 appearanceRevision_ = 0;
+	QPointer<UndoHistory> history_;
+	UndoFunctions target_;
+	// Set while restore() works: what it changes is no step.
+	bool quiet_ = false;
 	WatchTimestamp anchor_;
 	quint64 membership_ = ~quint64{0};
 	qint64 newestNs_ = 0;
