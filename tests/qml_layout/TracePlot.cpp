@@ -204,10 +204,13 @@ int main(int argc, char** argv)
 		CHECK(chips.size() == 2 && chips[0]->property("text").toString() == QStringLiteral("device.Voltage"));
 		const auto values = all(content, "plotChipValue");
 		CHECK(values.size() == 2 && values[0]->property("text").toString() == QStringLiteral("7.25") &&
-		      values[1]->property("text").toString() == QStringLiteral("1"));
+		      values[1]->property("text").toString() == QStringLiteral("true"));
 		auto* view = shown(content, "plotView");
 		CHECK(view->property("following").toBool() && view->property("spanSeconds").toDouble() == 60.0);
 		CHECK(view->property("drawnCurves").toInt() == 2 && view->property("rawCurves").toInt() == 2);
+		// LP-1d. A bool has a lane of its own under the numbers, named by its
+		// leaf; it is never on their axis.
+		CHECK(view->property("laneLabels").toStringList() == QStringList({QStringLiteral("Ready")}));
 		const QRegularExpression seconds(QStringLiteral("^\\d\\d:\\d\\d:\\d\\d$"));
 		const auto timeLabels = view->property("timeLabels").toStringList();
 		CHECK(timeLabels.size() >= 3);
@@ -258,6 +261,31 @@ int main(int argc, char** argv)
 		const auto area = view->property("plotArea").toRectF();
 		CHECK(area.width() > 400 && view->property("drawnPoints").toInt() < 400 + int(area.width() * window->effectiveDevicePixelRatio()) * 4 + 8);
 		shot(window, argc, argv, QStringLiteral("trace-plot-dense-760"));
+
+		// LP-1d. An enum's lane names its states where they fit; its chip says
+		// the state in words, a code no name has as "Code 7".
+		traces.setPaths(5, {{1, QStringLiteral("device.Voltage")}, {2, QStringLiteral("device.Ready")},
+		                    {gain, QStringLiteral("device.Config.Gain")}, {10, QStringLiteral("device.Mode")}},
+		                {{QStringLiteral("device.Ready"), true}, {QStringLiteral("device.Mode"), true}});
+		traces.setStates(QStringLiteral("device.Mode"), {{0, QStringLiteral("Idle")}, {1, QStringLiteral("Run")}});
+		const qint64 modeAt = ux::WatchTraces::nowNs();
+		for (int i = 0; i < 20; ++i)
+			traces.append(frame(modeAt - 20'000'000'000 + qint64(i) * 1'000'000'000,
+			                    {{10, 0, bits(S::U8, 1, quint64(i < 10 ? 0 : i < 18 ? 1 : 7), true)}}));
+		CHECK(traces.categorical(QStringLiteral("device.Mode")) &&
+		      traces.stateText(QStringLiteral("device.Mode"), 1.0) == QStringLiteral("Run") &&
+		      traces.stateText(QStringLiteral("device.Mode"), 7.0) == QStringLiteral("Code 7") &&
+		      traces.stateText(QStringLiteral("device.Voltage"), 1.0).isEmpty());
+		CHECK(traces.plot(QStringLiteral("device.Mode")).isEmpty());
+		settle(400);
+		CHECK(view->property("laneLabels").toStringList() == QStringList({QStringLiteral("Ready"), QStringLiteral("Mode")}));
+		const auto states = view->property("laneStates").toStringList();
+		CHECK(states.contains(QStringLiteral("Idle")) && states.contains(QStringLiteral("Run")));
+		const auto modeValues = all(content, "plotChipValue");
+		CHECK(modeValues.size() == 4 && modeValues[3]->property("text").toString() == QStringLiteral("Code 7"));
+		shot(window, argc, argv, QStringLiteral("trace-plot-lanes-760"));
+		traces.unplot(QStringLiteral("device.Mode"));
+		settle();
 
 		// LP-1b. Nine minutes kept, so there is somewhere to go.
 		traces.append(frame(dense - 540'000'000'000, {{3, 1, bits(S::S16, 2, 0)}}));
@@ -473,7 +501,7 @@ int main(int argc, char** argv)
 			traces.append(frame(start + qint64(i) * 1000, {{5, 0, bits(S::U8, 1, quint64(i & 0xff))}}));
 		CHECK(traces.count(QStringLiteral("device.Fast")) == int(ux::WatchTraces::keptReadings));
 		std::size_t sum = 0;
-		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Fast"})
+		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Mode", "device.Fast"})
 			sum += std::size_t(traces.count(QString::fromLatin1(path)));
 		CHECK(traces.total() == sum);
 		for (int i = 0; i < 700; ++i)

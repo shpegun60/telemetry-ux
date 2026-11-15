@@ -37,6 +37,11 @@ class WatchTraces;
 // trimmed meanwhile never changes them - and Esc takes it away. valueAt() and
 // referenceValue() give each value at the cursor and at the reference, for
 // the chips and their differences.
+//
+// Lanes (LP-1d): a bool or an enum is drawn under the numbers in a lane of its
+// own, a row high, never on their axis - a bool as a band while true and a
+// line while false, an enum as a band per state with its name where it fits
+// and a mark where it changes. Lanes take at most 40 % of the height.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -66,6 +71,14 @@ class TraceView : public QQuickPaintedItem {
 	// Room kept under the time labels for the cursor's and the reference's
 	// chips, so they never cover a label.
 	Q_PROPERTY(qreal bottomInset READ bottomInset WRITE setBottomInset NOTIFY styleChanged)
+	// A lane's height, and its colours: an enum state's band and its text.
+	Q_PROPERTY(qreal laneHeight READ laneHeight WRITE setLaneHeight NOTIFY styleChanged)
+	Q_PROPERTY(QColor laneFillColor READ laneFillColor WRITE setLaneFillColor NOTIFY styleChanged)
+	Q_PROPERTY(QColor laneTextColor READ laneTextColor WRITE setLaneTextColor NOTIFY styleChanged)
+	// The lanes the last paint drew, by their leaf names, and the states it
+	// named in them.
+	Q_PROPERTY(QStringList laneLabels READ laneLabels NOTIFY drawn)
+	Q_PROPERTY(QStringList laneStates READ laneStates NOTIFY drawn)
 	// A colour per palette place (WatchTraces::colorIndex).
 	Q_PROPERTY(QVariantList colors READ colors WRITE setColors NOTIFY styleChanged)
 	Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY styleChanged)
@@ -120,6 +133,14 @@ public:
 	void setDotRingColor(const QColor& color);
 	qreal bottomInset() const { return bottomInset_; }
 	void setBottomInset(qreal inset);
+	qreal laneHeight() const { return laneHeight_; }
+	void setLaneHeight(qreal height);
+	QColor laneFillColor() const { return laneFillColor_; }
+	void setLaneFillColor(const QColor& color);
+	QColor laneTextColor() const { return laneTextColor_; }
+	void setLaneTextColor(const QColor& color);
+	QStringList laneLabels() const { return laneLabels_; }
+	QStringList laneStates() const { return laneStates_; }
 	// The cursor at item x, snapped to the nearest reading within 8 px.
 	Q_INVOKABLE void setCursorAt(qreal x);
 	Q_INVOKABLE void hideCursor();
@@ -194,7 +215,9 @@ private:
 	QHash<QString, double> referenceValues_;
 	qreal cursorX_ = -1, referenceX_ = -1;
 	QPointF hoverAt_{-1, -1};
-	qreal bottomInset_ = 0;
+	qreal bottomInset_ = 0, laneHeight_ = 22;
+	QColor laneFillColor_{0x2a, 0x2f, 0x37}, laneTextColor_{0xe6, 0xed, 0xf3};
+	QStringList laneLabels_, laneStates_;
 	QColor cursorColor_{0x8b, 0x94, 0x9e}, referenceColor_{0x58, 0xa6, 0xff}, dotRingColor_{0x0d, 0x11, 0x17};
 	qreal behindSeconds_ = 0;
 	// A drag: where it started and the right edge then.

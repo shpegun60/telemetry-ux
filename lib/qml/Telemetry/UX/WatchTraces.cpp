@@ -202,6 +202,29 @@ const std::deque<TraceReading>* WatchTraces::readings(const QString& path) const
 	return it == traces_.cend() ? nullptr : &it->readings;
 }
 
+void WatchTraces::setStates(const QString& path, QHash<qint64, QString> names)
+{
+	states_.insert(path, std::move(names));
+}
+
+QString WatchTraces::stateText(const QString& path, const QVariant& value) const
+{
+	const auto it = traces_.constFind(path);
+	if (it == traces_.cend() || !it->categorical || !value.isValid())
+		return {};
+	const double number = value.toDouble();
+	if (std::isnan(number))
+		return {};
+	if (it->type.scalar == WatchScalar::Boolean && !it->type.enumeration)
+		return number != 0 ? QStringLiteral("true") : QStringLiteral("false");
+	const auto code = qint64(number);
+	const auto names = states_.constFind(path);
+	if (names != states_.cend())
+		if (const auto name = names->constFind(code); name != names->cend())
+			return *name;
+	return tr("Code %1").arg(code);
+}
+
 bool WatchTraces::categorical(const QString& path) const
 {
 	const auto it = traces_.constFind(path);

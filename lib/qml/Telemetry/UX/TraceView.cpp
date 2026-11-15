@@ -209,6 +209,27 @@ void TraceView::setReferenceColor(const QColor& color)
 	update();
 }
 
+void TraceView::setLaneHeight(qreal height)
+{
+	laneHeight_ = std::max<qreal>(6, height);
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setLaneFillColor(const QColor& color)
+{
+	laneFillColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setLaneTextColor(const QColor& color)
+{
+	laneTextColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
 void TraceView::setBottomInset(qreal inset)
 {
 	if (qFuzzyCompare(inset + 1, bottomInset_ + 1))
@@ -657,11 +678,15 @@ void TraceView::paint(QPainter* painter)
 	const qint64 offsetMs =
 	    qint64(QDateTime::fromMSecsSinceEpoch(qint64(utcOf(right))).offsetFromUtc()) * 1000;
 	const QStringList plotted = traces_ ? traces_->plotted() : QStringList{};
+	// Numbers share the value axis; a bool or an enum has a lane.
+	QStringList numbers, lanes;
+	for (const auto& path : plotted)
+		(traces_->categorical(path) ? lanes : numbers) << path;
 
-	// The value range of what is in view.
+	// The value range of the numbers in view.
 	Range wanted;
 	bool any = false;
-	for (const auto& path : plotted) {
+	for (const auto& path : std::as_const(numbers)) {
 		const auto* readings = traces_->readings(path);
 		if (!readings || readings->empty())
 			continue;
@@ -712,7 +737,13 @@ void TraceView::paint(QPainter* painter)
 	// The value labels first, so the plot starts after the widest.
 	const qreal labelsHeight = metrics.height() * 2 + pad + bottomInset_;
 	const qreal top = pad, bottom = std::max<qreal>(top + 1, height() - labelsHeight);
-	const double rows = std::max<qreal>(1, (bottom - top) / 40.0);
+	// The lanes under the numbers: a row each, at most 40 % of the height
+	// (all of it when there are no numbers).
+	const qreal laneShare = numbers.isEmpty() ? 1.0 : 0.4;
+	const qreal laneH = lanes.isEmpty() ? 0
+	                                    : std::max<qreal>(6, std::min(laneHeight_, (bottom - top) * laneShare / lanes.size()));
+	const qreal lanesTop = bottom - laneH * lanes.size();
+	const double rows = std::max<qreal>(1, (lanesTop - top) / 40.0);
 	const double valueStep = niceStep((values.high - values.low) / rows);
 	QStringList valueLabels;
 	QVector<double> valueTicks;
@@ -729,7 +760,11 @@ void TraceView::paint(QPainter* painter)
 		labelWidth = std::max(labelWidth, metrics.horizontalAdvance(text));
 	const QRectF area(QPointF(std::ceil(labelWidth + pad * 2), top), QPointF(std::max<qreal>(labelWidth + pad * 3, width() - pad), bottom));
 	const auto xOf = [&](qint64 ns) { return area.left() + (double(ns - left) / double(span)) * area.width(); };
-	const auto yOf = [&](double v) { return area.bottom() - (v - values.low) / (values.high - values.low) * area.height(); };
+	// The numbers' part of the area, above the lanes.
+	const QRectF numbersArea(area.topLeft(), QPointF(area.right(), lanesTop));
+	const auto yOf = [&](double v) {
+		return numbersArea.bottom() - (v - values.low) / (values.high - values.low) * numbersArea.height();
+	};
 
 	painter->setRenderHint(QPainter::Antialiasing, true);
 	painter->setFont(font_);
@@ -738,7 +773,7 @@ void TraceView::paint(QPainter* painter)
 	grid.setCosmetic(true);
 	painter->setPen(grid);
 	painter->drawRect(area);
-	for (int i = 0; i < valueTicks.size(); ++i) {
+	for (int i = 0; i < valueTicks.size() && !numbers.isEmpty(); ++i) {
 		const qreal y = std::round(yOf(valueTicks[i])) + 0.5;
 		painter->setPen(grid);
 		painter->drawLine(QPointF(area.left(), y), QPointF(area.right(), y));
@@ -785,8 +820,8 @@ void TraceView::paint(QPainter* painter)
 	int points = 0, raw = 0, curves = 0;
 	const double pixels = area.width() * ratio;
 	painter->save();
-	painter->setClipRect(area);
-	for (const auto& path : plotted) {
+	painter->setClipRect(numbersArea);
+	for (const auto& path : std::as_const(numbers)) {
 		const auto* readings = traces_->readings(path);
 		if (!readings || readings->empty())
 			continue;
@@ -881,6 +916,79 @@ void TraceView::paint(QPainter* painter)
 			flush();
 		}
 	}
+	painter->setClipRect(area);
+	QStringList laneLabels, laneStates;
+	const qreal inset = std::max<qreal>(2, std::round(laneH * 0.15));
+	for (int lane = 0; lane < lanes.size(); ++lane) {
+		const auto& path = lanes[lane];
+		const QRectF row(area.left(), lanesTop + lane * laneH, area.width(), laneH);
+		QPen separator(gridColor_, 1);
+		separator.setCosmetic(true);
+		painter->setPen(separator);
+		painter->drawLine(QPointF(row.left(), std::round(row.top()) + 0.5), QPointF(row.right(), std::round(row.top()) + 0.5));
+		// Its leaf name in the value labels' column.
+		const auto leaf = path.section(QLatin1Char('.'), -1);
+		laneLabels << leaf;
+		painter->save();
+		painter->setClipping(false);
+		painter->setPen(labelColor_);
+		painter->drawText(QRectF(0, row.top(), area.left() - pad, row.height()), Qt::AlignRight | Qt::AlignVCenter,
+		                  metrics.elidedText(leaf, Qt::ElideMiddle, area.left() - pad));
+		painter->restore();
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->empty())
+			continue;
+		++curves;
+		++raw;
+		const int colorAt = traces_->colorIndex(path);
+		const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
+		const bool flag = traces_->stateText(path, 1.0) == QStringLiteral("true");
+		auto from = std::lower_bound(readings->begin(), readings->end(), left,
+		                             [](const TraceReading& r, qint64 at) { return r.ns < at; });
+		if (from != readings->begin())
+			--from;
+		const auto newest = traces_->newestNs();
+		// Runs of one state: from a reading to the next, the last held to
+		// the newest reading of any value.
+		for (auto it = from; it != readings->end() && it->ns <= right; ) {
+			if (std::isnan(it->value)) {
+				++it;
+				continue;
+			}
+			auto end = std::next(it);
+			while (end != readings->end() && !std::isnan(end->value) && end->value == it->value)
+				++end;
+			const qint64 until = end == readings->end() ? newest : end->ns;
+			const qreal x0 = std::max(area.left(), xOf(it->ns)), x1 = std::min(area.right(), xOf(until));
+			if (x1 > area.left() && x0 < area.right()) {
+				const QRectF band(x0, row.top() + inset, std::max<qreal>(1, x1 - x0), laneH - 2 * inset);
+				if (flag) {
+					if (it->value != 0) {
+						painter->fillRect(band, color);
+					} else {
+						QPen low(color, 1);
+						low.setCosmetic(true);
+						painter->setPen(low);
+						painter->drawLine(QPointF(band.left(), band.bottom() - 0.5), QPointF(band.right(), band.bottom() - 0.5));
+					}
+				} else {
+					painter->fillRect(band, laneFillColor_);
+					painter->fillRect(QRectF(band.left(), band.top(), band.width(), 2), color);
+					painter->fillRect(QRectF(band.left(), band.top(), 1, band.height()), color);
+					const auto name = traces_->stateText(path, it->value);
+					if (band.width() >= 24 && laneH >= 12) {
+						painter->setPen(laneTextColor_);
+						painter->drawText(band.adjusted(4, 2, -2, 0), Qt::AlignLeft | Qt::AlignVCenter,
+						                  metrics.elidedText(name, Qt::ElideRight, band.width() - 6));
+						if (!laneStates.contains(name))
+							laneStates << name;
+					}
+				}
+			}
+			it = end;
+		}
+	}
+
 	// The reference, dashed, and the cursor with a dot on each number's
 	// reading at or before it.
 	const auto lineAt = [&](qint64 ns) { return std::round(xOf(ns)) + 0.5; };
@@ -898,7 +1006,7 @@ void TraceView::paint(QPainter* painter)
 		line.setCosmetic(true);
 		painter->setPen(line);
 		painter->drawLine(QPointF(cursorX, area.top()), QPointF(cursorX, area.bottom()));
-		for (const auto& path : plotted) {
+		for (const auto& path : std::as_const(numbers)) {
 			const auto* readings = traces_->readings(path);
 			const auto* at = readings ? atOrBefore(*readings, cursorNs_) : nullptr;
 			if (!at || std::isnan(at->value) || at->ns < left)
@@ -914,7 +1022,10 @@ void TraceView::paint(QPainter* painter)
 	painter->restore();
 
 	const bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
-	                     raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_;
+	                     raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_ ||
+	                     laneLabels != laneLabels_ || laneStates != laneStates_;
+	laneLabels_ = laneLabels;
+	laneStates_ = laneStates;
 	timeLabels_ = timeLabels;
 	valueLabels_ = valueLabels;
 	drawnPoints_ = points;

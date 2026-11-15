@@ -557,3 +557,14 @@ shows its value at the cursor and its difference from the reference. New on
 `referenceColor`, `dotRingColor`, `bottomInset`, `setCursorAt()`,
 `hideCursor()`, `stepCursor()`, `pinReference()`, `clearReference()`,
 `valueAt(path)`, `referenceValue(path)`.
+
+## Lanes for booleans and enums on the live Plot (LP-1d, November 2026)
+
+A plotted bool or enum is no longer drawn on the numbers' axis: `TraceView`
+gives each a lane of its own under the numbers, a row high (`laneHeight`, at
+most 40 % of the graph together): a bool a band while true and a line while
+false, an enum a band per state (`laneFillColor`) with its name where it fits
+(`laneTextColor`) and a mark where it changes. The value axis spans the numbers
+only. `WatchTraces` gains `stateText(path, value)` ("true", "Idle", "Code 7")
+and `setStates(path, names)`; the provider fills the names from each enum row's
+editor choices. The chips say a state in words, with no difference.
