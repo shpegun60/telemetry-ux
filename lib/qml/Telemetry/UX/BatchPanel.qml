@@ -56,15 +56,23 @@ Pane {
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
+        // The list beside the item's pane; in a narrow dock the pane goes
+        // under the list, so neither is cut off at the window's edge.
         SplitView {
+            id: batchSplit
+            objectName: "batchSplit"
             visible: expanded.checked
+            orientation: width >= 640 ? Qt.Horizontal : Qt.Vertical
+            readonly property bool sideBySide: orientation === Qt.Horizontal
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 220
-            Layout.preferredHeight: 220
+            Layout.minimumHeight: sideBySide ? 220 : 320
+            Layout.preferredHeight: sideBySide ? 220 : 420
             ColumnLayout {
-                    SplitView.fillWidth: true
-                    SplitView.minimumWidth: 320
+                    SplitView.fillWidth: batchSplit.sideBySide
+                    SplitView.fillHeight: !batchSplit.sideBySide
+                    SplitView.minimumWidth: batchSplit.sideBySide ? 320 : 0
+                    SplitView.minimumHeight: batchSplit.sideBySide ? 0 : Type.rowHeight * 4
                     spacing: 0
                 ListView {
                     id: items
@@ -297,7 +305,9 @@ Pane {
                 id: itemPane
                 objectName: "batchItemPane"
                 SplitView.preferredWidth: 400
-                SplitView.minimumWidth: 220
+                SplitView.minimumWidth: batchSplit.sideBySide ? 220 : 0
+                SplitView.preferredHeight: Type.rowHeight * 10
+                SplitView.minimumHeight: batchSplit.sideBySide ? 0 : Type.rowHeight * 6
                 framed: false
                 readonly property var item: panel.provider.batchItem
                 provider: item
