@@ -256,9 +256,12 @@ Pane {
                                           item.line, item.outcome].filter(part => part.length > 0).join(", ")
                         HoverHandler { id: rowHover }
                         TapHandler {
+                            // A click takes the keys to the list, as the Watchlist's
+                            // does: an editor elsewhere (the "+" field) commits.
                             onTapped: {
                                 items.currentIndex = item.index
                                 panel.provider.selectBatch(item.index)
+                                items.forceActiveFocus(Qt.MouseFocusReason)
                             }
                         }
                         TapHandler {

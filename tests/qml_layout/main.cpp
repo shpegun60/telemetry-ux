@@ -410,6 +410,36 @@ int main(int argc, char** argv)
 			CHECK(item(statePanel, QStringLiteral("endpointStatusLine"))->property("text").toString() ==
 			      QStringLiteral("Edited, not applied"));
 		}
+		// A Service's two request values over its response in a narrow, short
+		// dock (the Batch item's pane): the Request takes its rows' whole
+		// height and the Response starts below the last one.
+		{
+			auto* requestValues = stateWindow->findChild<QObject*>(QStringLiteral("requestValues"));
+			auto* responseValues = stateWindow->findChild<QObject*>(QStringLiteral("responseValues"));
+			CHECK(requestValues && responseValues);
+			CHECK(stateProvider->setProperty("editing", false) && stateProvider->setProperty("commandSelected", false) &&
+			      stateProvider->setProperty("serviceSelected", true) &&
+			      stateProvider->setProperty("values", QVariant::fromValue(requestValues)) &&
+			      stateProvider->setProperty("responses", QVariant::fromValue(responseValues)));
+			for (const int height : {640, 420, 340}) {
+				stateWindow->setWidth(300);
+				stateWindow->setHeight(height);
+				settle();
+				auto* tree = item(statePanel, QStringLiteral("valueTree"));
+				auto* heading = item(statePanel, QStringLiteral("responseSectionHeading"));
+				CHECK(tree && heading && heading->isVisible() && tree->property("rows").toInt() == 2);
+				QQuickItem* last = nullptr;
+				CHECK(QMetaObject::invokeMethod(tree, "itemAtCell", Q_RETURN_ARG(QQuickItem*, last), Q_ARG(QPoint, QPoint(0, 1))));
+				CHECK(last && last->isVisible());
+				const auto lastBottom = last->mapToScene(QPointF(0, last->height())).y();
+				CHECK(tree->mapToScene(QPointF(0, tree->height())).y() >= lastBottom - 0.5);
+				CHECK(heading->mapToScene(QPointF()).y() >= lastBottom - 0.5);
+				CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) +
+				                                     QStringLiteral("/service-request-narrow-%1.png").arg(height)));
+			}
+			stateWindow->setHeight(640);
+			settle();
+		}
 		delete stateWindow;
 		QCoreApplication::processEvents();
 		CHECK(warnings == 0);

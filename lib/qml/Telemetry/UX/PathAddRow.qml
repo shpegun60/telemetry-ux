@@ -397,14 +397,36 @@ FocusScope {
                         }
                         event.accepted = true
                     } else if (event.key === Qt.Key_Escape) {
-                        if (popup.visible)
+                        // Where a click away adds (enterAdds), Escape cancels:
+                        // the field empties as it was before.
+                        if (popup.visible) {
                             popup.close()
-                        else
+                        } else {
+                            if (addRow.enterAdds)
+                                addRow.clear()
                             addRow.finish()
+                        }
                         event.accepted = true
                     }
                 }
-                onActiveFocusChanged: if (!activeFocus && !popup.visible && text.length === 0) addRow.editing = false
+                onActiveFocusChanged: {
+                    // Focus gone elsewhere with a line that names one endpoint:
+                    // added as Enter adds it (enterAdds). Anything else stays
+                    // in the field, its line saying why.
+                    if (!activeFocus && addRow.enterAdds && addRow.editing && text.trim().length > 0) {
+                        if (settleTimer.running) {
+                            settleTimer.stop()
+                            addRow.refresh()
+                        }
+                        addRow.recheck()
+                        if (addRow.addStatuses.indexOf(addRow.check.status) >= 0) {
+                            popup.close()
+                            addRow.add([text])
+                        }
+                    }
+                    if (!activeFocus && !popup.visible && text.length === 0)
+                        addRow.editing = false
+                }
             }
             Popup {
                 id: popup

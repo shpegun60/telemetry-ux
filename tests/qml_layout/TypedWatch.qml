@@ -25,6 +25,10 @@ ApplicationWindow {
         readonly property string watchStatus: ""
         readonly property string watchWriteOutcome: ""
         function writeWatch(row, value) { typedWatchWrites.write(row, value) }
+        // A whole number, or the words Enter says it refuses with.
+        function watchEditPreview(row, text) {
+            return /^-?\d*$/.test(text) ? { preview: "" } : { error: "Enter a whole number." }
+        }
         function refreshWatch() {}
         function startWatch() {}
         function stopWatch() {}

@@ -338,6 +338,10 @@ Pane {
         // The row tooltip's name, so a host's check can find it per tree.
         property string toolTipName: ""
         readonly property var valueItem: valueCell.item
+        // How far an open value's editor may grow leftwards: over the Name
+        // column's room, short of the name's first characters.
+        readonly property real valueRoom: Math.max(0, panel.valueX(width) - Type.tight
+            - (Type.padding + nameIndent + Math.min(nameLabel.implicitWidth, Type.bodyPixels * 3)))
         readonly property real nameIndent: Math.min((depth + 1) * Type.indent,
             Math.max(Type.indent, panel.nameEnd(width) - Type.bodyPixels * 4 - Type.padding))
         indentation: Type.indent
@@ -375,6 +379,7 @@ Pane {
         }
         contentItem: Item {
             Label {
+                id: nameLabel
                 objectName: "detailCellName"
                 x: Type.padding + cellRow.nameIndent
                 width: Math.max(0, panel.nameEnd(cellRow.width) - x)
@@ -592,7 +597,14 @@ Pane {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumWidth: 160
-                Layout.minimumHeight: Type.rowHeight * 3
+                // A Service's request over its response (one column) takes its
+                // rows' whole height - headings, the table's header and every
+                // row - so the Response heading never covers one; a dock too
+                // short for both scrolls the pane instead.
+                Layout.minimumHeight: panel.showResponse && valueColumns.columns === 1
+                    ? Math.max(Type.rowHeight * 3, headingsHeight
+                        + (panel.noArguments || panel.showMetadata ? 0 : valueHeading.implicitHeight + valueTree.contentHeight))
+                    : Type.rowHeight * 3
                 // The heading and caption above the table count too, so a
                 // request's rows keep their whole height before its response.
                 readonly property real headingsHeight: (valueSectionHeading.visible ? valueSectionHeading.implicitHeight + spacing : 0)
@@ -747,6 +759,7 @@ Pane {
                             TableView.onReused: if (valueItem && typeof valueItem.reset === "function") valueItem.reset()
                             valueComponent: ValueCell {
                                 objectName: "valueCell"
+                                editorRoom: valueDelegate.valueRoom
                                 name: valueDelegate.name
                                 value: valueDelegate.value
                                 typeText: valueDelegate.typeText

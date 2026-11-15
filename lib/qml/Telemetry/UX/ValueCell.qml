@@ -3,11 +3,13 @@
 // the way to write text into the row; edits are live. Pure QML, so a host
 // needs none of the module's C++ types for it. MIT.
 //
-// Keys while open: Enter keeps the value; Tab and Shift+Tab keep it and ask
-// the owner for the next or previous cell (tabbed); Escape puts back the value
-// the cell had when it was opened. Leaving with text that is no value puts
-// back the last value that was. Ctrl+Enter keeps the value and goes on to the
-// owner (Apply, Execute or Call).
+// Keys while open: Enter keeps the value, and so does focus going elsewhere
+// (a click away, Tab); Tab and Shift+Tab also ask the owner for the next or
+// previous cell (tabbed); Escape puts back the value the cell had when it was
+// opened. Closing with text that is no value puts back the last value that
+// was, and the caption under the closed cell says why ("Not changed: Enter a
+// number from 0 to 255."). Ctrl+Enter keeps the value and goes on to the owner
+// (Apply, Execute or Call).
 import QtQuick
 import QtQuick.Controls
 // The editor is drawn here (22 px, a 1 px outline): Basic takes that in every
@@ -37,6 +39,12 @@ Item {
     property string canonicalText: ""
     // What the cell says while its text is no value: "Enter a number from 0 to 255."
     property string takes: ""
+    // Those words, or the type's when the owner gives none.
+    readonly property string takesText: takes.length > 0 ? takes : qsTr("Enter a value of type %1.").arg(typeText)
+    // How far left of the cell its editor may grow over the owner's spare
+    // room (the Name column's), so a long value shows whole while edited; 0
+    // keeps the editor in the cell. The right edge stays on the cell's.
+    property real editorRoom: 0
     // Codes in hexadecimal beside the names, "Idle (0x00)", as the
     // Watchlist shows them in its hex form; decimal otherwise.
     property bool hexCodes: false
@@ -68,6 +76,9 @@ Item {
     property bool manualCode: false
     property string startText: ""
     property bool closing: false
+    // Why the last text left was not kept: "Not changed: Enter a number from
+    // 0 to 255.", under the closed cell until it is opened again.
+    property string refusal: ""
 
     // Tab or Shift+Tab: the owner opens the next or previous cell.
     signal tabbed(bool forward)
@@ -83,6 +94,7 @@ Item {
         if (!canOpen)
             return false
         startText = editorText
+        refusal = ""
         invalid = false
         manualCode = false
         open = true
@@ -102,8 +114,13 @@ Item {
         if (!open || closing)
             return
         closing = true
-        if (invalid && typeof setText === "function")
-            setText(editorText)
+        // Text that is no value is never dropped in silence: the last value
+        // comes back, and the caption says why, in Enter's words.
+        if (invalid) {
+            refusal = qsTr("Not changed: %1").arg(takesText)
+            if (typeof setText === "function")
+                setText(editorText)
+        }
         invalid = false
         manualCode = false
         open = false
@@ -115,6 +132,7 @@ Item {
         if (!open || closing)
             return
         closing = true
+        refusal = ""
         if (typeof setText === "function" && editorText !== startText)
             setText(startText)
         invalid = false
@@ -124,6 +142,7 @@ Item {
         finished(true)
     }
     function reset() {
+        refusal = ""
         open = false
         invalid = false
         manualCode = false
@@ -250,7 +269,15 @@ Item {
                 objectName: "scalarEditor"
                 property string scalarName: cell.name
                 visible: cell.open && (!cell.choices || cell.manualCode)
-                anchors.fill: parent
+                // Its whole text and the cursor wide, growing leftwards over the
+                // owner's room; never narrower than the cell.
+                readonly property real needed: Math.ceil(inputMetrics.advanceWidth) + leftPadding + rightPadding + 3
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: Math.max(parent.width, Math.min(parent.width + Math.max(0, cell.editorRoom), needed))
+                // Grown to fit, the text shows from its start.
+                onWidthChanged: if (needed <= width) ensureVisible(0)
                 leftPadding: Type.tight + 1
                 rightPadding: Type.tight + 1
                 topPadding: 0
@@ -270,7 +297,14 @@ Item {
                 }
                 Accessible.name: qsTr("Value for %1").arg(cell.name)
                 Accessible.description: cell.invalid ? cell.takes : cell.detail
-                onTextEdited: if (typeof cell.setText === "function") cell.invalid = !cell.setText(text)
+                // The same text as the row's writes nothing (no step to undo).
+                onTextEdited: if (typeof cell.setText === "function")
+                    cell.invalid = text === cell.editorText ? false : !cell.setText(text)
+                TextMetrics {
+                    id: inputMetrics
+                    font: input.font
+                    text: input.text.length > 0 ? input.text : input.placeholderText
+                }
                 onAccepted: cell.keep(true)
                 Keys.onEscapePressed: function(event) { cell.revert(); event.accepted = true }
                 Keys.onTabPressed: function(event) { cell.keep(); cell.tabbed(true); event.accepted = true }
@@ -282,10 +316,38 @@ Item {
                 objectName: "valueChoice"
                 visible: cell.open && cell.choices && !cell.manualCode
                 height: parent.height
-                // As wide as its widest item, and a little room for the arrow.
-                width: Math.min(parent.width, implicitContentWidth + leftPadding + rightPadding + Type.bodyPixels * 1.8)
-                anchors.right: cell.numeric ? parent.right : undefined
+                // As wide as its widest choice with the arrow, "false (0)" or
+                // "Active (0x02)" never cut: growing leftwards over the owner's
+                // room as the text editor does, the right edge on the cell's.
+                readonly property real widestChoice: {
+                    let widest = 0
+                    for (let i = 0; i < cell.options.length; ++i)
+                        widest = Math.max(widest, choiceMetrics.advanceWidth(cell.options[i].label))
+                    return Math.ceil(widest)
+                }
+                readonly property real needed: Math.max(implicitWidth, widestChoice + leftPadding + rightPadding + 2
+                    + (contentItem && typeof contentItem.leftPadding === "number"
+                       ? contentItem.leftPadding + contentItem.rightPadding : 0))
+                width: Math.min(parent.width + Math.max(0, cell.editorRoom), needed)
+                x: cell.numeric || width > parent.width ? parent.width - width : 0
                 implicitContentWidthPolicy: ComboBox.WidestText
+                // The list never cuts a choice either: as wide as the widest in
+                // the current one's weight, its right edge on the box's.
+                popup.width: Math.max(width, widestChoice + choiceProbe.leftPadding + choiceProbe.rightPadding
+                                             + popup.leftPadding + popup.rightPadding + 2)
+                popup.x: width - popup.width
+                // The list's row as a style draws it, the current one in bold:
+                // its padding and its font measure every choice.
+                ItemDelegate {
+                    id: choiceProbe
+                    visible: false
+                    font.weight: Font.DemiBold
+                    Accessible.ignored: true
+                }
+                FontMetrics {
+                    id: choiceMetrics
+                    font: choiceProbe.font
+                }
                 topPadding: 0
                 bottomPadding: 0
                 palette.light: Theme.stateSelected
@@ -337,15 +399,17 @@ Item {
             objectName: "valueCaption"
             readonly property bool encoded: cell.open && !cell.invalid && cell.floating && cell.canonicalText.length > 0
                                             && input.text.length > 0 && input.text !== cell.canonicalText
-            visible: cell.invalid || encoded
+            readonly property bool refused: !cell.open && cell.refusal.length > 0
+            visible: cell.invalid || encoded || refused
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             font.pointSize: Type.caption
-            color: cell.invalid ? Theme.error : Theme.textSecondary
+            color: cell.invalid || refused ? Theme.error : Theme.textSecondary
             horizontalAlignment: cell.numeric ? Text.AlignRight : Text.AlignLeft
-            text: cell.invalid ? (cell.takes.length > 0 ? cell.takes : qsTr("Enter a value of type %1.").arg(cell.typeText))
+            text: cell.invalid ? cell.takesText
+                : refused ? cell.refusal
                 : encoded ? qsTr("Encoded: %1 (%2)").arg(cell.canonicalText).arg(cell.typeText) : ""
         }
         Button {

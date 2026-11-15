@@ -1413,3 +1413,66 @@ after it, as the start-up settles). `narrowNeed` is the new read-only step
 the controls need now; `narrowStep` is the step shown and is no longer a
 binding, so a host must not assign it. `trailingGivesWay` holds with it, and
 `trailingNeedsToGo` is what the controls need now.
+
+## One commit rule for the value editors; the cell editor shows its whole value (November 2026)
+
+Every value editor now follows one rule: the Batch's "+" field, the Batch
+item's request and write cells and Details' cells (`ValueCell`), and the
+Watchlist's row editor.
+
+- Enter commits, and so does focus going elsewhere: a click away, or Tab.
+  Escape cancels and puts back the value the editor opened with.
+- Text that is no value is never dropped in silence. Enter keeps refusing it
+  as before. On focus loss the old value stays and the editor's own caption
+  or status line says why, in Enter's words.
+- The text the editor opened with commits nothing: no write, no undo step.
+
+Per editor:
+
+- `ValueCell`: a click away keeps the value as Enter does (unchanged). New:
+  closing with text that is no value shows "Not changed: <takes>" in the
+  caption under the closed cell (`refusal`) until the cell opens again or is
+  `reset()`. `takesText` is `takes`, or "Enter a value of type <type>.". A
+  text equal to the row's `editorText` no longer calls `setText`.
+- `ValueCell.editorRoom` (new, default 0): how far left of the cell the
+  editor may grow over the owner's spare room. While open, the text field is
+  its whole text and the cursor wide (TextMetrics in the fixed face), between
+  the cell's width and the cell's width plus `editorRoom`. Its right edge
+  stays on the cell's, and a text that fits shows from its start. Details
+  gives it the Name column's room, short of the name's first characters, so
+  "3.14159274" no longer reads ".14159274". The choice combo follows the same
+  rule. It is as wide as its widest choice ("false (0)", "Active (0x02)") with
+  the arrow, measured over every choice in the list's bold weight, and its
+  list is never narrower than that. A host that gives no room keeps the
+  combo in the cell when the choices fit.
+- Watchlist row editor: focus leaving the editor (a click on another row or
+  anywhere else, or Tab past its own buttons) writes to the device, as Enter
+  does, under the same Allow changes rule. Text that is no value, or an empty
+  one, writes nothing, and the status line (`watchWriteOutcome`) says "Not
+  changed: <Enter's refusal>". That line outlives the click's own change of
+  row (`writeRefusalLeft`) until the next edit starts. Enter with the text the
+  editor opened with now closes it without writing; the Write button still
+  sends the value once again.
+- Batch "+" field (`PathAddRow` with `enterAdds`): focus leaving it with a
+  line that names one endpoint adds it, as Enter does. A line that names
+  nothing stays in the field with its line saying why. Escape, with the
+  suggestions shut, now empties the field before leaving it. The Watchlist's
+  "+" row (no `enterAdds`) is unchanged. A click on a Batch item now takes
+  the keys to the list, as a click on a Watchlist row does.
+
+### A Service's Request keeps its rows over the Response; one form for types
+
+- `EndpointPanel`: when a Service's Request stands over its Response (one
+  column, a narrow dock such as the Batch item's pane), the Request's minimum
+  height is now its rows' whole height: its headings, the table's header and
+  every row (`valueTree.contentHeight`). The Response heading starts below the
+  last request row and no longer covers the "factor" row of a two-value
+  request. Side by side, or with no response, the minimum is three rows as
+  before. In a dock too short for both, the panel still overflows at its
+  bottom: it does not scroll yet.
+- The value models (`DynamicModels`' `ValueModel`, which feeds Details'
+  values and a Service's Response) name scalar types in the short form the
+  Request and the Device tree already use: `u8 i8 u16 i16 u32 i32 u64 i64
+  f32 f64`, and `enum (i16)`. They were `uint8 ... float64` and `enum (int16)`.
+  A host that compares the `typeText` role with the long names must use the
+  short ones. The Inspector's device check does.

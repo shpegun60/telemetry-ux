@@ -69,25 +69,25 @@ QString scalarType(Code code)
 		case Code::Bool:
 			return QStringLiteral("bool");
 		case Code::U8:
-			return QStringLiteral("uint8");
+			return QStringLiteral("u8");
 		case Code::S8:
-			return QStringLiteral("int8");
+			return QStringLiteral("i8");
 		case Code::U16:
-			return QStringLiteral("uint16");
+			return QStringLiteral("u16");
 		case Code::S16:
-			return QStringLiteral("int16");
+			return QStringLiteral("i16");
 		case Code::U32:
-			return QStringLiteral("uint32");
+			return QStringLiteral("u32");
 		case Code::S32:
-			return QStringLiteral("int32");
+			return QStringLiteral("i32");
 		case Code::U64:
-			return QStringLiteral("uint64");
+			return QStringLiteral("u64");
 		case Code::S64:
-			return QStringLiteral("int64");
+			return QStringLiteral("i64");
 		case Code::F32:
-			return QStringLiteral("float32");
+			return QStringLiteral("f32");
 		case Code::F64:
-			return QStringLiteral("float64");
+			return QStringLiteral("f64");
 	}
 	return {};
 }

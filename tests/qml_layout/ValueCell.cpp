@@ -52,6 +52,32 @@ void typeText(QWindow* window, const QString& typed)
 		QTest::keyClick(window, letter);
 }
 
+// No choice cut: the closed box shows its whole text, and every row of its
+// open list has room for its own.
+bool choicesWhole(QQuickItem* combo)
+{
+	auto* shown = combo->property("contentItem").value<QQuickItem*>();
+	if (!shown)
+		return false;
+	const qreal room = shown->width() - shown->property("leftPadding").toReal() - shown->property("rightPadding").toReal();
+	if (shown->property("contentWidth").toReal() > room + 0.5)
+		return false;
+	auto* popup = combo->property("popup").value<QObject*>();
+	auto* list = popup ? popup->property("contentItem").value<QQuickItem*>() : nullptr;
+	auto* rows = list ? list->property("contentItem").value<QQuickItem*>() : nullptr;
+	if (!rows)
+		return false;
+	int seen = 0;
+	for (auto* row : rows->childItems()) {
+		if (!row->property("availableWidth").isValid() || !row->isVisible())
+			continue;
+		++seen;
+		if (row->property("implicitContentWidth").toReal() > row->property("availableWidth").toReal() + 0.5)
+			return false;
+	}
+	return seen == combo->property("count").toInt();
+}
+
 QString text(QObject* object, const char* property = "text")
 {
 	return object->property(property).toString();
@@ -130,12 +156,20 @@ int main(int argc, char** argv)
 		CHECK(text(gainCaption) == QStringLiteral("Enter a number from 0 to 255."));
 		CHECK(gain->height() > rowHeight + 4);
 		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-invalid.png"))));
-		// Enter with no value: the last value comes back, the cell closes.
+		// Enter with no value: the last value comes back, the cell closes, and
+		// the caption says it was not changed and why.
 		QTest::keyClick(window, Qt::Key_Return);
 		settle();
 		CHECK(!gain->property("open").toBool() && !gain->property("invalid").toBool());
 		CHECK(text(gainRow) == QStringLiteral("12") && text(gainText) == QStringLiteral("12"));
 		CHECK(gainRow->property("finishedByKey").toInt() == 1);
+		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: Enter a number from 0 to 255."));
+		// Opened again, the words go.
+		CHECK(QMetaObject::invokeMethod(gain, "begin"));
+		settle();
+		CHECK(!gainCaption->isVisible());
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
 		CHECK(qAbs(gain->height() - rowHeight) < 1);
 		// Escape puts back the value the cell had when it was opened.
 		CHECK(QMetaObject::invokeMethod(gain, "begin"));
@@ -170,8 +204,92 @@ int main(int argc, char** argv)
 		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(content, QStringLiteral("elsewhere"))));
 		settle();
 		CHECK(!gain->property("open").toBool() && text(gainRow) == QStringLiteral("9"));
+		// Never in silence: the caption says why the value stayed.
+		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: Enter a number from 0 to 255."));
 		// Enter and Escape gave the keys back; Tab and a click elsewhere did not.
-		CHECK(gainRow->property("finishedByKey").toInt() == 2);
+		CHECK(gainRow->property("finishedByKey").toInt() == 3);
+		// A click elsewhere keeps a valid value, as Enter does.
+		CHECK(QMetaObject::invokeMethod(gain, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("33"));
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(content, QStringLiteral("elsewhere"))));
+		settle();
+		CHECK(!gain->property("open").toBool() && text(gainRow) == QStringLiteral("33") && !gainCaption->isVisible());
+		// Unchanged text writes nothing: opened and left by Enter or a click away.
+		const int gainWrites = gainRow->property("written").toList().size();
+		CHECK(QMetaObject::invokeMethod(gain, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(QMetaObject::invokeMethod(gain, "begin"));
+		settle();
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(content, QStringLiteral("elsewhere"))));
+		settle();
+		CHECK(!gain->property("open").toBool() && text(gainRow) == QStringLiteral("33"));
+		CHECK(gainRow->property("written").toList().size() == gainWrites && !gainCaption->isVisible());
+		// A long value shows whole while edited: the editor grows leftwards
+		// over the owner's room, its right edge on the cell's, its start in sight.
+		auto* pi = named(content, QStringLiteral("piCell"));
+		auto* piRow = window->findChild<QObject*>(QStringLiteral("piRow"));
+		auto* piEditor = named(pi, QStringLiteral("scalarEditor"));
+		auto* piText = named(pi, QStringLiteral("valueText"));
+		CHECK(pi && piRow && piEditor && piText);
+		CHECK(piText->property("truncated").toBool());
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(piText));
+		settle();
+		CHECK(pi->property("open").toBool() && piEditor->isVisible() && piEditor->hasActiveFocus());
+		CHECK(text(piEditor) == QStringLiteral("3.14159274"));
+		const auto rightEdge = [](QQuickItem* item) { return item->mapToScene(QPointF(item->width(), 0)).x(); };
+		const auto shownWhole = [&]() {
+			QRectF first, last;
+			const int length = text(piEditor).size();
+			const bool asked = QMetaObject::invokeMethod(piEditor, "positionToRectangle", Q_RETURN_ARG(QRectF, first), Q_ARG(int, 0)) &&
+			                   QMetaObject::invokeMethod(piEditor, "positionToRectangle", Q_RETURN_ARG(QRectF, last), Q_ARG(int, length));
+			return asked && first.x() >= 0 && last.x() + 1 <= piEditor->width();
+		};
+		CHECK(piEditor->width() > pi->width() && qAbs(rightEdge(piEditor) - rightEdge(pi)) < 0.5);
+		CHECK(piEditor->property("contentWidth").toReal() + piEditor->property("leftPadding").toReal() +
+		      piEditor->property("rightPadding").toReal() <= piEditor->width());
+		CHECK(shownWhole());
+		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-long.png"))));
+		// Typed longer, it grows with the text up to the owner's room, and no further.
+		QTest::keyClick(window, Qt::Key_End);
+		typeText(window, QStringLiteral("12"));
+		settle();
+		CHECK(shownWhole() && qAbs(rightEdge(piEditor) - rightEdge(pi)) < 0.5);
+		typeText(window, QStringLiteral("123456789012345678901234567890"));
+		settle();
+		const qreal room = pi->property("editorRoom").toReal();
+		CHECK(room > 0 && qAbs(piEditor->width() - (pi->width() + room)) < 0.5);
+		// The name's first characters stay in sight.
+		auto* piName = named(content, QStringLiteral("piName"));
+		CHECK(piName && piEditor->mapToScene(QPointF(0, 0)).x() >= piName->mapToScene(QPointF(0, 0)).x() + 8);
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		CHECK(!pi->property("open").toBool() && text(piRow) == QStringLiteral("3.14159274"));
+		// A choice in a narrow Value column: the box grows leftwards over the
+		// owner's room, its right edge on the cell's, no choice cut, closed
+		// or in its list.
+		auto* state = named(content, QStringLiteral("stateCell"));
+		auto* stateChoice = named(state, QStringLiteral("valueChoice"));
+		CHECK(state && stateChoice);
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(state, QStringLiteral("valueText"))));
+		settle();
+		CHECK(state->property("open").toBool() && stateChoice->isVisible());
+		CHECK(stateChoice->property("displayText").toString() == QStringLiteral("Active (0x02)"));
+		CHECK(stateChoice->width() > state->width() && qAbs(rightEdge(stateChoice) - rightEdge(state)) < 0.5);
+		auto* statePopup = stateChoice->property("popup").value<QObject*>();
+		CHECK(statePopup && statePopup->property("visible").toBool());
+		CHECK(choicesWhole(stateChoice));
+		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-choice-narrow.png"))));
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		if (state->property("open").toBool()) {
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle();
+		}
+		CHECK(!state->property("open").toBool());
 		// A float says what it encodes while the text differs from it.
 		auto* factorText = named(factor, QStringLiteral("valueText"));
 		auto* factorCaption = named(factor, QStringLiteral("valueCaption"));
@@ -203,6 +321,7 @@ int main(int argc, char** argv)
 		CHECK(enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (0)")) ||
 		      enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (1)")));
 		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-choice.png"))));
+		CHECK(choicesWhole(enabledChoice));
 		CHECK(QMetaObject::invokeMethod(enabledChoice, "activated", Q_ARG(int, 1)));
 		settle();
 		CHECK(text(enabledRow) == QStringLiteral("true") && !enabled->property("open").toBool());
