@@ -361,6 +361,35 @@ void smallSignedBooleanAndExpansionBound() {
 	      choices[0].toMap().value("text") == "-1");
 	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).toList() == choices);
 	CHECK(watched.data(watchedFlag, ux::WatchlistModel::EditorChoicesRole).toList() == booleanChoices);
+	// The row's own code first when no choice is it, said as the row says it,
+	// and every code in hex when the row shows hex (WL-8).
+	{
+		ux::WatchlistModel own;
+		own.bind([] { return true; });
+		own.setSchemaMetadata(storage->schema);
+		CHECK(own.add(1, "Mode"));
+		const auto row = own.index(0, 0);
+		const auto* modeField = storage->schema.findField("local", "Mode"); CHECK(modeField);
+		ux::WatchValueBits five;
+		five.type = {modeField->typeId, ux::WatchScalar::S8, 1, true};
+		const std::array<std::byte, 1> code{std::byte{5}};
+		CHECK(five.assign(code.data(), 1));
+		CHECK(own.setResult(0, "Ok", "Unknown (5)", ux::WatchSample::ofSigned(5), five));
+		auto mine = own.data(row, ux::WatchlistModel::EditorChoicesRole).toList();
+		CHECK(mine.size() == 3 && mine[0].toMap().value("label") == "Unknown (5)" && mine[0].toMap().value("text") == "5" &&
+		      mine[1].toMap().value("label") == "Negative (-1)");
+		CHECK(own.data(row, ux::WatchlistModel::ShownTextRole) == "Unknown (5)");
+		CHECK(own.setRowFormat(0, ux::WatchNumberFormat::Hex));
+		mine = own.data(row, ux::WatchlistModel::EditorChoicesRole).toList();
+		CHECK(mine.size() == 3 && mine[0].toMap().value("label") == "Unknown (0x05)" && mine[0].toMap().value("text") == "5" &&
+		      mine[1].toMap().value("label") == "Negative (0xFF)" && mine[1].toMap().value("text") == "-1" &&
+		      mine[2].toMap().value("label") == "Positive (0x02)");
+		CHECK(own.setRowFormat(0, std::nullopt));
+		const std::array<std::byte, 1> negative{std::byte{0xff}};
+		CHECK(five.assign(negative.data(), 1));
+		CHECK(own.setResult(0, "Ok", "Negative (-1)", ux::WatchSample::ofSigned(-1), five));
+		CHECK(own.data(row, ux::WatchlistModel::EditorChoicesRole).toList() == choices);
+	}
 	// Both editors own the copied descriptor labels; none retain an enum-name borrow.
 	storage->enums[0].name = "Replacement";
 	CHECK(watched.data(watchedMode, ux::WatchlistModel::EditorChoicesRole).toList() == choices &&

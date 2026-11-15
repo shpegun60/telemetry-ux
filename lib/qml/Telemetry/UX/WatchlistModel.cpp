@@ -6,6 +6,7 @@
  */
 #include "WatchlistModel.hpp"
 #include "ScalarEditorMetadata.hpp"
+#include <QtCore/QCoreApplication>
 #include <QtCore/QSet>
 #include <array>
 #include <algorithm>
@@ -43,6 +44,47 @@ QString canonicalText(const WatchValueBits& value)
 	for (unsigned i = 0; i < value.size; ++i)
 		bits |= std::uint64_t(std::to_integer<unsigned char>(value.bytes[i])) << (8 * i);
 	return detail::scalarEditorBits(bits, *code);
+}
+
+// An enum's choices in the row's form: "Idle (0x00)" when the row shows hex
+// (WL-8); and the row's own code first when no choice is it, by its name when
+// the type has one past the choice limit, else "Unknown (5)" - as the row says.
+QVariantList enumChoices(const QVariantList& choices, const QHash<quint64, QString>& names,
+                         const WatchValueBits& value, bool read, WatchNumberFormat form)
+{
+	const auto inForm = [&](const QString& code) {
+		if (form != WatchNumberFormat::Hex)
+			return code;
+		const auto encoded = watch_format::encode(code, value.type);
+		const auto hex = encoded.error.isEmpty() ? watch_format::text(encoded.value, WatchNumberFormat::Hex) : QString{};
+		return hex.isEmpty() ? code : hex;
+	};
+	const auto own = read ? canonicalText(value) : QString{};
+	QVariantList out;
+	out.reserve(choices.size() + 1);
+	bool found = false;
+	for (const auto& choice : choices) {
+		auto map = choice.toMap();
+		const auto code = map.value(QStringLiteral("text")).toString();
+		found = found || code == own;
+		const auto suffix = QStringLiteral(" (") + code + QLatin1Char(')');
+		auto label = map.value(QStringLiteral("label")).toString();
+		if (form == WatchNumberFormat::Hex && label.endsWith(suffix)) {
+			label.chop(suffix.size());
+			map.insert(QStringLiteral("label"), label + QStringLiteral(" (") + inForm(code) + QLatin1Char(')'));
+		}
+		out.append(map);
+	}
+	if (!own.isEmpty() && !found) {
+		std::uint64_t bits = 0;
+		for (unsigned i = 0; i < value.size; ++i)
+			bits |= std::uint64_t(std::to_integer<unsigned char>(value.bytes[i])) << (8 * i);
+		const auto name = names.constFind(bits);
+		const auto label = name != names.cend() ? name.value() + QStringLiteral(" (") + inForm(own) + QLatin1Char(')')
+		                                        : QCoreApplication::translate("WatchlistModel", "Unknown (%1)").arg(inForm(own));
+		out.prepend(QVariantMap{{QStringLiteral("label"), label}, {QStringLiteral("text"), own}});
+	}
+	return out;
 }
 
 QString fallbackTypeText(const WatchValueType& type)
@@ -409,7 +451,7 @@ void WatchlistModel::setFormat(WatchNumberFormat format)
 		return;
 	format_ = format;
 	if (count_)
-		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole});
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole});
 }
 
 bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> format)
@@ -446,7 +488,7 @@ bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> form
 	if (rows_[row].format == format)
 		return true;
 	rows_[row].format = format;
-	Q_EMIT dataChanged(index(row, 0), index(row, 0), {ShownTextRole, EditorTextRole, FormatRole});
+	Q_EMIT dataChanged(index(row, 0), index(row, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole});
 	return true;
 }
 
@@ -475,7 +517,7 @@ bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
 		rows_[row].format = remembered != pathFormats_.cend() ? std::optional(remembered.value()) : std::nullopt;
 	}
 	if (count_)
-		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, FormatRole});
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole});
 	return true;
 }
 
@@ -802,6 +844,9 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		case EditorKindRole:
 			return kind;
 		case EditorChoicesRole:
+			if (metadata && kind == QStringLiteral("enum"))
+				return enumChoices(metadata->choices, metadata->names, row.value,
+				                   row.status == QStringLiteral("Ok") && row.value.size, row.format.value_or(format_));
 			if (metadata) return metadata->choices;
 			return kind == QStringLiteral("bool") ? detail::booleanEditorChoices() : QVariantList{};
 		case EditorChoicesTruncatedRole:
@@ -890,7 +935,7 @@ QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& 
 	return name.value.known
 	           ? QString::fromUtf8(name.value.name.data(), qsizetype(name.value.name.size())) +
 	                 QStringLiteral(" (") + digits + QLatin1Char(')')
-	           : digits + QStringLiteral(" (unknown)");
+	           : QCoreApplication::translate("WatchlistModel", "Unknown (%1)").arg(digits);
 }
 
 WatchSample WatchlistModel::sampleOf(const telemetry::runtime::DynamicValueView& value)
