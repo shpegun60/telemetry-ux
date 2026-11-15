@@ -537,9 +537,11 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(provider.serviceSelected());
 	ui.enter("Gain", "0.1");
 	ui.choose("Enabled", 0, "false");
-	// Canonical zero is unnamed in this enum. Select Idle (-7), then explicitly
+	// A request's enum starts at its first name (BA-4b, the SDK's one
+	// builder): Idle (-7), never an unnamed zero. Choose it, then explicitly
 	// enter another numeric code through the real ComboBox/manual-code control.
-	ui.choose("OperatingMode", 1, "Idle (-7)");
+	CHECK(value(provider, "OperatingMode") == "-7");
+	ui.choose("OperatingMode", 0, "Idle (-7)");
 	CHECK(value(provider, "OperatingMode") == "-7");
 	click(*ui.window, control(ui.valueRow("OperatingMode"), "valueText"));
 	auto* enumChoice = control(ui.valueRow("OperatingMode"), "valueChoice");
