@@ -7,6 +7,8 @@
 #include "DeviceFilesModel.hpp"
 #include "CapabilityContent.hpp"
 #include "DescriptorContent.hpp"
+#include "DeviceBytes.hpp"
+#include "DeviceFileTransfers.hpp"
 #include "ValuesContent.hpp"
 #include <integration/files/Client.hpp>
 #include <QtCore/QLocale>
@@ -809,6 +811,47 @@ void DeviceFilesModel::setCodecLookup(CodecLookup lookup)
 	}
 }
 
+void DeviceFilesModel::setCopyFolder(const QString& folder)
+{
+	if (folder == copyFolder_)
+		return;
+	copyFolder_ = folder;
+	QPointer<DeviceFilesModel> alive(this);
+	Q_EMIT copyFolderChanged();
+	if (alive)
+		refreshCopies();
+}
+
+void DeviceFilesModel::refreshCopies()
+{
+	if (!changing_)
+		announceFiles({CopyDiffersRole, CopyReadAtRole});
+}
+
+void DeviceFilesModel::announceFiles(const QList<int>& roles)
+{
+	const auto epoch = generation_;
+	QPointer<DeviceFilesModel> alive(this);
+	QList<QPair<QModelIndex, QModelIndex>> ranges;
+	// Finish traversing borrowed nodes before the first public notification.
+	const std::function<void(Node*)> walk = [&](Node* folder) {
+		for (const auto& child : folder->children)
+			if (child->folder)
+				walk(child.get());
+		if (!folder->children.empty()) {
+			const auto parent = indexOf(folder);
+			ranges.append({index(0, 0, parent), index(static_cast<int>(folder->children.size()) - 1, 0, parent)});
+		}
+	};
+	if (root_)
+		walk(root_.get());
+	for (const auto& range : ranges) {
+		Q_EMIT dataChanged(range.first, range.second, roles);
+		if (!alive || epoch != generation_)
+			return;
+	}
+}
+
 QString DeviceFilesModel::markOf(const Node* at) const
 {
 	return accessMark(at->sizeKnown, !at->statError.isEmpty(), at->readable, at->writable, at->savable);
@@ -1039,6 +1082,15 @@ QVariant DeviceFilesModel::data(const QModelIndex& index, int role) const
 			return at->folder ? QString{} : markOf(at);
 		case AccessWordsRole:
 			return at->folder ? QString{} : accessWords(markOf(at));
+		case CopyDiffersRole:
+		case CopyReadAtRole: {
+			if (at->folder || copyFolder_.isEmpty())
+				return role == CopyDiffersRole ? QVariant(qint64{0}) : QVariant(QDateTime{});
+			const auto copy = DeviceBytes::compare(DeviceFileTransfers::localPathFor(copyFolder_, at->path), at->path);
+			if (role == CopyDiffersRole)
+				return copy.known ? copy.differs : qint64{0};
+			return copy.readAt;
+		}
 		case FileCountRole:
 			return files;
 		case StatErrorRole:
@@ -1077,6 +1129,8 @@ QHash<int, QByteArray> DeviceFilesModel::roleNames() const
 	        {KindTextRole, "kindText"},
 	        {ProgramFileRole, "programFile"},
 	        {AccessMarkRole, "accessMark"},
-	        {AccessWordsRole, "accessWords"}};
+	        {AccessWordsRole, "accessWords"},
+	        {CopyDiffersRole, "copyDiffers"},
+	        {CopyReadAtRole, "copyReadAt"}};
 }
 } // namespace telemetry::ux

@@ -180,6 +180,8 @@ public:
 		bool missing = false;
 		QString error;
 		quint32 adds = 0;  // the values entries holds, or would hold
+		// A well-formed path with no device to look it up on (WL-8).
+		bool offline = false;
 	};
 	// build false: counts only (entries left empty, adds said in `adds`),
 	// cheap enough for every keystroke.
@@ -239,6 +241,12 @@ public:
 	void setInterval(int milliseconds);
 	bool begin(bool polling);
 	void stop();
+	// Polling begun and stopped by nothing but the link going (WL-8): not by
+	// stop(), clear(), or a failure while the device is still there. The
+	// provider begins it again on the same device; forgetResume drops it, on
+	// another device.
+	bool resumes() const;
+	void forgetResume();
 	// After a write, Command, Service or Batch while polling. With the Field
 	// written, it is read again before the cycle goes on when this cycle has
 	// already read it (or its read was in flight); without one, the next cycle

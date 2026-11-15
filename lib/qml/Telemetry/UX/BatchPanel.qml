@@ -27,6 +27,10 @@ Pane {
                 objectName: "executeBatchButton"
                 text: "Execute Batch"
                 enabled: panel.provider.canExecuteBatch
+                ToolTip.visible: hovered
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Run every item on the device in order. Undo does not take back what it sends.")
+                Accessible.description: ToolTip.text
                 onClicked: {
                     batchNotice.text = ""
                     panel.provider.executeBatch()

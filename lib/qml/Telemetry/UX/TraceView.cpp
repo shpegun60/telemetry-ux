@@ -136,13 +136,67 @@ void TraceView::setTraces(QObject* traces)
 			update();
 		});
 		connect(traces_, &WatchTraces::appearanceChanged, this, [this] {
-			// A new multiplier or offset is a new fit.
+			// A new multiplier or offset is a new fit; stacked or not, a new
+			// layout.
 			range_ = {};
+			laneRange_.clear();
+			if (stacked() != stackedSeen_) {
+				stackedSeen_ = stacked();
+				Q_EMIT viewChanged();
+			}
 			update();
 		});
 	}
+	stackedSeen_ = stacked();
 	Q_EMIT tracesChanged();
+	Q_EMIT viewChanged();
 	update();
+}
+
+bool TraceView::stacked() const
+{
+	return traces_ && traces_->stacked();
+}
+
+const TraceView::NumberLane* TraceView::numberLane(const QString& path) const
+{
+	for (const auto& lane : numberLanes_)
+		if (lane.path == path)
+			return &lane;
+	return nullptr;
+}
+
+int TraceView::laneAt(qreal y) const
+{
+	for (std::size_t i = 0; i < numberLanes_.size(); ++i)
+		if (y >= numberLanes_[i].rect.top() && y < numberLanes_[i].rect.bottom())
+			return int(i);
+	return -1;
+}
+
+QStringList TraceView::valueLanes() const
+{
+	// The lane under the pointer, else the focused curve's, else every one.
+	if (const int at = laneAt(pointerY_); at >= 0)
+		return {numberLanes_[std::size_t(at)].path};
+	QStringList every;
+	for (const auto& lane : numberLanes_) {
+		if (lane.path == focusedPath_)
+			return {lane.path};
+		every << lane.path;
+	}
+	return every;
+}
+
+TraceView::Range TraceView::zoomed(const Range& range, qreal factor, qreal at)
+{
+	if (!(factor > 0) || !range.valid())
+		return {};
+	const double pinned = range.high - std::clamp<qreal>(at, 0, 1) * (range.high - range.low);
+	Range next{pinned - (pinned - range.low) * factor, pinned + (range.high - pinned) * factor};
+	if (!(next.high - next.low > std::abs(pinned) * 1e-12 + 1e-300) || next.low < -valueLimit || next.high > valueLimit)
+		return {};
+	return next;
 }
 
 void TraceView::setSpanSeconds(qreal seconds)
@@ -592,6 +646,7 @@ bool TraceView::stepChange(int direction)
 		return false;
 	}
 	putCursorAt(utc(*found));
+	Q_EMIT changeFound();
 	return true;
 }
 
@@ -604,10 +659,30 @@ QVariant TraceView::valueAt(const QString& path) const
 	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
 }
 
+QVariant TraceView::valueAtRight(const QString& path) const
+{
+	if (!traces_)
+		return {};
+	// The edge in the readings' own time, never through a time of day: a
+	// double of milliseconds since the epoch cannot hold a nanosecond.
+	const auto* readings = traces_->readings(path);
+	const auto* at = readings ? atOrBefore(*readings, rightNs()) : nullptr;
+	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
+}
+
 QVariant TraceView::referenceValue(const QString& path) const
 {
 	const auto it = referenceValues_.constFind(path);
 	return referenceShown_ && it != referenceValues_.cend() ? QVariant(*it) : QVariant();
+}
+
+QVariant TraceView::endValue(const QString& path) const
+{
+	if (!endShown_ || !traces_)
+		return {};
+	const auto* readings = traces_->readings(path);
+	const auto* at = readings ? atOrBefore(*readings, endNs_) : nullptr;
+	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
 }
 
 void TraceView::hoverMoveEvent(QHoverEvent* event)
@@ -616,6 +691,7 @@ void TraceView::hoverMoveEvent(QHoverEvent* event)
 	// graph moves under a still pointer (the legend gaining a row); only a
 	// pointer that moved in the window moves the cursor, so the keys' cursor
 	// stays where they put it.
+	pointerY_ = event->position().y();
 	if (event->scenePosition() == hoverAt_)
 		return;
 	hoverAt_ = event->scenePosition();
@@ -628,6 +704,7 @@ void TraceView::hoverMoveEvent(QHoverEvent* event)
 void TraceView::hoverLeaveEvent(QHoverEvent*)
 {
 	hoverAt_ = QPointF(-1, -1);
+	pointerY_ = -1;
 	hideCursor();
 }
 
@@ -682,7 +759,8 @@ void TraceView::remember()
 	rememberedAtMs_ = now;
 	if (sameGesture && !back_.empty())
 		return;
-	back_.push_back({following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high});
+	back_.push_back({following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high,
+	                 laneManual_});
 	if (back_.size() > 50)
 		back_.erase(back_.begin());
 	Q_EMIT viewChanged();
@@ -703,6 +781,7 @@ void TraceView::goBack()
 		frozenNs_ = state.frozenNs;
 	valueAuto_ = state.valueAuto;
 	manual_ = {state.manualLow, state.manualHigh};
+	laneManual_ = state.laneManual;
 	if (valueAuto_)
 		range_ = {};
 	Q_EMIT viewChanged();
@@ -783,7 +862,7 @@ QString TraceView::valuesText(bool csv) const
 		const auto ns = rows.times[row];
 		const auto utc = double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6;
 		QStringList fields{QDateTime::fromMSecsSinceEpoch(qint64(utc)).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
-		                   locale.toString(double(ns - rows.times.front()) / 1e9, 'f', 3)};
+		                   locale.toString(double(ns - anchor.monotonicNs) / 1e9, 'f', 3)};
 		for (int column = 0; column < paths.size(); ++column) {
 			const auto& value = rows.cells[std::size_t(column)][row];
 			if (!value) {
@@ -812,7 +891,11 @@ QString TraceView::saveValues(const QUrl& url) const
 
 void TraceView::zoomToBox(QPointF from, QPointF to)
 {
-	const QRectF box = QRectF(from, to).normalized().intersected(plotArea_);
+	// Clipped to the plot by hand: QRectF::intersected makes a box with no
+	// height (a level drag, which zooms the time only) an empty one.
+	const QRectF drawn = QRectF(from, to).normalized();
+	const QRectF box(QPointF(std::max(drawn.left(), plotArea_.left()), std::max(drawn.top(), plotArea_.top())),
+	                 QPointF(std::min(drawn.right(), plotArea_.right()), std::min(drawn.bottom(), plotArea_.bottom())));
 	if (box.width() < 4 || plotArea_.width() <= 0)
 		return;
 	remember();
@@ -824,8 +907,22 @@ void TraceView::zoomToBox(QPointF from, QPointF to)
 	showAll_ = false;
 	heldAllNs_ = 0;
 	spanSeconds_ = std::max(0.01, double(newRight - newLeft) / 1e9);
-	// The values too, from a box over the numbers at least 8 px tall.
-	if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
+	// The values too, from a box over the numbers at least 8 px tall:
+	// stacked, the values of the lane it starts in.
+	if (!numberLanes_.empty()) {
+		if (const int at = laneAt(from.y()); at >= 0) {
+			const auto& lane = numberLanes_[std::size_t(at)];
+			const QRectF inLane = box.intersected(lane.valueRect);
+			if (inLane.height() >= 8 && lane.shown.valid()) {
+				const auto valueAt = [&](qreal y) {
+					return lane.shown.high - (y - lane.valueRect.top()) / lane.valueRect.height() * (lane.shown.high - lane.shown.low);
+				};
+				const double high = valueAt(inLane.top()), low = valueAt(inLane.bottom());
+				if (high > low)
+					laneManual_.insert(lane.path, {low, high});
+			}
+		}
+	} else if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
 	    box.top() <= valuesArea_.bottom()) {
 		const auto valueAt = [&](qreal y) {
 			return shown_.high - (y - valuesArea_.top()) / valuesArea_.height() * (shown_.high - shown_.low);
@@ -894,6 +991,25 @@ void TraceView::setFromStart(bool fromStart)
 	update();
 }
 
+void TraceView::setChipColor(const QColor& color)
+{
+	if (color == chipColor_)
+		return;
+	chipColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setChipHeight(qreal height)
+{
+	height = std::max<qreal>(0, height);
+	if (qFuzzyCompare(height + 1, chipHeight_ + 1))
+		return;
+	chipHeight_ = height;
+	Q_EMIT styleChanged();
+	update();
+}
+
 void TraceView::setGapColor(const QColor& color)
 {
 	if (color == gapColor_)
@@ -929,13 +1045,26 @@ void TraceView::setFocusedPath(const QString& path)
 
 void TraceView::zoomValues(qreal factor, qreal at)
 {
-	if (!(factor > 0) || !shown_.valid())
+	if (!numberLanes_.empty()) {
+		// Stacked: each aimed lane about the same point of its height.
+		const auto aimed = valueLanes();
+		QHash<QString, Range> next;
+		for (const auto& lane : numberLanes_)
+			if (aimed.contains(lane.path))
+				if (const auto range = zoomed(lane.shown, factor, at); range.valid())
+					next.insert(lane.path, range);
+		if (next.isEmpty())
+			return;
+		remember();
+		laneManual_.insert(next);
+		Q_EMIT viewChanged();
+		update();
+		return;
+	}
+	const auto next = zoomed(shown_, factor, at);
+	if (!next.valid())
 		return;
 	remember();
-	const double pinned = shown_.high - std::clamp<qreal>(at, 0, 1) * (shown_.high - shown_.low);
-	Range next{pinned - (pinned - shown_.low) * factor, pinned + (shown_.high - pinned) * factor};
-	if (!(next.high - next.low > std::abs(pinned) * 1e-12 + 1e-300) || next.low < -valueLimit || next.high > valueLimit)
-		return;
 	valueAuto_ = false;
 	manual_ = next;
 	Q_EMIT viewChanged();
@@ -944,6 +1073,20 @@ void TraceView::zoomValues(qreal factor, qreal at)
 
 void TraceView::panValues(qreal part)
 {
+	if (!numberLanes_.empty()) {
+		const auto aimed = valueLanes();
+		if (aimed.isEmpty())
+			return;
+		remember();
+		for (const auto& lane : numberLanes_)
+			if (aimed.contains(lane.path) && lane.shown.valid()) {
+				const double shift = (lane.shown.high - lane.shown.low) * part;
+				laneManual_.insert(lane.path, {lane.shown.low + shift, lane.shown.high + shift});
+			}
+		Q_EMIT viewChanged();
+		update();
+		return;
+	}
 	if (!shown_.valid())
 		return;
 	remember();
@@ -956,11 +1099,14 @@ void TraceView::panValues(qreal part)
 
 void TraceView::autoValues()
 {
-	if (valueAuto_)
+	// Every lane too.
+	if (valueAuto_ && laneManual_.isEmpty())
 		return;
 	remember();
 	valueAuto_ = true;
 	range_ = {};
+	laneManual_.clear();
+	laneRange_.clear();
 	Q_EMIT viewChanged();
 	update();
 }
@@ -972,7 +1118,14 @@ void TraceView::mousePressEvent(QMouseEvent* event)
 	pressY_ = event->position().y();
 	pressRightNs_ = rightNs();
 	pressRange_ = shown_;
+	pointerY_ = pressY_;
 	valueDrag_ = event->position().x() < plotArea_.left();
+	// Stacked, a drag over the labels pans the lane it starts in.
+	pressLane_.clear();
+	if (const int at = valueDrag_ ? laneAt(pressY_) : -1; at >= 0) {
+		pressLane_ = numberLanes_[std::size_t(at)].path;
+		pressRange_ = numberLanes_[std::size_t(at)].shown;
+	}
 	dragging_ = false;
 	boxing_ = !valueDrag_ && (event->modifiers() & Qt::ControlModifier) && plotArea_.contains(event->position());
 	boxFrom_ = boxTo_ = event->position();
@@ -981,9 +1134,20 @@ void TraceView::mousePressEvent(QMouseEvent* event)
 
 void TraceView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-	// On the value labels: fitted again.
-	if (event->position().x() < plotArea_.left())
-		autoValues();
+	// On the value labels: fitted again - stacked, the lane there.
+	if (event->position().x() < plotArea_.left()) {
+		if (numberLanes_.empty()) {
+			autoValues();
+		} else if (const int at = laneAt(event->position().y()); at >= 0) {
+			const auto path = numberLanes_[std::size_t(at)].path;
+			if (laneManual_.contains(path)) {
+				remember();
+				laneManual_.remove(path);
+				Q_EMIT viewChanged();
+				update();
+			}
+		}
+	}
 	event->accept();
 }
 
@@ -1006,7 +1170,15 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 			remember();
 		}
 		dragging_ = true;
-		if (pressRange_.valid() && valuesArea_.height() > 0) {
+		if (!numberLanes_.empty()) {
+			const auto* lane = numberLane(pressLane_);
+			if (lane && pressRange_.valid() && lane->valueRect.height() > 0) {
+				const double shift = (pressRange_.high - pressRange_.low) * down / lane->valueRect.height();
+				laneManual_.insert(pressLane_, {pressRange_.low + shift, pressRange_.high + shift});
+				Q_EMIT viewChanged();
+				update();
+			}
+		} else if (pressRange_.valid() && valuesArea_.height() > 0) {
 			const double shift = (pressRange_.high - pressRange_.low) * down / valuesArea_.height();
 			valueAuto_ = false;
 			manual_ = {pressRange_.low + shift, pressRange_.high + shift};
@@ -1043,17 +1215,24 @@ void TraceView::mouseReleaseEvent(QMouseEvent* event)
 	if (dragging_) {
 		setCursor(Qt::CrossCursor);
 	} else if (!valueDrag_ && plotArea_.contains(event->position())) {
-		// A click: on the reference takes it away, anywhere else pins it
-		// where the cursor snapped.
-		setCursorAt(event->position().x());
-		if (endShown_ && std::abs(event->position().x() - endX_) <= 4)
-			clearEnd();
-		else if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
-			clearReference();
-		else if (event->modifiers() & Qt::ShiftModifier)
-			pinEnd();
-		else
-			pinReference();
+		// A click: on a lane's name focuses its curve (again: unfocuses), on
+		// the reference takes it away, anywhere else pins it where the cursor
+		// snapped.
+		const auto named = std::find_if(numberLanes_.begin(), numberLanes_.end(),
+		                                [&](const NumberLane& lane) { return lane.nameRect.contains(event->position()); });
+		if (named != numberLanes_.end()) {
+			setFocusedPath(focusedPath_ == named->path ? QString() : named->path);
+		} else {
+			setCursorAt(event->position().x());
+			if (endShown_ && std::abs(event->position().x() - endX_) <= 4)
+				clearEnd();
+			else if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
+				clearReference();
+			else if (event->modifiers() & Qt::ShiftModifier)
+				pinEnd();
+			else
+				pinReference();
+		}
 	}
 	dragging_ = false;
 	valueDrag_ = false;
@@ -1067,7 +1246,17 @@ void TraceView::wheelEvent(QWheelEvent* event)
 		event->ignore();
 		return;
 	}
-	// Ctrl over the graph, or over the value labels: the values.
+	// Ctrl over the graph, or over the value labels: the values - stacked,
+	// the lane's under the pointer.
+	pointerY_ = event->position().y();
+	if (((event->modifiers() & Qt::ControlModifier) || event->position().x() < plotArea_.left()) && !numberLanes_.empty()) {
+		if (const int at = laneAt(pointerY_); at >= 0) {
+			const auto& rect = numberLanes_[std::size_t(at)].valueRect;
+			zoomValues(std::pow(0.8, steps), (pointerY_ - rect.top()) / std::max<qreal>(1, rect.height()));
+		}
+		event->accept();
+		return;
+	}
 	if ((event->modifiers() & Qt::ControlModifier) || event->position().x() < plotArea_.left()) {
 		const qreal heightPx = std::max<qreal>(1, valuesArea_.height());
 		zoomValues(std::pow(0.8, steps), (event->position().y() - valuesArea_.top()) / heightPx);
@@ -1259,31 +1448,44 @@ void TraceView::paint(QPainter* painter)
 	for (const auto& path : plotted)
 		(traces_->categorical(path) ? lanes : numbers) << path;
 
-	// The value range of the numbers in view - only the focused curve's
-	// while one is focused.
-	const QStringList fitted = numbers.contains(focusedPath_) ? QStringList{focusedPath_} : numbers;
-	Range wanted;
-	bool any = false;
-	for (const auto& path : std::as_const(fitted)) {
-		const auto* readings = traces_->readings(path);
-		if (!readings || readings->empty())
-			continue;
-		auto from = std::lower_bound(readings->begin(), readings->end(), left,
-		                             [](const TraceReading& r, qint64 at) { return r.ns < at; });
-		if (from != readings->begin())
-			--from;
-		for (auto it = from; it != readings->end() && it->ns <= right; ++it) {
-			if (std::isnan(it->value))
+	// The rows first: the time labels under the plot, and the lanes under the
+	// numbers - a row each, at most 40 % of the height (all of it when there
+	// are no numbers).
+	const qreal labelsHeight = metrics.height() * 2 + pad + bottomInset_;
+	const qreal top = pad, bottom = std::max<qreal>(top + 1, height() - labelsHeight);
+	const qreal laneShare = numbers.isEmpty() ? 1.0 : 0.4;
+	const qreal laneH = lanes.isEmpty() ? 0
+	                                    : std::max<qreal>(6, std::min(laneHeight_, (bottom - top) * laneShare / lanes.size()));
+	const qreal lanesTop = bottom - laneH * lanes.size();
+	// Stacked: a lane of at least 40 px for every number, else one axis.
+	const bool fits = !numbers.isEmpty() && (lanesTop - top) / numbers.size() >= 40;
+	const bool stackedNow = fits && stacked();
+
+	// The values of paths in view, drawn as k x value + b, into range: five
+	// per cent above and below them (a flat line gets a band around it),
+	// wider at once, narrower once it has been so for two seconds, or held.
+	const auto fit = [&](const QStringList& paths, Range& range, qint64& narrowSince) {
+		Range wanted;
+		bool any = false;
+		for (const auto& path : paths) {
+			const auto* readings = traces_->readings(path);
+			if (!readings || readings->empty())
 				continue;
-			const double v = std::clamp(traces_->multiplier(path) * it->value + traces_->offset(path), -valueLimit, valueLimit);
-			wanted.low = any ? std::min(wanted.low, v) : v;
-			wanted.high = any ? std::max(wanted.high, v) : v;
-			any = true;
+			auto from = std::lower_bound(readings->begin(), readings->end(), left,
+			                             [](const TraceReading& r, qint64 at) { return r.ns < at; });
+			if (from != readings->begin())
+				--from;
+			for (auto it = from; it != readings->end() && it->ns <= right; ++it) {
+				if (std::isnan(it->value))
+					continue;
+				const double v = std::clamp(traces_->multiplier(path) * it->value + traces_->offset(path), -valueLimit, valueLimit);
+				wanted.low = any ? std::min(wanted.low, v) : v;
+				wanted.high = any ? std::max(wanted.high, v) : v;
+				any = true;
+			}
 		}
-	}
-	if (any) {
-		// A flat line gets a band around it; otherwise five per cent above
-		// and below.
+		if (!any)
+			return;
 		if (wanted.high - wanted.low <= std::abs(wanted.high) * 1e-12) {
 			const double half = wanted.high == 0 ? 1 : std::abs(wanted.high) * 0.01;
 			wanted.low -= half;
@@ -1294,43 +1496,72 @@ void TraceView::paint(QPainter* painter)
 			wanted.high += margin;
 		}
 		const auto now = WatchTraces::nowNs();
-		if (!range_.valid()) {
-			range_ = wanted;
-		} else if (wanted.low < range_.low || wanted.high > range_.high) {
-			range_ = {std::min(range_.low, wanted.low), std::max(range_.high, wanted.high)};
-			narrowSinceNs_ = 0;
-		} else if (wanted.high - wanted.low < (range_.high - range_.low) * 0.8) {
-			if (!narrowSinceNs_)
-				narrowSinceNs_ = now;
-			if (now - narrowSinceNs_ >= 2'000'000'000 || !following_) {
-				range_ = wanted;
-				narrowSinceNs_ = 0;
+		if (!range.valid()) {
+			range = wanted;
+		} else if (wanted.low < range.low || wanted.high > range.high) {
+			range = {std::min(range.low, wanted.low), std::max(range.high, wanted.high)};
+			narrowSince = 0;
+		} else if (wanted.high - wanted.low < (range.high - range.low) * 0.8) {
+			if (!narrowSince)
+				narrowSince = now;
+			if (now - narrowSince >= 2'000'000'000 || !following_) {
+				range = wanted;
+				narrowSince = 0;
 			}
 		} else {
-			narrowSinceNs_ = 0;
+			narrowSince = 0;
 		}
-	}
-	const Range values = !valueAuto_ && manual_.valid() ? manual_ : range_.valid() ? range_ : Range{0, 1};
-	shown_ = values;
-
-	// The value labels first, so the plot starts after the widest.
-	const qreal labelsHeight = metrics.height() * 2 + pad + bottomInset_;
-	const qreal top = pad, bottom = std::max<qreal>(top + 1, height() - labelsHeight);
-	// The lanes under the numbers: a row each, at most 40 % of the height
-	// (all of it when there are no numbers).
-	const qreal laneShare = numbers.isEmpty() ? 1.0 : 0.4;
-	const qreal laneH = lanes.isEmpty() ? 0
-	                                    : std::max<qreal>(6, std::min(laneHeight_, (bottom - top) * laneShare / lanes.size()));
-	const qreal lanesTop = bottom - laneH * lanes.size();
-	const double rows = std::max<qreal>(1, (lanesTop - top) / 40.0);
-	const double valueStep = niceStep((values.high - values.low) / rows);
+	};
 	QStringList valueLabels;
 	QVector<double> valueTicks;
-	for (double v = std::ceil(values.low / valueStep) * valueStep; v <= values.high + valueStep * 1e-9; v += valueStep) {
-		valueTicks.push_back(v);
-		valueLabels.push_back(valueText(v, valueStep));
-		if (valueTicks.size() > 200)
-			break;
+	std::vector<NumberLane> numberLanes;
+	Range values{0, 1};
+	if (stackedNow) {
+		// A lane a number, each fitted to it alone, with two or three labels
+		// that stand whole inside it.
+		const qreal each = (lanesTop - top) / numbers.size();
+		const qreal inset = std::ceil(metrics.height() / 2) + 1;
+		for (int i = 0; i < numbers.size(); ++i) {
+			NumberLane lane;
+			lane.path = numbers[i];
+			lane.rect = QRectF(0, top + i * each, 0, each);
+			lane.valueRect = QRectF(0, lane.rect.top() + inset, 0, std::max<qreal>(1, each - 2 * inset));
+			fit({lane.path}, laneRange_[lane.path], laneNarrowSince_[lane.path]);
+			const auto manual = laneManual_.value(lane.path), fitted = laneRange_.value(lane.path);
+			lane.shown = manual.valid() ? manual : fitted.valid() ? fitted : Range{0, 1};
+			const double step = niceStep((lane.shown.high - lane.shown.low) /
+			                             std::max<qreal>(1, lane.valueRect.height() / (metrics.height() * 1.5)));
+			qreal lastY = std::numeric_limits<qreal>::max();
+			for (double v = std::ceil(lane.shown.low / step) * step; v <= lane.shown.high + step * 1e-9; v += step) {
+				const qreal y = lane.valueRect.bottom() -
+				                (v - lane.shown.low) / (lane.shown.high - lane.shown.low) * lane.valueRect.height();
+				lane.ticks.push_back(v);
+				// A label too close to the one below it is left out.
+				const bool apart = lastY - y >= metrics.height();
+				lane.labels.push_back(apart ? valueText(v, step) : QString());
+				if (apart) {
+					lastY = y;
+					valueLabels << lane.labels.back();
+				}
+				if (lane.ticks.size() > 50)
+					break;
+			}
+			numberLanes.push_back(std::move(lane));
+		}
+	} else {
+		// The value range of the numbers in view - only the focused curve's
+		// while one is focused.
+		fit(numbers.contains(focusedPath_) ? QStringList{focusedPath_} : numbers, range_, narrowSinceNs_);
+		values = !valueAuto_ && manual_.valid() ? manual_ : range_.valid() ? range_ : Range{0, 1};
+		shown_ = values;
+		const double rows = std::max<qreal>(1, (lanesTop - top) / 40.0);
+		const double valueStep = niceStep((values.high - values.low) / rows);
+		for (double v = std::ceil(values.low / valueStep) * valueStep; v <= values.high + valueStep * 1e-9; v += valueStep) {
+			valueTicks.push_back(v);
+			valueLabels.push_back(valueText(v, valueStep));
+			if (valueTicks.size() > 200)
+				break;
+		}
 	}
 	// At least a usual label's width, so the plot does not move sideways
 	// whenever the range gains a digit.
@@ -1341,8 +1572,25 @@ void TraceView::paint(QPainter* painter)
 	const auto xOf = [&](qint64 ns) { return area.left() + (double(ns - left) / double(span)) * area.width(); };
 	// The numbers' part of the area, above the lanes.
 	const QRectF numbersArea(area.topLeft(), QPointF(area.right(), lanesTop));
+	for (auto& lane : numberLanes) {
+		lane.rect = QRectF(area.left(), lane.rect.top(), area.width(), lane.rect.height());
+		lane.valueRect = QRectF(area.left(), lane.valueRect.top(), area.width(), lane.valueRect.height());
+	}
+	// Where a value is drawn: on the shared axis, or - set per number while
+	// stacked - in its lane.
+	QRectF yArea = numbersArea;
+	Range yRange = values;
 	const auto yOf = [&](double v) {
-		return numbersArea.bottom() - (v - values.low) / (values.high - values.low) * numbersArea.height();
+		return yArea.bottom() - (v - yRange.low) / (yRange.high - yRange.low) * yArea.height();
+	};
+	const auto inLaneOf = [&](const QString& path) -> NumberLane* {
+		for (auto& lane : numberLanes)
+			if (lane.path == path) {
+				yArea = lane.valueRect;
+				yRange = lane.shown;
+				return &lane;
+			}
+		return nullptr;
 	};
 
 	painter->setRenderHint(QPainter::Antialiasing, true);
@@ -1360,6 +1608,37 @@ void TraceView::paint(QPainter* painter)
 		painter->drawText(QRectF(0, y - metrics.height() / 2, area.left() - pad, metrics.height()),
 		                  Qt::AlignRight | Qt::AlignVCenter, valueLabels[i]);
 	}
+	for (std::size_t i = 0; i < numberLanes.size(); ++i) {
+		auto& lane = numberLanes[i];
+		inLaneOf(lane.path);
+		const QColor color = curveColor(lane.path);
+		if (lane.path == focusedPath_) {
+			QColor tint = color;
+			tint.setAlphaF(0.08);
+			painter->fillRect(lane.rect, tint);
+		}
+		if (i > 0) {
+			painter->setPen(grid);
+			const qreal y = std::round(lane.rect.top()) + 0.5;
+			painter->drawLine(QPointF(area.left(), y), QPointF(area.right(), y));
+		}
+		QPen tick(gridColor_, 1, Qt::DotLine);
+		tick.setCosmetic(true);
+		for (int t = 0; t < lane.ticks.size(); ++t) {
+			const qreal y = std::round(yOf(lane.ticks[t])) + 0.5;
+			painter->setPen(tick);
+			painter->drawLine(QPointF(area.left(), y), QPointF(area.right(), y));
+			if (lane.labels[t].isEmpty())
+				continue;
+			painter->setPen(labelColor_);
+			painter->drawText(QRectF(0, y - metrics.height() / 2, area.left() - pad, metrics.height()),
+			                  Qt::AlignRight | Qt::AlignVCenter, lane.labels[t]);
+		}
+		// Its colour, a bar between the labels and the plot.
+		painter->fillRect(QRectF(area.left() - 3, lane.rect.top() + 2, 2, std::max<qreal>(1, lane.rect.height() - 4)), color);
+	}
+	yArea = numbersArea;
+	yRange = values;
 
 	// Time of day: ticks on whole clock times, labels far enough apart.
 	const double pxPerMs = area.width() / (double(span) / msNs);
@@ -1370,16 +1649,25 @@ void TraceView::paint(QPainter* painter)
 			break;
 		}
 	QStringList timeLabels;
-	// Since reading last started: the end of the last stop or disconnect up
-	// to the right edge, else the first reading.
-	qint64 originNs = anchor.monotonicNs;
-	if (traces_)
-		for (auto pause = traces_->pauses().crbegin(); pause != traces_->pauses().crend(); ++pause)
-			if (pause->toNs && pause->toNs <= right) {
-				originNs = pause->toNs;
-				break;
-			}
-	originUtcMs_ = anchor.monotonicNs ? qreal(utcOf(originNs)) : 0;
+	QVariantList timeLabelRects;
+	// A label under its tick, drawn only whole: one the edge would cut reads
+	// as another time ("14:14:4"). Its grid line stays either way.
+	const auto timeLabel = [&](qreal x, const QString& text, const QString& widest) {
+		const qreal w = metrics.horizontalAdvance(widest) + pad;
+		if (x - w / 2 < 0 || x + w / 2 > width())
+			return;
+		const QRectF box(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2);
+		timeLabels.push_back(text);
+		timeLabelRects.push_back(box);
+		painter->setPen(labelColor_);
+		painter->drawText(box, Qt::AlignHCenter | Qt::AlignTop, text);
+	};
+	// From the start: the first reading of this run, or a recording's start -
+	// the anchor, so a reading has one time from start in every view, across
+	// any stop, in the CSV as on the axis.
+	const qint64 originNs = anchor.monotonicNs;
+	originUtcMs_ = anchor.monotonicNs ? qreal(anchor.utcMs) : 0;
+	int ticks = 0;
 	if (anchor.monotonicNs && fromStart_) {
 		const double leftMs = double(left - originNs) / double(msNs), rightMs = double(right - originNs) / double(msNs);
 		for (qint64 at = qint64(std::ceil(leftMs / double(timeStep))) * timeStep; double(at) <= rightMs; at += timeStep) {
@@ -1387,12 +1675,8 @@ void TraceView::paint(QPainter* painter)
 			painter->setPen(grid);
 			painter->drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
 			const auto text = elapsedText(at, timeStep);
-			timeLabels.push_back(text);
-			painter->setPen(labelColor_);
-			const qreal w = metrics.horizontalAdvance(text) + pad;
-			painter->drawText(QRectF(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2),
-			                  Qt::AlignHCenter | Qt::AlignTop, text);
-			if (timeLabels.size() > 400)
+			timeLabel(x, text, text);
+			if (++ticks > 400)
 				break;
 		}
 	} else if (anchor.monotonicNs) {
@@ -1409,12 +1693,8 @@ void TraceView::paint(QPainter* painter)
 				text += QLatin1Char('\n') +
 				        QLocale().toString(QDateTime::fromMSecsSinceEpoch(local - offsetMs).date(), QStringLiteral("d MMM"));
 			previousDay = day;
-			timeLabels.push_back(text);
-			painter->setPen(labelColor_);
-			const qreal w = metrics.horizontalAdvance(text.section(QLatin1Char('\n'), 0, 0)) + pad;
-			painter->drawText(QRectF(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2),
-			                  Qt::AlignHCenter | Qt::AlignTop, text);
-			if (timeLabels.size() > 400)
+			timeLabel(x, text, text.section(QLatin1Char('\n'), 0, 0));
+			if (++ticks > 400)
 				break;
 		}
 	}
@@ -1456,6 +1736,8 @@ void TraceView::paint(QPainter* painter)
 		const auto* readings = traces_->readings(path);
 		if (!readings || readings->empty())
 			continue;
+		if (const auto* lane = inLaneOf(path))
+			painter->setClipRect(lane->rect);
 		auto from = std::lower_bound(readings->begin(), readings->end(), left,
 		                             [](const TraceReading& r, qint64 at) { return r.ns < at; });
 		if (from != readings->begin())
@@ -1532,24 +1814,49 @@ void TraceView::paint(QPainter* painter)
 				painter->restore();
 			}
 		} else {
-			// Per pixel column: its first, lowest, highest and last.
+			// Per pixel column: from its lowest to its highest reading, joined
+			// to the last of the column before - a bar the pen's width, filled.
+			// It covers what a line through each column's first, lowest,
+			// highest and last covers, at a small part of the cost: stroking
+			// such a line, thousands of columns long, took a second a curve.
 			const int columns = std::max(1, int(std::ceil(area.width() * ratio)));
+			const qreal thick = pen.widthF();
 			int column = -1;
-			double first = 0, low = 0, high = 0, last = 0;
+			double low = 0, high = 0, last = 0;
+			std::optional<qreal> joined; // the column before's last, none after a break
+			QVector<QRectF> bars;
 			const auto emitColumn = [&] {
 				if (column < 0)
 					return;
 				const qreal x = area.left() + (column + 0.5) / ratio;
-				line.push_back(QPointF(x, yOf(drawn(first))));
-				line.push_back(QPointF(x, yOf(drawn(low))));
-				line.push_back(QPointF(x, yOf(drawn(high))));
-				line.push_back(QPointF(x, yOf(drawn(last))));
+				qreal top = yOf(drawn(high)), bottom = yOf(drawn(low));
+				if (top > bottom)
+					std::swap(top, bottom);
+				if (joined) {
+					top = std::min(top, *joined);
+					bottom = std::max(bottom, *joined);
+				}
+				bars.push_back(QRectF(x - thick / 2, top - thick / 2, thick, bottom - top + thick));
+				joined = yOf(drawn(last));
+				points += 4;
+			};
+			const auto flushBars = [&] {
+				if (!bars.isEmpty()) {
+					painter->save();
+					painter->setRenderHint(QPainter::Antialiasing, false);
+					painter->setPen(Qt::NoPen);
+					painter->setBrush(color);
+					painter->drawRects(bars.constData(), int(bars.size()));
+					painter->restore();
+					bars.clear();
+				}
+				joined.reset();
 			};
 			for (auto it = from; it != to; ++it) {
 				if (std::isnan(it->value)) {
 					emitColumn();
 					column = -1;
-					flush();
+					flushBars();
 					continue;
 				}
 				// Readings beyond either edge belong to no pixel in view.
@@ -1559,7 +1866,7 @@ void TraceView::paint(QPainter* painter)
 				if (at != column) {
 					emitColumn();
 					column = at;
-					first = low = high = last = it->value;
+					low = high = last = it->value;
 				} else {
 					low = std::min(low, it->value);
 					high = std::max(high, it->value);
@@ -1567,7 +1874,7 @@ void TraceView::paint(QPainter* painter)
 				}
 			}
 			emitColumn();
-			flush();
+			flushBars();
 		}
 		// A value no longer watched ends in an open circle at its last reading.
 		if (!traces_->watched(path)) {
@@ -1588,6 +1895,17 @@ void TraceView::paint(QPainter* painter)
 		}
 	}
 	painter->setClipRect(area);
+	for (auto& lane : numberLanes) {
+		const auto leaf = lane.path.section(QLatin1Char('.'), -1);
+		const qreal w = std::min(metrics.horizontalAdvance(leaf) + pad * 2, area.width() / 2);
+		lane.nameRect = QRectF(area.left() + 2, lane.rect.top() + 2, w, metrics.height());
+		QColor fill = chipColor_;
+		fill.setAlphaF(0.85);
+		painter->fillRect(lane.nameRect, fill);
+		painter->setPen(curveColor(lane.path));
+		painter->drawText(lane.nameRect.adjusted(pad, 0, -pad, 0), Qt::AlignLeft | Qt::AlignVCenter,
+		                  metrics.elidedText(leaf, Qt::ElideMiddle, w - pad * 2));
+	}
 	QStringList laneLabels, laneStates;
 	const qreal inset = std::max<qreal>(2, std::round(laneH * 0.15));
 	for (int lane = 0; lane < lanes.size(); ++lane) {
@@ -1696,28 +2014,34 @@ void TraceView::paint(QPainter* painter)
 			const auto* at = readings ? atOrBefore(*readings, cursorNs_) : nullptr;
 			if (!at || std::isnan(at->value) || at->ns < left)
 				continue;
+			auto* lane = inLaneOf(path);
 			const QColor color = curveColor(path);
 			painter->setPen(QPen(dotRingColor_, 1));
 			painter->setBrush(color);
 			const double drawnAt = traces_->multiplier(path) * at->value + traces_->offset(path);
-			painter->drawEllipse(QPointF(xOf(at->ns), yOf(std::clamp(drawnAt, -valueLimit, valueLimit))), 3.5, 3.5);
+			const qreal y = yOf(std::clamp(drawnAt, -valueLimit, valueLimit));
+			painter->drawEllipse(QPointF(xOf(at->ns), y), 3.5, 3.5);
+			if (lane)
+				lane->cursorY = y;
 		}
 		painter->setBrush(Qt::NoBrush);
 	}
 	painter->restore();
 
-	const bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
-	                     raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_ ||
-	                     laneLabels != laneLabels_ || laneStates != laneStates_;
+	bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
+	               raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_ ||
+	               laneLabels != laneLabels_ || laneStates != laneStates_ || timeLabelRects != timeLabelRects_;
 	laneLabels_ = laneLabels;
 	laneStates_ = laneStates;
 	timeLabels_ = timeLabels;
+	timeLabelRects_ = timeLabelRects;
 	valueLabels_ = valueLabels;
 	drawnPoints_ = points;
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
 	// The box being drawn (Ctrl and a drag): its frame, and its size in time
 	// and values.
+	QRectF boxCaption;
 	if (boxing_) {
 		const QRectF box = QRectF(boxFrom_, boxTo_).normalized().intersected(area);
 		painter->save();
@@ -1731,14 +2055,47 @@ void TraceView::paint(QPainter* painter)
 		painter->drawRect(box);
 		const double seconds = double(span) / 1e9 * box.width() / std::max<qreal>(1, area.width());
 		QString size = QString::number(seconds, 'f', seconds < 10 ? 3 : 1) + QStringLiteral(" s");
-		if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0)
-			size += QStringLiteral(" × ") +
-			        QString::number((shown_.high - shown_.low) * box.height() / valuesArea_.height(), 'g', 3);
-		painter->setPen(labelColor_);
+		const NumberLane* boxLane = nullptr;
+		for (const auto& lane : numberLanes)
+			if (boxFrom_.y() >= lane.rect.top() && boxFrom_.y() < lane.rect.bottom())
+				boxLane = &lane;
+		const Range sized = boxLane ? boxLane->shown : shown_;
+		const qreal sizedHeight = boxLane ? boxLane->valueRect.height() : valuesArea_.height();
+		const qreal boxHeight = boxLane ? box.intersected(boxLane->valueRect).height() : box.height();
+		if ((boxLane || numberLanes.empty()) && boxHeight >= 8 && sized.valid() && sizedHeight > 0)
+			size += QStringLiteral(" × ") + QString::number((sized.high - sized.low) * boxHeight / sizedHeight, 'g', 3);
+		// On a chip, as the cursor's time is: framed in the reference colour,
+		// at the corner under the pointer - outside the box where it fits,
+		// always inside the plot area - where the eye already is.
 		painter->setFont(font_);
-		painter->drawText(box.adjusted(pad / 2, pad / 2, -pad / 2, -pad / 2), Qt::AlignRight | Qt::AlignTop, size);
+		const qreal w = metrics.horizontalAdvance(size) + pad, h = chipHeight_ > 0 ? chipHeight_ : metrics.height() + pad / 2;
+		const QPointF corner(std::clamp(boxTo_.x(), area.left(), area.right()), std::clamp(boxTo_.y(), area.top(), area.bottom()));
+		const bool rightward = boxTo_.x() >= boxFrom_.x(), downward = boxTo_.y() >= boxFrom_.y();
+		const qreal gap = pad / 2;
+		const qreal outX = rightward ? corner.x() + gap : corner.x() - gap - w, inX = rightward ? corner.x() - w : corner.x();
+		const qreal outY = downward ? corner.y() + gap : corner.y() - gap - h, inY = downward ? corner.y() - h : corner.y();
+		QPointF at(inX, inY);
+		for (const QPointF place : {QPointF(outX, outY), QPointF(inX, outY), QPointF(outX, inY)})
+			if (place.x() >= area.left() && place.x() + w <= area.right() && place.y() >= area.top() && place.y() + h <= area.bottom()) {
+				at = place;
+				break;
+			}
+		at = QPointF(std::clamp(at.x(), area.left(), std::max(area.left(), area.right() - w)),
+		             std::clamp(at.y(), area.top(), std::max(area.top(), area.bottom() - h)));
+		const QRectF chip(at, QSizeF(w, h));
+		QPen edge(referenceColor_, 1);
+		edge.setCosmetic(true);
+		painter->setPen(edge);
+		painter->setBrush(chipColor_);
+		// Type.radius.
+		painter->drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+		painter->setPen(laneTextColor_);
+		painter->drawText(chip, Qt::AlignCenter, size);
 		painter->restore();
+		boxCaption = chip;
 	}
+	changed = changed || boxCaption != boxCaptionRect_;
+	boxCaptionRect_ = boxCaption;
 	plotArea_ = area;
 	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;
@@ -1750,14 +2107,45 @@ void TraceView::paint(QPainter* painter)
 	const qreal behind = !following_ && newest > right ? qreal(newest - right) / 1e9 : 0;
 	const bool behindChanged = !qFuzzyCompare(behind + 1, behindSeconds_ + 1);
 	behindSeconds_ = behind;
-	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2);
+	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2) ||
+	                        !qFuzzyCompare(endX + 2, endX_ + 2);
 	cursorX_ = cursorX;
 	referenceX_ = referenceX;
 	endX_ = endX;
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
-	if (changed || following_ || behindChanged || linesMoved || dotsChanged)
+	for (auto it = laneRange_.begin(); it != laneRange_.end();)
+		it = numbers.contains(it.key()) ? std::next(it) : laneRange_.erase(it);
+	bool pruned = false;
+	for (auto it = laneManual_.begin(); it != laneManual_.end();) {
+		if (numbers.contains(it.key())) {
+			++it;
+		} else {
+			it = laneManual_.erase(it);
+			pruned = true;
+		}
+	}
+	QVariantList lanesShown;
+	for (const auto& lane : numberLanes) {
+		QStringList labels;
+		for (const auto& label : lane.labels)
+			if (!label.isEmpty())
+				labels << label;
+		lanesShown << QVariantMap{{QStringLiteral("path"), lane.path}, {QStringLiteral("rect"), lane.rect},
+		                          {QStringLiteral("valueRect"), lane.valueRect}, {QStringLiteral("nameRect"), lane.nameRect},
+		                          {QStringLiteral("low"), lane.shown.low}, {QStringLiteral("high"), lane.shown.high},
+		                          {QStringLiteral("labels"), labels}, {QStringLiteral("cursorY"), lane.cursorY}};
+	}
+	const bool lanesChanged = lanesShown != numberLanesShown_ || fits != stackFits_;
+	// Stacked or not decides what Auto means: a view change.
+	const bool layoutSwitched = numberLanes.empty() != numberLanes_.empty();
+	numberLanes_ = std::move(numberLanes);
+	numberLanesShown_ = lanesShown;
+	stackFits_ = fits;
+	if (layoutSwitched || pruned)
+		QMetaObject::invokeMethod(this, &TraceView::viewChanged, Qt::QueuedConnection);
+	if (changed || following_ || behindChanged || linesMoved || dotsChanged || lanesChanged)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
 }
 } // namespace telemetry::ux

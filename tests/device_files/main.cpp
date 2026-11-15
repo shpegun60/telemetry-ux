@@ -1081,7 +1081,7 @@ void uploads(const QString& folder)
 	CHECK(put(stray, QByteArray(16, 'e')));
 	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray, device);
 	CHECK(ended(transfers, row) == State::Failed && outcome(row) == Outcome::NotKnown &&
-	      result(row).contains(QStringLiteral("nothing here records")) && keptStore.bytes[0] == std::byte{'d'});
+	      result(row).contains(QStringLiteral("nothing in the project records")) && keptStore.bytes[0] == std::byte{'d'});
 	CHECK(put(stray, QByteArray(16, 'd')) &&
 	      DeviceBytes::keep(device, stray, QStringLiteral("/cfg/unkept.bin"), QDateTime::currentDateTime()).isEmpty());
 	row = transfers.upload(QStringLiteral("/cfg/kept.bin"), indexOf("/cfg/kept.bin"), stray, device);
@@ -2691,6 +2691,243 @@ void descriptorWords(const QString& folder)
 
 // What a project's copy is against the device's bytes as read (FL-1d): the
 // same, a byte saved differently, a length changed, no record, no copy.
+// FL-1e: what a copy's state line says - when the device's bytes were read,
+// when the copy was saved, how many of its saved bytes are not the device's -
+// and a save heard by OpenFiles; the comparison the trees mark a copy with;
+// the device's path a copy's record names; the descriptor fingerprints the
+// FL-1f banner compares.
+void copyFacts(const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	using telemetry::ux::FileCodecContext;
+	using telemetry::ux::FileContent;
+	using telemetry::ux::OpenFiles;
+	const auto device = folder + QStringLiteral("/facts/Bench [EMU-2]");
+	const auto local = device + QStringLiteral("/config/gain.bin");
+	const auto path = QStringLiteral("/config/gain.bin");
+	CHECK(QDir().mkpath(QFileInfo(local).absolutePath()));
+	const auto put = [](const QString& file, const QByteArray& bytes) {
+		QFile out(file);
+		const bool written = out.open(QIODevice::WriteOnly | QIODevice::Truncate) && out.write(bytes) == bytes.size();
+		DeviceBytes::changed();
+		return written;
+	};
+	CHECK(put(local, QByteArray("ABCDEFGH")));
+	const auto readAt = QDateTime::currentDateTime().addSecs(-120);
+	CHECK(DeviceBytes::keep(device, local, path, readAt).isEmpty());
+	CHECK(DeviceBytes::devicePathOf(local) == path && DeviceFileTransfers::devicePathOf(local) == path &&
+	      DeviceBytes::devicePathOf(device + QStringLiteral("/config/none.bin")).isEmpty());
+	auto copy = DeviceBytes::compare(local);
+	CHECK(copy.exists && copy.known && copy.differs == 0 && !copy.written && copy.readAt.secsTo(readAt) == 0 &&
+	      copy.savedAt == QFileInfo(local).lastModified());
+	// Asked again with nothing changed: the same answer.
+	const auto again = DeviceBytes::compare(local);
+	CHECK(again.known && again.differs == 0 && again.readAt == copy.readAt);
+	CHECK(!DeviceBytes::compare(local, QStringLiteral("/config/other.bin")).known);
+	CHECK(put(local, QByteArray("AxCDEFGHij")));
+	copy = DeviceBytes::compare(local);
+	CHECK(copy.known && copy.differs == 1 + 2);
+	// A record kept anew, as after a write read back: compared again.
+	CHECK(DeviceBytes::keepBytes(device, local, path, QByteArray("AxCDEFGHij"), QDateTime::currentDateTime(), true)
+	          .isEmpty());
+	copy = DeviceBytes::compare(local);
+	CHECK(copy.known && copy.differs == 0 && copy.written);
+	DeviceBytes::forget(local);
+	copy = DeviceBytes::compare(local);
+	CHECK(copy.exists && !copy.known && copy.differs == 0 && !copy.readAt.isValid());
+	CHECK(!DeviceBytes::compare(device + QStringLiteral("/config/none.bin")).exists);
+
+	// The facts of a FileContent, through OpenFiles as a host has them.
+	CHECK(put(local, QByteArray("ABCDEFGH")));
+	CHECK(DeviceBytes::keep(device, local, path, readAt).isEmpty());
+	OpenFiles open;
+	open.setReferenceLookup(DeviceBytes::lookup());
+	QStringList saved;
+	QObject::connect(&open, &OpenFiles::fileSaved, &open, [&](const QString& file) { saved << file; });
+	CHECK(open.open(local, path) == 0);
+	auto* content = open.contentFor(local);
+	CHECK(content && content->hasReference() && content->referenceAt().secsTo(readAt) == 0 &&
+	      content->savedDiffers() == 0 && content->savedAt() == QFileInfo(local).lastModified() &&
+	      !content->deviceChanged() && content->fingerprint().isEmpty() && content->referenceFingerprint().isEmpty());
+	content->setEditing(true);
+	// An edit not saved moves the working copy's count, not the saved one's.
+	CHECK(content->overwrite(0, QByteArray("Z")) && content->referenceDiffers() == 1 && content->savedDiffers() == 0);
+	CHECK(content->save().isEmpty() && content->savedDiffers() == 1 && saved == QStringList{local} &&
+	      content->savedAt() == QFileInfo(local).lastModified());
+	CHECK(DeviceBytes::compare(local, path).differs == 1);
+	content->discard();
+	CHECK(content->savedDiffers() == 1);
+	// Known to have changed on the device until it is read from it again.
+	int edits = 0;
+	QObject::connect(content, &FileContent::editChanged, content, [&] { ++edits; });
+	content->setDeviceChanged(true);
+	CHECK(content->deviceChanged() && edits == 1);
+	content->setDeviceChanged(true);
+	CHECK(edits == 1);
+	CHECK(content->reload() && content->deviceChanged());
+	content->beginReading(local, path);
+	CHECK(!content->deviceChanged());
+	content->finishReading(true, {});
+	CHECK(content->loaded() && content->savedDiffers() == 1);
+
+	// A descriptor's fingerprint from its header, as DescriptorContent writes it.
+	QByteArray head("TDS3");
+	head.append(QByteArray(12, '\0'));
+	for (const auto byte : {0x11, 0x0D, 0xE4, 0x7B, 0xC0, 0x91, 0x2A, 0x3F})
+		head.append(static_cast<char>(byte));
+	CHECK(FileContent::descriptorFingerprint(head) == QStringLiteral("0x3F2A91C07BE40D11"));
+	CHECK(FileContent::descriptorFingerprint(head.left(23)).isEmpty() &&
+	      FileContent::descriptorFingerprint(QByteArray("TDS4") + head.mid(4)).isEmpty());
+	CHECK(FileContent::descriptorFingerprint(bytesOf(packed)) == telemetry::ux::DescriptorContent(bytesOf(packed)).fingerprint());
+	// The connected device's, from the codecs' context, heard on each change.
+	quint64 connected = 0;
+	bool hasConnected = false;
+	FileCodecContext context;
+	context.connectedFingerprint = [&](quint64& fingerprint) {
+		fingerprint = connected;
+		return hasConnected;
+	};
+	open.setContext(context);
+	int heard = 0;
+	QObject::connect(content, &FileContent::contextChanged, content, [&] { ++heard; });
+	CHECK(content->connectedFingerprint().isEmpty());
+	hasConnected = true;
+	connected = 0x9B1000000000002AULL;
+	open.contextChanged();
+	CHECK(heard == 1 && content->connectedFingerprint() == QStringLiteral("0x9B1000000000002A"));
+	// A saved descriptor copy and its device's bytes: both fingerprints.
+	CHECK(put(local, head + QByteArray(8, 'x')));
+	CHECK(DeviceBytes::keep(device, local, path, readAt).isEmpty());
+	CHECK(content->reload() && content->fingerprint() == QStringLiteral("0x3F2A91C07BE40D11") &&
+	      content->referenceFingerprint() == QStringLiteral("0x3F2A91C07BE40D11"));
+	// A content that leaves the model is no longer told.
+	open.close(0);
+	QCoreApplication::processEvents();
+	open.contextChanged();
+}
+
+// FL-1f: the device's firmware changed. The project's copy of its descriptor,
+// read from the earlier firmware, is kept as a device version with its
+// record, once for each fingerprint, the copy itself left as it is; a
+// descriptor downloaded is checked against the one read at connect. And the
+// Device tree's mark of a file whose copy in the project differs (FL-1e).
+void firmwareChange(qt::ConnectionSession& session, DeviceFilesModel& files, const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	using telemetry::ux::FileContent;
+	DeviceFileTransfers transfers(&session);
+	const auto root = folder + QStringLiteral("/firmware/devices");
+	const auto label = QStringLiteral("/Bench");
+	// Found only once it is there: nothing is made to look.
+	CHECK(transfers.deviceFolderFound(root, label).isEmpty() && !QFileInfo::exists(root));
+	const auto device = transfers.deviceFolder(root, label);
+	CHECK(!device.isEmpty() && transfers.deviceFolderFound(root, label) == device);
+	CHECK(transfers.deviceFolderFound({}, label).isEmpty());
+	const auto connectedBytes = bytesOf(packed);
+	const auto connected = FileContent::descriptorFingerprint(connectedBytes);
+	const auto earlier = bytesOf(richPacked);
+	const auto earlierPrint = FileContent::descriptorFingerprint(earlier);
+	CHECK(!connected.isEmpty() && !earlierPrint.isEmpty() && connected != earlierPrint);
+	const auto descriptorPath = QStringLiteral("/telemetry/descriptor.bin");
+	const auto versionsOf = [&](const QString& name) { return device + QStringLiteral("/device versions/") + name; };
+	// No copy yet: nothing to keep.
+	CHECK(transfers.keepOtherDescriptor(device, versionsOf(QStringLiteral("1"))).isEmpty());
+	const auto copy = DeviceFileTransfers::localPathFor(device, descriptorPath);
+	CHECK(QDir().mkpath(QFileInfo(copy).absolutePath()));
+	const auto put = [](const QString& file, const QByteArray& bytes) {
+		QFile out(file);
+		const bool written = out.open(QIODevice::WriteOnly | QIODevice::Truncate) && out.write(bytes) == bytes.size();
+		DeviceBytes::changed();
+		return written;
+	};
+	const auto read = [](const QString& file) {
+		QFile in(file);
+		return in.open(QIODevice::ReadOnly) ? in.readAll() : QByteArray{};
+	};
+	// The earlier firmware's descriptor, read into the project then.
+	CHECK(put(copy, earlier));
+	const auto readAt = QDateTime::currentDateTime().addDays(-1);
+	CHECK(DeviceBytes::keep(device, copy, descriptorPath, readAt).isEmpty());
+	auto other = transfers.keepOtherDescriptor(device, versionsOf(QStringLiteral("1")));
+	const auto version = DeviceFileTransfers::localPathFor(versionsOf(QStringLiteral("1")), descriptorPath);
+	CHECK(other.value(QStringLiteral("copy")).toString() == earlierPrint &&
+	      other.value(QStringLiteral("connected")).toString() == connected &&
+	      other.value(QStringLiteral("kept")).toBool() && other.value(QStringLiteral("version")).toString() == version &&
+	      !other.contains(QStringLiteral("problem")));
+	// The version is the device's bytes as read then, and says so.
+	CHECK(read(version) == earlier && DeviceBytes::devicePathOf(version) == descriptorPath);
+	const auto kept = DeviceBytes::compare(version, descriptorPath);
+	CHECK(kept.known && kept.differs == 0 && kept.readAt.secsTo(readAt) == 0);
+	// The copy itself stays: reading the device's file replaces it, as ever.
+	CHECK(read(copy) == earlier && DeviceBytes::compare(copy, descriptorPath).known);
+	// The next connect finds that fingerprint kept: nothing is copied again.
+	other = transfers.keepOtherDescriptor(device, versionsOf(QStringLiteral("2")));
+	CHECK(!other.value(QStringLiteral("kept")).toBool() && other.value(QStringLiteral("version")).toString() == version &&
+	      !QFileInfo::exists(versionsOf(QStringLiteral("2"))));
+	// A copy of the connected device's descriptor, or not a descriptor: nothing.
+	CHECK(put(copy, connectedBytes));
+	CHECK(transfers.keepOtherDescriptor(device, versionsOf(QStringLiteral("3"))).isEmpty());
+	CHECK(put(copy, QByteArray("not a descriptor")));
+	CHECK(transfers.keepOtherDescriptor(device, versionsOf(QStringLiteral("3"))).isEmpty());
+	CHECK(transfers.keepOtherDescriptor({}, versionsOf(QStringLiteral("3"))).isEmpty() &&
+	      !QFileInfo::exists(versionsOf(QStringLiteral("3"))));
+	DeviceBytes::forget(copy);
+
+	// A descriptor downloaded is checked against the one read at connect.
+	CHECK(put(copy, connectedBytes));
+	CHECK(DeviceFileTransfers::descriptorNote(descriptorPath, copy, connectedBytes).isEmpty());
+	CHECK(DeviceFileTransfers::descriptorNote(QStringLiteral("/logs/events.csv"), version, connectedBytes).isEmpty());
+	CHECK(DeviceFileTransfers::descriptorNote(descriptorPath, version, connectedBytes) ==
+	      QStringLiteral("its fingerprint %1 is not the one read at connect (%2): connect again")
+	          .arg(earlierPrint, connected));
+	CHECK(put(copy, QByteArray("not a descriptor")));
+	CHECK(DeviceFileTransfers::descriptorNote(descriptorPath, copy, connectedBytes) ==
+	      QStringLiteral("not a descriptor, unlike the one read at connect (%1)").arg(connected));
+	CHECK(DeviceFileTransfers::descriptorNote(descriptorPath, copy, {}).isEmpty());
+	// The device's own descriptor downloaded: it agrees, and its row says no more.
+	const auto descriptorIndex = files.indexOfPath(descriptorPath);
+	const auto downloaded = folder + QStringLiteral("/firmware/download/descriptor.bin");
+	const auto row = transfers.download(descriptorPath, files.data(descriptorIndex, DeviceFilesModel::FileIndexRole).toInt(),
+	                                    static_cast<qulonglong>(connectedBytes.size()), downloaded);
+	CHECK(row >= 0 && ended(transfers, row) == DeviceFileTransfers::State::Saved && read(downloaded) == connectedBytes);
+	CHECK(transfers.data(transfers.index(row), DeviceFileTransfers::ResultRole).toString() == QStringLiteral("Saved"));
+
+	// FL-1e: the Device tree marks a file whose copy in the device's folder is
+	// saved differently from the device's bytes as read.
+	const auto events = files.indexOfPath(QStringLiteral("/logs/events.csv"));
+	const auto eventsCopy = DeviceFileTransfers::localPathFor(device, QStringLiteral("/logs/events.csv"));
+	const QByteArray eventsDevice(reinterpret_cast<const char*>(eventsBytes.data()),
+	                              static_cast<qsizetype>(eventsBytes.size()));
+	auto eventsSaved = eventsDevice;
+	eventsSaved[3] = 'Z';
+	eventsSaved[9] = 'Z';
+	CHECK(QDir().mkpath(QFileInfo(eventsCopy).absolutePath()) && put(eventsCopy, eventsSaved));
+	const auto eventsRead = QDateTime::currentDateTime().addSecs(-30);
+	CHECK(DeviceBytes::keepBytes(device, eventsCopy, QStringLiteral("/logs/events.csv"), eventsDevice, eventsRead).isEmpty());
+	CHECK(files.copyFolder().isEmpty() && files.data(events, DeviceFilesModel::CopyDiffersRole).toLongLong() == 0);
+	int heard = 0;
+	const auto watch = QObject::connect(&files, &QAbstractItemModel::dataChanged, &files,
+	                                    [&](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
+		                                    if (roles.contains(DeviceFilesModel::CopyDiffersRole))
+			                                    ++heard;
+	                                    });
+	files.setCopyFolder(device);
+	CHECK(heard > 0 && files.copyFolder() == device);
+	CHECK(files.data(events, DeviceFilesModel::CopyDiffersRole).toLongLong() == 2 &&
+	      files.data(events, DeviceFilesModel::CopyReadAtRole).toDateTime().secsTo(eventsRead) == 0);
+	// A file without a record, and a folder, are not marked.
+	CHECK(files.data(descriptorIndex, DeviceFilesModel::CopyDiffersRole).toLongLong() == 0 &&
+	      files.data(files.parent(events), DeviceFilesModel::CopyDiffersRole).toLongLong() == 0);
+	CHECK(files.roleNames().value(DeviceFilesModel::CopyDiffersRole) == QByteArrayLiteral("copyDiffers"));
+	// Saved back to the device's bytes: told, then no mark.
+	CHECK(put(eventsCopy, eventsDevice));
+	heard = 0;
+	files.refreshCopies();
+	CHECK(heard > 0 && files.data(events, DeviceFilesModel::CopyDiffersRole).toLongLong() == 0);
+	files.setCopyFolder({});
+	QObject::disconnect(watch);
+}
+
 void copyStates(const QString& folder)
 {
 	using telemetry::ux::DeviceBytes;
@@ -2700,6 +2937,9 @@ void copyStates(const QString& folder)
 	const auto put = [](const QString& path, const QByteArray& bytes) {
 		QFile file(path);
 		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		// Written again within the time the file system tells apart: the
+		// comparisons are told, as this program's own writers tell them.
+		telemetry::ux::DeviceBytes::changed();
 	};
 	const QByteArray device("gain,1.5\nperiod,10\n");
 	put(local, device);
@@ -2765,7 +3005,8 @@ void readOnlyFiles(const QString& folder)
 	open.setReferenceLookup([&](const QString&, const QString& devicePath) -> std::optional<FileContent::Reference> {
 		if (devicePath != QStringLiteral("/telemetry/descriptor.bin"))
 			return std::nullopt;
-		return FileContent::Reference{deviceBytes, QStringLiteral("the device's bytes as read at 12:04"), false};
+		return FileContent::Reference{deviceBytes, QStringLiteral("the device's bytes as read at 12:04"), false,
+		                              QDateTime::currentDateTime()};
 	});
 	open.open(copy, QStringLiteral("/telemetry/descriptor.bin"));
 	auto* content = open.contentFor(copy);
@@ -4041,6 +4282,7 @@ int main(int argc, char** argv)
 	openInViewer(session, files, folder.path());
 	destroyedMidway(session, files, folder.path());
 	stalledTransferStaysLive(peer, session, files, folder.path());
+	firmwareChange(session, files, folder.path());
 	session.disconnect();
 	CHECK(await([&] {
 		return !files.available();
@@ -4057,6 +4299,7 @@ int main(int argc, char** argv)
 	descriptorWords(folder.path());
 	readOnlyFiles(folder.path());
 	copyStates(folder.path());
+	copyFacts(folder.path());
 	valuesFormatting();
 	lazyValues();
 	lazyDescriptor();

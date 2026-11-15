@@ -1,4 +1,6 @@
 // A real QQuickWindow exercises marking without changing editor selection or I/O. MIT.
+#include "ScriptSteps.hpp"
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QGuiApplication>
 #include <QItemSelectionModel>
 #include <QQmlApplicationEngine>
@@ -68,6 +70,7 @@ static QVariant evaluate(QObject* object, const char* expression) {
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+    telemetry::ux::registerQmlTypes();
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
         if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ++warnings;
         std::fprintf(stderr, "%s\n", qPrintable(message));
@@ -77,6 +80,8 @@ int main(int argc, char** argv) {
         model.populate();
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("bulkFixtureModel"), &model);
+        ScriptSteps steps;
+        engine.rootContext()->setContextProperty(QStringLiteral("scriptSteps"), &steps);
         engine.load(QUrl(QStringLiteral("qrc:/Bulk.qml")));
         CHECK(!engine.rootObjects().isEmpty());
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().last());
@@ -125,16 +130,42 @@ int main(int argc, char** argv) {
             // one Undo would take (UR-1); the link takes it back and says so.
             click(boxesWindow, firstBox);
             CHECK(firstRow->property("watchState").toInt() == Qt::Checked);
-            auto* undo = named(boxTree, "endpointWatchUndo");
-            CHECK(undo && undo->isVisible() && status->property("text").toString().startsWith(QStringLiteral("Added ")));
+            auto* undo = named(boxTree, "undoNoticeLink");
+            CHECK(undo && undo->isVisible() && status->property("text").toString().startsWith(QStringLiteral("Added ")) &&
+                  undo->property("text").toString() == QStringLiteral("Undo") &&
+                  evaluate(undo, "Accessible.name").toString() == QStringLiteral("Undo: Add 1 values"));
             click(boxesWindow, undo);
-            CHECK(firstRow->property("watchState").toInt() == Qt::Unchecked && !undo->isVisible() &&
+            // Taken, the line says so and offers it again.
+            CHECK(firstRow->property("watchState").toInt() == Qt::Unchecked && undo->isVisible() &&
+                  undo->property("text").toString() == QStringLiteral("Redo") &&
+                  status->property("text").toString() == QStringLiteral("Undone: Add 1 values"));
+            click(boxesWindow, undo);
+            CHECK(firstRow->property("watchState").toInt() == Qt::Checked &&
+                  status->property("text").toString() == QStringLiteral("Redone: Add 1 values") &&
+                  undo->property("text").toString() == QStringLiteral("Undo"));
+            // Ctrl+Z in the tree is the window's router's: the same step.
+            boxesWindow->requestActivate();
+            CHECK(QTest::qWaitForWindowActive(boxesWindow));
+            QTest::keyClick(boxesWindow, Qt::Key_Z, Qt::ControlModifier);
+            settle();
+            CHECK(firstRow->property("watchState").toInt() == Qt::Unchecked &&
                   status->property("text").toString() == QStringLiteral("Undone: Add 1 values"));
             // A box changed by nothing that records leaves no link behind.
             CHECK(boxes->setProperty("history", QVariant::fromValue<QObject*>(nullptr)));
             click(boxesWindow, firstBox);
             CHECK(firstRow->property("watchState").toInt() == Qt::Checked && !undo->isVisible());
             click(boxesWindow, firstBox);
+            // A second device's tree offers no watching: no boxes, no Add bar,
+            // no Watch in its menu, and nothing reserved for them.
+            auto* compareWindow = window->findChild<QQuickWindow*>(QStringLiteral("compareWindow"));
+            CHECK(compareWindow);
+            auto* compareTree = named(compareWindow->contentItem(), "compareTree");
+            CHECK(compareTree && !evaluate(compareTree, "watchApi").toBool() &&
+                  !evaluate(compareTree, "bulkWatchAvailable").toBool());
+            auto* compareRow = named(compareTree, "endpointRow", 0);
+            auto* compareBox = compareRow ? named(compareRow, "endpointWatchCheck") : nullptr;
+            CHECK(compareRow && compareBox && !compareBox->isVisible() && !compareRow->property("watchable").toBool());
+            compareWindow->close();
             // The checks below type into the main window: give it back the keyboard.
             boxesWindow->close();
             window->requestActivate();

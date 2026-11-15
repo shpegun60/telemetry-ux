@@ -2,6 +2,8 @@
 // nodes from paths, folding, a node's summary, removing a node's values, the
 // view's controls giving way, and an open editor that outlives rows added and
 // removed around it. MIT.
+#include "ScriptSteps.hpp"
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/WatchRows.hpp>
 #include <QtCore/QDir>
 #include <QtCore/QLocale>
@@ -234,6 +236,7 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;
@@ -245,7 +248,9 @@ int main(int argc, char** argv)
 			telemetry::ux::WatchRows rows;
 			rows.setSource(&model);
 			Calls calls;
+			ScriptSteps steps;
 			QQmlApplicationEngine engine;
+			engine.rootContext()->setContextProperty(QStringLiteral("scriptSteps"), &steps);
 			engine.rootContext()->setContextProperty(QStringLiteral("watchTreeModel"), &model);
 			engine.rootContext()->setContextProperty(QStringLiteral("watchTreeRows"), &rows);
 			engine.rootContext()->setContextProperty(QStringLiteral("watchTreeCalls"), &calls);
@@ -381,8 +386,9 @@ int main(int argc, char** argv)
 			CHECK(!rowMenu->property("visible").toBool());
 			// Every value back to Original (WL-3b): the Watchlist's form and every
 			// row's own, from the "…" menu or a row's Number format menu, as one
-			// change Undo and Ctrl+Z take back from anywhere in the panel; the
-			// notice and its Undo go once a form is chosen again.
+			// change Undo and Ctrl+Z - the window's router - take back from
+			// anywhere in the panel; the notice and its Undo go once a form is
+			// chosen again.
 			{
 				auto* fixture = panel->property("provider").value<QObject*>();
 				const auto ownFormats = [fixture] { return fixture->property("rowFormats").toMap(); };
@@ -401,15 +407,16 @@ int main(int argc, char** argv)
 				click(window, reset);
 				CHECK(formatIs("original") && ownFormats().isEmpty());
 				CHECK(textOf(content, "watchNotice") == QStringLiteral("Number formats reset to Original; 2 values had their own"));
-				CHECK(named(content, "watchUndo"));
+				CHECK(named(content, "undoNoticeLink"));
 				// Ctrl+Z with the keys on the ⋯ button, not in the list.
 				more->forceActiveFocus(Qt::TabFocusReason);
 				settle();
 				QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
 				settle();
 				CHECK(formatIs("hex") && ownFormats() == chosen);
+				// Taken, the step's link offers it again.
 				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone: Reset number formats to Original") &&
-				      !named(content, "watchUndo"));
+				      textOf(content, "undoNoticeLink") == QStringLiteral("Redo"));
 				// From the row's Number format menu, by keys: Down to it, Right
 				// into it, past "Like the Watchlist", Original, Dec and Hex to
 				// the reset under them.
@@ -421,11 +428,11 @@ int main(int argc, char** argv)
 				auto* rowReset = shown(content, "watchRowFormatReset");
 				CHECK(rowReset->property("enabled").toBool() && rowReset->property("highlighted").toBool());
 				key(window, Qt::Key_Return);
-				CHECK(formatIs("original") && ownFormats().isEmpty() && named(content, "watchUndo"));
+				CHECK(formatIs("original") && ownFormats().isEmpty() && textOf(content, "undoNoticeLink") == QStringLiteral("Undo"));
 				// A form chosen: the notice no longer says how things are, and its
 				// step is no longer the one Undo would take; both go.
 				click(window, named(content, "watchFormat_dec"));
-				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
+				CHECK(formatIs("dec") && !named(content, "watchNotice") && !named(content, "undoNoticeLink"));
 				auto* history = fixture->property("history").value<QObject*>();
 				CHECK(history && history->property("undoText").toString() == QStringLiteral("Show the Watchlist in dec"));
 				// A value in a format of its own is counted by a mark before the
@@ -488,9 +495,8 @@ int main(int argc, char** argv)
 				settle();
 				CHECK(moreMenu && !moreMenu->property("visible").toBool());
 			}
-			// A window narrower than the remove dialog: the popup narrows it, and
-			// the dialog's height must not follow its body's wrapping (a binding
-			// loop, warned about, in the client's style).
+			// A window as narrow as a dock gets: nothing in the panel loops its
+			// layout (a binding loop is warned about).
 			window->setWidth(140);
 			settle();
 			window->setWidth(480);
@@ -576,7 +582,7 @@ int main(int argc, char** argv)
 			CHECK(QGuiApplication::clipboard()->text() ==
 			      QStringLiteral("device.Config.Gain = 1.5\ndevice.Config.Enabled = true"));
 			CHECK(textOf(content, "watchNotice") == QStringLiteral("Copied 2 values"));
-			CHECK(!named(content, "watchUndo"));
+			CHECK(!named(content, "undoNoticeLink"));
 			QTest::keyClick(window, Qt::Key_C, Qt::AltModifier | Qt::ShiftModifier);
 			settle();
 			CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("device.Config.Gain\ndevice.Config.Enabled"));
@@ -725,15 +731,15 @@ int main(int argc, char** argv)
 			auto* removedLine = named(content, "watchNotice");
 			CHECK(removedLine && removedLine->property("text").toString() ==
 			                         QStringLiteral("Removed 2 values of device.Config"));
-			click(window, named(content, "watchUndo"));
+			click(window, named(content, "undoNoticeLink"));
 			CHECK(calls.undos == 1 &&
 			      removedLine->property("text").toString() == QStringLiteral("Undone: Remove 2 values from the Watchlist"));
-			CHECK(!named(content, "watchUndo"));
+			CHECK(textOf(content, "undoNoticeLink") == QStringLiteral("Redo"));
 			list->setProperty("currentIndex", 0);
 			list->forceActiveFocus();
 			key(window, Qt::Key_Delete);
 			CHECK(calls.removed == QList<int>({2, 0, 3, 1}));
-			// Ctrl+Z undoes while the list has the keys.
+			// Ctrl+Z undoes while the list has the keys: the router's, one step.
 			QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
 			settle();
 			CHECK(calls.undos == 2);
@@ -826,8 +832,8 @@ int main(int argc, char** argv)
 				CHECK(textOf(content, "watchNotice") == QStringLiteral("Removed %1 values").arg(model.rowCount()));
 				// After a removal the cursor's row is the one selected.
 				CHECK(selectedRows() == QList<int>({current()}));
-				// With no history there is no Undo to bring them back: asked
-				// first. A history puts them back with no device too (UR-1).
+				// Never asked first (UR-1): a history puts them back, device or
+				// not; a host that gave none has no Undo, and is not asked either.
 				auto* fixture = panel->property("provider").value<QObject*>();
 				const auto history = fixture->property("history");
 				fixture->setProperty("history", QVariant::fromValue<QObject*>(nullptr));
@@ -835,21 +841,8 @@ int main(int argc, char** argv)
 				settle();
 				calls.removed.clear();
 				key(window, Qt::Key_Delete);
-				auto* dialog = window->findChild<QObject*>(QStringLiteral("removeWatchDialog"));
-				CHECK(dialog && dialog->property("visible").toBool() && calls.removed.isEmpty());
-				click(window, shown(content, "removeWatchConfirm"));
-				CHECK(calls.removed.size() == model.rowCount() && !dialog->property("visible").toBool());
-				CHECK(!named(content, "watchUndo"));
-				// A question about rows that changed meanwhile goes away unanswered.
-				list->forceActiveFocus();
-				QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
-				settle();
-				calls.removed.clear();
-				key(window, Qt::Key_Delete);
-				CHECK(dialog->property("visible").toBool());
-				fixture->setProperty("watchRevision", fixture->property("watchRevision").toInt() + 1);
-				settle();
-				CHECK(!dialog->property("visible").toBool() && calls.removed.isEmpty());
+				CHECK(calls.removed.size() == model.rowCount() && !named(content, "undoNoticeLink"));
+				CHECK(!window->findChild<QObject*>(QStringLiteral("removeWatchDialog")));
 				fixture->setProperty("history", history);
 				list->forceActiveFocus();
 				settle();
@@ -1032,7 +1025,7 @@ int main(int argc, char** argv)
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Config.Gain")}));
 			CHECK(addField->property("text").toString().isEmpty() && addField->hasActiveFocus());
 			CHECK(textOf(content, "watchNotice") == QStringLiteral("Added device.Config.Gain"));
-			CHECK(named(content, "watchUndo"));
+			CHECK(named(content, "undoNoticeLink"));
 			// A Command is refused in words, and Enter adds nothing.
 			typeText(window, "control.Execute");
 			settle();
@@ -1057,7 +1050,7 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_Return);
 			CHECK(calls.addedLines == QStringList({QStringLiteral("device.Nope")}));
 			CHECK(textOf(content, "watchNotice") == QStringLiteral("Added device.Nope, not on this device"));
-			CHECK(addField->property("text").toString().isEmpty() && named(content, "watchUndo"));
+			CHECK(addField->property("text").toString().isEmpty() && named(content, "undoNoticeLink"));
 			// Half typed, the suggestions going on from it: Enter takes the first,
 			// never keeps the half as a row the device lacks.
 			// Enter at once, before the suggestions settle: made again first.

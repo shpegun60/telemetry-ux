@@ -756,6 +756,8 @@ between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
 
+
+
 ## Details: the cell is the editor (BA-4·0a, November 2026)
 
 - **No Edit button.** `EndpointPanel` no longer shows Edit. A Field's values are
@@ -883,12 +885,7 @@ one for its workspace and gives it to its providers; a file keeps its own.
   Static's steps wait while it polls; its `blockedReason` says so.
 - **`DynamicWatchlist.restore(removed)` is replaced by `putBack(rows)`**, rows
   by place and path, which needs no device.
-- **The Watchlist asks before removing several values only when its provider
-  has no history**: with one, Undo brings them back, device or not. Clear still
-  asks; UX-B removes both questions.
-- Until UX-B, the panels call the history themselves: the Watchlist's Ctrl+Z,
-  the hex view's Ctrl+Z and Ctrl+Y while editing, the notices' "· Undo" and
-  `FileEditTools`' Undo and Redo. UX-B replaces them with one router per window.
+- The panels' own Ctrl+Z, notices and the two questions are UX-B's (below).
 
 ## The live Plot's changes as steps (UR-1, UX-D, November 2026)
 
@@ -937,6 +934,46 @@ The Batch records into the same history as the Watchlist and the Plot (README,
   answers `add(lines) -> {notice, undoable, serial, clear}` and the row emits
   `added(notice, undoable, serial)`; `BatchAddRow` and `WatchAddRow` give the
   step's serial, and the Batch's additions are undoable.
+
+## Ctrl+Z in a window: the router, scopes, notices and buttons (UR-1, UX-B, November 2026)
+
+The panels stop answering Ctrl+Z themselves; a window has one router (README,
+"Ctrl+Z in a window").
+
+1. **Panels no longer take Ctrl+Z: one `UndoRouter` per window**, its
+   `workspace` the host's `UndoHistory`, and `UndoScope.refusal` on areas that
+   act on the device - Details: `UndoScope.refusal: details.undoRefusal`, the
+   words `EndpointPanel.undoRefusal` holds. The Watchlist's
+   `Keys.onShortcutOverride`/`onPressed` for Ctrl+Z, its `undo()` and its
+   `recorded` property, and `HexView`'s Ctrl+Z and Ctrl+Y are gone. A
+   `FileViewer` is an `UndoScope` for its file's history, so Ctrl+Z in it takes
+   the file's step. `registerQmlTypes()` is needed for the router, as for
+   `HexView`.
+2. **`FileEditTools` has no Undo and Redo buttons: use `UndoButtons {
+   router }`.** Its Write to the device says "Undo changes only the copy on
+   this computer." in its tooltip; `IconToolButton.note` is new for such a
+   second clause.
+3. **The questions are gone**: `clearWatchDialog` and `removeWatchDialog`, with
+   `clearWatchConfirm`, `clearWatchCancel`, `removeWatchConfirm` and
+   `removeWatchCancel`. Clear the Watchlist (no ellipsis) and removing several
+   values act at once and say so with Undo ("Cleared 66 values · Undo");
+   `WatchlistPanel.removeAt(row, own)` loses its `confirmed` argument;
+   `clearAll()` is new.
+4. **One notice component, `UndoNotice`.** The Watchlist's notice line is one
+   (`watchNotice`, its link `undoNoticeLink`, the old `watchNoticeLine` and
+   `watchUndo` gone); so is the Device tree's status line
+   (`endpointWatchSelectionStatus`, its link `undoNoticeLink`;
+   `endpointWatchUndo`, `undoStatusStep()`, `canUndoStatus`, `statusSerial`,
+   `statusRevision` and the writable `watchStatusFull` gone; `watchMarkStatus`
+   is read-only). After an undo a notice says "Undone: ... · Redo".
+5. **`EndpointTreePanel.watchBoxes`** is new (default true): false offers no
+   watching at all, for a second device's tree.
+6. **`UndoHistory`**: `done` gains `kinds`; `redoBlockedReason`,
+   `markNoticed()` and `noticed()` are new; a step taken ends the irreversible
+   note. Both providers call `noteIrreversible` as Apply, Execute, Call and a
+   Watchlist row write are sent, and Dynamic's Execute Batch; Static's
+   `apply()`, `executeCommand()` and `callService()` too. `FileContent.writing`
+   is new: while the host writes the copy to the device, the file's steps wait.
 
 ## The live Plot's time axis from the start of reading (LP-1h, November 2026)
 
@@ -1091,3 +1128,198 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 - **`batchAttention`** (`DynamicBatch::attention()`): the status line asks for
   attention - a run that failed, or an item not done; the panel draws it in
   the warning colour, else muted.
+
+## The designer's fixes to the Plot's analysis tools (November 2026)
+
+From the design review of the analysis tools. **Behaviour changes:** "From
+start" counts from one fixed moment, the anchor (the first reading of this
+run, or a recording's start), no longer from the end of the last stop before
+the right edge, and the CSV's and Copy values' "Seconds from start" count
+from the same moment, so a row matches the axis and the cursor's chip; a time
+label the edge would cut is left out (its grid line stays); a dropped
+selection passes text values over and plots the rest as one step of the
+history (`plotMany`), stopping only at the sixteen-curve limit. `TraceView`
+gains `endValue(path)` (the reading at the
+end pin), `chipColor` and `chipHeight` (the box's size is drawn on a chip),
+`changeFound()` (emitted when `stepChange` finds its change), and, for checks,
+`timeLabelRects` and `boxCaptionRect`; `WatchTraces.refusal(path)` is
+invokable from QML. `TracePlot`'s Measure table says "At cursor", "At end" or
+"Newest" over its first column and gives a state's reading there; it keeps a
+Name column of nine body characters and shows seven, five or three figures,
+the rest in the row's tooltip; its rows, like the chips, stop at a height and
+scroll. Mean and Std dev show one decimal more than Min and Max. The end pin
+has its own chip (`plotEndChip`). Copy picture takes the table or chips and
+the graph (`plotPicture`) without the cursor. `notice` gains `noticeKind`
+and `tell(words, kind)`: "Copied …", "Saved …" and a failed find leave after
+5 s, refusals stay until ×. `dropWords(payload)` gives what a drop will do.
+
+## The Plot's header in a narrow dock (November 2026)
+
+`TracePlot`'s header now fits a 320 px dock instead of holding the whole Plot
+at its own width. As the Plot narrows it gives way in a fixed order,
+measured from the controls as the Watchlist's toolbar is: the zoom buttons
+hide (the wheel, + and - still zoom); then 10 s | 1 min | 10 min | All fold
+into one button showing the span, "1 min ▾", with the four in its menu
+(`plotSpanButton`, `plotSpanMenu`; keys 1 to 4 still choose); then Follow
+becomes an icon-only toggle, "Follow the newest reading (End)"
+(`plotFollowIcon`, the new `ToolIcon` "follow"); and last the time axis
+switch reads "Clock ▾" or "Start ▾", its accessible name unchanged. Back and
+Measure always stay. `narrowStep` (0 to 4), `headerMinimum` and `spans` are
+new. The graph keeps at least `graphMinimumHeight` (six rows): the chips and
+the Measure table scroll before it shrinks below that. The pins' and the
+cursor's chips step beside the axis switch, and a chip whose line is on the
+plot area's last pixel shows (`onPlot(x)`).
+
+## The Trend drawn by TracePlot (TR-2, November 2026)
+
+`TracePlot.recording` draws a recorded run, the Trend: its words say so (×
+"Remove from the Trend; the recording is unchanged", the axis "From run start
+(s)"), a chip with no cursor gives the reading at the right edge of the view
+(`TraceView.valueAtRight(path)`), nothing is dropped on it, and Follow, its
+menu entry and the behind chip appear only while `writing`. `runName` names
+the run in the graph's accessible name. `leading` and `trailing` take the
+host's controls at either end of the header row. `emptyText`, `emptyHint`,
+`waitingText` and `message` let the host word the empty, waiting and
+over-the-graph states. In a narrow dock a recording's header gives way in the
+live Plot's order (`narrowStep`, above): the leading controls keep their
+width, the trailing ones give way after Follow's icon and before the axis'
+words (`trailingGivesWay`), and Back and Measure stay. Below 400 px of height
+the chips keep to one row and scroll.
+`WatchTraces::appendRecorded(path, readings)` adds a run's newer readings to
+a recorded path without copying the rest. The live Plot is unchanged.
+
+## The Plot's numbers stacked in lanes (November 2026)
+
+New, nothing removed. `WatchTraces.stacked` (L, or "Stack numbers in lanes"
+in the graph's menu) draws each plotted number in a lane of its own, one above
+another over the bool and enum lanes, with its own values, its leaf name and a
+colour bar; it is the Plot's setting, kept by `capture()` and `restore()`
+(`"stacked"`) and one step of the new `plot.stack` kind ("Stack the numbers in
+lanes", "Put the numbers on one axis"), so `UndoHistory::kinds()` names one
+more kind. Stacking needs 40 px a lane: while the Plot is shorter the numbers
+share one axis again, and L says "Too many numbers to stack at this height.
+Make the Plot taller or remove a curve." `TraceView` gains `stacked`,
+`stackFits` and, for checks and hosts, `numberLanes` (each lane's path, rect,
+valueRect, nameRect, low, high, labels and cursorY). While stacked, Auto fits
+each lane to its own number; a value zoom or pan, a drag or the wheel over the
+labels, and a box act on the lane under the pointer (the keys: else the
+focused curve's, else every lane); A fits every lane and a double-click on a
+lane's labels fits that lane; a click on a lane's name focuses its curve; Back
+remembers the lanes' values; `valueAuto` is false while any lane is zoomed by
+hand. `TracePlot` puts Auto (A) after the first lane's name while stacked,
+and has no "Fitted to" chip then.
+
+## A copy's state, the trees' marks and the two places' words (FL-1e, November 2026)
+
+There are two places, the device and the project, and the Viewer now says
+which. `FileViewer`'s footer begins with how the copy stands with the
+device's file, then its size, format and path: "Same as the device's · read
+12:04" (with the date when not today), "Saved in the project · 3 bytes differ
+from the device's", "Written 12:10 · read back the same" or, in the warning
+colour, "· 1 byte reads back different", "! The device's file changed after
+12:04", "The device's bytes are not known", "Read-only · made by the device's
+firmware", each followed by "· not connected" while the copy's device is not.
+A file from disk has no state, only its size, format and path, and the
+footer no longer says when the copy was loaded. The footer is a `RowLayout`
+now (still `fileViewerFooter`, its whole line in `text`, the project's path
+and the times in `details`, shown on hover), the state a label of its own,
+`fileViewerState`. A change of the state is announced to a screen reader
+(`Accessible.announce`); the first state of a file is not.
+
+New on `FileViewer`: `deviceConnected` (the copy's device is the connected
+one; follows `reloadable` unless the host sets it), `readOnlyNote` (the few
+words after "Read-only · ", the host's), `stateKind`, `stateText`,
+`saveCopy()`. New on `FileContent`: `referenceAt` (when the device's bytes
+were read or read back), `savedAt` (the copy's last write), `savedDiffers`
+(the saved copy against the device's bytes, edits not saved left out),
+`deviceChanged` (a write found the device's file changed; until it is read
+again; a host may set it), `localUrl()`, the signal `saved()`; on
+`OpenFiles`, `fileSaved(localFile)`. `FileContent::Reference` gains `at`, the
+time the bytes were read: code that brace-initialises a `Reference` adds it.
+
+The words: Save in the project ("Save descriptor.bin in the project. The
+device's file is unchanged."), Read again from the device (was Reload; shown
+for a device's file only, "(not connected)" when it cannot), Save a copy as…,
+which writes what the tab shows, edits not saved included, through the
+viewer's own dialog. It replaces both "Save as…" and "Save the edited bytes
+as…": the `⋯` menu no longer emits `saveAsRequested`, which stays declared for
+hosts that connect to it, and the menu item `hexSaveCopy` is gone. The hex
+state line reads "Saved in the project · 1 byte differs from the device's";
+"here", "locally" and "on this computer" read "in the project" in the tool
+tips, the discard question and an upload's "nothing in the project records".
+
+`DeviceFilesModel.copyFolder` names the device's folder in the project; each
+file's `copyDiffers` then counts the bytes its copy there is saved
+differently from the device's bytes as read, with `copyReadAt`, and
+`refreshCopies()` compares them again. `DeviceFileRow` shows a `≠` after the
+name in the info colour, its words on hover ("The project's copy differs from
+this file as read at 12:04: 3 bytes. Open it to write or restore.") and in
+the row's spoken name. It adds two required properties, `copyDiffers` and
+`copyReadAt`: a host's own model for the row gives both.
+
+`DeviceBytes::compare(localFile, devicePath)` is that comparison, kept until
+the copy or a record changes (`DeviceBytes::changed()` says a copy was
+written, as `FileContent::save()`, a download and `copyFile` do);
+`DeviceFileTransfers::copyState` now reads it. `DeviceBytes::devicePathOf` and
+`DeviceFileTransfers::devicePathOf` give the device's path a copy's record
+names, so a host opens a copy from its project tree as that device's file -
+the same document as from the device. `DeviceFileTransfers::deviceFolderFound`
+gives the connected device's folder without making or renaming it.
+
+## A descriptor that is not the connected device's (FL-1f, November 2026)
+
+`FileContent` gains `fingerprint` and `referenceFingerprint` (the descriptor
+fingerprints in the copy's header and in the device's bytes as read, "0x" and
+16 digits as `DescriptorContent` writes them; `descriptorFingerprint(bytes)`
+reads one) and `connectedFingerprint` (the connected device's, from the
+codecs' context), with the signal `contextChanged`, which
+`OpenFiles::contextChanged()` now sends each file. A descriptor from a device
+that is not the connected device's shows "This descriptor is not the
+connected device's (3f2a… against 9b10…)" over its view
+(`fileViewerOtherDescriptorBar`) with Read again from the device; while its
+device is connected and the bytes it was read from are another fingerprint,
+the state line says the device's file changed after that read.
+
+`DeviceFileTransfers::keepOtherDescriptor(deviceFolder, versionFolder)` keeps
+the project's copy of the descriptor, with its record, as a device version
+under `versionFolder` when its fingerprint is not the connected device's -
+once for each fingerprint - and leaves the copy itself as it is. A downloaded
+descriptor is checked against the one read at connect: one of another
+fingerprint ends its row "… · its fingerprint 0x… is not the one read at
+connect (0x…): connect again" and keeps it (`descriptorNote`).
+
+## The Watchlist's leftovers of WL-3b and WL-4d (WL-8, November 2026)
+
+- A number out of range is said in the row's form: "“65536” is out of range
+  for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF)." and, on a row
+  shown in hex, "... from 0x0000 to 0xFFFF (0 to 65535)." `watch_format::encode`,
+  `fromHex` and `range` take an optional `WatchNumberFormat form` (Original by
+  default); the dynamic provider passes the row's own form, or the Watchlist's.
+  The sentence changed from "...: enter 0 to 65535 (...)" to the one above.
+- An enum's choices in the row editor follow the row's form: on a row shown
+  in hex they read "Idle (0x00)". The model now puts the row's own code first
+  when no choice is it: by its name when the type has one past the choice
+  limit, else "Unknown (5)". The unknown code is "Unknown (5)" everywhere in
+  the Watchlist (`watch_format::text`, `WatchlistModel::formatValue`), no
+  longer "5 (unknown)". The Inspector's own value text (`DynamicModels`) is
+  unchanged.
+- Polling resumes by itself when the same device comes back.
+  `DynamicWatchlist::resumes()` holds polling the operator started and that
+  nothing but a lost link stopped (not `stop()`, `clear()`, or a failure while
+  the device is still there); `forgetResume()` drops it. The dynamic provider
+  remembers the descriptor fingerprint polling was started on and begins
+  polling again when a device with that fingerprint is attached; another
+  device forgets it. While away, the status says "polling resumes when this
+  device is back"; a read drained after the link went now says the same
+  no-device line, not "Stopped - accepted read drained".
+- The "+" row works with no device: `addWatchPaths` keeps every well-formed
+  path as a row by its path (one step, `offline: true` in the answer) that is
+  read on a device that has it; `checkWatchPath` answers "missing" with "No
+  device. Enter keeps it; ..." or "watched" for a path kept already.
+  `DynamicWatchlist::PathResolution` gains `offline`.
+- A group whose name holds dots ("power.meter") is read as the longest known
+  group a path starts with, then the Field: `resolvePath`, `pathCandidates`
+  ("power." offers "power.meter." and power's own Fields) and a kept row's
+  saved binding.
+- Undo of rows removed while offline was already done by UR-1 (One history
+  for Undo and Redo); nothing changed for it.

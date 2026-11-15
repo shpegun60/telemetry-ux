@@ -177,6 +177,9 @@ class FileContent final : public QObject {
 	// two seconds, is one step. 1000 steps; emptied by a read, Reload and
 	// Discard. Undo and redo change only the bytes in memory, editing on or off.
 	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history CONSTANT)
+	// The host is writing this copy to the device: its Undo and Redo wait
+	// ("Wait for values.bin to finish writing to the device.") until it ends.
+	Q_PROPERTY(bool writing READ writing WRITE setWriting NOTIFY editChanged)
 	// The device's layer: whether the device's bytes as read are known for
 	// this copy, what to call them in a sentence, and how many bytes of the
 	// working copy differ from them, edits not saved included. Without them
@@ -185,6 +188,26 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QString referenceLabel READ referenceLabel NOTIFY editChanged)
 	Q_PROPERTY(qint64 referenceDiffers READ referenceDiffers NOTIFY editChanged)
 	Q_PROPERTY(bool referenceWritten READ referenceWritten NOTIFY editChanged)
+	// The state line's facts (FL-1e): when the device's bytes were read (or
+	// read back after a write), invalid when not known; when the copy in the
+	// project was last written - read from the device, or saved; and how many
+	// bytes of the copy as saved differ from the device's, edits not saved
+	// left out.
+	Q_PROPERTY(QDateTime referenceAt READ referenceAt NOTIFY editChanged)
+	Q_PROPERTY(QDateTime savedAt READ savedAt NOTIFY editChanged)
+	Q_PROPERTY(qint64 savedDiffers READ savedDiffers NOTIFY editChanged)
+	// The device's file is known to have changed after its bytes here were
+	// read - a write found it so - until it is read again. A host may say so
+	// too (setDeviceChanged).
+	Q_PROPERTY(bool deviceChanged READ deviceChanged WRITE setDeviceChanged NOTIFY editChanged)
+	// The descriptor fingerprint in the header of this copy and of the
+	// device's bytes as read, as DescriptorContent writes it ("0x3F2A…"), or
+	// empty when they are not a descriptor's; and the connected device's,
+	// from the codecs' context, empty while no device with a descriptor is
+	// connected (FL-1f: a descriptor that is not the connected device's).
+	Q_PROPERTY(QString fingerprint READ fingerprint NOTIFY changed)
+	Q_PROPERTY(QString referenceFingerprint READ referenceFingerprint NOTIFY editChanged)
+	Q_PROPERTY(QString connectedFingerprint READ connectedFingerprint NOTIFY contextChanged)
 	// Why this copy's bytes are not edited here, in a sentence, or empty:
 	// what the host's lookup says of the device's path - a file the
 	// connection itself makes or uses, such as the descriptor. A file from
@@ -259,6 +282,8 @@ public:
 		QString label;
 		// Read back after this copy was written to the device.
 		bool written = false;
+		// When they were read, or read back.
+		QDateTime at;
 	};
 	using ReferenceLookup =
 	    std::function<std::optional<Reference>(const QString& localFile, const QString& devicePath)>;
@@ -286,6 +311,8 @@ public:
 	qint64 editedBytes() const noexcept { return edited_; }
 	bool modified() const noexcept { return edited_ > 0; }
 	UndoHistory* history() noexcept { return &history_; }
+	bool writing() const noexcept { return writing_; }
+	void setWriting(bool writing);
 	// The file's name in a step's words: the device's file, else the copy's.
 	QString stepName() const;
 	// Overwrites bytes at offset, cut at the file's end: one step to undo,
@@ -305,12 +332,26 @@ public:
 	Q_INVOKABLE QString save();
 	// Writes the bytes as edited to another file; this copy keeps its edits.
 	Q_INVOKABLE QString saveCopyAs(const QUrl& file);
+	// localFile as a URL, for a file dialog's first choice.
+	Q_INVOKABLE QUrl localUrl() const { return localFile_.isEmpty() ? QUrl{} : QUrl::fromLocalFile(localFile_); }
 	// Drops the edits not saved: the bytes on disk again, nothing to undo.
 	Q_INVOKABLE void discard();
 	bool hasReference() const noexcept { return hasReference_; }
 	QString referenceLabel() const { return referenceLabel_; }
 	qint64 referenceDiffers() const noexcept { return referenceDiffers_; }
 	bool referenceWritten() const noexcept { return referenceWritten_; }
+	QDateTime referenceAt() const { return referenceAt_; }
+	QDateTime savedAt() const { return savedAt_; }
+	qint64 savedDiffers() const noexcept { return savedDiffers_; }
+	bool deviceChanged() const noexcept { return deviceChanged_; }
+	void setDeviceChanged(bool changed);
+	QString fingerprint() const;
+	QString referenceFingerprint() const;
+	QString connectedFingerprint() const;
+	// The fingerprint a descriptor's header gives - "TDS3", then the u64 at
+	// byte 16, little-endian - as "0x" and 16 upper-case hex digits; empty
+	// for bytes that do not begin as a descriptor.
+	static QString descriptorFingerprint(const QByteArray& bytes);
 	// Whether a byte of the working copy differs from the device's as read.
 	bool differsFromReference(qint64 offset) const noexcept
 	{
@@ -349,6 +390,10 @@ Q_SIGNALS:
 	void changed();
 	void retiringChanged();
 	void editChanged();
+	// What the codecs' context offers has changed: the connected device.
+	void contextChanged();
+	// The bytes as edited were written to localFile.
+	void saved();
 	// Bytes are about to change in place: a view holding a copy lets it go,
 	// so an edit does not copy the whole file.
 	void aboutToEdit();
@@ -397,8 +442,9 @@ private:
 	const ReadOnlyLookup* readOnlyLookup_ = nullptr;
 	QByteArray reference_;
 	QString referenceLabel_;
-	bool hasReference_ = false, referenceWritten_ = false;
-	qint64 referenceDiffers_ = 0;
+	bool hasReference_ = false, referenceWritten_ = false, deviceChanged_ = false;
+	qint64 referenceDiffers_ = 0, savedDiffers_ = 0;
+	QDateTime referenceAt_, savedAt_;
 	QObject* decoded_ = nullptr; // a child of this
 	QPointer<QObject> live_;    // a child of this, for devicePath_
 	bool retiring_ = false, retirementReady_ = false;
@@ -408,6 +454,7 @@ private:
 	QByteArray saved_;
 	qint64 edited_ = 0;
 	bool editing_ = false;
+	bool writing_ = false;
 	UndoHistory history_;
 	UndoFunctions target_;
 	// The typing step on top of the history: its serial, the bytes it covers
@@ -484,6 +531,8 @@ public:
 
 Q_SIGNALS:
 	void countChanged();
+	// A file's edits were saved to its copy: the trees mark it again.
+	void fileSaved(const QString& localFile);
 
 private:
 	// A new row with a new content that knows the codecs; returns the row.
