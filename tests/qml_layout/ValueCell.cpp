@@ -52,6 +52,32 @@ void typeText(QWindow* window, const QString& typed)
 		QTest::keyClick(window, letter);
 }
 
+// No choice cut: the closed box shows its whole text, and every row of its
+// open list has room for its own.
+bool choicesWhole(QQuickItem* combo)
+{
+	auto* shown = combo->property("contentItem").value<QQuickItem*>();
+	if (!shown)
+		return false;
+	const qreal room = shown->width() - shown->property("leftPadding").toReal() - shown->property("rightPadding").toReal();
+	if (shown->property("contentWidth").toReal() > room + 0.5)
+		return false;
+	auto* popup = combo->property("popup").value<QObject*>();
+	auto* list = popup ? popup->property("contentItem").value<QQuickItem*>() : nullptr;
+	auto* rows = list ? list->property("contentItem").value<QQuickItem*>() : nullptr;
+	if (!rows)
+		return false;
+	int seen = 0;
+	for (auto* row : rows->childItems()) {
+		if (!row->property("availableWidth").isValid() || !row->isVisible())
+			continue;
+		++seen;
+		if (row->property("implicitContentWidth").toReal() > row->property("availableWidth").toReal() + 0.5)
+			return false;
+	}
+	return seen == combo->property("count").toInt();
+}
+
 QString text(QObject* object, const char* property = "text")
 {
 	return object->property(property).toString();
@@ -242,6 +268,28 @@ int main(int argc, char** argv)
 		QTest::keyClick(window, Qt::Key_Escape);
 		settle();
 		CHECK(!pi->property("open").toBool() && text(piRow) == QStringLiteral("3.14159274"));
+		// A choice in a narrow Value column: the box grows leftwards over the
+		// owner's room, its right edge on the cell's, no choice cut, closed
+		// or in its list.
+		auto* state = named(content, QStringLiteral("stateCell"));
+		auto* stateChoice = named(state, QStringLiteral("valueChoice"));
+		CHECK(state && stateChoice);
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(state, QStringLiteral("valueText"))));
+		settle();
+		CHECK(state->property("open").toBool() && stateChoice->isVisible());
+		CHECK(stateChoice->property("displayText").toString() == QStringLiteral("Active (0x02)"));
+		CHECK(stateChoice->width() > state->width() && qAbs(rightEdge(stateChoice) - rightEdge(state)) < 0.5);
+		auto* statePopup = stateChoice->property("popup").value<QObject*>();
+		CHECK(statePopup && statePopup->property("visible").toBool());
+		CHECK(choicesWhole(stateChoice));
+		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-choice-narrow.png"))));
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		if (state->property("open").toBool()) {
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle();
+		}
+		CHECK(!state->property("open").toBool());
 		// A float says what it encodes while the text differs from it.
 		auto* factorText = named(factor, QStringLiteral("valueText"));
 		auto* factorCaption = named(factor, QStringLiteral("valueCaption"));
@@ -273,6 +321,7 @@ int main(int argc, char** argv)
 		CHECK(enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (0)")) ||
 		      enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (1)")));
 		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-choice.png"))));
+		CHECK(choicesWhole(enabledChoice));
 		CHECK(QMetaObject::invokeMethod(enabledChoice, "activated", Q_ARG(int, 1)));
 		settle();
 		CHECK(text(enabledRow) == QStringLiteral("true") && !enabled->property("open").toBool());

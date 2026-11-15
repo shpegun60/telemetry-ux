@@ -9,7 +9,7 @@ import Telemetry.UX
 ApplicationWindow {
     id: window
     width: 420
-    height: 300
+    height: 340
     visible: true
     color: Theme.surfaceWindow
 
@@ -33,6 +33,7 @@ ApplicationWindow {
     FakeRow { id: enabledRow; objectName: "enabledRow"; text: "false"; accepts: function(t) { return t === "true" || t === "false" } }
     FakeRow { id: modeRow; objectName: "modeRow"; text: "1"; accepts: function(t) { return /^\d+$/.test(t) } }
     FakeRow { id: factorRow; objectName: "factorRow"; text: "0.1"; accepts: function(t) { return !isNaN(Number(t)) && t.length > 0 } }
+    FakeRow { id: stateRow; objectName: "stateRow"; text: "2"; accepts: function(t) { return t === "0" || t === "2" } }
     FakeRow { id: piRow; objectName: "piRow"; text: "3.14159274"; accepts: function(t) { return !isNaN(Number(t)) && t.length > 0 } }
 
     Column {
@@ -111,6 +112,24 @@ ApplicationWindow {
                 value: piRow.text; editorText: piRow.text
                 takes: "Enter a number."
                 setText: function(text) { return piRow.set(text) }
+            }
+        }
+        // A choice in that narrow column, its codes in hex.
+        Item {
+            width: parent.width
+            height: stateCell.height
+            ValueCell {
+                id: stateCell
+                objectName: "stateCell"
+                x: parent.width - width
+                width: 60
+                editorRoom: parent.width - width - Type.bodyPixels * 2
+                hexCodes: true
+                name: "State"; typeText: "u8"; editable: true; editorKind: "enum"
+                editorChoices: [{ label: "Idle (0)", text: "0" }, { label: "Active (2)", text: "2" }]
+                value: stateRow.text === "0" ? "Idle (0)" : stateRow.text === "2" ? "Active (2)" : stateRow.text
+                editorText: stateRow.text
+                setText: function(text) { return stateRow.set(text) }
             }
         }
     }

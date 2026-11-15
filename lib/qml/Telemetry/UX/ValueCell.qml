@@ -316,10 +316,38 @@ Item {
                 objectName: "valueChoice"
                 visible: cell.open && cell.choices && !cell.manualCode
                 height: parent.height
-                // As wide as its widest item, and a little room for the arrow.
-                width: Math.min(parent.width, implicitContentWidth + leftPadding + rightPadding + Type.bodyPixels * 1.8)
-                anchors.right: cell.numeric ? parent.right : undefined
+                // As wide as its widest choice with the arrow, "false (0)" or
+                // "Active (0x02)" never cut: growing leftwards over the owner's
+                // room as the text editor does, the right edge on the cell's.
+                readonly property real widestChoice: {
+                    let widest = 0
+                    for (let i = 0; i < cell.options.length; ++i)
+                        widest = Math.max(widest, choiceMetrics.advanceWidth(cell.options[i].label))
+                    return Math.ceil(widest)
+                }
+                readonly property real needed: Math.max(implicitWidth, widestChoice + leftPadding + rightPadding + 2
+                    + (contentItem && typeof contentItem.leftPadding === "number"
+                       ? contentItem.leftPadding + contentItem.rightPadding : 0))
+                width: Math.min(parent.width + Math.max(0, cell.editorRoom), needed)
+                x: cell.numeric || width > parent.width ? parent.width - width : 0
                 implicitContentWidthPolicy: ComboBox.WidestText
+                // The list never cuts a choice either: as wide as the widest in
+                // the current one's weight, its right edge on the box's.
+                popup.width: Math.max(width, widestChoice + choiceProbe.leftPadding + choiceProbe.rightPadding
+                                             + popup.leftPadding + popup.rightPadding + 2)
+                popup.x: width - popup.width
+                // The list's row as a style draws it, the current one in bold:
+                // its padding and its font measure every choice.
+                ItemDelegate {
+                    id: choiceProbe
+                    visible: false
+                    font.weight: Font.DemiBold
+                    Accessible.ignored: true
+                }
+                FontMetrics {
+                    id: choiceMetrics
+                    font: choiceProbe.font
+                }
                 topPadding: 0
                 bottomPadding: 0
                 palette.light: Theme.stateSelected
