@@ -563,13 +563,13 @@ void groupWatchBoxes()
 	int holdable = 0;
 	for (int row = 0; row < model->rowCount(group); ++row)
 		holdable += provider->watchState(model->index(row, 0, group)) >= 0 ? 1 : 0;
-	CHECK(holdable >= 3 && holdable <= 1024);
+	CHECK(holdable >= 3 && holdable <= ux::watchlistRowLimit);
 	const auto requests = peer.requests();
 	const auto watched = [&](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
 	// A Command has no box; the Fields start empty.
 	CHECK(provider->watchState(command) == -1 && provider->watchState(first) == Qt::Unchecked &&
 	      provider->watchState(group) == Qt::Unchecked && !history.canUndo());
-	CHECK(provider->watchLimit() == 1024);
+	CHECK(provider->watchLimit() == ux::watchlistRowLimit && ux::watchlistRowLimit == 8192);
 	auto result = provider->setWatchMany(watched(first), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(provider->watchState(first) == Qt::Checked && provider->watchState(group) == Qt::PartiallyChecked);
@@ -735,11 +735,11 @@ void memberWatchBoxes()
 	result = dataProvider->setWatchMany(one(samples), true);
 	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == 16384 &&
 	      result.value("adding").toInt() == 16384 &&
-	      result.value("room").toInt() == 1024 && result.value("values").toBool() && dataProvider->watchCount() == 0);
+	      result.value("room").toInt() == ux::watchlistRowLimit && result.value("values").toBool() && dataProvider->watchCount() == 0);
 	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
 	// Typed, the same room is said before Enter, and a paste adds all or nothing.
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
-	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(1024))));
+	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(ux::watchlistRowLimit))));
 	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
 	      dataProvider->watchCount() == 0);
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
@@ -1799,6 +1799,74 @@ ApplicationWindow {
 	connection.disconnect();
 }
 
+// The live Plot from the Watchlist (LP-1g): Ctrl+P on a row puts its value on
+// the Plot and takes it off again; on a selection it takes every value in it,
+// and the row menu says how many. Counter reads a u64 no double holds: a
+// number type, so it is plotted all the same.
+void watchRowsToPlot()
+{
+	inspector_qml::TcpDemoServer peer;
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	for (const auto& name : {QStringLiteral("Counter"), QStringLiteral("Offset"), QStringLiteral("Mode")}) {
+		const auto field = endpoint(provider->endpoints(), name);
+		CHECK(field.isValid() && provider->addWatchMany({QVariant::fromValue(field)}).value("added").toInt() == 1);
+	}
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && !provider->watchPending(); }));
+	auto* traces = qobject_cast<ux::WatchTraces*>(provider->watchTraces());
+	CHECK(traces && traces->plotted().isEmpty());
+
+	QQmlApplicationEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	QQmlComponent component(&engine);
+	component.setData(R"qml(
+import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+ApplicationWindow {
+    width: 840; height: 480; visible: true
+    WatchlistPanel { anchors.fill: parent; provider: testProvider; collapsible: false }
+}
+)qml", QUrl(QStringLiteral("rows-to-plot.qml")));
+	CHECK(component.isReady());
+	std::unique_ptr<QObject> object(component.create());
+	auto* window = qobject_cast<QQuickWindow*>(object.get());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	window->requestActivate();
+	CHECK(QTest::qWaitForWindowActive(window));
+	auto* list = control(window->contentItem(), QStringLiteral("watchlistView"));
+	CHECK(list->setProperty("currentIndex", 0));
+	list->forceActiveFocus(Qt::TabFocusReason);
+	CHECK(await([&] { return list->hasActiveFocus(); }));
+	const auto first = provider->watchlist()->index(0, 0).data(ux::WatchlistModel::NameRole).toString();
+	// One row: on, then off; its readings stay.
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted() == QStringList{first}; }));
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().isEmpty() && traces->count(first) > 0; }));
+	// The whole list selected: every value, in the order shown.
+	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().size() == 3 && traces->plotted().first() == first; }));
+	// The row menu speaks for the selection.
+	QTest::keyClick(window, Qt::Key_Menu);
+	auto* item = control(window->contentItem(), QStringLiteral("watchRowPlot"));
+	CHECK(item->property("text").toString() == QStringLiteral("Plot 3 values\tCtrl+P") && item->property("enabled").toBool() &&
+	      !item->property("checkable").toBool());
+	QTest::keyClick(window, Qt::Key_Escape);
+	// Every one on it already: Ctrl+P takes them all off.
+	CHECK(await([&] { return list->hasActiveFocus(); }));
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().isEmpty(); }));
+	object.reset();
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -2443,6 +2511,7 @@ int main(int argc, char** argv)
 	watchRowWrite();
 	watchRowWriteUnknown();
 	watchRowSignedZero();
+	watchRowsToPlot();
 	presentationPanels();
 	disconnectedPanels();
 	outcomeAttention();

@@ -1243,7 +1243,7 @@ static void groupWatchBoxes()
 	const auto group = p.endpoints()->index(0, 0);
 	const auto watched = [](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
 	CHECK(p.watchState(group) == Qt::Unchecked && p.watchState(endpoint(p, 0)) == Qt::Unchecked &&
-	      !history.canUndo() && p.watchLimit() == 1024);
+	      !history.canUndo() && p.watchLimit() == watchlistRowLimit);
 	auto result = p.setWatchMany(watched(endpoint(p, 0)), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(p.watchState(endpoint(p, 0)) == Qt::Checked && p.watchState(group) == Qt::PartiallyChecked);
@@ -1296,11 +1296,11 @@ static void groupWatchBoxes()
 
 	// More Fields than the Watchlist holds: nothing changes, and room says why.
 	Api wide;
-	StaticConfiguratorProvider large(watchBinding(wide, 1030));
+	StaticConfiguratorProvider large(watchBinding(wide, watchlistRowLimit + 6));
 	const auto all = large.endpoints()->index(0, 0);
 	result = large.setWatchMany(watched(all), true);
-	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == 1030 &&
-	      result.value("room").toInt() == 1024 && large.watchCount() == 0 &&
+	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == watchlistRowLimit + 6 &&
+	      result.value("room").toInt() == watchlistRowLimit && large.watchCount() == 0 &&
 	      large.watchState(all) == Qt::Unchecked && large.history() == nullptr);
 }
 

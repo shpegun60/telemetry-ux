@@ -1,5 +1,6 @@
 // Editing a file's bytes as pictograms: Edit (a switch), Save, Write to the
-// device, Undo, Redo.
+// device, Undo, Redo. A file the host keeps read-only (FileContent's
+// readOnlyReason) has Edit off, its reason in the tooltip.
 // On the Viewer's own row, or on a host's toolbar acting on whichever Viewer
 // is in front, as an editor's toolbar acts on the editor in front. MIT.
 //
@@ -28,6 +29,8 @@ RowLayout {
     readonly property string fileName: viewer ? viewer.fileName : ""
     readonly property bool editing: !!content && content.editing
     readonly property bool onDevice: !!content && content.devicePath.length > 0
+    // Why the file is not edited here (a file the connection makes or uses), or empty.
+    readonly property string readOnly: content && content.readOnlyReason ? content.readOnlyReason : ""
     spacing: 2
 
     IconToolButton {
@@ -36,6 +39,8 @@ RowLayout {
         toggles: true
         switchedOn: tools.editing
         enabled: !!tools.content && tools.content.loaded && tools.content.size > 0 && !tools.writing
+                 && tools.readOnly.length === 0
+        disabledReason: tools.readOnly
         text: !tools.content ? qsTr("Edit the bytes of the file in the Viewer")
             : tools.editing ? qsTr("Stop editing %1").arg(tools.fileName)
             : tools.onDevice ? qsTr("Edit the bytes of %1 - the copy on this computer").arg(tools.fileName)

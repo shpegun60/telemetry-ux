@@ -343,7 +343,7 @@ Pane {
     // The step the status line spoke of can be taken back from here.
     readonly property bool canUndoStatus: statusSerial > 0 && history !== null && history.canUndo
                                           && history.undoSerial === statusSerial
-    function undoWatch() {
+    function undoStatusStep() {
         if (!canUndoStatus)
             return false
         const text = history.undoText
@@ -1330,7 +1330,7 @@ Pane {
                 text: qsTr("Undo")
                 Accessible.name: panel.history ? qsTr("Undo: %1").arg(panel.history.undoText) : text
                 font.pointSize: Type.caption
-                onClicked: panel.undoWatch()
+                onClicked: panel.undoStatusStep()
             }
             Item { Layout.fillWidth: true }
         }

@@ -1037,7 +1037,7 @@ struct DynamicConfiguratorProvider::Impl {
 				watch.retire();
 				batch.retire();
 				// A disconnect breaks every line on the Plot.
-				traces.breakAll();
+				traces.breakAll(WatchTraces::PauseReason::Disconnected);
 				allowed = false;
 				category = 0;
 				selectedIndex = QModelIndex{};

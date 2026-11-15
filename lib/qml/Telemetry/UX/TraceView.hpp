@@ -75,6 +75,12 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(QRectF valuesArea READ valuesArea NOTIFY drawn)
 	// Measurement points the last paint drew, for its checks.
 	Q_PROPERTY(int drawnDots READ drawnDots NOTIFY drawn)
+	// Bands the last paint drew where nothing was read, and the open circles
+	// that end a value no longer watched.
+	Q_PROPERTY(int drawnGaps READ drawnGaps NOTIFY drawn)
+	Q_PROPERTY(int drawnEnds READ drawnEnds NOTIFY drawn)
+	// A band where the Watchlist was stopped or the device gone.
+	Q_PROPERTY(QColor gapColor READ gapColor WRITE setGapColor NOTIFY styleChanged)
 	// The cursor: shown, its time on this PC's clock (ms since the epoch),
 	// how long before the newest reading, and where it is drawn (item x;
 	// outside the plot area when it has scrolled out).
@@ -144,6 +150,10 @@ public:
 	void setFocusedPath(const QString& path);
 	QRectF valuesArea() const { return valuesArea_; }
 	int drawnDots() const { return drawnDots_; }
+	int drawnGaps() const { return drawnGaps_; }
+	int drawnEnds() const { return drawnEnds_; }
+	QColor gapColor() const { return gapColor_; }
+	void setGapColor(const QColor& color);
 	// The colour a path is drawn in: its own, else its palette place's.
 	Q_INVOKABLE QColor curveColor(const QString& path) const;
 	// The values times factor (below 1 zooms in) about a point of the
@@ -276,7 +286,8 @@ private:
 	Range manual_, shown_, pressRange_;
 	QString focusedPath_;
 	QRectF valuesArea_;
-	int drawnDots_ = 0;
+	int drawnDots_ = 0, drawnGaps_ = 0, drawnEnds_ = 0;
+	QColor gapColor_{0x15, 0x1d, 0x27};
 	qint64 narrowSinceNs_ = 0;
 	// Per path: drawn per pixel rather than raw, for the hysteresis.
 	QHash<QString, bool> aggregated_;

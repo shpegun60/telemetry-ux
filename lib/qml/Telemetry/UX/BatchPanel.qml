@@ -83,6 +83,10 @@ Pane {
                     Layout.fillHeight: true
                     model: panel.provider.batchItems
                     clip: true
+                    // The current item, the one just added among them.
+                    highlight: Rectangle { color: Theme.stateSelectedInactive; radius: Type.radius }
+                    highlightMoveDuration: 0
+                    highlightResizeDuration: 0
                     // Down from the last item, or Insert, goes to the "+" row.
                     Keys.onDownPressed: event => {
                         if (batchAdd.visible && items.currentIndex >= items.count - 1) {
@@ -109,11 +113,28 @@ Pane {
                         required property bool historical
                         width: items.width
                         height: 64
+                        Accessible.role: Accessible.ListItem
+                        Accessible.name: qsTr("Item %1, %2 %3, %4").arg(item.index + 1).arg(item.operation).arg(item.name).arg(item.status)
+                        TapHandler { onTapped: items.currentIndex = item.index }
                         RowLayout {
                             anchors.fill: parent
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Label { textFormat: Text.PlainText; text: (item.index + 1) + ". " + item.operation + " - " + item.name; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                                Label {
+                                    id: itemName
+                                    objectName: "batchRowName"
+                                    textFormat: Text.PlainText
+                                    text: (item.index + 1) + ". " + item.operation + " - " + item.name
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideMiddle
+                                    // Cut short: the whole of it on hover.
+                                    HoverHandler { id: itemNameHover }
+                                    PlainToolTip {
+                                        visible: itemNameHover.hovered && itemName.truncated
+                                        text: itemName.text
+                                        delay: 700
+                                    }
+                                }
                                 Label { textFormat: Text.PlainText; text: item.status + (item.historical ? " - previous session" : ""); color: "#99abbf"; Layout.fillWidth: true; elide: Text.ElideRight }
                             }
                             Button {
@@ -156,8 +177,13 @@ Pane {
                     Layout.fillWidth: true
                     onAdded: notice => {
                         batchNotice.text = notice
+                        // The new item is the current one, in view; the
+                        // keys stay in the row for the next.
                         if (!batchAdd.lastRefused)
-                            Qt.callLater(items.positionViewAtEnd)
+                            Qt.callLater(() => {
+                                items.currentIndex = items.count - 1
+                                items.positionViewAtEnd()
+                            })
                     }
                     onSelected: kind => {
                         const at = operation.find(kind)
@@ -170,18 +196,44 @@ Pane {
                             items.currentIndex = items.count - 1
                     }
                 }
-                // What the row last did, in words: a refusal in the error colour.
-                Label {
-                    id: batchNotice
-                    objectName: "batchAddNotice"
-                    visible: batchAdd.visible && text.length > 0
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    color: batchAdd.lastRefused ? Theme.error : Theme.textSecondary
-                    font.pointSize: Type.caption
+                // What the row last did, in words: a refusal in the error
+                // colour; beside it, for a Command or a Service on the line,
+                // the way to Details by pointer as Ctrl+Enter is by key.
+                RowLayout {
+                    visible: batchAdd.visible && (batchNotice.text.length > 0 || fillDetails.wanted)
                     Layout.fillWidth: true
                     Layout.leftMargin: Type.padding + Type.indent + Type.tight
+                    Layout.rightMargin: Type.padding
                     Layout.bottomMargin: Type.tight
+                    spacing: Type.spacing
+                    Label {
+                        id: batchNotice
+                        objectName: "batchAddNotice"
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: batchAdd.lastRefused ? Theme.error : Theme.textSecondary
+                        font.pointSize: Type.caption
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        id: fillDetails
+                        objectName: "batchAddFillDetails"
+                        // What the line names (not the operation box beside it).
+                        readonly property string named: batchAdd.check.operation || ""
+                        // Its own condition: the row's visibility follows it.
+                        readonly property bool wanted: batchAdd.text.trim().length > 0
+                                                       && (fillDetails.named === "command" || fillDetails.named === "service")
+                                                       && (batchAdd.check.path || "").length > 0
+                        visible: wanted
+                        flat: true
+                        focusPolicy: Qt.NoFocus
+                        text: qsTr("Fill in Details")
+                        ToolTip.text: qsTr("Fill in Details (Ctrl+Enter)")
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 700
+                        Accessible.description: qsTr("Selects %1 in the Device tree with the values typed here.").arg(batchAdd.check.path || "")
+                        onClicked: batchAdd.adapter.select(batchAdd.text)
+                    }
                 }
             }
             ColumnLayout {
