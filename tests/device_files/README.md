@@ -102,6 +102,10 @@ over localhost TCP to the SDK's native server. No board.
     fingerprint (the connected device's), the good one beside it still first;
     with none it says "values.bin cannot be decoded: telemetry/descriptor.bin
     beside it cannot be read."
+  - What a project's copy is against the device's bytes as read
+    (`DeviceFileTransfers::copyState`), for the question before a read replaces
+    it: the same, a byte saved differently, a length changed, a record of
+    another path, no record, no copy.
   - A file the host keeps read-only (`OpenFiles::setReadOnlyLookup`,
     `FileContent::readOnlyReason`): its reason, editing and overwriting
     refused; a broken copy put back to the device's bytes by Restore and saved,

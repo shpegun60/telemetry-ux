@@ -11,6 +11,7 @@
 #include <integration/files/Client.hpp>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QLocale>
 #include <QtCore/QSaveFile>
@@ -339,6 +340,37 @@ QUrl DeviceFileTransfers::urlOfLocalFile(const QString& path)
 bool DeviceFileTransfers::makeFolder(const QString& path)
 {
 	return !path.isEmpty() && QDir().mkpath(path);
+}
+
+QVariantMap DeviceFileTransfers::copyState(const QString& localFile, const QString& devicePath)
+{
+	const QFileInfo info(localFile);
+	QVariantMap state{{QStringLiteral("exists"), info.isFile()},
+	                  {QStringLiteral("known"), false},
+	                  {QStringLiteral("differs"), qint64{0}},
+	                  {QStringLiteral("written"), false}};
+	if (!info.isFile())
+		return state;
+	state.insert(QStringLiteral("savedAt"), info.lastModified());
+	// The record's bytes, checked against their hash; none of another path.
+	const auto reference = DeviceBytes::reference(localFile, devicePath);
+	if (!reference)
+		return state;
+	QFile file(localFile);
+	if (!file.open(QIODevice::ReadOnly) || file.size() > FileContent::maxBytes)
+		return state;
+	const auto copy = file.readAll();
+	const auto& device = reference->bytes;
+	const auto common = std::min(copy.size(), device.size());
+	qint64 differs = std::max(copy.size(), device.size()) - common;
+	for (qsizetype i = 0; i < common; ++i)
+		differs += copy[i] != device[i] ? 1 : 0;
+	state.insert(QStringLiteral("known"), true);
+	state.insert(QStringLiteral("differs"), differs);
+	state.insert(QStringLiteral("written"), reference->written);
+	if (const auto record = DeviceBytes::find(localFile))
+		state.insert(QStringLiteral("readAt"), record->readAt);
+	return state;
 }
 
 QString DeviceFileTransfers::copyFile(const QString& from, const QString& to)

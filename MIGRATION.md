@@ -614,3 +614,13 @@ reason with two links - Restore the device's version (when the device's bytes
 are known and differ) and Read again from the device (when `reloadable`) -
 in `fileViewerCodecProblemBar`; the reason keeps its `fileViewerCodecProblem`
 label. New on `FileViewer`: `codecFailed`.
+
+## What a project's copy is before a read replaces it (FL-1d, November 2026)
+
+`DeviceFileTransfers::copyState(localFile, devicePath)` (static, invokable)
+returns `exists`, `known` (the device's bytes as read are kept and check),
+`differs` (bytes of the copy that are not those, a difference in length
+included), `savedAt`, `readAt` and `written`. A host asks before reading the
+device's file over a copy that exists and differs, or whose device's bytes are
+not known; opening reads over a copy the same as the device's bytes as
+before. Nothing else changes: `openIn` still replaces the copy it is given.

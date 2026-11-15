@@ -27,6 +27,7 @@
 #pragma once
 
 #include <integration/qt/ConnectionSession.hpp>
+#include <QtCore/QVariantMap>
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
@@ -172,6 +173,16 @@ public:
 	// Save as: copies a local file to another place, replacing what is there,
 	// written whole or not at all. Empty when done; otherwise why not, in words.
 	Q_INVOKABLE static QString copyFile(const QString& from, const QString& to);
+	// The project's copy of devicePath at localFile against the device's bytes
+	// as read (DeviceBytes), for the question a host asks before reading the
+	// device's file over it: `exists`; `known`, whether the device's bytes as
+	// read are kept and check; `differs`, the bytes of the copy that are not
+	// those (a difference in length counted too; 0 when not known);
+	// `savedAt`, when the copy was last written; `readAt`, when the device's
+	// bytes were read; `written`, whether they were read back after a write.
+	// A host asks when the copy exists and differs, or its device's bytes are
+	// not known; a copy the same as the device's bytes is replaced quietly.
+	Q_INVOKABLE static QVariantMap copyState(const QString& localFile, const QString& devicePath);
 	// The connected device's folder under root, made when missing; empty when
 	// it cannot be. "<name> [<id>]" from the device's identity file, or the id
 	// alone for a device without a name; a folder of the same id under an

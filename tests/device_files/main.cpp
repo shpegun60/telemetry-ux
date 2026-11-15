@@ -2623,6 +2623,48 @@ void descriptorWords(const QString& folder)
 	CHECK(asked == 1 && qobject_cast<ValuesContent*>(connected.contentFor(values)->decoded())->valid());
 }
 
+// What a project's copy is against the device's bytes as read (FL-1d): the
+// same, a byte saved differently, a length changed, no record, no copy.
+void copyStates(const QString& folder)
+{
+	using telemetry::ux::DeviceBytes;
+	const auto deviceFolder = folder + QStringLiteral("/copy-state/Bench [EMU-1]");
+	const auto local = deviceFolder + QStringLiteral("/config/settings.csv");
+	QDir().mkpath(QFileInfo(local).absolutePath());
+	const auto put = [](const QString& path, const QByteArray& bytes) {
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+	};
+	const QByteArray device("gain,1.5\nperiod,10\n");
+	put(local, device);
+	const auto readAt = QDateTime::currentDateTime().addSecs(-60);
+	CHECK(DeviceBytes::keep(deviceFolder, local, QStringLiteral("/config/settings.csv"), readAt).isEmpty());
+	auto state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/settings.csv"));
+	CHECK(state.value(QStringLiteral("exists")).toBool() && state.value(QStringLiteral("known")).toBool() &&
+	      state.value(QStringLiteral("differs")).toLongLong() == 0 && !state.value(QStringLiteral("written")).toBool());
+	CHECK(state.value(QStringLiteral("readAt")).toDateTime().secsTo(readAt) == 0 &&
+	      state.value(QStringLiteral("savedAt")).toDateTime().isValid());
+	auto saved = device;
+	saved[0] = 'G';
+	put(local, saved);
+	state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/settings.csv"));
+	CHECK(state.value(QStringLiteral("known")).toBool() && state.value(QStringLiteral("differs")).toLongLong() == 1);
+	put(local, saved + QByteArray("x,1\n"));
+	state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/settings.csv"));
+	CHECK(state.value(QStringLiteral("differs")).toLongLong() == 1 + 4);
+	// The record of another device path is not this copy's.
+	state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/other.csv"));
+	CHECK(state.value(QStringLiteral("exists")).toBool() && !state.value(QStringLiteral("known")).toBool() &&
+	      state.value(QStringLiteral("differs")).toLongLong() == 0);
+	DeviceBytes::forget(local);
+	state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/settings.csv"));
+	CHECK(state.value(QStringLiteral("exists")).toBool() && !state.value(QStringLiteral("known")).toBool() &&
+	      !state.contains(QStringLiteral("readAt")) && state.value(QStringLiteral("savedAt")).toDateTime().isValid());
+	CHECK(QFile::remove(local));
+	state = DeviceFileTransfers::copyState(local, QStringLiteral("/config/settings.csv"));
+	CHECK(!state.value(QStringLiteral("exists")).toBool() && !state.value(QStringLiteral("known")).toBool());
+}
+
 // A file the host keeps read-only (FL-1c): its reason, no editing, no
 // overwrite; a broken copy goes back to the device's bytes by Restore and is
 // saved like any edit, then reads again. Another device path, and the same
@@ -3852,6 +3894,7 @@ int main(int argc, char** argv)
 	valuesCodec(folder.path());
 	descriptorWords(folder.path());
 	readOnlyFiles(folder.path());
+	copyStates(folder.path());
 	valuesFormatting();
 	lazyValues();
 	lazyDescriptor();
