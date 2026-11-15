@@ -960,7 +960,20 @@ struct DynamicConfiguratorProvider::Impl {
 
 	// No draft and no selection is used, so a stale Details view does not
 	// stop it (a write from the Watchlist marks that view stale).
-	// request: a Command's or a Service's values typed in the row (BA-2).
+	// A request of type at its initial values: zero, false, an enum's first
+	// name (RequestEditor::initialize, the one builder Details uses too).
+	QByteArray initialRequest(TypeId type, std::size_t bytes) const
+	{
+		QByteArray out(qsizetype(bytes), '\0');
+		if (bytes && wb::RequestEditor::initialize(batch.schema(), type,
+		                                           std::span{reinterpret_cast<std::byte*>(out.data()), bytes}) !=
+		                 rt::Status::Ok)
+			return {};
+		return out;
+	}
+
+	// request: a Command's or a Service's values typed in the row (BA-2);
+	// without it the request starts at its initial values (BA-4b).
 	std::optional<BatchRow> pathRow(const EndpointEntry& entry, const QByteArray* request = nullptr) const
 	{
 		if (!selectable() || !state)
@@ -979,21 +992,25 @@ struct DynamicConfiguratorProvider::Impl {
 		} else if (entry.category == 2) {
 			const auto bound = state->view.bindCommand(row.id);
 			const auto bytes = bound ? bound.endpoint.requestBytes() : 0;
-			if (!bound || (bytes != 0 && (!request || std::size_t(request->size()) != bytes)))
+			if (!bound || (bytes != 0 && request && std::size_t(request->size()) != bytes))
 				return {};
 			row.operation = cl::Operation::Command;
 			row.requestType = bound.endpoint.requestType();
 			if (bytes)
-				row.request = *request;
+				row.request = request ? *request : initialRequest(row.requestType, bytes);
+			if (std::size_t(row.request.size()) != bytes)
+				return {};
 		} else if (entry.category == 3) {
 			const auto bound = state->view.bindService(row.id);
 			const auto bytes = bound ? bound.endpoint.requestBytes() : 0;
-			if (!bound || (bytes != 0 && (!request || std::size_t(request->size()) != bytes)))
+			if (!bound || (bytes != 0 && request && std::size_t(request->size()) != bytes))
 				return {};
 			row.operation = cl::Operation::Service;
-			if (bytes)
-				row.request = *request;
 			row.requestType = bound.endpoint.requestType();
+			if (bytes)
+				row.request = request ? *request : initialRequest(row.requestType, bytes);
+			if (std::size_t(row.request.size()) != bytes)
+				return {};
 			row.responseType = bound.endpoint.responseType();
 			row.responseBytes = bound.endpoint.responseBytes();
 		} else
@@ -1917,7 +1934,9 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 	// A Command or a Service that takes input, with its values typed after
 	// it (BA-2): what is missing or wrong, or the request it makes.
 	std::optional<request_arguments::Result> typed;
-	if (pick.status == QStringLiteral("input") && pick.matches.size() == 1) {
+	if (pick.status == QStringLiteral("input") && pick.matches.size() == 1 && pick.tail.trimmed().isEmpty())
+		pick.status = QStringLiteral("adds");
+	else if (pick.status == QStringLiteral("input") && pick.matches.size() == 1) {
 		typed = typedArguments(p->batch, pick.matches.first(), pick.tail);
 		if (typed) {
 			out[QStringLiteral("path")] = pick.matches.first().path;
@@ -1973,9 +1992,6 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 	const auto& entry = pick.matches.first();
 	out[QStringLiteral("path")] = entry.path;
 	out[QStringLiteral("operation")] = operationWord(entry);
-	if (p->takesInput(entry) && !typed)
-		return say(QStringLiteral("input"),
-		           batchWords("%1 takes input. Enter selects it: fill it in Details, then Add selected draft.").arg(entry.path));
 	if (!p->batch.supported())
 		return say(QStringLiteral("unsupported"), batchWords("This device has no Batch."));
 	auto row = p->pathRow(entry, typed ? &typed->request : nullptr);
@@ -1999,6 +2015,19 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 	out[QStringLiteral("also")] = also;
 	QString message = pick.member ? batchWords("A Batch reads whole Fields: adds a read of %1 as item %L2").arg(entry.path).arg(item)
 	                              : batchWords("Adds %1 as item %L2").arg(addedWhat(entry, typed ? valuesSaid(*typed) : QString{})).arg(item);
+	// The initial values it starts at, to be set on the item: "with value 0
+	// and factor 0", the first three and how many more.
+	if (!typed && !row->request.isEmpty()) {
+		QStringList said;
+		for (const auto& part : DynamicBatch::lineOf(p->batch.schema(), row->requestType, row->request).split(QLatin1Char(' '), Qt::SkipEmptyParts))
+			said << QString(part).replace(QLatin1Char('='), QLatin1Char(' '));
+		if (said.size() > 3)
+			message += batchWords(", with %1 and %L2 more").arg(said.mid(0, 3).join(QStringLiteral(", "))).arg(said.size() - 3);
+		else if (!said.isEmpty())
+			message += batchWords(", with %1").arg(said.size() == 1 ? said.first()
+			                                                         : said.mid(0, said.size() - 1).join(QStringLiteral(", ")) +
+			                                                               batchWords(" and ") + said.last());
+	}
 	if (entry.category != 1)
 		message += entry.category == 2 ? batchWords("; it runs when the Batch is executed")
 		                               : batchWords("; it is called when the Batch is executed");
