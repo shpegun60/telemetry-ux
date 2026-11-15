@@ -957,25 +957,18 @@ int main(int argc, char** argv)
             settle();
             CHECK(!expandBox->property("checked").toBool());
             CHECK(narrowProvider->property("starts").toInt() == 1 && narrowProvider->property("reads").toInt() == 1);
-            // Clear asks first; Esc keeps the list, Remove all empties it.
+            // Clear empties it at once, never asked first (UR-1): Undo brings
+            // the values back where the host gave a history; this one gave
+            // none, so the line says it with no Undo.
             CHECK(narrowPanel->setProperty("expanded", true));
             settle();
-            auto* clearDialog = narrowPanel->findChild<QObject*>(QStringLiteral("clearWatchDialog"));
-            CHECK(clearDialog != nullptr);
             CHECK(QMetaObject::invokeMethod(menuItem("clearWatchItem"), "click"));
             settle();
-            CHECK(clearDialog->property("visible").toBool());
-            auto* clearCancel = item(narrowWindow->contentItem(), QStringLiteral("clearWatchCancel"));
-            CHECK(clearCancel && clearCancel->hasActiveFocus());
-            CHECK(clearDialog->property("title").toString().contains(QStringLiteral("66")));
+            CHECK(!narrowPanel->findChild<QObject*>(QStringLiteral("clearWatchDialog")));
+            CHECK(narrowProvider->property("watchCount").toInt() == 0);
+            auto* cleared = named("watchNotice");
+            CHECK(cleared && cleared->property("text").toString() == QStringLiteral("Cleared 66 values"));
             CHECK(narrowWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/watch-clear.png")));
-            QTest::keyClick(narrowWindow, Qt::Key_Escape);
-            settle();
-            CHECK(!clearDialog->property("visible").toBool() && narrowProvider->property("watchCount").toInt() == 66);
-            CHECK(QMetaObject::invokeMethod(menuItem("clearWatchItem"), "click"));
-            settle();
-            click(narrowWindow, item(narrowWindow->contentItem(), QStringLiteral("clearWatchConfirm")));
-            CHECK(!clearDialog->property("visible").toBool() && narrowProvider->property("watchCount").toInt() == 0);
             auto* empty = named("watchEmpty");
             CHECK(empty->isVisible() && empty->property("text").toString().contains(QStringLiteral("Watch the selected Field")));
         }

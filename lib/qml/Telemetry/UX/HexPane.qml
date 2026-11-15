@@ -6,9 +6,10 @@
 // Ctrl+Shift+C copy as, Ctrl+C copy, Ctrl+A select all, Esc collapses the
 // selection or closes a bar. Editing is off until Edit: then hex digits (or
 // letters in the text column) write over the bytes, Ctrl+V pastes over them,
-// Ctrl+H replaces what Find finds, Ctrl+Z and Ctrl+Y undo and redo; the
-// viewer's Ctrl+S saves. The status line says how many bytes are changed and
-// not saved - Save writes this computer's copy, never the device's file. The
+// Ctrl+H replaces what Find finds - Ctrl+Z and Ctrl+Y undo and redo through
+// the window's UndoRouter, which the viewer's UndoScope points at this file's
+// history; the viewer's Ctrl+S saves. The status line says how many bytes are changed and
+// not saved - Save writes the project's copy, never the device's file. The
 // actions are the viewer's (FileEditTools, on its row or the host's toolbar,
 // and its `⋯` menu): they call startEditing(), stopEditing(), save(),
 // askDiscard() and saveCopy() here.
@@ -111,6 +112,13 @@ FocusScope {
     property string saveProblem: ""
     // A copy of a device's file: Save writes this computer's copy, never the device's.
     readonly property bool onDevice: !!content && content.devicePath.length > 0
+    // The device's name, or the local file's for one from disk.
+    readonly property string fileName: {
+        if (!content)
+            return ""
+        const path = content.devicePath.length > 0 ? content.devicePath : content.localFile
+        return path.substring(path.lastIndexOf("/") + 1)
+    }
     // Why this file is not edited here, or empty (FileContent.readOnlyReason).
     readonly property string readOnly: content && content.readOnlyReason ? content.readOnlyReason : ""
     function startEditing() {
@@ -129,7 +137,15 @@ FocusScope {
         return pane.saveProblem
     }
     function askDiscard() { discardDialog.open() }
-    function saveCopy() { copyDialog.open() }
+    // Save a copy as…: what the tab shows, edits not saved included, where a
+    // dialog says; the copy's own name first. A problem is said on the status
+    // line (copyProblem asks the viewer to show Hex).
+    signal copyProblem(string problem)
+    function saveCopy() {
+        if (pane.content && pane.content.localFile.length > 0)
+            copyDialog.selectedFile = pane.content.localUrl()
+        copyDialog.open()
+    }
     // A new edit makes an old save problem stale.
     Connections {
         target: pane.content
@@ -199,8 +215,8 @@ FocusScope {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: !pane.content || pane.content.editedBytes === 1 ? qsTr("The changed byte goes back to the copy on this computer.")
-                      : qsTr("%L1 changed bytes go back to the copy on this computer.").arg(pane.content.editedBytes)
+                text: !pane.content || pane.content.editedBytes === 1 ? qsTr("The changed byte goes back to the copy in the project.")
+                      : qsTr("%L1 changed bytes go back to the copy in the project.").arg(pane.content.editedBytes)
             }
         }
         onDiscarded: {
@@ -211,9 +227,15 @@ FocusScope {
     }
     FileDialog {
         id: copyDialog
-        title: qsTr("Save a copy of the edited bytes")
+        title: pane.content ? qsTr("Save a copy of %1").arg(pane.fileName) : qsTr("Save a copy")
         fileMode: FileDialog.SaveFile
-        onAccepted: pane.saveProblem = pane.content.saveCopyAs(selectedFile)
+        onAccepted: {
+            pane.saveProblem = pane.content.saveCopyAs(selectedFile)
+            if (pane.saveProblem.length > 0)
+                pane.copyProblem(pane.saveProblem)
+            else
+                pane.Accessible.announce(qsTr("Saved a copy of %1").arg(pane.fileName))
+        }
     }
 
     // The grid's own menu, on a right click, the Menu key or Shift+F10.
@@ -686,8 +708,8 @@ FocusScope {
                         // Short, so it fits beside the cursor's place; when the
                         // device's bytes were read is in the tooltip.
                         return pane.content.referenceDiffers === 1
-                               ? qsTr("Saved locally · 1 byte differs from device")
-                               : qsTr("Saved locally · %L1 bytes differ from device").arg(pane.content.referenceDiffers)
+                               ? qsTr("Saved in the project · 1 byte differs from the device's")
+                               : qsTr("Saved in the project · %L1 bytes differ from the device's").arg(pane.content.referenceDiffers)
                     const edited = pane.content.editedBytes
                     const state = pane.content.editing ? qsTr("Editing") : qsTr("Not saved")
                     return edited === 0 ? state
@@ -700,9 +722,9 @@ FocusScope {
                 ToolTip.text: readOnlyState ? pane.readOnly
                             : !editState && !deviceDiffers
                               ? qsTr("Same as %1").arg(pane.content ? pane.content.referenceLabel : "")
-                            : !editState ? qsTr("This copy is saved on this computer and differs from %1; Restore the device's version puts them back")
+                            : !editState ? qsTr("This copy is saved in the project and differs from %1; Restore the device's version puts them back")
                                                 .arg(pane.content ? pane.content.referenceLabel : "")
-                            : pane.onDevice ? qsTr("Changed in the copy on this computer, not saved; the device's file is unchanged")
+                            : pane.onDevice ? qsTr("Changed in the project's copy, not saved; the device's file is unchanged")
                                             : qsTr("Changed, not saved")
                 Accessible.role: Accessible.StaticText
                 Accessible.description: ToolTip.text

@@ -1,7 +1,8 @@
 // The Watchlist's "+" row (WL-4b), as Live Expressions' "Add new expression":
 // a path typed or pasted, completed from the device's descriptor, added on
 // Enter - PathAddRow with the Watchlist's words and rules. A path the device
-// lacks is kept as a row (WL-4c); one already watched shows its row. Several
+// lacks is kept as a row (WL-4c), and so is one typed with no device (WL-8);
+// one already watched shows its row. Several
 // pasted lines are added at once, "path = value" lines copied from the
 // Watchlist included. Presentation only: the provider resolves and adds. MIT.
 import QtQuick
@@ -42,7 +43,13 @@ PathAddRow {
             const kept = result.missing ? result.missing.length : 0
             const parts = []
             const first = lines[0].split(" = ")[0].split("\t")[0].trim()
-            if (lines.length === 1 && kept === 1)
+            // Typed with no device (WL-8): kept as rows read on a device that has them.
+            const offline = result.offline === true
+            if (offline && kept === 1 && lines.length === 1)
+                parts.push(qsTr("Added %1; it is read on a device that has it").arg(first))
+            else if (offline && kept > 0)
+                parts.push(qsTr("Added %L1; each is read on a device that has it").arg(kept))
+            else if (lines.length === 1 && kept === 1)
                 parts.push(qsTr("Added %1, not on this device").arg(first))
             else if (added > 0)
                 parts.push(lines.length === 1 && added === 1 ? qsTr("Added %1").arg(first)
@@ -50,7 +57,7 @@ PathAddRow {
                            : qsTr("Added %L1").arg(added))
             if (result.already > 0)
                 parts.push(qsTr("%L1 already watched").arg(result.already))
-            if (kept > 0 && lines.length > 1)
+            if (kept > 0 && lines.length > 1 && !offline)
                 parts.push(qsTr("%L1 not on this device").arg(kept))
             if (result.refused && result.refused.length > 0)
                 parts.push(result.refused.length === 1 ? result.refused[0].reason

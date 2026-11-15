@@ -365,8 +365,10 @@ struct DynamicConfiguratorProvider::Impl {
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
 	QString writeText, writeName, watchWrite, watchWriteKind;
-	// The written row's type, to say why a text is not a value of it.
+	// The written row's type, to say why a text is not a value of it, and its
+	// form, to say a range in the form the row shows (WL-8).
 	WatchValueType writeType;
+	WatchNumberFormat writeForm = WatchNumberFormat::Original;
 	// A value inside a struct or array Field: where it is, so the write walks
 	// to it in the Field just read; and the value as it will be written.
 	std::optional<WatchLeaves::Leaf> writeLeaf;
@@ -622,6 +624,69 @@ struct DynamicConfiguratorProvider::Impl {
 		                   QStringLiteral("watch.rows"), {}, std::move(after));
 	}
 
+	// Paths typed with no device (WL-8): each well-formed one kept as a row
+	// by its path, as a disconnect keeps rows, found on a device that has it;
+	// one step. Answered as addWatchPaths, with offline: true.
+	QVariantMap keepWatchPaths(const QStringList& lines, QVariantMap result)
+	{
+		result.insert(QStringLiteral("offline"), true);
+		QVector<DynamicWatchlist::PathRow> kept;
+		QSet<QString> seen;
+		QVariantList paths, refused;
+		int already = 0;
+		const int from = watch.count();
+		for (const auto& line : lines) {
+			auto path = line;
+			if (const auto equals = path.indexOf(QStringLiteral(" = ")); equals >= 0)
+				path = path.left(equals);
+			if (const auto tab = path.indexOf(QLatin1Char('\t')); tab >= 0)
+				path = path.left(tab);
+			path = path.trimmed();
+			if (path.isEmpty())
+				continue;
+			const auto resolved = watch.resolvePath(path, false);
+			if (!resolved.offline) {
+				refused.append(QVariantMap{{QStringLiteral("path"), path}, {QStringLiteral("reason"), resolved.error}});
+				continue;
+			}
+			if (seen.contains(path) || watch.unboundRow(path) >= 0) {
+				++already;
+				continue;
+			}
+			seen.insert(path);
+			paths.append(path);
+			kept.push_back({from + int(kept.size()), path});
+		}
+		result[QStringLiteral("missing")] = paths;
+		result[QStringLiteral("refused")] = refused;
+		result[QStringLiteral("already")] = already;
+		if (kept.isEmpty())
+			return result;
+		const int room = WatchlistModel::maxRows - from;
+		if (kept.size() > room) {
+			result[QStringLiteral("status")] = QStringLiteral("capacity");
+			result[QStringLiteral("message")] =
+			    DynamicConfiguratorProvider::tr("These add %L1 values; the Watchlist has room for %L2 more of its %L3. Remove some first.")
+			        .arg(kept.size())
+			        .arg(room)
+			        .arg(WatchlistModel::maxRows);
+			return result;
+		}
+		bool put = false;
+		{
+			WatchRows::Changes held{rows};
+			put = watch.putBack(kept);
+		}
+		if (!put) {
+			result[QStringLiteral("status")] = QStringLiteral("refused");
+			result[QStringLiteral("message")] = DynamicConfiguratorProvider::tr("The Watchlist is busy; try again in a moment.");
+			return result;
+		}
+		result[QStringLiteral("serial")] = recordAdded(from);
+		notify();
+		return result;
+	}
+
 	// The rows' own formats by key, read before they go.
 	QHash<WatchKey, std::optional<WatchNumberFormat>> formatsOf(const QSet<WatchKey>& keys) const
 	{
@@ -861,6 +926,22 @@ struct DynamicConfiguratorProvider::Impl {
 	bool current() const
 	{
 		return binding && binding->current() && state && !state->retired && state->view.isCurrent();
+	}
+
+	// The device polling was started on, by its descriptor fingerprint.
+	QString pollDevice;
+	// Polling that only a lost link stopped begins again on the same device,
+	// the same descriptor fingerprint (WL-8); another device forgets it.
+	void resumeWatch()
+	{
+		if (!watch.resumes() || watch.active() || !current())
+			return;
+		const auto device = binding->fingerprint();
+		if (device.isEmpty() || device != pollDevice) {
+			watch.forgetResume();
+			return;
+		}
+		watch.begin(true);
 	}
 
 	void present(bool notify = true)
@@ -1345,7 +1426,7 @@ struct DynamicConfiguratorProvider::Impl {
 		}
 		if (!parsed || set != rt::Status::Ok) {
 			// Why, in words: the type's range for a number past it (WL-3b).
-			const auto why = writeType.valid() ? watch_format::encode(writeText, writeType).error : QString{};
+			const auto why = writeType.valid() ? watch_format::encode(writeText, writeType, writeForm).error : QString{};
 			failWatchWrite(writeName + QStringLiteral(" not written: ") +
 			               (why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why));
 			return;
@@ -1558,6 +1639,7 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 	p->status = p->current() ? QString() : QStringLiteral("Not connected");
 	p->present();
 	p->updating = false;
+	p->resumeWatch();
 	p->notify();
 }
 
@@ -2368,7 +2450,12 @@ bool DynamicConfiguratorProvider::selectBatch(int row)
 bool DynamicConfiguratorProvider::executeBatch()
 {
 	auto p = d;
-	return p->batch.execute();
+	if (!p->batch.execute())
+		return false;
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The Batch was run on the device; Undo does not take back what it sent."));
+	return true;
 }
 
 void DynamicConfiguratorProvider::setBatchSource(BatchSource source)
@@ -2399,6 +2486,7 @@ void DynamicConfiguratorProvider::setWatchSource(WatchlistSource source)
 		if (!p->rowFormats.isEmpty())
 			model->setPathFormats(std::exchange(p->rowFormats, {}));
 	}
+	p->resumeWatch();
 	p->notify();
 }
 
@@ -2648,6 +2736,18 @@ QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) con
 		return out;
 	};
 	const auto resolved = p->watch.resolvePath(typed, false);
+	// No device to look it up on: kept as a row that says so (WL-8).
+	if (resolved.offline && !p->current()) {
+		if (p->watch.unboundRow(typed) >= 0) {
+			out[QStringLiteral("row")] = p->watch.unboundRow(typed);
+			return say(QStringLiteral("watched"), words("%1 is already in the Watchlist.").arg(typed));
+		}
+		const int room = watchLimit() - watchCount();
+		if (room < 1)
+			return say(QStringLiteral("error"), words("The Watchlist is full: %L1 values.").arg(watchLimit()));
+		return say(QStringLiteral("missing"),
+		           words("No device. Enter keeps it; it is read on a device that has it."));
+	}
 	if (resolved.missing && p->watch.unboundRow(typed) >= 0) {
 		out[QStringLiteral("row")] = p->watch.unboundRow(typed);
 		return say(QStringLiteral("watched"), words("%1 is already in the Watchlist; it is not on this device.").arg(typed));
@@ -2698,6 +2798,8 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("added"), 0},
 	                   {QStringLiteral("already"), 0}, {QStringLiteral("missing"), QVariantList{}},
 	                   {QStringLiteral("refused"), QVariantList{}}};
+	if (!p->current() && !p->updating && p->watch.model())
+		return p->keepWatchPaths(lines, result);
 	if (!p->current() || p->updating || p->endpoints.changing()) {
 		result[QStringLiteral("status")] = QStringLiteral("refused");
 		result[QStringLiteral("message")] = words("The device is changing; try again in a moment.");
@@ -2869,7 +2971,7 @@ QVariantMap DynamicConfiguratorProvider::watchEditPreview(int row, const QString
 	static const QRegularExpression unfinished(QStringLiteral("^([-+]|0[xX]|.*[eE][-+]?|.*\\.)$"));
 	if (unfinished.match(typed).hasMatch())
 		return out;
-	const auto encoded = watch_format::encode(typed, type);
+	const auto encoded = watch_format::encode(typed, type, model->rowFormat(row).value_or(model->format()));
 	if (!encoded.error.isEmpty()) {
 		out[QStringLiteral("error")] = encoded.error;
 		return out;
@@ -3363,7 +3465,8 @@ void DynamicConfiguratorProvider::refreshWatch()
 void DynamicConfiguratorProvider::startWatch()
 {
 	auto p = d;
-	p->watch.begin(true);
+	if (p->watch.begin(true) && p->current())
+		p->pollDevice = p->binding->fingerprint();
 }
 
 bool DynamicConfiguratorProvider::canWriteWatch() const
@@ -3397,12 +3500,16 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto index = model->index(row, 0);
 	if (!model->data(index, WatchlistModel::WritableRole).toBool())
 		return false;
+	// The value as last read, as it is typed: what writing it again takes back.
+	const auto previous = model->data(index, WatchlistModel::EditorTextRole).toString();
 	p->watchWriteSession = p->writer->view.session();
 	// Hex is taken whatever the row shows: as the value's exact text.
 	auto typed = text.trimmed();
 	if (watch_format::isHex(typed)) {
 		const auto* watched = qobject_cast<const WatchlistModel*>(model);
-		const auto parsed = watch_format::fromHex(typed, watched ? watched->valueType(row) : WatchValueType{});
+		const auto parsed = watch_format::fromHex(typed, watched ? watched->valueType(row) : WatchValueType{},
+		                                          watched ? watched->rowFormat(row).value_or(watched->format())
+		                                                  : WatchNumberFormat::Original);
 		if (!parsed.error.isEmpty()) {
 			p->watchWrite = model->data(index, WatchlistModel::NameRole).toString() + QStringLiteral(" not written: ") +
 			                parsed.error;
@@ -3457,8 +3564,14 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
 	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
 	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
+	p->writeForm = watchedRow ? watchedRow->rowFormat(row).value_or(watchedRow->format()) : WatchNumberFormat::Original;
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->watchWriteKind = QStringLiteral("writing");
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(
+		    previous.isEmpty() ? tr("The write to %1 is not undone.").arg(p->writeName)
+		                       : tr("The write to %1 is not undone; write %2 to go back.").arg(p->writeName, previous));
 	p->notify();
 	return true;
 }
@@ -3770,6 +3883,10 @@ bool DynamicConfiguratorProvider::apply()
 		p->binding->requestSubmitted();
 	p->write = p->status = QStringLiteral("Write pending");
 	p->writeAttention = false;
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(
+		    tr("The write to %1 is not undone; apply the old value to go back.").arg(p->selection));
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -3807,6 +3924,8 @@ bool DynamicConfiguratorProvider::executeCommand()
 		p->binding->requestSubmitted();
 	p->command = p->status = QStringLiteral("Command pending");
 	p->commandAttention = false;
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The Command %1 was sent; Undo does not take it back.").arg(p->selection));
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -3847,6 +3966,8 @@ bool DynamicConfiguratorProvider::callService()
 		p->binding->requestSubmitted();
 	p->service = p->status = QStringLiteral("Service pending");
 	p->serviceAttention = false;
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The request to %1 was sent; Undo does not take it back.").arg(p->selection));
 	p->updating = true;
 	p->present(false);
 	p->values.clear();

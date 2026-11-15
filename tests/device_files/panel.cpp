@@ -1,6 +1,7 @@
 // DeviceFilesPanel with live models over a real session, off screen: the
 // states, the tree, the download button following the marks, a transfer row
 // with its progress and its result, and not one QML warning. MIT.
+#include <Telemetry/UX/DeviceBytes.hpp>
 #include <Telemetry/UX/DeviceFileTransfers.hpp>
 #include <Telemetry/UX/DeviceFilesModel.hpp>
 #include <Telemetry/UX/FileContent.hpp>
@@ -10,7 +11,9 @@
 #include <integration/tcp/Server.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <QAccessible>
 #include <QClipboard>
+#include <QColor>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -38,6 +41,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 namespace qt = telemetry::integration::qt;
 namespace tcp = telemetry::integration::tcp;
 using telemetry::ux::DeviceFilesModel;
@@ -516,11 +520,23 @@ void hexEditing(const QString& folder)
 	CHECK(content.bytes().startsWith("Zz") && view.cursor() == 2 && content.editedBytes() == 2);
 	view.moveTo(1);
 	CHECK(view.status().contains(QStringLiteral("Edited, not saved")));
-	// One step for what was typed in one go.
+	// One step for what was typed in one go. Ctrl+Z and Ctrl+Y are the
+	// window's UndoRouter's (UR-1), never the grid's own: here they do nothing.
 	press(&view, Qt::Key_Z, Qt::ControlModifier);
+	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2 && content.history()->canUndo());
+	CHECK(content.history()->undo());
 	CHECK(content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 0 && !content.history()->canUndo());
 	press(&view, Qt::Key_Y, Qt::ControlModifier);
+	CHECK(content.bytes() == QByteArray("ABCDEFGH"));
+	CHECK(content.history()->redo());
 	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2);
+	// While the host writes the copy to the device its steps wait, in words.
+	content.setWriting(true);
+	CHECK(!content.history()->canUndo() &&
+	      content.history()->blockedReason() == QStringLiteral("Wait for editing.bin to finish writing to the device.") &&
+	      !content.history()->undo() && content.bytes().startsWith("Zz"));
+	content.setWriting(false);
+	CHECK(content.history()->canUndo() && content.history()->blockedReason().isEmpty());
 	// A letter outside the printable range is not typed; a hex digit in the
 	// text column is a letter there.
 	view.moveTo(7);
@@ -1301,7 +1317,7 @@ int main(int argc, char** argv)
 	const telemetry::ux::FileContent::ReferenceLookup reference =
 	    [&](const QString&, const QString&) -> std::optional<telemetry::ux::FileContent::Reference> {
 		return telemetry::ux::FileContent::Reference{deviceCsv, QStringLiteral("the device's bytes as read at 12:04"),
-		                                             false};
+		                                             false, QDateTime::currentDateTime()};
 	};
 	viewerContent.setCodecs(&failingCodecs, &noContext);
 	viewerContent.setReferenceLookup(&reference);
@@ -1324,18 +1340,252 @@ int main(int argc, char** argv)
 	viewerContent.setReferenceLookup(nullptr);
 	CHECK(viewerContent.reload());
 	CHECK(await([&] { return !child(root, "fileViewerCodecProblem")->property("visible").toBool(); }));
-	// The file's actions are in its ⋯ menu: Save as hands the host the local
-	// copy, Copy path the device's path.
+	// The file's actions are in its ⋯ menu, in the two places' words (FL-1e):
+	// Read again from the device, for a device's file; Save a copy as…, which
+	// writes what the tab shows itself (its dialog is not opened here) - the
+	// separate "Save the edited bytes as…" is gone; Copy path the device's path.
 	CHECK(child(root, "fileViewerMore") && !child(root, "fileViewerMore")->property("text").toString().isEmpty());
 	CHECK(QMetaObject::invokeMethod(viewer, "openMenu"));
 	CHECK(await([&] {
 		return child(root, "fileViewerMenu")->property("visible").toBool();
 	}));
-	CHECK(QMetaObject::invokeMethod(child(root, "fileViewerSaveAs"), "triggered"));
-	CHECK(root->property("lastSaveAs").toString() == csvPath);
+	CHECK(child(root, "fileViewerReload")->property("visible").toBool() &&
+	      child(root, "fileViewerReload")->property("text").toString() ==
+	          QStringLiteral("&Read again from the device (not connected)\tCtrl+R") &&
+	      !child(root, "fileViewerReload")->property("enabled").toBool());
+	CHECK(child(root, "fileViewerSaveAs")->property("text").toString() == QStringLiteral("Save a cop&y as…\tCtrl+Shift+S") &&
+	      child(root, "fileViewerSaveAs")->property("enabled").toBool() && !child(root, "hexSaveCopy"));
 	CHECK(QMetaObject::invokeMethod(child(root, "fileViewerCopyPath"), "triggered"));
 	CHECK(QGuiApplication::clipboard()->text() == QStringLiteral("/config/viewer.csv"));
 	child(root, "fileViewerMenu")->setProperty("visible", false);
+	CHECK(root->property("lastSaveAs").toString().isEmpty());
+
+	// FL-1e: the state line - how the copy stands with the device's file
+	// first, then its size, format and path; the times on hover; a change
+	// announced to a screen reader, the first state of a file not.
+	static QStringList announced;
+	const auto previousHandler = QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+		if (event->type() == QAccessible::Announcement)
+			announced << static_cast<QAccessibleAnnouncementEvent*>(event)->message();
+	});
+	QAccessible::setActive(true);
+	auto* footer = child(root, "fileViewerFooter");
+	auto* stateLine = child(root, "fileViewerState");
+	const auto stateText = [&] { return viewer->property("stateText").toString(); };
+	const auto stateKind = [&] { return viewer->property("stateKind").toString(); };
+	const auto shortTime = [](const QDateTime& when) { return QLocale().toString(when.time(), QLocale::ShortFormat); };
+	QByteArray deviceView;
+	{
+		QFile file(csvPath);
+		CHECK(file.open(QIODevice::ReadOnly));
+		deviceView = file.readAll();
+	}
+	auto readAt = QDateTime::currentDateTime().addSecs(-60);
+	bool written = false;
+	std::optional<QByteArray> deviceSide = deviceView;
+	const telemetry::ux::FileContent::ReferenceLookup layer =
+	    [&](const QString&, const QString&) -> std::optional<telemetry::ux::FileContent::Reference> {
+		if (!deviceSide)
+			return std::nullopt;
+		return telemetry::ux::FileContent::Reference{*deviceSide, QStringLiteral("the device's bytes as read"), written,
+		                                             readAt};
+	};
+	viewerContent.setReferenceLookup(&layer);
+	viewer->setProperty("deviceConnected", true);
+	CHECK(viewerContent.reload());
+	CHECK(stateKind() == QStringLiteral("same") &&
+	      stateText() == QStringLiteral("Same as the device's · read %1").arg(shortTime(readAt)));
+	CHECK(footer->property("text").toString() ==
+	      QStringLiteral("%1 · %2 · %3 · /config/viewer.csv").arg(stateText(), viewerContent.sizeText(), viewerContent.format()));
+	CHECK(stateLine && stateLine->property("visible").toBool());
+	{
+		const auto details = footer->property("details").toString();
+		CHECK(details.contains(QStringLiteral("In the project: %1").arg(csvPath)) &&
+		      details.contains(QStringLiteral("On the device: /config/viewer.csv")) &&
+		      details.contains(QStringLiteral("Read from the device: %1").arg(shortTime(readAt))) &&
+		      details.contains(QStringLiteral("Saved in the project: ")));
+		QQmlExpression name(qmlContext(footer), footer, QStringLiteral("Accessible.name"));
+		CHECK(name.evaluate().toString() == footer->property("text").toString());
+	}
+	// Its device not connected: said after the state.
+	viewer->setProperty("deviceConnected", false);
+	CHECK(stateText().endsWith(QStringLiteral(" · not connected")));
+	viewer->setProperty("deviceConnected", true);
+	announced.clear();
+	// Saved in the project with a byte the device's is not: the info colour.
+	viewerContent.setEditing(true);
+	CHECK(viewerContent.overwrite(0, QByteArray(1, deviceView[0] == 'q' ? 'r' : 'q')));
+	// An edit not saved leaves the line as it is: it is about the saved copy.
+	CHECK(stateKind() == QStringLiteral("same"));
+	CHECK(viewerContent.save().isEmpty());
+	viewerContent.setEditing(false);
+	CHECK(stateKind() == QStringLiteral("saved") &&
+	      stateText() == QStringLiteral("Saved in the project · 1 byte differs from the device's"));
+	CHECK(stateLine->property("color").value<QColor>() ==
+	      QQmlExpression(qmlContext(stateLine), stateLine, QStringLiteral("Theme.info")).evaluate().value<QColor>());
+	CHECK(await([&] { return announced.contains(stateText()); }));
+	// The device's file known to have changed since: a warning.
+	viewerContent.setDeviceChanged(true);
+	CHECK(stateKind() == QStringLiteral("changed") &&
+	      stateText() == QStringLiteral("! The device's file changed after %1").arg(shortTime(readAt)));
+	CHECK(stateLine->property("color").value<QColor>() ==
+	      QQmlExpression(qmlContext(stateLine), stateLine, QStringLiteral("Theme.warning")).evaluate().value<QColor>());
+	viewerContent.setDeviceChanged(false);
+	// Written to the device and read back after the copy was saved.
+	{
+		QFile file(csvPath);
+		CHECK(file.open(QIODevice::ReadOnly));
+		deviceSide = file.readAll();
+	}
+	written = true;
+	readAt = QDateTime::currentDateTime().addSecs(60);
+	viewerContent.refreshReference();
+	CHECK(stateKind() == QStringLiteral("written") &&
+	      stateText() == QStringLiteral("Written %1 · read back the same").arg(shortTime(readAt)));
+	(*deviceSide)[1] = (*deviceSide)[1] == 'q' ? 'r' : 'q';
+	viewerContent.refreshReference();
+	CHECK(stateKind() == QStringLiteral("writtenDiffers") &&
+	      stateText() == QStringLiteral("Written %1 · 1 byte reads back different").arg(shortTime(readAt)));
+	// Saved again after that write: the saved copy's difference.
+	readAt = QDateTime::currentDateTime().addSecs(-60);
+	viewerContent.refreshReference();
+	CHECK(stateKind() == QStringLiteral("saved"));
+	written = false;
+	// Not known.
+	deviceSide.reset();
+	viewerContent.refreshReference();
+	CHECK(stateKind() == QStringLiteral("unknown") && stateText() == QStringLiteral("The device's bytes are not known"));
+	// Read-only, with the host's few words.
+	{
+		QFile file(csvPath);
+		CHECK(file.open(QIODevice::ReadOnly));
+		deviceSide = file.readAll();
+	}
+	viewerContent.setReadOnlyLookup(&readOnly);
+	viewer->setProperty("readOnlyNote", QStringLiteral("one of the connection's own files"));
+	CHECK(viewerContent.reload());
+	CHECK(stateKind() == QStringLiteral("readOnly") &&
+	      stateText() == QStringLiteral("Read-only · one of the connection's own files"));
+	viewerContent.setReadOnlyLookup(nullptr);
+	viewer->setProperty("readOnlyNote", QString());
+	// A file from disk has no state: its size, format and path only.
+	viewerContent.setDevicePath({});
+	CHECK(viewerContent.reload());
+	CHECK(stateText().isEmpty() && !stateLine->property("visible").toBool() &&
+	      footer->property("text").toString().endsWith(csvPath));
+	viewerContent.setDevicePath(QStringLiteral("/config/viewer.csv"));
+	CHECK(viewerContent.reload());
+
+	// FL-1f: a descriptor that is not the connected device's says so over
+	// its view; with the device's bytes of it as read, its state line says
+	// the device's file changed after that read.
+	const auto descriptorCopy = folder.filePath(QStringLiteral("descriptor.bin"));
+	QByteArray earlier("TDS3");
+	earlier.append(QByteArray(12, '\0'));
+	for (const auto byte : {0x11, 0x0D, 0xE4, 0x7B, 0xC0, 0x91, 0x2A, 0x3F})
+		earlier.append(static_cast<char>(byte));
+	earlier.append(QByteArray(40, 'd'));
+	{
+		QFile file(descriptorCopy);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write(earlier) == earlier.size());
+	}
+	const std::vector<telemetry::ux::FileCodec> descriptorCodecs{telemetry::ux::FileCodec{
+	    QStringLiteral("Descriptor"),
+	    [](const telemetry::ux::FileIdentity& identity) {
+		    return identity.devicePath == QStringLiteral("/telemetry/descriptor.bin") ? telemetry::ux::FileMatch::Path
+		                                                                               : telemetry::ux::FileMatch::No;
+	    },
+	    [](const QByteArray&, const telemetry::ux::FileCodecContext&, QString&) -> std::unique_ptr<QObject> {
+		    return std::make_unique<QObject>();
+	    },
+	    {}}};
+	quint64 connectedPrint = 0x9B1000000000002AULL;
+	telemetry::ux::FileCodecContext connectedContext;
+	connectedContext.connectedFingerprint = [&](quint64& fingerprint) {
+		fingerprint = connectedPrint;
+		return true;
+	};
+	deviceSide = earlier;
+	written = false;
+	readAt = QDateTime::currentDateTime().addSecs(-60);
+	viewerContent.setCodecs(&descriptorCodecs, &connectedContext);
+	viewerContent.setDevicePath(QStringLiteral("/telemetry/descriptor.bin"));
+	viewerContent.setLocalFile(descriptorCopy);
+	viewer->setProperty("reloadable", true);
+	viewer->setProperty("deviceConnected", true);
+	auto* otherBar = child(root, "fileViewerOtherDescriptorBar");
+	auto* otherText = child(root, "fileViewerOtherDescriptor");
+	CHECK(await([&] { return viewerContent.decoded() && otherBar->property("visible").toBool(); }));
+	CHECK(otherText->property("text").toString() ==
+	      QStringLiteral("This descriptor is not the connected device's (3f2a… against 9b10…)"));
+	CHECK(child(root, "fileViewerOtherDescriptorReadAgain")->property("visible").toBool());
+	CHECK(stateKind() == QStringLiteral("changed") &&
+	      stateText() == QStringLiteral("! The device's file changed after %1").arg(shortTime(readAt)));
+	{
+		QQmlExpression role(qmlContext(otherText), otherText, QStringLiteral("Accessible.role"));
+		CHECK(role.evaluate().toInt() == QAccessible::AlertMessage);
+	}
+	// Its device not the one connected: the banner stays, the line does not
+	// call it a change of this device's file.
+	viewer->setProperty("deviceConnected", false);
+	CHECK(otherBar->property("visible").toBool() && stateKind() != QStringLiteral("changed"));
+	viewer->setProperty("deviceConnected", true);
+	// The connected device gives this descriptor after all: nothing to say.
+	connectedPrint = 0x3F2A91C07BE40D11ULL;
+	CHECK(QMetaObject::invokeMethod(&viewerContent, "contextChanged"));
+	CHECK(await([&] { return !otherBar->property("visible").toBool(); }) && stateKind() == QStringLiteral("same"));
+	viewerContent.setCodecs(nullptr, nullptr);
+	viewerContent.setReferenceLookup(nullptr);
+	viewer->setProperty("reloadable", false);
+	viewerContent.setDevicePath(QStringLiteral("/config/viewer.csv"));
+	viewerContent.setLocalFile(csvPath);
+
+	// FL-1e: the Device tree marks a file whose copy in the project is saved
+	// differently from the device's bytes as read: a ≠ after its name in the
+	// info colour, its words on hover and in the row's spoken name.
+	const auto deviceFolder = folder.filePath(QStringLiteral("devices/Bench"));
+	const auto eventsCopy = DeviceFileTransfers::localPathFor(deviceFolder, QStringLiteral("/logs/events.csv"));
+	const QByteArray eventsDevice(reinterpret_cast<const char*>(eventsBytes.data()),
+	                              static_cast<qsizetype>(eventsBytes.size()));
+	auto eventsSaved = eventsDevice;
+	eventsSaved[0] = 'Z';
+	CHECK(QDir().mkpath(QFileInfo(eventsCopy).absolutePath()));
+	{
+		QFile file(eventsCopy);
+		CHECK(file.open(QIODevice::WriteOnly) && file.write(eventsSaved) == eventsSaved.size());
+	}
+	const auto eventsRead = QDateTime::currentDateTime().addSecs(-30);
+	CHECK(telemetry::ux::DeviceBytes::keepBytes(deviceFolder, eventsCopy, QStringLiteral("/logs/events.csv"),
+	                                            eventsDevice, eventsRead)
+	          .isEmpty());
+	files.setCopyFolder(deviceFolder);
+	QQuickItem* eventsMarked = nullptr;
+	CHECK(await([&] {
+		eventsMarked = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("events.csv"));
+		return eventsMarked && eventsMarked->property("copyDiffers").toInt() == 1;
+	}));
+	auto* mark = visualChild(eventsMarked, QStringLiteral("deviceFileCopyDiffers"));
+	CHECK(mark && mark->isVisible() && mark->property("text").toString() == QStringLiteral("≠"));
+	CHECK(eventsMarked->property("copyTip").toString() ==
+	      QStringLiteral("The project's copy differs from this file as read at %1: 1 byte. Open it to write or restore.")
+	          .arg(shortTime(eventsRead)));
+	{
+		QQmlExpression name(qmlContext(eventsMarked), eventsMarked, QStringLiteral("Accessible.name"));
+		CHECK(name.evaluate().toString().endsWith(QStringLiteral(", the project's copy differs")));
+	}
+	auto* descriptorRow = delegateWhere(root, "deviceFileRow", "name", QStringLiteral("descriptor.bin"));
+	CHECK(descriptorRow && !visualChild(descriptorRow, QStringLiteral("deviceFileCopyDiffers"))->isVisible());
+	// Saved back to the device's bytes: told, and the mark goes.
+	{
+		QFile file(eventsCopy);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(eventsDevice) == eventsDevice.size());
+	}
+	telemetry::ux::DeviceBytes::changed();
+	files.refreshCopies();
+	CHECK(await([&] { return eventsMarked->property("copyDiffers").toInt() == 0 && !mark->isVisible(); }));
+	files.setCopyFolder({});
+	QAccessible::setActive(false);
+	QAccessible::installUpdateHandler(previousHandler);
 
 	// Disconnected: back to the words.
 	session.disconnect();

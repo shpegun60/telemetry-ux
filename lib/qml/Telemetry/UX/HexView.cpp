@@ -842,7 +842,7 @@ QString HexView::textAs(const QString& format) const
 bool HexView::copy(const QString& format)
 {
 	if (std::max<qint64>(1, selectionLength()) > maxCopyBytes) {
-		setNotice(tr("Copy is limited to 1 MiB; use Save as… for more."));
+		setNotice(tr("Copy is limited to 1 MiB; use Save a copy as… for more."));
 		return false;
 	}
 	const auto text = textAs(format);
@@ -1103,7 +1103,9 @@ void HexView::keyPressEvent(QKeyEvent* event)
 	const bool extend = event->modifiers() & Qt::ShiftModifier;
 	const bool control = event->modifiers() & Qt::ControlModifier;
 	// Editing: a hex digit in the hex column, a printable letter in the text
-	// column, written over the byte at the cursor; Ctrl+Z and Ctrl+Y undo and redo.
+	// column, written over the byte at the cursor. Ctrl+Z and Ctrl+Y are the
+	// window's UndoRouter's: the FileViewer's UndoScope gives it this file's
+	// history.
 	if (editing()) {
 		const auto typed = event->text();
 		if (!control && !(event->modifiers() & Qt::AltModifier) && typed.size() == 1) {
@@ -1121,14 +1123,6 @@ void HexView::keyPressEvent(QKeyEvent* event)
 				event->accept();
 				return;
 			}
-		}
-		if (control && (event->key() == Qt::Key_Z || event->key() == Qt::Key_Y)) {
-			if (event->key() == Qt::Key_Y || extend)
-				content_->history()->redo();
-			else
-				content_->history()->undo();
-			event->accept();
-			return;
 		}
 	}
 	const qint64 page = static_cast<qint64>(visibleRows()) * bytesPerRow_;

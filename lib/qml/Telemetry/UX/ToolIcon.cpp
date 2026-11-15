@@ -403,10 +403,25 @@ QPainterPath corners()
 	path.lineTo(4.5, 15);
 	return path;
 }
+// Follow: an arrow into a bar, to the newest reading at the right edge.
+QPainterPath toNewest()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 12);
+	path.lineTo(15.5, 12);
+	path.moveTo(11, 7.5);
+	path.lineTo(15.5, 12);
+	path.lineTo(11, 16.5);
+	path.moveTo(19.5, 5);
+	path.lineTo(19.5, 19);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("zoomIn"))
 		return lens(true);
+	if (name == QLatin1String("follow"))
+		return toNewest();
 	if (name == QLatin1String("zoomOut"))
 		return lens(false);
 	if (name == QLatin1String("fit"))

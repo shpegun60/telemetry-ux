@@ -71,6 +71,14 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		bool readable = true;   // a write-only Field can't be watched
 	};
 	QHash<quint32, FieldShape> fields;
+	// Every group the Fields are in; a group may hold dots ("power.meter").
+	QSet<QString> groupNames() const
+	{
+		QSet<QString> out;
+		for (const auto& shape : fields)
+			out.insert(shape.group);
+		return out;
+	}
 	// Rows whose path has no device yet are numbered from here.
 	mutable quint64 nextUnresolved = 1;
 	// The Watchlist itself, while it lives: rows are found again from here.
@@ -80,6 +88,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	bool enabled = false, attached = false, running = false, cycle = false, individual = false;
 	bool publishing = false, queued = false, retiring = false, clearRetiredRows = false;
 	bool deferredQueued = false;
+	// Polling the operator started and nothing but a lost link stopped: the
+	// provider resumes it when the same device is back (WL-8).
+	bool resume = false;
 	// Written Fields to read again before the cycle goes on, and whether the
 	// next cycle follows this one at once.
 	std::vector<quint32> urgent;
@@ -483,9 +494,17 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	// One line for the whole Watchlist while it has no device (WL-4c), rather
 	// than a warning on every row.
-	static QString keptWithoutDevice()
+	QString keptWithoutDevice() const
 	{
-		return QStringLiteral("No device. The values are the last read; each row is read again on a device that has it.");
+		return resume ? QStringLiteral("No device. The values are the last read; polling resumes when this device is back.")
+		              : QStringLiteral("No device. The values are the last read; each row is read again on a device that has it.");
+	}
+
+	// A read accepted before a retire, drained: with the device gone and rows
+	// kept, the line says what a disconnect's says.
+	QString drainedStatus() const
+	{
+		return !attached && model.count() > 0 ? keptWithoutDevice() : QStringLiteral("Stopped - accepted read drained");
 	}
 
 	void retire(bool clearRows)
@@ -689,6 +708,10 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void fail(QString message)
 	{
+		// A failure on a device still here ends polling for good; one from
+		// the link going leaves it to resume.
+		if (current())
+			resume = false;
 		urgent.clear();
 		rerun = false;
 		running = cycle = false;
@@ -840,6 +863,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void stopFailed(client::Status status)
 	{
+		if (current())
+			resume = false;
 		running = cycle = false;
 		timer.stop();
 		publishing = true;
@@ -891,7 +916,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				return false;
 		}
 		if (completed.revision != revision || !current()) {
-			status = QStringLiteral("Stopped - accepted read drained");
+			status = drainedStatus();
 			return true;
 		}
 		if (applicable) {
@@ -978,7 +1003,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			k += n;
 		}
 		if (completed.revision != revision || !current()) {
-			status = QStringLiteral("Stopped - accepted read drained");
+			status = drainedStatus();
 			return true;
 		}
 		if (applicable) {
@@ -1043,7 +1068,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				// stop/rebind/delete the panel; retain Impl and revalidate before applying.
 				if (!report(frame)) return;
 				if (completed->revision != revision || !current()) {
-					status = QStringLiteral("Stopped - accepted read drained");
+					status = drainedStatus();
 				} else if (completed->urgent) {
 					// Matched by id: rows may have moved since it was sent. A failed
 					// read leaves the row to the next cycle.
@@ -1418,6 +1443,7 @@ void DynamicWatchlist::clear()
 {
 	auto p = d;
 	if (!p->guarded() && !p->reportingCompletion) {
+		p->resume = false;
 		p->model.clear();
 		const std::weak_ptr<Impl> weak = p;
 		p->model.bind([weak] {
@@ -1554,9 +1580,26 @@ QString words(const char* text)
 struct PathParts {
 	QString group, name, member;
 };
-std::optional<PathParts> splitPath(const QString& text)
+// The size of the longest of groups text starts with, followed by a dot; -1
+// for none. A group may hold dots ("power.meter"), so the first dot is not
+// always where the group ends (WL-8).
+qsizetype groupEnd(const QString& text, const QSet<QString>& groups)
 {
-	const auto dot = text.indexOf(QLatin1Char('.'));
+	qsizetype end = -1;
+	for (const auto& group : groups)
+		if (group.size() > end && text.size() > group.size() && text.startsWith(group) &&
+		    text.at(group.size()) == QLatin1Char('.'))
+			end = group.size();
+	return end;
+}
+
+// A path's group, Field and member: the group the longest of groups it starts
+// with, else the text up to the first dot.
+std::optional<PathParts> splitPath(const QString& text, const QSet<QString>& groups = {})
+{
+	auto dot = groupEnd(text, groups);
+	if (dot < 0)
+		dot = text.indexOf(QLatin1Char('.'));
 	if (dot <= 0 || dot + 1 >= text.size())
 		return std::nullopt;
 	PathParts parts;
@@ -1579,13 +1622,14 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 	auto p = d;
 	PathResolution out;
 	const auto typed = text.trimmed();
-	const auto parts = splitPath(typed);
+	const auto parts = splitPath(typed, p->groupNames());
 	if (!parts) {
 		out.error = words("Write a path such as device.Config.Gain or data.Samples[3].");
 		return out;
 	}
 	if (!canTellHoldable()) {
 		out.error = words("Connect to a device to watch %1.").arg(typed);
+		out.offline = true;
 		return out;
 	}
 	quint32 found = 0;
@@ -1707,13 +1751,16 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		c.watched = shape.aggregate ? heldAll(id, 0, c.values) : p->model.rowOf(watch_key::whole(id)) >= 0;
 		return c;
 	};
-	const auto dot = typed.indexOf(QLatin1Char('.'));
-	if (dot < 0) {
+	// The longest group typed in full, then its Fields (WL-8): a group may
+	// hold dots ("power.meter"). Before them the groups that go on from what
+	// is typed: "power." offers "power.meter." as "pow" offers "power.".
+	const auto dot = groupEnd(typed, p->groupNames());
+	{
 		// The groups, then the Fields whose name holds the word.
 		QStringList groups;
 		for (const auto id : std::as_const(ids)) {
 			const auto& group = p->fields[id].group;
-			if (p->fields[id].readable && !groups.contains(group) && starts(group, typed))
+			if (p->fields[id].readable && !groups.contains(group) && group.size() >= typed.size() && starts(group, typed))
 				groups.append(group);
 		}
 		for (const auto& group : std::as_const(groups)) {
@@ -1727,7 +1774,8 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 			if (out.size() >= limit)
 				return out;
 		}
-	} else {
+	}
+	if (dot >= 0) {
 		const auto group = typed.left(dot);
 		const auto rest = typed.mid(dot + 1);
 		auto end = 0;
@@ -1840,7 +1888,8 @@ QVariantMap DynamicWatchlist::binding(int row) const
 	const auto key = p->model.key(row);
 	if (row >= 0 && row < p->model.count() && watch_key::isUnresolved(key)) {
 		// A row without a device is saved by the path it was given.
-		const auto parts = splitPath(p->model.data(p->model.index(row, 0), WatchlistModel::NameRole).toString());
+		const auto parts = splitPath(p->model.data(p->model.index(row, 0), WatchlistModel::NameRole).toString(),
+		                             p->groupNames());
 		if (!parts)
 			return {};
 		QVariantMap saved{{QStringLiteral("group"), parts->group}, {QStringLiteral("name"), parts->name}};
@@ -1982,6 +2031,7 @@ bool DynamicWatchlist::begin(bool polling)
 		// Start while a Read once runs: that cycle becomes the first one of
 		// polling instead of the Start being refused.
 		p->running = true;
+		p->resume = true;
 		p->timer.start();
 		p->changed();
 		return true;
@@ -2008,7 +2058,26 @@ bool DynamicWatchlist::begin(bool polling)
 	if (polling)
 		p->timer.start();
 	p->next();
-	return p->cycle || bool(p->request);
+	const bool started = p->cycle || bool(p->request);
+	if (started && polling)
+		p->resume = true;
+	return started;
+}
+
+bool DynamicWatchlist::resumes() const
+{
+	return d->resume;
+}
+
+void DynamicWatchlist::forgetResume()
+{
+	auto p = d;
+	if (!p->resume)
+		return;
+	p->resume = false;
+	if (!p->current() && p->model.count() > 0 && !p->request)
+		p->status = p->keptWithoutDevice();
+	p->changed();
 }
 
 void DynamicWatchlist::wake(std::optional<quint32> written)
@@ -2029,6 +2098,7 @@ void DynamicWatchlist::stop()
 	if (p->guarded())
 		return;
 	p->running = p->cycle = false;
+	p->resume = false;
 	p->urgent.clear();
 	p->rerun = false;
 	p->timer.stop();

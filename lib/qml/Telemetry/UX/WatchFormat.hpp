@@ -49,19 +49,23 @@ struct Parsed {
 	QString canonical;
 	QString error;
 };
-[[nodiscard]] Parsed fromHex(QStringView text, const WatchValueType& type);
+// form is the row's: a number out of range says the range in it (WL-8).
+[[nodiscard]] Parsed fromHex(QStringView text, const WatchValueType& type,
+                             WatchNumberFormat form = WatchNumberFormat::Original);
 
 // What a typed value would write - decimal, hex (0x...), true or false - as
 // the value's bits at its type, or why not in words: a number out of range
-// says the type's range in decimal and in hex. Empty text gives neither. An
-// enum takes its code; its names are the editor's.
+// says the type's range in decimal and in hex, the row's form (form) first.
+// Empty text gives neither. An enum takes its code; its names are the editor's.
 struct Encoded {
 	WatchValueBits value;
 	QString error;
 };
-[[nodiscard]] Encoded encode(QStringView text, const WatchValueType& type);
-// "from 0 to 65535 (0x0000 to 0xFFFF)" for an integer type; empty for others.
-[[nodiscard]] QString range(const WatchValueType& type);
+[[nodiscard]] Encoded encode(QStringView text, const WatchValueType& type,
+                             WatchNumberFormat form = WatchNumberFormat::Original);
+// "0 to 65535 (0x0000 to 0xFFFF)" for an integer type, "0x0000 to 0xFFFF (0 to
+// 65535)" when form is Hex; empty for others.
+[[nodiscard]] QString range(const WatchValueType& type, WatchNumberFormat form = WatchNumberFormat::Original);
 } // namespace watch_format
 
 } // namespace telemetry::ux

@@ -125,6 +125,10 @@ UndoOutcome WatchTraces::apply(const QString& kind, const QVariantMap& state, co
 		setShowPoints(state.value(QString{}).toBool());
 		return {};
 	}
+	if (kind == QStringLiteral("plot.stack")) {
+		setStacked(state.value(QString{}).toBool());
+		return {};
+	}
 	if (kind == QStringLiteral("plot.look")) {
 		for (const auto& path : keys) {
 			const auto look = state.value(path).toMap();
@@ -540,6 +544,17 @@ void WatchTraces::setShowPoints(bool show)
 	       {{QString{}, !show}}, {{QString{}, show}});
 }
 
+void WatchTraces::setStacked(bool stacked)
+{
+	if (stacked == stacked_)
+		return;
+	stacked_ = stacked;
+	++appearanceRevision_;
+	Q_EMIT appearanceChanged();
+	record(stacked ? tr("Stack the numbers in lanes") : tr("Put the numbers on one axis"), QStringLiteral("plot.stack"),
+	       {{QString{}, !stacked}}, {{QString{}, stacked}});
+}
+
 QVariantMap WatchTraces::capture() const
 {
 	QVariantMap curves;
@@ -549,7 +564,7 @@ QVariantMap WatchTraces::capture() const
 		                                    {QStringLiteral("offset"), it->offset},
 		                                    {QStringLiteral("points"), it->points}});
 	return {{QStringLiteral("plotted"), plotted_}, {QStringLiteral("curves"), curves},
-	        {QStringLiteral("showPoints"), showPoints_}};
+	        {QStringLiteral("showPoints"), showPoints_}, {QStringLiteral("stacked"), stacked_}};
 }
 
 bool WatchTraces::restore(const QVariantMap& state)
@@ -568,6 +583,7 @@ bool WatchTraces::restore(const QVariantMap& state)
 		whole = whole && ok;
 	}
 	setShowPoints(state.value(QStringLiteral("showPoints")).toBool());
+	setStacked(state.value(QStringLiteral("stacked")).toBool());
 	const auto chosen = state.value(QStringLiteral("plotted")).toStringList();
 	// In the saved order; each keeps its colour, as a curve plotted again does.
 	if (plotted_ == chosen)
@@ -595,6 +611,27 @@ void WatchTraces::setRecorded(const QString& path, std::vector<TraceReading> rea
 	watched_.insert(path);
 	if (!trace.readings.empty())
 		newestNs_ = std::max(newestNs_, trace.readings.back().ns);
+	++revision_;
+	announce();
+}
+
+void WatchTraces::appendRecorded(const QString& path, const std::vector<TraceReading>& readings)
+{
+	const auto it = traces_.find(path);
+	if (it == traces_.end() || readings.empty())
+		return;
+	auto& kept = it->readings;
+	for (const auto& reading : readings) {
+		// No live caps: a recording keeps every reading it was given.
+		if (kept.empty() || kept.back().ns <= reading.ns)
+			kept.push_back(reading);
+		else
+			kept.insert(std::upper_bound(kept.begin(), kept.end(), reading.ns,
+			                             [](qint64 at, const TraceReading& r) { return at < r.ns; }),
+			            reading);
+	}
+	total_ += readings.size();
+	newestNs_ = std::max(newestNs_, kept.back().ns);
 	++revision_;
 	announce();
 }

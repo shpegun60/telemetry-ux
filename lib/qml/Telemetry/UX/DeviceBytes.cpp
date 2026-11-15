@@ -12,9 +12,13 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
 #include <QtCore/QLocale>
+#include <QtCore/QMutex>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
+#include <algorithm>
+#include <atomic>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -52,6 +56,11 @@ QString absolute(const QString& path)
 
 // Folders above a copy that are searched for its record.
 constexpr int maxLevels = 16;
+
+// Moves on whenever a record is kept or removed here: every comparison
+// made before it is looked at again. The records are written only by this
+// class, in this process.
+std::atomic<quint64> recordsChanged{1};
 
 // Where localFile's record goes inside deviceFolder, as bytesFile; otherwise
 // why it cannot go there.
@@ -122,6 +131,7 @@ QString DeviceBytes::keepBytes(const QString& deviceFolder, const QString& local
 	};
 	QSaveFile meta(bytesFile + QStringLiteral(".json"));
 	const auto json = QJsonDocument(record).toJson();
+	++recordsChanged;
 	if (!meta.open(QIODevice::WriteOnly) || meta.write(json) != json.size() || !meta.commit())
 		return meta.errorString();
 	return {};
@@ -158,8 +168,77 @@ void DeviceBytes::forget(const QString& localFile)
 	const auto bytesFile = recordOf(localFile);
 	if (bytesFile.isEmpty())
 		return;
+	++recordsChanged;
 	QFile::remove(bytesFile + QStringLiteral(".json"));
 	QFile::remove(bytesFile);
+}
+
+QString DeviceBytes::devicePathOf(const QString& localFile)
+{
+	const auto record = find(localFile);
+	return record ? record->devicePath : QString{};
+}
+
+namespace {
+// What compare() found for a copy, with what it was found from.
+struct Compared {
+	DeviceBytes::Comparison result;
+	QString devicePath;
+	qint64 copySize = -1;
+	QDateTime copyTime;
+	quint64 records = 0;
+};
+QMutex comparedLock;
+QHash<QString, Compared> compared;
+// A tree's rows; more are forgotten at once and made again as asked.
+constexpr qsizetype maxCompared = 8192;
+} // namespace
+
+void DeviceBytes::changed()
+{
+	++recordsChanged;
+}
+
+DeviceBytes::Comparison DeviceBytes::compare(const QString& localFile, const QString& devicePath)
+{
+	const QFileInfo info(localFile);
+	Comparison result;
+	if (localFile.isEmpty() || !info.isFile())
+		return result;
+	const auto key = absolute(localFile);
+	const auto size = info.size();
+	const auto time = info.lastModified();
+	const auto records = recordsChanged.load();
+	{
+		const QMutexLocker lock(&comparedLock);
+		const auto known = compared.constFind(key);
+		if (known != compared.constEnd() && known->copySize == size && known->copyTime == time &&
+		    known->records == records && known->devicePath == devicePath)
+			return known->result;
+	}
+	result.exists = true;
+	result.savedAt = time;
+	// The record's bytes, checked against their hash; none of another path.
+	if (const auto device = reference(localFile, devicePath); device && size <= FileContent::maxBytes) {
+		QFile file(localFile);
+		if (file.open(QIODevice::ReadOnly)) {
+			const auto copy = file.readAll();
+			const auto& bytes = device->bytes;
+			const auto common = std::min(copy.size(), bytes.size());
+			qint64 differs = std::max(copy.size(), bytes.size()) - common;
+			for (qsizetype i = 0; i < common; ++i)
+				differs += copy[i] != bytes[i] ? 1 : 0;
+			result.known = true;
+			result.differs = differs;
+			result.written = device->written;
+			result.readAt = device->at;
+		}
+	}
+	const QMutexLocker lock(&comparedLock);
+	if (compared.size() >= maxCompared)
+		compared.clear();
+	compared.insert(key, {result, devicePath, size, time, records});
+	return result;
 }
 
 std::optional<DeviceBytes::Record> DeviceBytes::find(const QString& localFile)
@@ -199,6 +278,7 @@ std::optional<FileContent::Reference> DeviceBytes::reference(const QString& loca
 	FileContent::Reference reference;
 	reference.bytes = std::move(bytes);
 	reference.written = record->written;
+	reference.at = record->readAt;
 	const QLocale locale;
 	const auto time = locale.toString(record->readAt.time(), QLocale::ShortFormat);
 	const bool today = record->readAt.date() == QDate::currentDate();
