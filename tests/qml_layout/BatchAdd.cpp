@@ -36,6 +36,8 @@ class Calls final : public QObject {
 	Q_OBJECT
 public:
 	QList<QStringList> added;
+	QList<int> removed;
+	QStringList moved;
 	int count = 0;
 	// The Batch's items as the panel lists them, when given.
 	QStandardItemModel* items = nullptr;
@@ -97,6 +99,16 @@ public:
 			return {heading("Fields", "field", 120, 1), entry("device.Voltage", "device.Voltage", "Fields", "f32"),
 			        heading("Commands", "command", 2, 1), entry("control.Ping", "command control.Ping", "Commands", "no input")};
 		return {};
+	}
+	Q_INVOKABLE bool remove(int row)
+	{
+		removed.append(row);
+		return false;
+	}
+	Q_INVOKABLE bool move(int row, int delta)
+	{
+		moved.append(QStringLiteral("%1:%2").arg(row).arg(delta));
+		return false;
 	}
 	Q_INVOKABLE QVariantMap addPaths(const QStringList& lines)
 	{
@@ -338,6 +350,49 @@ int main(int argc, char** argv)
 			// Down from the last item comes back to the row.
 			key(window, Qt::Key_Down);
 			CHECK(field->hasActiveFocus());
+
+			// BA-4c. The rows have no Up, Down or Remove buttons; the current
+			// one shows its menu and Remove.
+			CHECK(!named(content, "moveBatchUpButton") && !named(content, "moveBatchDownButton"));
+			list->setProperty("currentIndex", 1);
+			list->forceActiveFocus();
+			settle();
+			CHECK(shown(content, "batchRowMenuButton") && shown(content, "removeBatchButton"));
+			// Delete removes the current item; Alt+Up and Alt+Down move it.
+			key(window, Qt::Key_Delete);
+			CHECK(calls.removed == QList<int>({1}));
+			key(window, Qt::Key_Up, Qt::AltModifier);
+			key(window, Qt::Key_Down, Qt::AltModifier);
+			CHECK(calls.moved == QStringList({QStringLiteral("1:-1"), QStringLiteral("1:1")}));
+			// Shift+F10: the row's menu - move, Read | Write, remove.
+			key(window, Qt::Key_F10, Qt::ShiftModifier);
+			auto* menu = window->findChild<QObject*>(QStringLiteral("batchRowMenu"));
+			CHECK(menu && menu->property("visible").toBool() && menu->property("count").toInt() == 7);
+			shot(window, argc, argv, QStringLiteral("batch-row-menu-760"));
+			key(window, Qt::Key_Escape);
+			CHECK(!menu->property("visible").toBool());
+			// Paths dropped on the list: added as the row adds them, said on its line.
+			auto* drop = window->findChild<QObject*>(QStringLiteral("batchDrop"));
+			CHECK(drop && drop->property("keys").toStringList() == QStringList({QStringLiteral("application/x-telemetry-paths")}));
+			QVariant dropped;
+			CHECK(QMetaObject::invokeMethod(shown(content, "batchAddPanel"), "dropPaths", Q_RETURN_ARG(QVariant, dropped),
+			                                Q_ARG(QVariant, QVariant(QStringList({QStringLiteral("device.Voltage"),
+			                                                                      QStringLiteral("measure.Voltage")})))));
+			settle();
+			CHECK(dropped.toBool() && calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("measure.Voltage")}));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 5 to 6."));
+			// The status line: muted, in the warning colour when it asks for attention.
+			auto* status = shown(content, "batchOutcomeLabel");
+			CHECK(status->property("text").toString() == QStringLiteral("Executed at 14:02:11 - 2 of 2 done."));
+			const auto mutedStatus = status->property("color");
+			auto* statusFixture = window->findChild<QObject*>(QStringLiteral("batchAddFixture"));
+			CHECK(statusFixture && statusFixture->setProperty("batchAttention", true));
+			settle();
+			CHECK(status->property("color") != mutedStatus);
+			CHECK(statusFixture->setProperty("batchAttention", false));
+			// Back to the row for the checks that follow.
+			CHECK(QMetaObject::invokeMethod(row, "begin"));
+			settle();
 
 			// While the Batch runs the row is off.
 			auto* fixture = window->findChild<QObject*>(QStringLiteral("batchAddFixture"));

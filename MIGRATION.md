@@ -1061,3 +1061,33 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
   `signatureText` and `valueType` stay). A host that added a prepared draft
   with `addBatch` adds the path with `addBatchPaths` and sets the values on
   the item (`batchItem.setScalarText`).
+
+## The Batch's rows, drop and status line (BA-4c, November 2026)
+
+- **Rows.** The Up, Down and Remove buttons are gone. The hovered or current
+  row shows `...` (`batchRowMenuButton`, the row's menu) and × (`removeBatchButton`,
+  "Remove item 3", Delete). A right click or Shift+F10 opens the menu (`batchRowMenu`):
+  Move up (Alt+Up), Move down (Alt+Down), Make it a read, Make it a write (a
+  Field that can be both, as the pane's Read | Write switch) and Remove (Delete).
+- **Drop.** Paths dragged from the Device tree or the Watchlist
+  (`application/x-telemetry-paths`, as the Watchlist and the Plot accept) can be
+  dropped on the list (`batchDrop`): a focus-ring frame and "Drop to add 3 items
+  to the Batch"; they are added as the "+" row adds them, at their initial
+  values (`BatchPanel.dropPaths(paths)` over `addBatchPaths`).
+- **The status line in words.** `DynamicBatch::status()` (`batchStatus`) says
+  "Sending 3 items in one request…", "Executed at 14:02:11 - 3 of 3 done." (or
+  "…; item 3: invalidargument." for the first item not done), and for a run that
+  failed as a whole: "No reply in time. The items may have run; nothing is sent
+  again by itself.", "The reply was lost: the items may have run. Check the
+  device before executing again.", "The device was busy and ran nothing.
+  Execute the Batch again in a moment." Items of an earlier connection: "These
+  items are from an earlier connection and are never sent again. Clear them to
+  start a new Batch." It is empty while there is nothing to say. The old words
+  ("Pending - one ordered Batch request", "Batch reply received - inspect each
+  item", "OutcomeUnknown - may have executed; no automatic retry", "QueueFull -
+  …") are gone; a host that matched them matches the new ones, or the item
+  facts in the `result` role. An item with no checked outcome reads "Outcome
+  unknown", "No reply" or "Not sent".
+- **`batchAttention`** (`DynamicBatch::attention()`): the status line asks for
+  attention - a run that failed, or an item not done; the panel draws it in
+  the warning colour, else muted.

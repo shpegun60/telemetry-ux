@@ -169,7 +169,12 @@ public:
 	bool execute();
 	int count() const;
 	int selection() const;
+	// The status line: "Sending 3 items in one request…", "Executed at
+	// 14:02:11 - 3 of 3 done.", or why a run failed, in words (BA-4c).
 	QString status() const;
+	// The status line asks for attention: a run that failed as a whole, or an
+	// item that was not done.
+	bool attention() const;
 	QString responseEndpoint() const;
 	BatchListModel* model() const;
 	ValueModel* responses() const;

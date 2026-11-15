@@ -1719,6 +1719,11 @@ QString DynamicConfiguratorProvider::batchStatus() const
 	return d->batch.status();
 }
 
+bool DynamicConfiguratorProvider::batchAttention() const
+{
+	return d->batch.attention();
+}
+
 namespace {
 QString batchWords(const char* text)
 {

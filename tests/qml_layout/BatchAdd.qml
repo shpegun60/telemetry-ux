@@ -14,7 +14,8 @@ ApplicationWindow {
         property int batchCount: 0
         property bool batchPending: false
         readonly property bool canExecuteBatch: batchCount > 0
-        readonly property string batchStatus: ""
+        readonly property string batchStatus: "Executed at 14:02:11 - 2 of 2 done."
+        property bool batchAttention: false
         readonly property bool batchSupported: true
         readonly property bool busy: false
         readonly property bool allowMutations: true
@@ -40,8 +41,8 @@ ApplicationWindow {
         function executeBatch() { return false }
         function clearBatch() { return false }
         function selectBatch(row) { return false }
-        function moveBatch(row, delta) { return false }
-        function removeBatch(row) { return false }
+        function moveBatch(row, delta) { return batchAddCalls.move(row, delta) }
+        function removeBatch(row) { return batchAddCalls.remove(row) }
         function checkBatchPath(text) { return batchAddCalls.check(text) }
         function batchPathCandidates(text) { return batchAddCalls.candidates(text) }
         function addBatchPaths(lines) {

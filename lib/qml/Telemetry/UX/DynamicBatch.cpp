@@ -27,19 +27,48 @@ QString operationName(client::Operation op)
 	}
 }
 
+QString batchSaid(const char* text)
+{
+	return QCoreApplication::translate("DynamicBatch", text);
+}
+
+// The status line's words for a run that failed as a whole (BA-4c).
 QString statusText(client::Status status)
 {
 	if (status == client::Status::OutcomeUnknown)
-		return QStringLiteral("OutcomeUnknown - may have executed; no automatic retry");
+		return batchSaid("The reply was lost: the items may have run. Check the device before executing again.");
 	if (status == client::Status::QueueFull)
-		return QStringLiteral("QueueFull - draft and previous results retained");
+		return batchSaid("The device was busy and ran nothing. Execute the Batch again in a moment.");
 	if (status == client::Status::Timeout)
-		return QStringLiteral("Timeout");
+		return batchSaid("No reply in time. The items may have run; nothing is sent again by itself.");
 	if (status == client::Status::Cancelled)
-		return QStringLiteral("Cancelled");
+		return batchSaid("The Batch was cancelled before its reply came.");
 	if (status == client::Status::Unsupported)
-		return QStringLiteral("Batch unavailable for this session");
-	return QStringLiteral("Status %1").arg(static_cast<unsigned>(status));
+		return batchSaid("This connection has no Batch.");
+	return batchSaid("The Batch failed (status %1).").arg(static_cast<unsigned>(status));
+}
+
+// An item's word when the run failed as a whole: no checked outcome.
+QString itemStatusText(client::Status status)
+{
+	if (status == client::Status::OutcomeUnknown)
+		return batchSaid("Outcome unknown");
+	if (status == client::Status::QueueFull)
+		return batchSaid("Not sent");
+	if (status == client::Status::Timeout)
+		return batchSaid("No reply");
+	if (status == client::Status::Cancelled)
+		return batchSaid("Cancelled");
+	if (status == client::Status::Unsupported)
+		return batchSaid("Unavailable");
+	return batchSaid("Failed");
+}
+
+// A checked item outcome counts as done.
+bool itemDone(const QVariantMap& result)
+{
+	return result.value(QStringLiteral("succeeded")).toBool() || result.value(QStringLiteral("executed")).toBool() ||
+	       result.value(QStringLiteral("accepted")).toBool();
 }
 
 QString itemText(client::Operation operation, const QVariantMap& result)
@@ -179,7 +208,10 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 	int selected = -1;
 	bool publishing = false, invalidationPending = false, pendingHistorical = false,
 	     invalidationQueued = false, retired = true;
-	QString status = QStringLiteral("Add ordered operations; Execute sends one Batch");
+	// The status line: empty while there is nothing to say (BA-4c).
+	QString status;
+	// The status line asks for attention: a run that failed, an item not done.
+	bool attention = false;
 	// The selected item's request (BA-4a): its bytes as a store, an editor's
 	// draft over them, and its values as Details shows them. A value's steps
 	// merge while its cell stays open: editSerial moves when it is left.
@@ -627,6 +659,11 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		clearItem();
 		snapshot.invalidate();
 		model.replace(std::move(rows));
+		// Items of an earlier connection, said on the status line (BA-4c).
+		if (historical && !request && !attention) {
+			status = batchSaid("These items are from an earlier connection and are never sent again. Clear them to start a new Batch.");
+			attention = false;
+		}
 		finishPublication();
 		signal();
 	}
@@ -804,7 +841,8 @@ bool DynamicBatch::add(std::vector<BatchRow> rows)
 	p->snapshot.invalidate();
 	p->model.replace(std::move(all));
 	p->showItem();
-	p->status = QStringLiteral("Draft - Execute sends one ordered Batch");
+	p->status.clear();
+	p->attention = false;
 	p->finishPublication();
 	p->recordAdded(first);
 	p->signal();
@@ -876,7 +914,8 @@ bool DynamicBatch::clear()
 	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace({});
-	p->status = QStringLiteral("Add ordered operations; Execute sends one Batch");
+	p->status.clear();
+	p->attention = false;
 	p->finishPublication();
 	if (!before.isEmpty())
 		p->record(QCoreApplication::translate("DynamicBatch", "Clear the Batch"), std::move(before), {});
@@ -934,6 +973,7 @@ bool DynamicBatch::execute()
 	if (!submitted) {
 		p->request.reset();
 		p->status = statusText(submitted.status);
+		p->attention = true;
 		p->finishPublication();
 		p->signal();
 		return false;
@@ -954,7 +994,9 @@ bool DynamicBatch::execute()
 	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
-	p->status = QStringLiteral("Pending - one ordered Batch request");
+	p->status = request->rows.size() == 1 ? batchSaid("Sending 1 item in one request…")
+	                                        : batchSaid("Sending %L1 items in one request…").arg(request->rows.size());
+	p->attention = false;
 	p->finishPublication();
 	p->signal();
 	return true;
@@ -998,20 +1040,35 @@ void DynamicBatch::poll()
 				row.hasValue = true;
 			}
 		} else
-			row.status = completion.status == client::Status::Ok
-			                 ? QStringLiteral("No checked item outcome")
-			                 : statusText(completion.status);
+			row.status = completion.status == client::Status::Ok ? batchSaid("No checked outcome")
+			                                                      : itemStatusText(completion.status);
 	}
 	p->model.replace(std::move(rows));
 	p->request.reset();
 	p->showItem();
-	p->status = completion.status == client::Status::Ok && completion.succeeded
-	                ? completion.valueStatus == QStringLiteral("InvalidPayload") ||
-	                          completion.valueStatus == QStringLiteral("TypeMismatch")
-	                      ? QStringLiteral(
-	                            "Batch reply received - invalid response values; inspect each item")
-	                      : QStringLiteral("Batch reply received - inspect each item")
-	                : statusText(completion.status);
+	// "Executed at 14:02:11 - 3 of 3 done.", or the first item not done.
+	if (completion.status == client::Status::Ok && completion.succeeded && checked) {
+		const auto& held = p->model.rows();
+		int done = 0, first = -1;
+		for (std::size_t i = 0; i < held.size(); ++i)
+			if (itemDone(held[i].result))
+				++done;
+			else if (first < 0)
+				first = int(i);
+		const auto at = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+		p->status = batchSaid("Executed at %1 - %L2 of %L3 done").arg(at).arg(done).arg(int(held.size()));
+		if (first >= 0)
+			p->status += batchSaid("; item %L1: %2").arg(first + 1).arg(held[std::size_t(first)].status.toLower());
+		p->status += QLatin1Char('.');
+		if (completion.valueStatus == QStringLiteral("InvalidPayload") ||
+		    completion.valueStatus == QStringLiteral("TypeMismatch"))
+			p->status += batchSaid(" Some values in the reply could not be read.");
+		p->attention = first >= 0;
+	} else {
+		p->status = completion.status == client::Status::Ok ? batchSaid("The reply checked no item; the items may have run.")
+		                                                    : statusText(completion.status);
+		p->attention = true;
+	}
 	p->finishPublication();
 	p->signal();
 	if (p->finished)
@@ -1031,6 +1088,11 @@ int DynamicBatch::selection() const
 QString DynamicBatch::status() const
 {
 	return d->status;
+}
+
+bool DynamicBatch::attention() const
+{
+	return d->attention;
 }
 
 QString DynamicBatch::responseEndpoint() const

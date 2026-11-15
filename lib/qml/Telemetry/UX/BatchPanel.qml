@@ -43,13 +43,15 @@ Pane {
             }
             Item { Layout.fillWidth: true }
         }
+        // The status line (BA-4c): what the Batch is doing or did, in words;
+        // muted unless something went wrong.
         Label {
             objectName: "batchOutcomeLabel"
             textFormat: Text.PlainText
-            text: panel.provider.batchPending ? "Waiting for one ordered Batch reply..."
-                : panel.provider.batchStatus + (panel.provider.batchSupported ? ""
-                    : " - Batch is unavailable for this connection; previous outcomes are historical.")
-            color: "#e6c57b"
+            text: panel.provider.batchSupported || panel.provider.batchCount === 0 ? panel.provider.batchStatus
+                : qsTr("These items are from an earlier connection and are never sent again. Clear them to start a new Batch.")
+            color: panel.provider.batchAttention === true ? Theme.warning : Theme.textSecondary
+            font.pointSize: Type.caption
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
@@ -77,8 +79,24 @@ Pane {
                     onCurrentIndexChanged: if (currentIndex >= 0 && currentIndex !== panel.provider.batchSelection)
                         panel.provider.selectBatch(currentIndex)
                     // Down from the last item, or Insert, goes to the "+" row.
+                    Keys.onUpPressed: event => {
+                        if (event.modifiers & Qt.AltModifier) {
+                            panel.moveCurrent(-1)
+                            event.accepted = true
+                        } else {
+                            event.accepted = false
+                        }
+                    }
+                    Keys.onDeletePressed: event => {
+                        if (items.currentIndex >= 0 && !panel.provider.batchPending)
+                            panel.provider.removeBatch(items.currentIndex)
+                        event.accepted = true
+                    }
                     Keys.onDownPressed: event => {
-                        if (batchAdd.visible && items.currentIndex >= items.count - 1) {
+                        if (event.modifiers & Qt.AltModifier) {
+                            panel.moveCurrent(1)
+                            event.accepted = true
+                        } else if (batchAdd.visible && items.currentIndex >= items.count - 1) {
                             batchAdd.begin()
                             event.accepted = true
                         } else {
@@ -88,6 +106,10 @@ Pane {
                     Keys.onPressed: event => {
                         if (event.key === Qt.Key_Insert && batchAdd.visible) {
                             batchAdd.begin()
+                            event.accepted = true
+                        } else if ((event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)) || event.key === Qt.Key_Menu) {
+                            if (items.currentIndex >= 0)
+                                panel.openRowMenu(items.currentIndex, items.currentItem)
                             event.accepted = true
                         }
                     }
@@ -108,11 +130,16 @@ Pane {
                         height: 64
                         Accessible.role: Accessible.ListItem
                         Accessible.name: qsTr("Item %1, %2 %3, %4").arg(item.index + 1).arg(item.operation).arg(item.name).arg(item.status)
+                        HoverHandler { id: rowHover }
                         TapHandler {
                             onTapped: {
                                 items.currentIndex = item.index
                                 panel.provider.selectBatch(item.index)
                             }
+                        }
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: panel.openRowMenu(item.index, item)
                         }
                         RowLayout {
                             anchors.fill: parent
@@ -143,30 +170,89 @@ Pane {
                                     color: Theme.textSecondary; Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                             }
-                            Button {
-                                objectName: "moveBatchUpButton"
+                            // On the hovered or the current row: its menu and Remove.
+                            ToolButton {
+                                id: rowMore
+                                objectName: "batchRowMenuButton"
                                 property int batchRowIndex: item.index
-                                text: "Up"
-                                enabled: !panel.provider.busy && item.index > 0
-                                onClicked: panel.provider.moveBatch(item.index, -1)
+                                visible: rowHover.hovered || item.ListView.isCurrentItem
+                                text: "\u2026"
+                                focusPolicy: Qt.NoFocus
+                                implicitWidth: Type.controlHeight
+                                ToolTip.visible: hovered
+                                ToolTip.delay: 700
+                                ToolTip.text: qsTr("Item %L1: move, read or write, remove (Shift+F10)").arg(item.index + 1)
+                                Accessible.name: qsTr("Menu of item %L1").arg(item.index + 1)
+                                onClicked: panel.openRowMenu(item.index, rowMore)
                             }
-                            Button {
-                                objectName: "moveBatchDownButton"
-                                property int batchRowIndex: item.index
-                                text: "Down"
-                                enabled: !panel.provider.busy && item.index + 1 < panel.provider.batchCount
-                                onClicked: panel.provider.moveBatch(item.index, 1)
-                            }
-                            Button {
+                            ToolButton {
                                 objectName: "removeBatchButton"
                                 property int batchRowIndex: item.index
-                                text: "Remove"
-                                enabled: !panel.provider.busy
+                                visible: rowHover.hovered || item.ListView.isCurrentItem
+                                text: "×"
+                                focusPolicy: Qt.NoFocus
+                                implicitWidth: Type.controlHeight
+                                enabled: !panel.provider.busy && !panel.provider.batchPending
+                                ToolTip.visible: hovered
+                                ToolTip.delay: 700
+                                ToolTip.text: qsTr("Remove item %L1 (Delete)").arg(item.index + 1)
+                                Accessible.name: qsTr("Remove item %L1").arg(item.index + 1)
                                 onClicked: panel.provider.removeBatch(item.index)
                             }
                         }
                     }
                     ScrollBar.vertical: ScrollBar {}
+                    // Paths dropped from the Device tree or the Watchlist join
+                    // the Batch as the "+" row adds them, at their initial values
+                    // (BA-4c). Over the list itself, so the pane keeps its size.
+                    DropArea {
+                        id: batchDrop
+                        objectName: "batchDrop"
+                        anchors.fill: parent
+                        keys: ["application/x-telemetry-paths"]
+                        property int count: 0
+                        function pathsOf(event) {
+                            let payload = null
+                            try { payload = JSON.parse(event.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+                            if (!payload || payload.from === "batch" || !Array.isArray(payload.paths))
+                                return []
+                            return payload.paths.filter((path, at) => typeof path === "string" && path.length > 0
+                                                                     && payload.paths.indexOf(path) === at)
+                        }
+                        onEntered: drag => {
+                            const paths = pathsOf(drag)
+                            if (paths.length === 0 || !batchAdd.visible || !batchAdd.enabled) {
+                                drag.accepted = false
+                                return
+                            }
+                            count = paths.length
+                        }
+                        onExited: count = 0
+                        onDropped: drop => {
+                            const paths = pathsOf(drop)
+                            count = 0
+                            if (panel.dropPaths(paths))
+                                drop.acceptProposedAction()
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            visible: batchDrop.containsDrag
+                            color: "transparent"
+                            border.width: 2
+                            border.color: Theme.focusRing
+                            Label {
+                                objectName: "batchDropText"
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: Type.padding
+                                text: batchDrop.count === 1 ? qsTr("Drop to add 1 item to the Batch")
+                                                            : qsTr("Drop to add %L1 items to the Batch").arg(batchDrop.count)
+                                color: Theme.textPrimary
+                                padding: Type.tight
+                                background: Rectangle { color: Theme.surface; radius: Type.radius }
+                            }
+                        }
+                    }
                 }
                 // Adding by name or path (BA-1), where the provider can.
                 BatchAddRow {
@@ -262,6 +348,84 @@ Pane {
                     }
                 }
             }
+        }
+    }
+    // Paths dropped on the list, added as the "+" row adds them; said on its
+    // notice line.
+    function dropPaths(paths) {
+        if (paths.length === 0 || typeof provider.addBatchPaths !== "function")
+            return false
+        const result = batchAdd.adapter.add(paths)
+        if (!result)
+            return false
+        batchNotice.text = result.notice
+        if (result.clear)
+            Qt.callLater(() => {
+                expanded.checked = true
+                items.currentIndex = items.count - 1
+                items.positionViewAtEnd()
+            })
+        return result.clear === true
+    }
+    // The current item one place up or down (Alt+Up, Alt+Down, the menu).
+    function moveCurrent(delta) {
+        const at = items.currentIndex
+        if (at < 0 || provider.batchPending || !provider.moveBatch(at, delta))
+            return false
+        items.currentIndex = at + delta
+        provider.selectBatch(at + delta)
+        return true
+    }
+    // The row's menu, on the row it was opened for, which becomes the current one.
+    function openRowMenu(row, at) {
+        if (row < 0)
+            return
+        items.currentIndex = row
+        provider.selectBatch(row)
+        rowMenu.row = row
+        rowMenu.popup(at || items)
+    }
+    Menu {
+        id: rowMenu
+        objectName: "batchRowMenu"
+        property int row: -1
+        readonly property var detail: panel.provider.batchItem
+        readonly property bool idle: !panel.provider.busy && !panel.provider.batchPending
+        MenuItem {
+            objectName: "batchMenuMoveUp"
+            text: qsTr("Move up (Alt+Up)")
+            enabled: rowMenu.idle && rowMenu.row > 0
+            onTriggered: panel.moveCurrent(-1)
+        }
+        MenuItem {
+            objectName: "batchMenuMoveDown"
+            text: qsTr("Move down (Alt+Down)")
+            enabled: rowMenu.idle && rowMenu.row >= 0 && rowMenu.row + 1 < panel.provider.batchCount
+            onTriggered: panel.moveCurrent(1)
+        }
+        MenuSeparator {}
+        // Read | Write, as the switch in the item's pane: each offered when
+        // it changes the item.
+        MenuItem {
+            objectName: "batchMenuRead"
+            text: qsTr("Make it a read")
+            enabled: !!rowMenu.detail && rowMenu.detail.switchable === true && !rowMenu.detail.busy
+                     && rowMenu.detail.operation === "write"
+            onTriggered: rowMenu.detail.setOperation("read")
+        }
+        MenuItem {
+            objectName: "batchMenuWrite"
+            text: qsTr("Make it a write")
+            enabled: !!rowMenu.detail && rowMenu.detail.switchable === true && !rowMenu.detail.busy
+                     && rowMenu.detail.allowMutations === true && rowMenu.detail.operation === "read"
+            onTriggered: rowMenu.detail.setOperation("write")
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "batchMenuRemove"
+            text: qsTr("Remove (Delete)")
+            enabled: rowMenu.idle && rowMenu.row >= 0
+            onTriggered: panel.provider.removeBatch(rowMenu.row)
         }
     }
     Connections {

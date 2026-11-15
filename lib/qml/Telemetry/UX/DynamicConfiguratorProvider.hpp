@@ -107,6 +107,8 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int batchCount READ batchCount NOTIFY stateChanged)
 	Q_PROPERTY(int batchSelection READ batchSelection NOTIFY stateChanged)
 	Q_PROPERTY(QString batchStatus READ batchStatus NOTIFY stateChanged)
+	// The status line asks for attention: a run failed, or an item was not done.
+	Q_PROPERTY(bool batchAttention READ batchAttention NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
 	// The Watchlist's rows as shown: a list of whole paths or a tree grouped
 	// by path (a WatchRows over watchlist). Made here, so a host needs no
@@ -219,6 +221,7 @@ public:
 	int batchCount() const;
 	int batchSelection() const;
 	QString batchStatus() const;
+	bool batchAttention() const;
 	Q_INVOKABLE bool removeBatch(int row);
 	Q_INVOKABLE bool moveBatch(int row, int delta);
 	Q_INVOKABLE bool clearBatch();

@@ -156,6 +156,8 @@ void orderedOwnedResults()
 	CHECK(batch.count() == 3 && peer.calls == 0);
 	CHECK(batch.canExecute() && batch.execute());
 	CHECK(peer.calls == 1 && peer.submitted[2].request == QByteArray("abc"));
+	// The status line in words (BA-4c).
+	CHECK(batch.status() == QStringLiteral("Sending 3 items in one request…") && !batch.attention());
 	CHECK(peer.submitted[0].id == peer.submitted[1].id);
 	CHECK(batch.pending() && !batch.add(row) && !batch.remove(0) && !batch.move(1, -1) &&
 	      !batch.clear() && !batch.select(0));
@@ -166,6 +168,9 @@ void orderedOwnedResults()
 	      peer.finishes == 0);
 	batch.poll();
 	CHECK(!batch.pending() && peer.finishes == 1 && resets.count() == 1);
+	// "Executed at 14:02:11 - 3 of 3 done.", or the first item not done.
+	CHECK(batch.status().startsWith(QStringLiteral("Executed at ")) && batch.status().contains(QStringLiteral(" of 3 done")) &&
+	      batch.attention() == !batch.status().contains(QStringLiteral(" - 3 of 3 done.")));
 	CHECK(role(batch, 2, ux::BatchListModel::StatusRole)
 	          .toString()
 	          .contains(QStringLiteral("Accepted")));
@@ -186,7 +191,8 @@ void orderedOwnedResults()
 	CHECK(!batch.execute() && !batch.pending() && batch.count() == 3);
 	CHECK(role(batch, 2, ux::BatchListModel::ResultRole).toMap() == facts);
 	CHECK(role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
-	CHECK(batch.status().contains(QStringLiteral("QueueFull")));
+	CHECK(batch.status() == QStringLiteral("The device was busy and ran nothing. Execute the Batch again in a moment.") &&
+	      batch.attention());
 	peer.refusal = cl::Status::Ok;
 	peer.permitted = false;
 	CHECK(!batch.canExecute() && !batch.execute() && peer.calls == 2);
@@ -219,8 +225,10 @@ void boundedAdmissionAndHistory()
 	CHECK(batch.pending() && !batch.supported() && !batch.clear());
 	peer.finish(cl::Status::OutcomeUnknown);
 	batch.poll();
-	CHECK(!batch.pending() && batch.status().contains(QStringLiteral("OutcomeUnknown")) &&
-	      peer.calls == 1);
+	CHECK(!batch.pending() &&
+	      batch.status() == QStringLiteral("The reply was lost: the items may have run. Check the device before executing again.") &&
+	      batch.attention() && peer.calls == 1);
+	CHECK(role(batch, 0, ux::BatchListModel::StatusRole).toString() == QStringLiteral("Outcome unknown"));
 	for (int i = 0; i < batch.count(); ++i) {
 		CHECK(role(batch, i, ux::BatchListModel::ResultRole).toMap().isEmpty());
 		CHECK(role(batch, i, ux::BatchListModel::HistoricalRole).toBool());
