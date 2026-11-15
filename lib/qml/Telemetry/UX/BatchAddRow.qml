@@ -1,14 +1,14 @@
-// The Batch's "+" row (BA-1): a Field, a Command or a Service found by its
-// name or path, completed from the device's descriptor, added on Enter as
-// the next item - PathAddRow with the Batch's words and rules. A Field is
-// read; a Command runs and a Service is called. One that takes input takes
-// its values after its path, named (BA-2): "control.Scale value=2 factor=3";
-// Enter writes the next missing name, or the names into values typed without
-// them, and adds the item once every value is valid; Ctrl+Enter, or Enter on
-// one whose input has a struct or an array, selects it in the Device tree to
-// fill in Details. A name two endpoints share opens the suggestions to
-// choose; a half-typed one takes the first. Several pasted lines are added at
-// once, or none. Presentation only: the provider resolves and adds. MIT.
+// The Batch's "+" row (BA-1, BA-4b): a finder. A Field, a Command or a
+// Service found by its name or path, listed under the headings Fields,
+// Commands and Services, completed from the device's descriptor and added on
+// Enter as the next item: a Field is read (a write-only one written), a
+// Command runs and a Service is called with its request at its initial values
+// - zero, false, an enum's first name - set on the item afterwards. A kind
+// word first ("command ", "fields ") lists that kind only. A name two
+// endpoints share opens the suggestions to choose; a half-typed one takes the
+// first. Several pasted lines are added at once, or none. PathAddRow with the
+// Batch's words and rules. Presentation only: the provider resolves and adds.
+// MIT.
 import QtQuick
 
 PathAddRow {
@@ -16,53 +16,20 @@ PathAddRow {
     objectName: "batchAddRow"
     namePrefix: "batchAdd"
     required property var provider
-    // The endpoint that takes input was selected: the operation to add it with.
-    signal selected(string operation)
     // The last notice was a refusal, said in the error colour.
     property bool lastRefused: false
     readonly property bool usable: provider.batchSupported === true
-    restText: usable ? qsTr("Add by name or path") : qsTr("This device has no Batch")
-    placeholderText: qsTr("Voltage, control.Reset or control.Scale value=2")
-    accessibleName: qsTr("Add to the Batch by name or path")
-    accessibleDescription: qsTr("Type a name or a path; for a Command or a Service, its values as name=value after a space. Down opens suggestions; Enter adds; Ctrl+Enter fills it in Details.")
-    quietStatuses: ["adds", "partial", "input", "choose", "busy", "needs"]
+    restText: usable ? qsTr("Add a Field, Command or Service") : qsTr("This device has no Batch")
+    placeholderText: qsTr("Name or path, such as Counter or control.Scale")
+    accessibleName: qsTr("Add to the Batch")
+    accessibleDescription: qsTr("Type a name or a path. Fields, Commands and Services are listed under their own headings; type command and a space to see one kind. Enter adds the highlighted one; set its values on the item.")
+    quietStatuses: ["adds", "partial", "choose", "busy"]
     addStatuses: ["adds"]
     hideWhileTyping: false
-    popupMaxWidth: Type.bodyPixels * 40
+    openOnEmpty: false
+    popupMaxWidth: Type.bodyPixels * 46
     enabled: usable && provider.batchPending !== true
-    function say(notice, refused) {
-        lastRefused = refused
-        batchAdd.added(notice, false, 0)
-    }
-    // Selects what the line names in the Device tree, for Details; the
-    // provider puts the valid values typed into its draft when changes are
-    // allowed. byControl: Ctrl+Enter rather than Enter, for the words.
-    function toDetails(text, byControl) {
-        const operation = batchAdd.check.operation
-        const path = batchAdd.check.path
-        const allowed = batchAdd.provider.allowMutations === true
-        const typed = (batchAdd.check.arguments || []).some(argument => argument.status === "ok")
-        if (batchAdd.provider.selectBatchPath(text)) {
-            batchAdd.selected(operation)
-            batchAdd.say(!allowed ? qsTr("Selected %1. Changes are off: allow them to fill it in Details.").arg(path)
-                         : typed ? qsTr("Selected %1 with the values typed here: finish it in Details, then Add selected draft.").arg(path)
-                                 : qsTr("Selected %1: fill it in Details, then Add selected draft.").arg(path), false)
-        } else if (batchAdd.provider.selectionRequiresDiscard === true) {
-            batchAdd.say(byControl ? qsTr("Finish or cancel the edit in Details first, then press Ctrl+Enter again.")
-                                   : qsTr("Finish or cancel the edit in Details first, then press Enter again."), true)
-        } else {
-            batchAdd.say(qsTr("Nothing on this line can be selected in Details."), true)
-        }
-    }
     adapter: QtObject {
-        // Ctrl+Enter: a Command or a Service the line names, whatever it
-        // still lacks or the Batch refuses; a Field the line adds.
-        function select(text) {
-            const operation = batchAdd.check.operation || ""
-            if ((batchAdd.check.path || "").length > 0 &&
-                    (operation === "command" || operation === "service" || batchAdd.check.status === "adds"))
-                batchAdd.toDetails(text, true)
-        }
         function check(text) {
             return batchAdd.provider.checkBatchPath(text)
         }
@@ -73,25 +40,7 @@ PathAddRow {
             const status = batchAdd.check.status
             // Half typed: the first suggestion, as the line says.
             if (status === "partial") {
-                batchAdd.choose(0)
-                return true
-            }
-            if (status === "input") {
-                batchAdd.toDetails(text, false)
-                return true
-            }
-            // Values missing: Enter writes what the line says - the next
-            // "name=", or a name or a value half typed, completed.
-            if (status === "needs") {
-                const line = batchAdd.check.line || ""
-                if (line.length > 0)
-                    batchAdd.setText(line)
-                return true
-            }
-            // Values with no names: Enter writes the names in, adds nothing.
-            if (status === "unnamed") {
-                if ((batchAdd.check.named || "").length > 0)
-                    batchAdd.setText(batchAdd.check.named)
+                batchAdd.choose(batchAdd.firstPick())
                 return true
             }
             // Several share the name: the suggestions, the first to take.

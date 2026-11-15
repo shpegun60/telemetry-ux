@@ -908,38 +908,70 @@ void batchPaths()
 	const auto member = check("device.Config.Gain");
 	CHECK(member.value("path") == "device.Config" && member.value("operation") == "read");
 	CHECK(check("Setpoint").value("path") == "device.Setpoint");
-	// One whose input has a struct or an array goes to Details (BA-2).
+	// One whose input has a struct or an array is added like any other, at
+	// its initial values to be set on the item (BA-4b) - had this device a Batch.
 	const auto input = check("control.Execute");
-	CHECK(input.value("status") == "input" && input.value("message").toString().contains("which is filled in Details"));
+	CHECK(input.value("status") == "unsupported" && input.value("operation") == "command" &&
+	      input.value("path") == "control.Execute");
 	// Input to one that takes none is refused in words; a Field's "= value" still is.
 	const auto none = check("command control.Ping now");
 	CHECK(none.value("status") == "error" && none.value("message") == "control.Ping takes no input; remove \"now\".");
-	CHECK(provider->selectBatchPath(QStringLiteral("control.Execute")) &&
-	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Execute");
-	CHECK(!provider->selectBatchPath(QStringLiteral("Ping")) && !provider->selectBatchPath(QStringLiteral("Nope")));
-	// Selected and untouched, a Command is not an edit to lose: the row
-	// selects another (BA-1 refused the second).
-	CHECK(provider->selectBatchPath(QStringLiteral("control.Accept")) &&
-	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Accept");
+	// A kind word in the plural chooses as the singular does.
+	CHECK(check("commands Ping").value("operation") == "command" && check("Services ping").value("operation") == "service");
 	CHECK(check("Nope").value("status") == "missing" && check("Nope").value("message") == "Nothing on this device is named Nope.");
 	CHECK(check("device.Nope").value("message") == "device.Nope is not on this device.");
 	CHECK(check("device.Setpoint = 3").value("status") == "error");
-	// Suggestions: groups to go into first, then names word by word.
+	// Suggestions under the headings Fields, Commands and Services, in that
+	// order, each with its count (BA-4b); no group rows: a group's name lists
+	// its members, word by word.
+	const auto picks = [](const QVariantList& candidates) {
+		QVariantList out;
+		for (const auto& candidate : candidates)
+			if (!candidate.toMap().value("heading").toBool())
+				out << candidate;
+		return out;
+	};
+	const auto headings = [](const QVariantList& candidates) {
+		QStringList out;
+		for (const auto& candidate : candidates)
+			if (candidate.toMap().value("heading").toBool())
+				out << candidate.toMap().value("path").toString() + QLatin1Char(' ') +
+				           QString::number(candidate.toMap().value("count").toInt());
+		return out;
+	};
 	const auto groups = provider->batchPathCandidates(QStringLiteral("dev"));
-	CHECK(!groups.isEmpty() && groups.first().toMap().value("path") == "device" &&
-	      groups.first().toMap().value("container").toBool());
+	CHECK(!groups.isEmpty() && groups.first().toMap().value("heading").toBool() &&
+	      groups.first().toMap().value("path") == "Fields" && groups.first().toMap().value("completion") == "field dev");
+	for (const auto& candidate : groups)
+		CHECK(!candidate.toMap().value("container").toBool() && candidate.toMap().value("kindCode") != "group");
+	CHECK(picks(groups).first().toMap().value("path").toString().startsWith("device."));
 	QStringList pings;
-	for (const auto& candidate : provider->batchPathCandidates(QStringLiteral("Pi")))
-		pings << candidate.toMap().value("completion").toString() + QLatin1Char('/') + candidate.toMap().value("kind").toString();
-	CHECK(pings.contains("command control.Ping/Command") && pings.contains("service control.Ping/Service"));
-	const auto words = provider->batchPathCandidates(QStringLiteral("dev set"));
+	for (const auto& candidate : picks(provider->batchPathCandidates(QStringLiteral("Pi"))))
+		pings << candidate.toMap().value("completion").toString() + QLatin1Char('/') + candidate.toMap().value("section").toString();
+	CHECK(pings.contains("command control.Ping/Commands") && pings.contains("service control.Ping/Services"));
+	const auto piHeadings = headings(provider->batchPathCandidates(QStringLiteral("Pi")));
+	CHECK(piHeadings.contains("Commands 1") && piHeadings.contains("Services 1") &&
+	      piHeadings.indexOf("Commands 1") < piHeadings.indexOf("Services 1"));
+	// A kind word lists that kind only.
+	CHECK(headings(provider->batchPathCandidates(QStringLiteral("commands Pi"))) == QStringList({"Commands 1"}));
+	CHECK(picks(provider->batchPathCandidates(QStringLiteral("command Pi"))).first().toMap().value("completion") ==
+	      "command control.Ping");
+	const auto words = picks(provider->batchPathCandidates(QStringLiteral("dev set")));
 	CHECK(words.size() == 1 && words.first().toMap().value("path") == "device.Setpoint" &&
-	      words.first().toMap().value("typeText").toString().endsWith("rw"));
+	      !words.first().toMap().value("typeText").toString().isEmpty() &&
+	      !words.first().toMap().value("typeText").toString().contains("write-only"));
 	const auto under = provider->batchPathCandidates(QStringLiteral("control."));
-	CHECK(under.size() == 8);
+	CHECK(picks(under).size() == 8 && headings(under).size() == 2 && headings(under).first().startsWith("Commands"));
 	for (const auto& candidate : under)
 		if (candidate.toMap().value("path") == "control.Execute")
-			CHECK(candidate.toMap().value("input").toBool());
+			CHECK(candidate.toMap().value("input").toBool() && candidate.toMap().value("section") == "Commands");
+	// Empty: up to eight of each kind, the heading saying how many there are.
+	const auto empty = provider->batchPathCandidates(QString{});
+	CHECK(headings(empty).size() == 3);
+	for (const auto& candidate : empty)
+		if (candidate.toMap().value("heading").toBool())
+			CHECK(candidate.toMap().value("shown").toInt() <= 8 &&
+			      candidate.toMap().value("shown").toInt() == std::min(8, candidate.toMap().value("count").toInt()));
 	// A half-typed name: Enter takes the first suggestion, said quietly.
 	const auto partial = check("Setp");
 	CHECK(partial.value("status") == "partial" && partial.value("message") == "Enter takes device.Setpoint.");
@@ -955,8 +987,9 @@ void batchPaths()
 	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
 	connection.disconnect();
 
-	// A Command's values typed after its path (BA-2), checked as Details would,
-	// on the demo whose control.Calibrate takes reference (f32).
+	// A Command that takes input, on the demo whose control.Calibrate takes
+	// reference (f32): added at its initial values, set on the item (BA-4b);
+	// values typed after its path are refused in words.
 	inspector_qml::TcpDemoServer plain;
 	CHECK(plain.listen());
 	host::ConnectionSession second;
@@ -965,58 +998,26 @@ void batchPaths()
 	connect(second, plain);
 	const auto line = [calibrate](const char* text) { return calibrate->checkBatchPath(QString::fromUtf8(text)); };
 	auto typed = line("control.Calibrate");
-	CHECK(typed.value("status") == "needs" && typed.value("next") == "reference" &&
-	      typed.value("line") == "control.Calibrate reference=" &&
-	      typed.value("message") == "control.Calibrate needs reference (f32). Enter writes reference=; Ctrl+Enter fills it in Details.");
-	// A name half typed is a name: quiet, and Enter completes it.
-	typed = line("control.Calibrate ref");
-	CHECK(typed.value("status") == "needs" && typed.value("line") == "control.Calibrate reference=");
-	// "reference=" waits for its value, quietly.
-	typed = line("control.Calibrate reference=");
-	CHECK(typed.value("status") == "needs" && typed.value("message") == "reference (f32) takes a number." &&
-	      typed.contains("line") && typed.value("line").toString().isEmpty());
-	typed = line("control.Calibrate reference=abc");
-	CHECK(typed.value("status") == "error" && typed.value("message") == "reference (f32) takes a number, not \"abc\".");
-	typed = line("control.Calibrate referenc=1");
-	CHECK(typed.value("status") == "error" && typed.value("message") == "control.Calibrate has no argument referenc. Did you mean reference?");
-	// Valid, it would be added - here the device has no Batch - with its value as sent.
-	for (const auto* text : {"control.Calibrate reference=1.5", "control.Calibrate reference = 1.5", "control.Calibrate 1.5",
-	                         "Calibrate reference=0x3fc00000"}) {
+	CHECK(typed.value("status") == "unsupported" && typed.value("operation") == "command" &&
+	      typed.value("path") == "control.Calibrate");
+	for (const auto* text : {"control.Calibrate reference=1.5", "Calibrate reference=0x3fc00000"}) {
 		typed = line(text);
-		const auto arguments = typed.value("arguments").toList();
-		CHECK(typed.value("status") == "unsupported" && arguments.size() == 1 &&
-		      arguments.first().toMap().value("status") == "ok" && arguments.first().toMap().value("canonical") == "1.5");
+		CHECK(typed.value("status") == "error" && !typed.contains("arguments") &&
+		      typed.value("message") == QStringLiteral("Set values on the item, not here: remove \"%1\".")
+		                                    .arg(QString::fromUtf8(text).section(QLatin1Char(' '), 1)));
 	}
-	// Suggestions: the named signature, then the arguments to give.
+	// Suggestions: the named signature in the right column, under Commands;
+	// no argument after the path.
 	const auto found = calibrate->batchPathCandidates(QStringLiteral("Calib"));
 	bool signature = false;
 	for (const auto& candidate : found)
 		signature = signature || (candidate.toMap().value("path") == "control.Calibrate" &&
 		                          candidate.toMap().value("typeText") == "(reference: f32)" &&
-		                          candidate.toMap().value("follow") == " " && candidate.toMap().value("continues").toBool());
+		                          candidate.toMap().value("section") == "Commands" &&
+		                          !candidate.toMap().contains("follow") && !candidate.toMap().contains("continues"));
 	CHECK(signature);
-	// The argument shows as "reference=" with its type; choosing it writes
-	// the whole line.
-	const auto arguments = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate "));
-	CHECK(arguments.size() == 1 && arguments.first().toMap().value("completion") == "control.Calibrate reference=" &&
-	      arguments.first().toMap().value("path") == "reference=" && arguments.first().toMap().value("kind") == "" &&
-	      arguments.first().toMap().value("kindCode") == "argument" && arguments.first().toMap().value("typeText") == "f32");
-	const auto starting = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate re"));
-	CHECK(starting.size() == 1 && starting.first().toMap().value("completion") == "control.Calibrate reference=");
-	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate 1.")).isEmpty());
-	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate reference=1 ")).isEmpty());
-	// Ctrl+Enter takes the typed value into the draft, as Details would; an
-	// edit made that way is then one to finish or cancel before the next.
-	secondPresentation.setMutationsAllowed(true);
-	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate")) && !calibrate->selectionRequiresDiscard());
-	calibrate->setAllowMutations(true);
-	CHECK(calibrate->allowMutations() && calibrate->selectBatchPath(QStringLiteral("Calibrate reference=0x3fc00000")));
-	CHECK(::member(calibrate->values(), QStringLiteral("reference")).data(ux::ValueModel::EditorTextRole) == "1.5" &&
-	      calibrate->selectionRequiresDiscard());
-	CHECK(!calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=2")));
-	calibrate->cancelEdit();
-	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=nope")) &&
-	      !calibrate->selectionRequiresDiscard());
+	for (const auto& candidate : calibrate->batchPathCandidates(QStringLiteral("control.Calibrate ")))
+		CHECK(candidate.toMap().value("kindCode") != "argument");
 	second.disconnect();
 }
 

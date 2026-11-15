@@ -237,17 +237,18 @@ list with at most 32 operations. Repeated endpoint IDs are allowed, so a write
 followed by a read is a natural sequence. There is no atomic snapshot,
 transaction rollback, exactly-once execution or automatic replay guarantee.
 
-1. Select an endpoint in the existing endpoint tree. For a Field write, read it
-   explicitly, press **Edit**, and prepare the values in the existing editor.
-   Commands and Services use their existing request editor, including Void.
-2. Choose `read`, `write`, `command` or `service`, then **Add selected draft**.
-   This captures owned canonical request bytes without sending anything or
-   changing the editor. A Field read needs no draft. After capturing a Field
-   write, **Cancel** closes the local editor before selecting another endpoint;
-   the captured Batch step remains intact.
-3. Prepare and add more operations. Use Up, Down, Remove or Clear while idle.
-   Later editor changes do not alter a captured step. To change its arguments,
-   prepare a replacement and remove/re-add that step.
+1. Find a Field, a Command or a Service in the **+** row under the list by its
+   name or path. It lists what it finds under the headings Fields, Commands and
+   Services; a kind word first (`field `, `command `, `service `, singular or
+   plural; `read ` too) lists that kind only, and a heading's click writes it.
+   Enter adds the item: a Field is read (a write-only one written), a Command
+   runs and a Service is called. Its request starts at its initial values -
+   zero, false, an enum's first name (the SDK's `RequestEditor::initialize`,
+   which Details uses too) - and values typed after a path are refused: they
+   are set on the item. Several pasted lines are added at once, or none.
+2. Choose the item: its values show in the pane beside the list, where they are
+   set; a Field that can be read and written is made a write there.
+3. Add more operations. Use Up, Down, Remove or Clear while idle.
 4. Press **Execute Batch** to submit one ordered request through the existing
    Session/FIFO. Any mutating item requires the shared mutation permission and
    this panel's `allowMutations`. A read-only Batch needs no mutation permission.
@@ -276,10 +277,11 @@ old values and old-session recipes cannot become current or run automatically.
 
 The provider exposes `batchSupported`, `batchItems`, `batchCount`, `batchPending`,
 `canExecuteBatch`, `batchStatus`, `batchSelection` and `batchItem`. Its
-invokables are `canAddBatch(operation)`,
-`addBatch(operation)`, `removeBatch(row)`, `moveBatch(row, delta)` (delta -1/+1),
-`clearBatch()`, `selectBatch(row)` and `executeBatch()`. Operation names are the
-four lowercase strings above. `batchFinished()` is emitted after native progress
+invokables are `checkBatchPath(text)`, `batchPathCandidates(text)` and
+`addBatchPaths(lines)` (the **+** row), `removeBatch(row)`, `moveBatch(row,
+delta)` (delta -1/+1), `clearBatch()`, `selectBatch(row)` and `executeBatch()`.
+Operation names are `read`, `write`, `command` and `service`. `batchFinished()`
+is emitted after native progress
 returns; it does not imply that every item succeeded. The row model provides
 `name`, `operation`, `endpointId`, `status`, `hasValue`, `historical`, `line`
 (the request's values in one line), `changed` (they differ from what Execute

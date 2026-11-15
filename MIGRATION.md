@@ -1031,3 +1031,33 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
   the selected item's values and response from `batchItem`.
 - `EndpointPanel` takes `emptyText`, what it says with nothing selected, and
   asks a provider with `closeValue()` to close a value when its cell closes.
+
+## The Batch's "+" is a finder (BA-4b, November 2026)
+
+- **Commands and Services are added at their initial values.** A Command or a
+  Service that takes input is added like one that takes none, its request at
+  the SDK's initial values (zero, false, an enum's first named enumerator:
+  `RequestEditor::initialize`, from telemetry-sdk #64), and its values are set
+  on the item. The line under the row says what it starts at: "Adds a call of
+  Service control.Scale as item 3, with value 0 and factor 0; …". A write-only
+  Field is added as a write.
+- **Values typed after a path are refused:** `Set values on the item, not here:
+  remove "value=2".` The `needs`, `unnamed` and `input` statuses of
+  `checkBatchPath`, its `arguments`, `next`, `line` and `named` keys, and the
+  argument and value candidates are gone.
+- **Headings.** `batchPathCandidates` lists its candidates under headings,
+  Fields, Commands and Services in that order: a heading is `{heading: true,
+  path, completion, word, category, count, shown}`, a candidate carries
+  `section`. Empty text lists up to eight of each kind. No group rows. A kind
+  word first may be `field`, `command` or `service`, singular or plural, or
+  `read` (`endpoint_paths::kindCategory`). `PathAddRow` skips headings with the
+  keys, and a heading's click writes its kind word before the text.
+- **Removed:** `DynamicConfiguratorProvider::canAddBatch(operation)`,
+  `addBatch(operation)` and `selectBatchPath(text)`; the Batch panel's
+  operation box, **Add selected draft** and **Fill in Details**;
+  `BatchAddRow`'s `selected` signal and its Ctrl+Enter; `PathAddRow`'s
+  `follow` and `continues`; and from the installed `RequestArguments.hpp`,
+  `parse`, `check`, `Given`, `Item` and `Result` (`arguments`,
+  `signatureText` and `valueType` stay). A host that added a prepared draft
+  with `addBatch` adds the path with `addBatchPaths` and sets the values on
+  the item (`batchItem.setScalarText`).

@@ -23,19 +23,6 @@ Pane {
                 countText: qsTr("%L1/32").arg(panel.provider.batchCount)
                 checked: false
             }
-            ComboBox {
-                id: operation
-                objectName: "batchOperation"
-                model: ["read", "write", "command", "service"]
-                enabled: !panel.provider.batchPending
-                Layout.preferredWidth: 130
-            }
-            Button {
-                objectName: "addBatchButton"
-                text: "Add selected draft"
-                enabled: panel.providerRevision >= 0 && panel.provider.canAddBatch(operation.currentText)
-                onClicked: if (panel.provider.addBatch(operation.currentText)) expanded.checked = true
-            }
             Button {
                 objectName: "executeBatchButton"
                 text: "Execute Batch"
@@ -197,11 +184,6 @@ Pane {
                                 items.positionViewAtEnd()
                             })
                     }
-                    onSelected: kind => {
-                        const at = operation.find(kind)
-                        if (at >= 0)
-                            operation.currentIndex = at
-                    }
                     onLeaveUp: {
                         items.forceActiveFocus()
                         if (items.count > 0)
@@ -209,43 +191,19 @@ Pane {
                     }
                 }
                 // What the row last did, in words: a refusal in the error
-                // colour; beside it, for a Command or a Service on the line,
-                // the way to Details by pointer as Ctrl+Enter is by key.
-                RowLayout {
-                    visible: batchAdd.visible && (batchNotice.text.length > 0 || fillDetails.wanted)
+                // colour.
+                Label {
+                    id: batchNotice
+                    objectName: "batchAddNotice"
+                    visible: batchAdd.visible && text.length > 0
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: batchAdd.lastRefused ? Theme.error : Theme.textSecondary
+                    font.pointSize: Type.caption
                     Layout.fillWidth: true
                     Layout.leftMargin: Type.padding + Type.indent + Type.tight
                     Layout.rightMargin: Type.padding
                     Layout.bottomMargin: Type.tight
-                    spacing: Type.spacing
-                    Label {
-                        id: batchNotice
-                        objectName: "batchAddNotice"
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: batchAdd.lastRefused ? Theme.error : Theme.textSecondary
-                        font.pointSize: Type.caption
-                        Layout.fillWidth: true
-                    }
-                    Button {
-                        id: fillDetails
-                        objectName: "batchAddFillDetails"
-                        // What the line names (not the operation box beside it).
-                        readonly property string named: batchAdd.check.operation || ""
-                        // Its own condition: the row's visibility follows it.
-                        readonly property bool wanted: batchAdd.text.trim().length > 0
-                                                       && (fillDetails.named === "command" || fillDetails.named === "service")
-                                                       && (batchAdd.check.path || "").length > 0
-                        visible: wanted
-                        flat: true
-                        focusPolicy: Qt.NoFocus
-                        text: qsTr("Fill in Details")
-                        ToolTip.text: qsTr("Fill in Details (Ctrl+Enter)")
-                        ToolTip.visible: hovered
-                        ToolTip.delay: 700
-                        Accessible.description: qsTr("Selects %1 in the Device tree with the values typed here.").arg(batchAdd.check.path || "")
-                        onClicked: batchAdd.adapter.select(batchAdd.text)
-                    }
                 }
             }
             EndpointPanel {

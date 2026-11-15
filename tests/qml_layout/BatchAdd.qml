@@ -37,8 +37,6 @@ ApplicationWindow {
             signal stateChanged()
             signal readFinished(bool published)
         }
-        function canAddBatch(operation) { return false }
-        function addBatch(operation) { return false }
         function executeBatch() { return false }
         function clearBatch() { return false }
         function selectBatch(row) { return false }
@@ -52,7 +50,6 @@ ApplicationWindow {
             stateChanged()
             return result
         }
-        function selectBatchPath(text) { return batchAddCalls.selectPath(text) }
     }
     BatchPanel {
         objectName: "batchAddPanel"
