@@ -608,3 +608,15 @@ selection or a node; every value on the Plot already takes them all off) and
 refuses text in words. `TracePlot`'s graph menu gains Follow, Pin reference
 here, Remove reference and Remove all curves; Delete on a chip's settings
 button takes that curve off.
+
+## Gaps and values no longer watched on the live Plot (LP-1g, November 2026)
+
+`WatchTraces.breakAll(reason)` now records why nothing was read
+(`PauseReason::Stopped` from stopWatch, `Disconnected` when the provider
+retires) as a `Pause` from the break to the next reading; `pauses()` keeps
+the last 1,024. `TraceView` fills each with `gapColor` (TracePlot passes
+`Theme.surfaceAlternate`) and captions it "Watchlist stopped 12:05:10" or
+"Disconnected 12:05:10" where the words fit; `drawnGaps` counts them.
+`WatchTraces.watched(path)` and `lastReadUtcMs(path)` tell a value taken out
+of the Watchlist: its chip says "not read since 12:05:10" in the muted colour,
+and its line ends in an open circle (`drawnEnds`).

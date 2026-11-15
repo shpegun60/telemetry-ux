@@ -486,6 +486,15 @@ void TraceView::toOldest()
 	hold(oldest + spanNs());
 }
 
+void TraceView::setGapColor(const QColor& color)
+{
+	if (color == gapColor_)
+		return;
+	gapColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
 QColor TraceView::curveColor(const QString& path) const
 {
 	if (traces_) {
@@ -937,6 +946,33 @@ void TraceView::paint(QPainter* painter)
 
 	// The lines: raw while two readings or fewer fall on each device pixel,
 	// else each pixel's first, lowest, highest and last.
+	// Where the Watchlist was stopped or the device gone: a band under the
+	// curves, captioned with what and when where the words fit (LP-1g).
+	int gaps = 0, ends = 0;
+	if (traces_) {
+		painter->save();
+		painter->setClipRect(area);
+		for (const auto& pause : traces_->pauses()) {
+			const qint64 to = pause.toNs ? pause.toNs : std::max(right, pause.fromNs);
+			if (to <= left || pause.fromNs >= right)
+				continue;
+			const qreal x0 = xOf(std::max(pause.fromNs, left)), x1 = xOf(std::min(to, right));
+			if (x1 - x0 < 1)
+				continue;
+			const QRectF band(x0, area.top(), x1 - x0, area.height());
+			painter->fillRect(band, gapColor_);
+			++gaps;
+			const auto at = QDateTime::fromMSecsSinceEpoch(qint64(utcOf(pause.fromNs))).toString(QStringLiteral("HH:mm:ss"));
+			const auto words = pause.reason == WatchTraces::PauseReason::Disconnected ? tr("Disconnected %1").arg(at)
+			                                                                          : tr("Watchlist stopped %1").arg(at);
+			if (metrics.horizontalAdvance(words) + 2 * pad <= band.width()) {
+				painter->setPen(labelColor_);
+				painter->setFont(font_);
+				painter->drawText(QPointF(x0 + pad, area.top() + pad + metrics.ascent()), words);
+			}
+		}
+		painter->restore();
+	}
 	int points = 0, raw = 0, curves = 0, dots = 0;
 	const double pixels = area.width() * ratio;
 	painter->save();
@@ -1058,6 +1094,23 @@ void TraceView::paint(QPainter* painter)
 			emitColumn();
 			flush();
 		}
+		// A value no longer watched ends in an open circle at its last reading.
+		if (!traces_->watched(path)) {
+			auto last = to;
+			while (last != from) {
+				--last;
+				if (!std::isnan(last->value))
+					break;
+			}
+			if (last != to && !std::isnan(last->value) && last->ns >= left && last->ns <= right) {
+				painter->save();
+				painter->setPen(QPen(color, 1.5));
+				painter->setBrush(Qt::NoBrush);
+				painter->drawEllipse(QPointF(xOf(last->ns), yOf(drawn(last->value))), 2.5, 2.5);
+				painter->restore();
+				++ends;
+			}
+		}
 	}
 	painter->setClipRect(area);
 	QStringList laneLabels, laneStates;
@@ -1174,8 +1227,10 @@ void TraceView::paint(QPainter* painter)
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
 	plotArea_ = area;
-	const bool dotsChanged = dots != drawnDots_;
+	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;
+	drawnGaps_ = gaps;
+	drawnEnds_ = ends;
 	valuesArea_ = numbersArea;
 	rightUtcMs_ = qreal(utcOf(right));
 	const auto newest = traces_ ? traces_->newestNs() : 0;

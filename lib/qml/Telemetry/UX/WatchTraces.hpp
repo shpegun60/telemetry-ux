@@ -5,6 +5,7 @@
 #include "WatchFrame.hpp"
 #include <QtCore/QHash>
 #include <QtCore/QObject>
+#include <QtCore/QSet>
 #include <QtCore/QStringList>
 #include <QtCore/QVariant>
 #include <QtQml/qqmlregistration.h>
@@ -121,7 +122,20 @@ public:
 	Q_INVOKABLE bool restore(const QVariantMap& state);
 	// Every line ends here - the Watchlist stopped, the device went - so
 	// the time not read is never drawn as if it were.
-	void breakAll();
+	// Why nothing was read for a while (LP-1g): the Watchlist stopped, or
+	// the device gone. From the break to the next reading; to 0 while it lasts.
+	enum class PauseReason : quint8 { Stopped, Disconnected };
+	struct Pause {
+		qint64 fromNs = 0, toNs = 0;
+		PauseReason reason = PauseReason::Stopped;
+	};
+	void breakAll(PauseReason reason = PauseReason::Stopped);
+	// The last 1,024 pauses, oldest first.
+	[[nodiscard]] const std::deque<Pause>& pauses() const noexcept { return pauses_; }
+	// Whether path is in the Watchlist now; one that left keeps its readings.
+	Q_INVOKABLE bool watched(const QString& path) const { return watched_.contains(path); }
+	// This PC's time of path's newest reading with a value, NaN when none.
+	Q_INVOKABLE double lastReadUtcMs(const QString& path) const;
 	// Why path cannot be plotted, or empty: a value whose readings are not a
 	// number, a bool or an enum (text).
 	[[nodiscard]] QString refusal(const QString& path) const;
@@ -143,6 +157,8 @@ private:
 
 	QHash<QString, Trace> traces_;
 	QHash<quint64, QString> paths_;
+	QSet<QString> watched_;
+	std::deque<Pause> pauses_;
 	QHash<QString, bool> categorical_;
 	QHash<QString, QHash<qint64, QString>> states_;
 	QStringList plotted_;
