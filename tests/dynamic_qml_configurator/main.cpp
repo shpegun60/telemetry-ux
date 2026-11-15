@@ -753,6 +753,43 @@ static void injectedApplicationLeak()
 #endif
 }
 
+// A host whose owner runs only when it has work learns of each request a
+// provider puts in the owner's queue from submitted(): once per accepted
+// submission, with the request already queued, and never for a refusal.
+// QtConnectionBinding wakes the Qt session on it (SDK-2b).
+static void submittedOncePerAcceptedRequest()
+{
+	Harness h;
+	Provider provider{h.binding.get()};
+	provider.setAllowMutations(true);
+	int signalled = 0;
+	std::size_t queuedAtSignal = 0;
+	QObject::connect(h.binding.get(), &Binding::submitted, h.binding.get(), [&] {
+		++signalled;
+		queuedAtSignal = std::size_t(h.storage->owner.pending());
+	});
+	select(provider, "Config");
+	CHECK(provider.refresh());
+	CHECK(signalled == 1 && queuedAtSignal == 1);
+	CHECK(!provider.refresh() && signalled == 1); // still reading: refused, nothing queued
+	h.pump();
+	CHECK(provider.beginEdit() && edit(provider, "limit", "7"));
+	CHECK(provider.apply() && signalled == 2 && queuedAtSignal == 1);
+	h.pump(); // the read back is the Workbench's own, not a second submission
+	CHECK(signalled == 2 && device.writes == 1 && device.config.limit == 7);
+	select(provider, "Reset");
+	CHECK(provider.executeCommand() && signalled == 3 && queuedAtSignal == 1);
+	h.pump();
+	select(provider, "Ping");
+	CHECK(provider.callService() && signalled == 4 && queuedAtSignal == 1);
+	h.pump();
+	CHECK(device.commands == 1 && device.services == 1);
+	// Changes not allowed: refused before the queue, so nothing to wake.
+	h.binding->setMutationsAllowed(false);
+	select(provider, "Reset");
+	CHECK(!provider.executeCommand() && signalled == 4 && h.storage->owner.pending() == 0);
+}
+
 // Without a Watchlist source nothing can be watched yet: no box, no reason,
 // nothing saved and nothing restored. The S3-A headers stand on their own.
 void watchWithoutSource()
@@ -803,6 +840,8 @@ int main(int argc, char** argv)
 		uncertainCommandFacts();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("watch"))
 		watchWithoutSource();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("submitted"))
+		submittedOncePerAcceptedRequest();
 	CHECK(warnings == 0);
 	if (application.arguments().contains(QStringLiteral("--application-leak-control")))
 		injectedApplicationLeak();

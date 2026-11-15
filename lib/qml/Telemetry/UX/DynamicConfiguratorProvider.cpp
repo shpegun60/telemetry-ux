@@ -250,6 +250,12 @@ void DynamicConfiguratorBinding::invalidateData()
 	mutationAccepted({});
 }
 
+void DynamicConfiguratorBinding::requestSubmitted()
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	Q_EMIT submitted();
+}
+
 namespace {
 QString operationText(const ins::OperationResult& result)
 {
@@ -975,6 +981,8 @@ struct DynamicConfiguratorProvider::Impl {
 		writer->submittedSession = view.session();
 		writer->sequence = submitted.handle.sequence;
 		writer->eventReported = false;
+		if (binding)
+			binding->requestSubmitted();
 		watchWrite = QStringLiteral("Writing ") + writeName;
 		watchWriteKind = QStringLiteral("writing");
 		watchWroteLast = true;
@@ -3088,6 +3096,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writer->submittedSession = view.session();
 	p->writer->sequence = submitted.handle.sequence;
 	p->writer->eventReported = false;
+	if (p->binding)
+		p->binding->requestSubmitted();
 	p->writeId = id;
 	p->writeLeaf = std::move(leaf);
 	p->writeIntended = typed;
@@ -3306,6 +3316,8 @@ bool DynamicConfiguratorProvider::refresh()
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
+	if (p->binding)
+		p->binding->requestSubmitted();
 	p->updating = true;
 	p->values.clear();
 	p->updating = false;
@@ -3364,6 +3376,8 @@ bool DynamicConfiguratorProvider::apply()
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
+	if (p->binding)
+		p->binding->requestSubmitted();
 	p->write = p->status = QStringLiteral("Write pending");
 	p->writeAttention = false;
 	p->updating = true;
@@ -3397,6 +3411,8 @@ bool DynamicConfiguratorProvider::executeCommand()
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
+	if (p->binding)
+		p->binding->requestSubmitted();
 	p->command = p->status = QStringLiteral("Command pending");
 	p->commandAttention = false;
 	p->updating = true;
@@ -3433,6 +3449,8 @@ bool DynamicConfiguratorProvider::callService()
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
+	if (p->binding)
+		p->binding->requestSubmitted();
 	p->service = p->status = QStringLiteral("Service pending");
 	p->serviceAttention = false;
 	p->updating = true;

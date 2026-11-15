@@ -252,7 +252,10 @@ view is hidden; its stale completion cannot warm a replacement lease/session.
 
 The existing progress owner services previews after foreground, Watchlist and
 Batch work, with one pending request, at least 500 ms between attempts and a
-5,000 ms refresh age. The shared cache holds at most 64 Fields and 256 KiB of
+5,000 ms refresh age. The Session runs only when it has work, so its progress
+takes replies in but is no clock: each cycle, and the once-a-second move of the
+ages shown, starts from the previews' own single-shot timer, which runs only
+while rows are in view. The shared cache holds at most 64 Fields and 256 KiB of
 payload, with an 8 KiB per-Field limit. At most 16 view leases each contribute
 256 IDs; 256 is not a global union limit. Local expansion adds at most 4,096
 descendants per model, in pages of 128 and array ranges of 256. Limit/stale/error
@@ -513,8 +516,11 @@ every write to disk:
 - `DeviceFileTransfers` (C++, the same component) downloads one file at a time
   with the SDK's `FileReader`, writes it through `QSaveFile` so a cancelled or
   failed download never leaves a truncated file under the real name, and reports
-  progress, rate and time left in the designer's words. It owns its readers: one
-  whose request is still in flight is handed to the session when the model goes.
+  progress, rate and time left in the designer's words. While a transfer runs
+  it republishes the row on a 250 ms timer of its own, so the rate and "waiting
+  for the device…" stay current while the session, waiting on the device,
+  publishes nothing. It owns its readers: one whose request is still in flight
+  is handed to the session when the model goes.
 - `upload(path, fileIndex, localFile, deviceFolder, overwrite, viewer)` writes a
   saved copy inside the connected device's folder back to the device, in the
   same queue and rows (`UploadRole`, states `Writing` and `Written`, the

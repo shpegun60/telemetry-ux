@@ -45,7 +45,12 @@ notifications can be recognized by `previewOnlyChange(roles)` so search need not
 rescan the entire tree on every age/value change.
 
 Metadata access, `data()` and local `fetchMore()` never submit I/O. The shared
-progress owner polls previews after foreground work, Watchlist and Batch.
+progress owner polls previews after foreground work, Watchlist and Batch, which
+takes a reply in. The Session runs only when it has work (SDK #63), so its
+progress is no clock: the previews start each cycle, and move the ages shown
+on, from a single-shot timer of their own, armed for the nearest of the next
+cycle and the next whole second, and only while Fields are in view and the
+source is current (`nextPollInMs()` is -1 otherwise).
 
 ## One snapshot a cycle (PV-2)
 
@@ -83,6 +88,7 @@ cache without a duplicate read.
 | Interval | 2,000 ms by default, 1,000 to 10,000 ms; a value is stale after three intervals, at least 5,000 ms |
 | Cycle spacing | A cycle starts at least 500 ms after the last landed |
 | Accepted preview requests | At most one pending; no timer backlog |
+| Own timer | One single-shot timer, off while no Field is in view; at most one wake a second besides a due cycle |
 | Cached Fields | At most 64 |
 | Total cached payload | At most 256 KiB, also subject to the Field count limit |
 | One preview payload | At most 8 KiB; larger Fields say Open Details |
@@ -134,7 +140,11 @@ hashes before and after the run, executable/log hashes, and UI captures.
 
 - `telemetry_endpoint_previews_check`: controlled clock and completion slots,
   cache/demand bounds, refusal/payload errors, stale epochs, Watch warming,
-  detached callbacks and reentrancy.
+  detached callbacks and reentrancy; the previews' own timer - armed for the
+  next cycle or the next whole second, held back without spinning while the
+  Session is busy, off out of view or without a current source - and, on the
+  real clock, a value read again an interval after it landed by that timer
+  alone.
 - `telemetry_endpoint_preview_models_check`: actual parsed descriptors and
   Encoded client operations, metadata without getters, local array offsets and
   expansion bounds, ID zero, stable indexes, deletion during publication,
@@ -143,7 +153,10 @@ hashes before and after the run, executable/log hashes, and UI captures.
   `QAbstractItemModelTester` also validates GUI role metatypes; it opens no window.
 - `telemetry_endpoint_previews_ui_check`: the real reusable QML panel, visibility
   demand and narrow layouts, with strict warnings and captured output supplied
-  as its first argument.
+  as its first argument; over the real Session and TCP, previews at a 1 s
+  interval read again about a second after each landing with nothing else
+  running, the Session publishing nothing in between, and nothing more once
+  the demand is gone.
 
 Before the tree-table follow-up, the complete installed-package runner passed
 on Windows with Qt 6.12.0 and

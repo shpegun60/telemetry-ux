@@ -342,6 +342,9 @@ public:
 	telemetry::Workspace workspace{scratch};
 	std::array<std::byte, 4096> rx{}, tx{};
 	QByteArray pending;
+	// A device that keeps its answer back: requests stay unread in the socket
+	// until read() is called with hold off.
+	bool hold = false;
 
 	explicit Peer(resource::FileSystemView table)
 	{
@@ -368,6 +371,8 @@ public:
 
 	void read()
 	{
+		if (hold)
+			return;
 		pending += socket->readAll();
 		while (!pending.isEmpty()) {
 			const auto result = server->receive({reinterpret_cast<const std::byte*>(pending.constData()),
@@ -1461,6 +1466,66 @@ void destroyedMidway(qt::ConnectionSession& session, DeviceFilesModel& files, co
 		return !files.loading();
 	}));
 	CHECK(files.fileCount() == 4 && files.error().isEmpty());
+}
+
+// The session runs only when it has work: while the device keeps a piece back
+// it publishes nothing at all. The row is published on its own clock all the
+// same, as a view would re-read it: the rate once it can be trusted, then,
+// three seconds after the last byte, that the device is awaited (SDK-2b).
+void stalledTransferStaysLive(Peer& peer, qt::ConnectionSession& session, DeviceFilesModel& files,
+                              const QString& folder)
+{
+	DeviceFileTransfers transfers(&session);
+	const auto large = files.indexOfPath(QStringLiteral("/logs/large.bin"));
+	const auto local = folder + QStringLiteral("/stalled.bin");
+	const auto row = transfers.download(QStringLiteral("/logs/large.bin"),
+	                                    files.data(large, DeviceFilesModel::FileIndexRole).toInt(),
+	                                    largeBytes.size(), local);
+	const auto received = [&] {
+		return transfers.data(transfers.index(row), DeviceFileTransfers::ReceivedRole).toULongLong();
+	};
+	CHECK(await([&] { return received() > 20000; }));
+	peer.hold = true;
+	int published = 0, progressed = 0;
+	QString shown;
+	bool shownRate = false;
+	QObject::connect(&transfers, &QAbstractItemModel::dataChanged, &transfers, [&](const QModelIndex& from) {
+		++published;
+		if (from.row() != row)
+			return;
+		shown = transfers.data(from, DeviceFileTransfers::FiguresRole).toString();
+		shownRate = shownRate || shown.contains(QStringLiteral("/s"));
+	});
+	QObject::connect(&session, &qt::ConnectionSession::progressed, &transfers, [&] { ++progressed; });
+	// The piece already on its way when the device stopped may still land.
+	QElapsedTimer settle;
+	settle.start();
+	CHECK(await([&] { return settle.elapsed() >= 200; }));
+	const auto stopped = received();
+	published = progressed = 0;
+	shownRate = false;
+	QElapsedTimer held;
+	held.start();
+	const bool waiting = await([&] { return shown.contains(QStringLiteral("waiting for the device")); }, 6000);
+	const auto waited = held.elapsed();
+	std::printf("Device files stalled transfer: %d publications and %d session progress in %lld ms held; "
+	            "rate shown %d; waiting shown %d\n",
+	            published, progressed, static_cast<long long>(waited), shownRate ? 1 : 0, waiting ? 1 : 0);
+	CHECK(received() == stopped && progressed == 0);
+	// The row keeps being published while held and comes to "waiting"; whether
+	// a rate shows first depends on the timer's phase (Linux CI went straight to
+	// waiting), so it is printed, not required.
+	CHECK(waiting && waited < 4000 && published >= 3);
+	peer.hold = false;
+	peer.read();
+	CHECK(ended(transfers, row) == DeviceFileTransfers::State::Saved && sameBytes(local, largeBytes));
+	// Nothing runs: the row is not published again.
+	published = 0;
+	QElapsedTimer quiet;
+	quiet.start();
+	CHECK(await([&] { return quiet.elapsed() >= 800; }));
+	CHECK(published == 0);
+	transfers.clearFinished();
 }
 
 // The viewers' reading of a local file: CSV as a table, text, anything as hex.
@@ -3879,6 +3944,7 @@ int main(int argc, char** argv)
 	transferSafety(session, files, folder.path());
 	openInViewer(session, files, folder.path());
 	destroyedMidway(session, files, folder.path());
+	stalledTransferStaysLive(peer, session, files, folder.path());
 	session.disconnect();
 	CHECK(await([&] {
 		return !files.available();

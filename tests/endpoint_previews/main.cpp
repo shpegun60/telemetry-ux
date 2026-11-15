@@ -1,8 +1,11 @@
 // Controlled clock/native completions over actual parsed descriptor bytes. MIT.
 #include <Telemetry/UX/EndpointPreviews.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
+#include <QtCore/QTimer>
 #include <functional>
 #include <utility>
 
@@ -588,6 +591,88 @@ void watchWarmingAndCorrelation() {
 	CHECK(peer.calls.isEmpty());
 }
 
+// The session runs only when it has work, so its progress is no clock: the
+// previews arm a timer of their own, for the next cycle falling due and for
+// the next whole second (the ages shown), and only while Fields are in view
+// and the source is current (SDK-2b).
+void timerArmsOnlyWhileInView() {
+	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
+	Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+	ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
+	CHECK(previews.nextPollInMs() == -1);
+	QObject view;
+	CHECK(previews.setDemand(&view, {0}));
+	// Nothing is sent from setDemand itself; the first cycle goes at the next turn.
+	CHECK(previews.nextPollInMs() == 0 && peer.calls.isEmpty());
+	for (int turn = 0; turn < 100 && peer.calls.isEmpty(); ++turn)
+		QCoreApplication::processEvents();
+	CHECK(peer.calls.size() == 1 && previews.pending());
+	// A reply on its way is polled by the progress that brings it; the ages' tick stays.
+	const auto tick = previews.nextPollInMs();
+	CHECK(tick > 0 && tick <= 1000);
+	peer.now = 250;
+	peer.finish(encoded(UINT64_MAX)); previews.poll();
+	CHECK(hasValue(previews, 0));
+	// Landed at 250 ms: the ages move on at 1000, the next cycle comes at 2250.
+	CHECK(previews.nextPollInMs() > 650 && previews.nextPollInMs() <= 750);
+	peer.now = 1900; previews.poll();
+	CHECK(previews.nextPollInMs() > 50 && previews.nextPollInMs() <= 100);
+	peer.now = 2100; previews.poll();
+	CHECK(previews.nextPollInMs() > 100 && previews.nextPollInMs() <= 150);
+	// Due while the session is busy: the progress that frees it polls; no spin.
+	peer.busy = true; peer.now = 2250; previews.poll();
+	CHECK(peer.calls.size() == 1 && previews.nextPollInMs() > 650 && previews.nextPollInMs() <= 750);
+	peer.busy = false; previews.poll();
+	CHECK(peer.calls.size() == 2);
+	peer.finish(encoded(UINT64_MAX)); previews.poll();
+	// A shorter interval brings the next cycle nearer at once.
+	peer.now = 2300; previews.setInterval(ux::EndpointPreviews::intervalMinimumMs);
+	CHECK(previews.nextPollInMs() > 650 && previews.nextPollInMs() <= 700);
+	// Out of view, or the source not current: off.
+	previews.clearDemand(&view);
+	CHECK(previews.nextPollInMs() == -1);
+	CHECK(previews.setDemand(&view, {0}) && previews.nextPollInMs() >= 0);
+	peer.admitted = false; previews.poll();
+	CHECK(previews.nextPollInMs() == -1);
+	peer.admitted = true;
+	previews.retire();
+	CHECK(previews.nextPollInMs() == -1);
+}
+
+// With the real clock and nothing else to move it, a preview is read again
+// an interval after it landed, by its own timer alone.
+void rereadsOnItsOwnTimer() {
+	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
+	Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+	ux::EndpointPreviews previews; bind(previews, peer);
+	previews.setInterval(ux::EndpointPreviews::intervalMinimumMs);
+	// Runs the loop as a program does, waking at least every 5 ms.
+	const auto loop = [](const std::function<bool()>& done, int limit) {
+		QElapsedTimer deadline; deadline.start();
+		QTimer wake; wake.setTimerType(Qt::PreciseTimer); wake.start(5);
+		while (!done() && deadline.elapsed() < limit)
+			QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents);
+		return done();
+	};
+	QObject view; CHECK(previews.setDemand(&view, {0}));
+	CHECK(loop([&] { return peer.calls.size() == 1; }, 1000));
+	// The progress owner takes the reply in, as on the session's progress.
+	peer.finish(encoded(UINT64_MAX)); previews.poll();
+	CHECK(hasValue(previews, 0));
+	QElapsedTimer landed; landed.start();
+	CHECK(loop([&] { return peer.calls.size() == 2; }, 3000));
+	const auto again = landed.elapsed();
+	std::printf("Endpoint preview read again %lld ms after it landed (interval %d ms)\n",
+	            static_cast<long long>(again), previews.interval());
+	CHECK(again >= ux::EndpointPreviews::intervalMinimumMs - 20 && again < ux::EndpointPreviews::intervalMinimumMs + 300);
+	peer.finish(encoded(std::uint64_t{5})); previews.poll();
+	CHECK(previews.value(0, peer.type(0), 0) == "5");
+	previews.clearDemand(&view);
+	CHECK(previews.nextPollInMs() == -1);
+	const auto calls = peer.calls.size();
+	CHECK(!loop([&] { return peer.calls.size() != calls; }, 1200));
+}
+
 void detachedCallbackAndReentrancy() {
 	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
 	{
@@ -635,6 +720,8 @@ int main(int argc, char** argv) {
 	demandLifecycleAndEpochs();
 	invalidationCannotBurstRequests();
 	watchWarmingAndCorrelation();
+	timerArmsOnlyWhileInView();
+	rereadsOnItsOwnTimer();
 	detachedCallbackAndReentrancy();
 	CHECK(fixture::warnings == 0);
 	std::printf("Endpoint preview checks=%u warnings=%u Qt=%s\n", fixture::checks, fixture::warnings, qVersion());

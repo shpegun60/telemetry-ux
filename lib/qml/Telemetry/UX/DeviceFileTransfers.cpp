@@ -203,6 +203,19 @@ DeviceFileTransfers::DeviceFileTransfers(Session* session, QObject* parent)
     : QAbstractListModel(parent), session_(session)
 {
 	clock_.start();
+	// The session runs only when it has work: while it waits on the device it
+	// publishes nothing, and the rate and "waiting for the device" would stand
+	// still. Twice a publication period, so a row is never more than
+	// publishEveryMs + 250 ms behind.
+	live_.setInterval(250);
+	connect(&live_, &QTimer::timeout, this, [this] {
+		if (std::any_of(jobs_.begin(), jobs_.end(), [](const auto& job) {
+			    return job->state == State::Reading || job->state == State::Writing;
+		    }))
+			schedulePoll();
+		else
+			live_.stop();
+	});
 	if (session_) {
 		// The session signals from inside its own progress pass, when it takes
 		// no new request; poll on the next turn of the event loop instead.
@@ -675,6 +688,7 @@ void DeviceFileTransfers::startNext()
 		job.state = State::Reading;
 		job.startedMs = job.sampleMs = job.dataMs = clock_.elapsed();
 		(void)job.reader->start(static_cast<resource::FileIndex>(job.fileIndex));
+		keepLive();
 		if (!publish(static_cast<int>(row)))
 			return;
 		poll();
@@ -718,6 +732,7 @@ bool DeviceFileTransfers::beginUpload(Job& job)
 	job.state = State::Writing;
 	job.startedMs = job.sampleMs = job.dataMs = clock_.elapsed();
 	(void)job.reader->start(static_cast<resource::FileIndex>(job.fileIndex));
+	keepLive();
 	return true;
 }
 
@@ -950,6 +965,12 @@ bool DeviceFileTransfers::advanceUpload(Job& job)
 	job.reader = std::make_unique<Job::Reader>(*session_, Job::Sink{&job});
 	(void)job.reader->start(index);
 	return false;
+}
+
+void DeviceFileTransfers::keepLive()
+{
+	if (!live_.isActive())
+		live_.start();
 }
 
 void DeviceFileTransfers::schedulePoll()

@@ -65,6 +65,25 @@ progressing the existing Workbench/transport, call `views.poll()`. This only
 publishes already completed results and reclaims retired local views; it never
 drives the core, retries, polls endpoints, opens a socket or starts a timer.
 
+`views` emits `submitted()` once for every request a provider puts in the
+owner's queue - a Refresh, Apply, Command, Service, and each of the two steps
+of a Watchlist row write - synchronously, once the queue has accepted it, and
+never for a refusal. An owner that progresses on its own clock may ignore it.
+An owner that runs only when it has work must start a pass there: the SDK's Qt
+`ConnectionSession` (SDK #63) cannot see a request submitted to its
+`workbench()` or `storage()` and would write it only at its idle heartbeat, up
+to a second later. `QtConnectionBinding` connects the signal to
+`ConnectionSession::wake()` for you; a host with its own binding over a
+session's Workbench, like the Inspector's TCP mode, connects it itself:
+
+```cpp
+QObject::connect(&views, &telemetry::ux::DynamicConfiguratorBinding::submitted,
+                 &session, [&session] { session.wake(); });
+```
+
+A receiver queues that work; it must not progress the owner or destroy a
+provider or the binding from inside the signal.
+
 Each provider owns independent Qt models, selection, edit errors and outcomes.
 Its native view owns independent snapshot/draft/committed-request state and
 service response storage. Construction and selection issue no endpoint requests.

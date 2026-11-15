@@ -708,3 +708,50 @@ the last 1,024. `TraceView` fills each with `gapColor` (TracePlot passes
 `WatchTraces.watched(path)` and `lastReadUtcMs(path)` tell a value taken out
 of the Watchlist: its chip says "not read since 12:05:10" in the muted colour,
 and its line ends in an open circle (`drawnEnds`).
+
+## The session runs only when it has work (SDK-2b, November 2026)
+
+The SDK's Qt `ConnectionSession` no longer runs a pass every 5 ms
+(telemetry-sdk #63). It runs one when it has work, publishes `progressed()`
+only after a pass that did something, and keeps a 1 s heartbeat while idle.
+UX is pinned to that SDK and follows it:
+
+- **Requests put straight into the session's Workbench wake it.**
+  `DynamicConfiguratorBinding` has a new signal, `submitted()`: once for every
+  request a provider puts in the owner's queue - Refresh, Apply, Command,
+  Service and both steps of a Watchlist row write - synchronously, once the
+  queue has accepted it, never for a refusal. `QtConnectionBinding` connects it
+  to `ConnectionSession::wake()`. A host with a binding of its own over a
+  session's `workbench()` or `storage()` must connect it too
+  ([DynamicConfigurator.md](doc/DynamicConfigurator.md#ownership-and-progress));
+  otherwise each such request waits for the heartbeat, up to a second. A host
+  that progresses its owner on its own clock may ignore the signal.
+- **Previews keep a timer of their own.** `EndpointPreviews` started its next
+  cycle, and moved the ages shown on, only when the session's progress polled
+  it; with an idle session they stopped. A single-shot timer now wakes
+  `poll()` for the next cycle and for the next whole second, only while Fields
+  are in view and the source is current. Replies are still taken in on
+  `progressed()`. New: `nextPollInMs()`, -1 while the timer is off.
+- **Transfers stay live.** `DeviceFileTransfers` republishes the running
+  transfer's row on a 250 ms timer, which stops once nothing runs, so the rate
+  and "waiting for the device…" stay current while the session waits on the
+  device and publishes nothing.
+- **The Inspector example's TCP mode** wakes its session after each accepted
+  Refresh, Apply, Command, Service and Watchlist read, and on its Configurator
+  panels' `submitted()`.
+- The Watchlist has its own timer and is unchanged. Code of your own that
+  refreshes on `progressed()` as if it were a clock needs a timer of its own.
+
+Measured over localhost TCP, Windows 11, MinGW 15.1, Qt 6.12.0, each request
+sent with the session at rest (`tests/qt_connection`): with the new SDK and the
+UX before this change, Refresh, Apply, Command, Service and a row write took
+930-950 ms each (the first Refresh 350-370 ms, by the heartbeat's phase); with
+the wake, 0-1 ms each, in three runs of each. The Inspector's TCP Refresh,
+Apply and Configurator panel Refresh went from 930-950 ms to 0 ms
+(`tests/inspector_tcp`). The `tests/qt_connection` native check, whose waits
+had gone to the heartbeat, ran in 75 s before and runs in 8 s now. Before,
+previews over TCP were never read at all; now a preview at a 1 s interval is
+read again 1000-1047 ms after it landed, the session publishing nothing in
+between. A download the device holds back was published 0 times in 6 s before;
+now it is published 5-6 times in about 3 s, the rate and then "waiting for the
+device…" shown on time, while the session publishes nothing.

@@ -658,6 +658,17 @@ void InspectorController::bindCurrentState()
 		        updating_ = false;
 		        Q_EMIT stateChanged();
 	        });
+	// A Configurator panel's request goes into the same Workbench.
+	connect(dynamicBinding_.get(), &telemetry::ux::DynamicConfiguratorBinding::submitted, this,
+	        &InspectorController::wakeTcpSession);
+}
+
+void InspectorController::wakeTcpSession()
+{
+	// Demo and serial States are progressed by pump() on this controller's
+	// own timer; only the TCP session runs on demand.
+	if (state_ && state_->tcpManaged)
+		tcpSession_->wake();
 }
 
 QByteArray InspectorController::demoDescriptor() const
@@ -1082,6 +1093,7 @@ bool InspectorController::apply()
 		Q_EMIT stateChanged();
 		return false;
 	}
+	wakeTcpSession();
 	updating_ = true;
 	state_->applying = true;
 	if (dynamicBinding_)
@@ -1113,6 +1125,7 @@ bool InspectorController::executeCommand()
 		Q_EMIT stateChanged();
 		return false;
 	}
+	wakeTcpSession();
 	updating_ = true;
 	state_->executing = true;
 	if (dynamicBinding_)
@@ -1145,6 +1158,7 @@ bool InspectorController::callService()
 		Q_EMIT stateChanged();
 		return false;
 	}
+	wakeTcpSession();
 	updating_ = true;
 	state_->calling = true;
 	if (dynamicBinding_)
@@ -1298,6 +1312,7 @@ bool InspectorController::refresh()
 		Q_EMIT stateChanged();
 		return false;
 	}
+	wakeTcpSession();
 	updating_ = true;
 	values_.clear();
 	busy_ = true;
@@ -1612,6 +1627,7 @@ bool InspectorController::submitWatch()
 		watchStatus_ = QStringLiteral("Watch read refused: %1").arg(statusName(submitted.status));
 		return false;
 	}
+	wakeTcpSession();
 	watchPending_ = true;
 	watchStatus_ = watchIndividual_ ? QStringLiteral("Reading individual Field %1 of %2...")
 	                                      .arg(watchCursor_ + 1)

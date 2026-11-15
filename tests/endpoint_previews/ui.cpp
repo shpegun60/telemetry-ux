@@ -516,6 +516,45 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(peer.nativeCommands() == finalCommands && peer.nativeServices() == finalServices);
 }
 
+// The session runs only when it has work (SDK-2b): with previews on and no
+// other traffic, nothing but the previews' own timer starts the next cycle.
+// The value is read again an interval after it landed, and with the demand
+// gone nothing more is read.
+void previewRereadsAtItsInterval()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession session;
+	ux::QtConnectionBinding binding(&session);
+	auto* provider = binding.createProvider();
+	CHECK(session.connectTcpReference(QStringLiteral("127.0.0.1"), peer.port()));
+	CHECK(await([&] { return session.ready() && provider->connected(); }));
+	provider->setPreviewIntervalMs(ux::EndpointPreviews::intervalMinimumMs);
+	QObject view;
+	CHECK(provider->setPreviewDemand(&view, {QVariant::fromValue(endpoint(provider->endpoints(), "Config"))}));
+	CHECK(await([&] { return peer.fieldReads() == 1 && !session.busy(); }, 3000));
+	QElapsedTimer landed;
+	landed.start();
+	// Half way to the next cycle the session has had nothing to publish.
+	QSignalSpy progressed(&session, &host::ConnectionSession::progressed);
+	settle(500);
+	const auto between = progressed.count();
+	CHECK(await([&] { return peer.fieldReads() == 2; }, 3000));
+	const auto again = landed.elapsed();
+	CHECK(await([&] { return peer.fieldReads() == 3; }, 3000));
+	const auto third = landed.elapsed();
+	std::printf("Endpoint preview re-read over TCP after %lld ms, then %lld ms; %d progress between\n",
+	            static_cast<long long>(again), static_cast<long long>(third - again), int(between));
+	CHECK(again >= 900 && again < 1400 && third - again >= 900 && third - again < 1400 && between == 0);
+	provider->clearPreviewDemand(&view);
+	CHECK(await([&] { return !session.busy(); }));
+	const auto reads = peer.fieldReads();
+	settle(1500);
+	CHECK(peer.fieldReads() == reads);
+	session.disconnect();
+}
+
 void leasesWithoutQmlObservers()
 {
 	// Use the real public Session/binding factory so private cache attachment is
@@ -633,6 +672,7 @@ int main(int argc, char** argv) {
 	previewVisibility(ui, *provider, session, peer);
 	editorsAndActualCalls(ui, *provider, session, peer);
 	leasesWithoutQmlObservers();
+	previewRereadsAtItsInterval();
 	CHECK(warnings == 0);
 	std::printf("Endpoint preview UI checks=%u warnings=%u\n", checks, warnings);
 }

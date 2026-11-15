@@ -31,6 +31,7 @@
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
+#include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <memory>
 #include <vector>
@@ -249,6 +250,8 @@ private:
 	          OpenFiles* viewer, const QString& deviceFolder = {});
 	void schedulePoll();
 	void poll();
+	// Starts live_ for the transfer that has just begun.
+	void keepLive();
 	void startNext();
 	bool beginUpload(Job& job);
 	// An upload's next step after its reader or writer ended; true once it
@@ -264,6 +267,10 @@ private:
 	QPointer<integration::qt::ConnectionSession> session_;
 	std::vector<std::unique_ptr<Job>> jobs_;
 	QElapsedTimer clock_;
+	// While a transfer runs: the session's progress comes only when a piece
+	// moves, so the rate, the time left and "waiting for the device" are
+	// published on this clock too. It stops on its first tick with none.
+	QTimer live_;
 	bool pollQueued_ = false;
 	quint64 sessionGeneration_ = 0;
 	unsigned notificationDepth_ = 0;
