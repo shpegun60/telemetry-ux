@@ -49,6 +49,14 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   Command and Service, with the request already in the owner's queue (an
   Apply's read back is the Workbench's own and adds none), and never for a
   refusal - what a host whose owner runs only on demand wakes it on.
+- The central Undo's history (UR-1) on a target of the check's own: a step
+  recorded once its change is made, undo and redo putting states back, steps
+  of one merge key within two seconds merging (and going when back where they
+  started), a merge window of the caller's own and 0 (merged while the key
+  stays the same), a blocked step keeping its words, a skipped step and a dead
+  target's step going, the limit, the irreversible note, `clean`, a kind not
+  declared or a target that is not one refused with a warning, a host's own
+  kind declared; a provider's `history` assigned and announced once.
 
 QML warnings remain failures. The sanitizer profile uses only the existing narrow
 upstream Qt software-texture exception (`QSGRenderContext::textureForFactory`);

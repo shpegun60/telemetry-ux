@@ -121,6 +121,20 @@ int main(int argc, char** argv) {
             CHECK(status->property("text").toString().startsWith(QStringLiteral("No room")) &&
                   firstRow->property("watchState").toInt() == Qt::Unchecked);
             CHECK(boxes->setProperty("full", false));
+            // The step a box made is offered on the status line while it is the
+            // one Undo would take (UR-1); the link takes it back and says so.
+            click(boxesWindow, firstBox);
+            CHECK(firstRow->property("watchState").toInt() == Qt::Checked);
+            auto* undo = named(boxTree, "endpointWatchUndo");
+            CHECK(undo && undo->isVisible() && status->property("text").toString().startsWith(QStringLiteral("Added ")));
+            click(boxesWindow, undo);
+            CHECK(firstRow->property("watchState").toInt() == Qt::Unchecked && !undo->isVisible() &&
+                  status->property("text").toString() == QStringLiteral("Undone: Add 1 values"));
+            // A box changed by nothing that records leaves no link behind.
+            CHECK(boxes->setProperty("history", QVariant::fromValue<QObject*>(nullptr)));
+            click(boxesWindow, firstBox);
+            CHECK(firstRow->property("watchState").toInt() == Qt::Checked && !undo->isVisible());
+            click(boxesWindow, firstBox);
             // The checks below type into the main window: give it back the keyboard.
             boxesWindow->close();
             window->requestActivate();

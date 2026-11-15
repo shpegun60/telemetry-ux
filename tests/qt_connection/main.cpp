@@ -2,10 +2,12 @@
 #include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
+#include <Telemetry/UX/UndoHistory.hpp>
 #include <Telemetry/UX/WatchlistModel.hpp>
 #include <Telemetry/UX/WatchTraces.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
+#include "../helpers/UndoKinds.hpp"
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QTimer>
@@ -537,8 +539,8 @@ void bulkSessionWatch()
 
 // The Device tree's watch boxes (T-1). A group's box covers every Field under
 // it the Watchlist can hold, and shows all, some or none. It watches or stops
-// watching them in one change with no request sent. Undo puts the rows back
-// where they were, and is gone once anything else changes the Watchlist.
+// watching them in one step with no request sent. Undo puts the rows back
+// where they were; steps stack, the last taken back first (UR-1).
 void groupWatchBoxes()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -548,6 +550,9 @@ void groupWatchBoxes()
 	ux::QtConnectionBinding presentation{&connection};
 	auto* provider = presentation.createProvider();
 	auto* other = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
+	CHECK(provider->history() == &history && other->history() == nullptr);
 	connect(connection, peer);
 	auto* model = provider->endpoints();
 	const auto first = endpoint(model, QStringLiteral("Value_0"));
@@ -564,23 +569,26 @@ void groupWatchBoxes()
 	const auto watched = [&](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
 	// A Command has no box; the Fields start empty.
 	CHECK(provider->watchState(command) == -1 && provider->watchState(first) == Qt::Unchecked &&
-	      provider->watchState(group) == Qt::Unchecked && !provider->canUndoWatch());
+	      provider->watchState(group) == Qt::Unchecked && !history.canUndo());
 	CHECK(provider->watchLimit() == ux::watchlistRowLimit && ux::watchlistRowLimit == 8192);
 	auto result = provider->setWatchMany(watched(first), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(provider->watchState(first) == Qt::Checked && provider->watchState(group) == Qt::PartiallyChecked);
+	CHECK(result.value("serial").toInt() == history.undoSerial() &&
+	      history.undoText() == QStringLiteral("Add scaling.Value_0 to the Watchlist"));
 	// The group: every Field it holds, the one already watched unchanged.
 	QSignalSpy inserted(provider->watchlist(), &QAbstractItemModel::rowsInserted);
 	result = provider->setWatchMany(watched(group), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == holdable - 1 &&
 	      result.value("unchanged").toInt() == 1 && result.value("fields").toInt() == holdable);
 	CHECK(inserted.count() == 1 && provider->watchCount() == holdable &&
-	      provider->watchState(group) == Qt::Checked && provider->canUndoWatch());
-	// Undo takes back what the group added, and only that.
-	result = provider->undoWatch();
-	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == holdable - 1);
+	      provider->watchState(group) == Qt::Checked && history.canUndo());
+	CHECK(history.undoText() == QStringLiteral("Add %1 values to the Watchlist").arg(holdable - 1));
+	// Undo takes back what the group added, and only that; Redo does it again.
+	CHECK(history.undo());
 	CHECK(provider->watchCount() == 1 && provider->watchState(group) == Qt::PartiallyChecked &&
-	      !provider->canUndoWatch() && provider->undoWatch().value("status") == "refused");
+	      history.undoText() == QStringLiteral("Add scaling.Value_0 to the Watchlist") && history.canRedo());
+	CHECK(history.redo() && provider->watchCount() == holdable && history.undo() && provider->watchCount() == 1);
 	// Unwatching the group, then Undo: the rows come back in their order.
 	CHECK(provider->setWatchMany(watched(third), true).value("changed").toInt() == 1);
 	CHECK(provider->setWatchMany(watched(second), true).value("changed").toInt() == 1);
@@ -597,19 +605,24 @@ void groupWatchBoxes()
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 3 &&
 	      provider->watchCount() == 0 && provider->watchState(group) == Qt::Unchecked &&
 	      removed.count() == 1);
-	CHECK(provider->undoWatch().value("changed").toInt() == 3 && names() == before);
+	CHECK(history.undoText() == QStringLiteral("Remove 3 values from the Watchlist"));
+	CHECK(history.undo() && names() == before);
 	// Rows apart from one another: taken out run by run, put back in place.
 	const auto fourth = endpoint(model, QStringLiteral("Value_3"));
 	CHECK(provider->setWatchMany(watched(fourth), true).value("changed").toInt() == 1);
 	const auto four = names();
 	result = provider->setWatchMany({QVariant::fromValue(first), QVariant::fromValue(second)}, false);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && provider->watchCount() == 2);
-	CHECK(provider->undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(history.undo() && names() == four);
 	CHECK(provider->setWatchMany(watched(fourth), false).value("changed").toInt() == 1);
-	// Another change of the Watchlist takes Undo away.
-	CHECK(provider->setWatchMany(watched(group), true).value("status") == "ok" && provider->canUndoWatch());
+	// Steps stack: a row removed after the group was ticked is put back
+	// first, then the tick is taken back.
+	CHECK(provider->setWatchMany(watched(group), true).value("status") == "ok");
+	const auto ticked = history.undoSerial();
+	const auto all = names();
 	provider->removeWatch(0);
-	CHECK(!provider->canUndoWatch());
+	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove scaling.")));
+	CHECK(history.undo() && history.undoSerial() == ticked && names() == all);
 	// Another provider's index is refused; nothing was sent to the device.
 	CHECK(provider->setWatchMany(watched(endpoint(other->endpoints(), QStringLiteral("Value_0"))), true)
 	          .value("status") == "invalid");
@@ -632,6 +645,8 @@ void memberWatchBoxes()
 	host::ConnectionSession connection;
 	ux::QtConnectionBinding presentation{&connection};
 	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
 	connect(connection, peer);
 	auto* model = provider->endpoints();
 	// A row under parent by name, its rows fetched first; any provider's model.
@@ -656,12 +671,12 @@ void memberWatchBoxes()
 	auto result = provider->setWatchMany(one(gain), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1 && result.value("values").toBool());
 	CHECK(provider->watchState(gain) == Qt::Checked && provider->watchState(config) == Qt::PartiallyChecked &&
-	      provider->canUndoWatch());
-	// Opening more of the struct changes no box and keeps Undo.
+	      history.undoText() == QStringLiteral("Add device.Config.Gain to the Watchlist"));
+	// Opening more of the struct changes no box and no step.
 	const auto matrix = child(config, QStringLiteral("Matrix"));
 	const auto second = child(matrix, QStringLiteral("[1]"));
 	const auto cell = child(second, QStringLiteral("[0]"));
-	CHECK(cell.isValid() && provider->canUndoWatch() && provider->watchState(matrix) == Qt::Unchecked);
+	CHECK(cell.isValid() && history.count() == 1 && provider->watchState(matrix) == Qt::Unchecked);
 	CHECK(provider->watchTally(matrix).value("kind") == "values" && provider->watchTally(matrix).value("total").toInt() == 4);
 	CHECK(provider->watchTally(second).value("kind") == "elements");
 	CHECK(provider->setWatchMany(one(cell), true).value("changed").toInt() == 1);
@@ -695,11 +710,12 @@ void memberWatchBoxes()
 	result = provider->setWatchMany(one(config), true);
 	CHECK(result.value("changed").toInt() == 19 && result.value("unchanged").toInt() == 2 &&
 	      result.value("fields").toInt() == 21 && provider->watchState(config) == Qt::Checked);
+	CHECK(history.undoText() == QStringLiteral("Add 19 values of device.Config to the Watchlist"));
 	result = provider->setWatchMany(one(config), false);
 	CHECK(result.value("changed").toInt() == 21 && provider->watchCount() == 0 &&
 	      provider->watchState(config) == Qt::Unchecked && provider->watchState(gain) == Qt::Unchecked);
-	CHECK(provider->undoWatch().value("changed").toInt() == 21 && provider->watchCount() == 21 &&
-	      provider->watchState(cell) == Qt::Checked);
+	CHECK(history.undoText() == QStringLiteral("Remove 21 values of device.Config from the Watchlist"));
+	CHECK(history.undo() && provider->watchCount() == 21 && provider->watchState(cell) == Qt::Checked);
 	connection.disconnect();
 	CHECK(provider->watchState(config) == -1 && provider->watchState(gain) == -1);
 
@@ -749,6 +765,8 @@ void watchPaths()
 	host::ConnectionSession connection;
 	ux::QtConnectionBinding presentation{&connection};
 	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
 	connect(connection, peer);
 	const auto check = [&](const char* text) { return provider->checkWatchPath(QString::fromUtf8(text)); };
 	auto said = check("device.Config.Gain");
@@ -774,13 +792,14 @@ void watchPaths()
 	// The one not on this device is kept as a row that says so (WL-4c).
 	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2 && provider->watchCount() == 3);
 	CHECK(added.value("missing").toList() == QVariantList({QStringLiteral("device.Nope")}));
-	CHECK(added.value("refused").toList().size() == 1 && provider->canUndoWatch());
+	CHECK(added.value("refused").toList().size() == 1 && added.value("serial").toInt() == history.undoSerial() &&
+	      history.undoText() == QStringLiteral("Add 3 values to the Watchlist"));
 	said = check("device.Config.Gain");
 	CHECK(said.value("status") == "watched" && said.value("row").toInt() >= 0);
 	said = check("device.Nope");
 	CHECK(said.value("status") == "watched" && said.value("row").toInt() == 2);
 	CHECK(provider->addWatchPaths({QStringLiteral("device.Nope")}).value("already").toInt() == 1 && provider->watchCount() == 3);
-	CHECK(provider->undoWatch().value("status") == "ok" && provider->watchCount() == 0);
+	CHECK(history.undo() && provider->watchCount() == 0);
 	CHECK(provider->addWatchPaths({QStringLiteral("device.Config")}).value("added").toInt() == 21 &&
 	      provider->watchCount() == 21);
 	// While the Watchlist polls, a typed path goes in between two reads (fix 8).
@@ -1012,6 +1031,8 @@ void watchKeptAcrossReconnect()
 	host::ConnectionSession connection;
 	ux::QtConnectionBinding presentation{&connection};
 	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
 	connect(connection, peer);
 	const auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Nope"),
 	                                            QStringLiteral("device.Config.Counter")});
@@ -1042,12 +1063,14 @@ void watchKeptAcrossReconnect()
 	provider->refreshWatch();
 	CHECK(await([&] { return !provider->watchActive() && role(0, ux::WatchlistModel::StatusRole) == "Ok"; }));
 	CHECK(role(0, ux::WatchlistModel::TextRole) == "1" && role(2, ux::WatchlistModel::StatusRole) == "Ok");
-	// A saved Watchlist comes back in its own order, the absent path in its place.
+	// A saved Watchlist comes back in its own order, the absent path in its
+	// place: a restore, never a step.
+	const auto steps = history.count();
 	const auto restored = provider->restoreWatchBindings(QVariantList{saved[2], saved[1], saved[0]});
 	CHECK(restored.value("status") == "ok" && restored.value("added").toInt() == 2 &&
 	      restored.value("missing").toList() == QVariantList{1});
 	CHECK(role(0, ux::WatchlistModel::NameRole) == "device.Config.Counter" && role(1, ux::WatchlistModel::NameRole) == "device.Nope" &&
-	      role(2, ux::WatchlistModel::NameRole) == "device.Config.Gain" && !provider->canUndoWatch());
+	      role(2, ux::WatchlistModel::NameRole) == "device.Config.Gain" && history.count() == steps);
 	// A saved path the device has but that names nothing to watch says why.
 	const auto command = provider->restoreWatchBindings({QVariantMap{{"group", "control"}, {"name", "Execute"}}});
 	CHECK(command.value("status") == "ok" && provider->watchCount() == 1 && !provider->watchReadable());
@@ -1144,6 +1167,8 @@ void watchChangesWhilePolling()
 	host::ConnectionSession connection;
 	ux::QtConnectionBinding presentation{&connection};
 	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
 	connect(connection, peer);
 	CHECK(provider->watchChangesWhilePolling());
 	auto* model = provider->endpoints();
@@ -1174,14 +1199,24 @@ void watchChangesWhilePolling()
 	auto result = provider->setWatchMany({QVariant::fromValue(second), QVariant::fromValue(gain)}, true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && provider->watchActive());
 	CHECK(await([&] { return provider->watchCount() == 3 && !text(1).isEmpty() && text(2) == "1"; }));
-	CHECK(provider->watchState(gain) == Qt::Checked && provider->canUndoWatch());
-	CHECK(provider->undoWatch().value("changed").toInt() == 2 && provider->watchCount() == 1 && provider->watchActive());
+	CHECK(provider->watchState(gain) == Qt::Checked && history.canUndo());
+	// Undo and Redo while it polls (UR-1): the rows go and come back between
+	// two reads, and are read again.
+	CHECK(history.undo() && provider->watchCount() == 1 && provider->watchActive());
+	CHECK(history.redo() && provider->watchCount() == 3 && provider->watchActive());
+	CHECK(await([&] { return !text(1).isEmpty() && text(2) == "1"; }));
+	CHECK(history.undo() && provider->watchCount() == 1);
 	provider->removeWatch(0);
 	CHECK(provider->watchCount() == 0 && provider->watchActive());
+	CHECK(history.undo() && provider->watchCount() == 1 && provider->watchActive());
+	CHECK(await([&] { return !text(0).isEmpty(); }));
+	provider->removeWatch(0);
 	CHECK(provider->setWatchMany(one(second), true).value("changed").toInt() == 1);
 	CHECK(await([&] { return !text(0).isEmpty(); }));
 	provider->clearWatch();
-	CHECK(provider->watchCount() == 0 && provider->watchActive());
+	CHECK(provider->watchCount() == 0 && provider->watchActive() && history.undoText() == QStringLiteral("Clear the Watchlist"));
+	CHECK(history.undo() && provider->watchCount() == 1 && provider->watchActive());
+	CHECK(history.redo() && provider->watchCount() == 0);
 	CHECK(await([&] { return provider->watchStatus() == "Nothing to read. Add a value, or Stop."; }));
 	CHECK(!provider->watchStatus().startsWith("Watch read failed"));
 	provider->stopWatch();
@@ -1564,6 +1599,12 @@ void watchRowSignedZero()
 	ux::QtConnectionBinding presentation{&connection};
 	presentation.setMutationsAllowed(true);
 	auto* provider = presentation.createProvider();
+	// The formats' steps (UR-1) on a clock of the check's own: choices merge
+	// only within two seconds of each other.
+	ux::UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	provider->setHistory(&history);
 	connect(connection, peer);
 	provider->setWatchIndividual(true);
 	provider->setAllowMutations(true);
@@ -1657,8 +1698,8 @@ ApplicationWindow {
 	CHECK(rows->data(rows->index(1, 0), ux::WatchlistModel::ShownTextRole).toString().startsWith(QStringLiteral("0x")));
 	provider->setWatchFormat(QStringLiteral("original"));
 	// Every value back to Original (WL-3b): the Watchlist's format and every
-	// row's own, one for a path not watched now included, as one change Undo
-	// takes back while no format has changed since; the revision moves.
+	// row's own, one for a path not watched now included, as one step; the
+	// revision moves.
 	{
 		const auto gain = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
 		const QVariantMap own{{gain, QStringLiteral("hex")}, {QStringLiteral("device.Gone"), QStringLiteral("dec")}};
@@ -1671,6 +1712,7 @@ ApplicationWindow {
 		provider->setWatchFormat(QStringLiteral("dec"));
 		CHECK(provider->watchOwnFormatCount() == 1);
 		CHECK(provider->watchFormatsDiffer());
+		history.clear();
 		QSignalSpy changed(provider, &ux::DynamicConfiguratorProvider::stateChanged);
 		const auto revision = provider->watchRevision();
 		const auto reset = provider->resetWatchFormats();
@@ -1678,32 +1720,59 @@ ApplicationWindow {
 		CHECK(provider->watchFormat() == QStringLiteral("original") && provider->watchRowFormats().isEmpty() &&
 		      !provider->watchFormatsDiffer());
 		CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::FormatRole).toString().isEmpty());
-		CHECK(provider->watchRevision() != revision && provider->canUndoWatch());
+		CHECK(provider->watchRevision() != revision && reset.value("serial").toInt() == history.undoSerial() &&
+		      history.undoText() == QStringLiteral("Reset number formats to Original"));
 		CHECK(provider->resetWatchFormats().value("status") == "unchanged");
-		CHECK(provider->undoWatch().value("status") == "ok");
+		CHECK(history.undo());
 		CHECK(provider->watchFormat() == QStringLiteral("dec") && provider->watchRowFormats() == own);
 		CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::FormatRole).toString() == QStringLiteral("hex"));
-		CHECK(!provider->canUndoWatch() && provider->watchOwnFormatCount() == 1);
-		// A format chosen after it - here, in another panel, by a project
-		// loaded - ends the reset's Undo.
-		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
+		CHECK(!history.canUndo() && history.canRedo() && provider->watchOwnFormatCount() == 1);
+		// Steps stack (UR-1): a format chosen after a reset is taken back
+		// first, then the reset.
+		now += 5000;
+		CHECK(provider->resetWatchFormats().value("status") == "ok");
+		now += 5000;
 		CHECK(provider->chooseWatchFormat(QStringLiteral("hex")) && !provider->chooseWatchFormat(QStringLiteral("binary")));
-		// A format chosen is a change of its own (WL-2c): Undo takes it back,
-		// and the reset under it is gone.
-		CHECK(provider->canUndoWatch() && provider->undoWatch().value("status") == "ok");
-		CHECK(provider->watchFormat() == QStringLiteral("original") && provider->watchRowFormats().isEmpty());
-		CHECK(!provider->canUndoWatch() && provider->undoWatch().value("status") == "refused");
-		// A format given to many rows: one change.
-		CHECK(provider->setWatchRowFormat({0, 1}, QStringLiteral("dec")) && provider->canUndoWatch());
-		CHECK(provider->watchRowFormats().size() == 2 && provider->undoWatch().value("status") == "ok");
+		CHECK(history.count() == 2 && history.undoText() == QStringLiteral("Show the Watchlist in hex"));
+		CHECK(history.undo() && provider->watchFormat() == QStringLiteral("original") && provider->watchRowFormats().isEmpty());
+		CHECK(history.undoText() == QStringLiteral("Reset number formats to Original") && history.undo());
+		CHECK(provider->watchFormat() == QStringLiteral("dec") && provider->watchRowFormats() == own);
+		// Choices within two seconds merge into one step; back where they
+		// started, no step is left.
+		now += 5000;
+		CHECK(provider->chooseWatchFormat(QStringLiteral("hex")));
+		now += 500;
+		CHECK(provider->chooseWatchFormat(QStringLiteral("dec")) && history.count() == 0);
+		now += 5000;
+		CHECK(provider->chooseWatchFormat(QStringLiteral("hex")));
+		now += 500;
+		CHECK(provider->chooseWatchFormat(QStringLiteral("original")) && history.count() == 1 &&
+		      history.undoText() == QStringLiteral("Show the Watchlist as Original"));
+		CHECK(history.undo() && provider->watchFormat() == QStringLiteral("dec") && history.redo() &&
+		      provider->watchFormat() == QStringLiteral("original"));
+		CHECK(provider->setWatchRowFormats({}));
+		history.clear();
+		// A format given to many rows: one step, named by their count.
+		now += 5000;
+		CHECK(provider->setWatchRowFormat({0, 1}, QStringLiteral("dec")) &&
+		      history.undoText() == QStringLiteral("Show 2 values in decimal"));
+		CHECK(provider->watchRowFormats().size() == 2 && history.undo());
 		CHECK(provider->watchRowFormats().isEmpty());
-		// The property is a project's or a host's: no Undo of its own, and
-		// the format Undo before it is gone.
-		CHECK(provider->chooseWatchFormat(QStringLiteral("dec")) && provider->canUndoWatch());
+		now += 5000;
+		const auto first = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
+		CHECK(provider->setWatchRowFormat({0}, QStringLiteral("hex")) &&
+		      history.undoText() == QStringLiteral("Show %1 in hex").arg(first));
+		CHECK(provider->setWatchRowFormat({0}, QString{}) && history.count() == 0);
+		// The property is a project's or a host's: no step of its own; a step
+		// before it still puts back what it changed.
+		now += 5000;
+		CHECK(provider->chooseWatchFormat(QStringLiteral("dec")) && history.count() == 1);
+		const auto chosen = history.undoSerial();
 		provider->setWatchFormat(QStringLiteral("hex"));
-		CHECK(!provider->canUndoWatch());
-		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
-		CHECK(provider->setWatchRowFormats(own) && !provider->canUndoWatch());
+		CHECK(history.undoSerial() == chosen && provider->watchFormat() == QStringLiteral("hex"));
+		CHECK(history.undo() && provider->watchFormat() == QStringLiteral("original"));
+		CHECK(provider->resetWatchFormats().value("status") == "unchanged");
+		CHECK(provider->setWatchRowFormats(own) && history.redoSerial() == chosen && !history.canUndo());
 		// A pin to Original shows nothing different, yet a reset clears it.
 		CHECK(provider->setWatchRowFormats({}) && provider->setWatchRowFormat({0}, QStringLiteral("original")));
 		CHECK(!provider->watchFormatsDiffer() && provider->resetWatchFormats().value("status") == "ok" &&
@@ -1899,12 +1968,14 @@ void presentationPanels()
 	ux::QtConnectionBinding presentation{&connection};
 	auto* first = presentation.createProvider();
 	auto* second = presentation.createProvider();
+	ux::UndoHistory history;
+	second->setHistory(&history);
 	// Before any device the formats wait for the rows, and a reset and its
 	// Undo work on them all the same (WL-3b).
 	CHECK(second->setWatchRowFormats({{QStringLiteral("device.Config.Gain"), QStringLiteral("hex")}}));
 	CHECK(second->resetWatchFormats().value("status") == "ok" && second->watchRowFormats().isEmpty());
-	CHECK(second->undoWatch().value("status") == "ok" && second->watchRowFormats().size() == 1);
-	CHECK(second->setWatchRowFormats({}) && !second->canUndoWatch());
+	CHECK(history.undo() && second->watchRowFormats().size() == 1);
+	CHECK(second->setWatchRowFormats({}) && history.redo() && second->watchRowFormats().isEmpty());
 	connect(connection, peer);
 	const auto fingerprint = QStringLiteral("0x%1").arg(connection.storage()->schema.fingerprint(),
 	                                                    16, 16, QLatin1Char('0'));
@@ -2315,6 +2386,186 @@ void reentrantAdmission()
 #if defined(__GNUC__)
 __attribute__((noinline))
 #endif
+// The central Undo over a real session (UR-1). Every kind the Watchlist records
+// is held to UndoKinds' property: done, undone and redone the same, across a
+// disconnect and across a device with another descriptor. Then steps one after
+// another, a list changed with no device and found again on one, and a step
+// that finds nothing left to change.
+void watchUndoKinds()
+{
+	inspector_qml::TcpDemoServer peer, other;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen() && other.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	// A clock of the check's own, a step apart: no two steps merge by time.
+	qint64 now = 0;
+	history.setClock([&now] { return now += 5000; });
+	provider->setHistory(&history);
+	auto* list = provider->watchlist();
+	const auto bound = [list](int row) {
+		return list->index(row, 0).data(ux::WatchlistModel::WatchKeyRole).toULongLong() < (quint64{1} << 52);
+	};
+	const auto allBound = [&] {
+		for (int row = 0; row < list->rowCount(); ++row)
+			if (!bound(row))
+				return false;
+		return true;
+	};
+	bool onPeer = false;
+	const auto attach = [&](inspector_qml::TcpDemoServer& device) {
+		if (connection.ready())
+			connection.disconnect();
+		CHECK(await([&] { return !provider->connected(); }));
+		connect(connection, device);
+		onPeer = &device == &peer;
+		CHECK(await([&] { return provider->connected(); }));
+	};
+	// Rows by path in order, each with its own format and whether a device
+	// holds it; the formats besides.
+	const auto rows = [&] {
+		QStringList all;
+		for (int row = 0; row < list->rowCount(); ++row) {
+			const auto index = list->index(row, 0);
+			all << index.data(ux::WatchlistModel::NameRole).toString() + QLatin1Char('=') +
+			           index.data(ux::WatchlistModel::FormatRole).toString() + (bound(row) ? QString{} : QStringLiteral(" kept"));
+		}
+		return QVariant(all);
+	};
+	const auto formats = [&] {
+		return QVariant(QVariantMap{{QStringLiteral("format"), provider->watchFormat()},
+		                            {QStringLiteral("rows"), provider->watchRowFormats()}});
+	};
+	// The start of every case: three rows on the writable demo, one with a
+	// format of its own, and no step.
+	const auto start = [&] {
+		if (!onPeer || !connection.ready())
+			attach(peer);
+		provider->clearWatch();
+		provider->setWatchFormat(QStringLiteral("original"));
+		CHECK(provider->setWatchRowFormats({}));
+		CHECK(provider->addWatchPaths({QStringLiteral("scaling.Value_0"), QStringLiteral("device.Config.Gain"),
+		                               QStringLiteral("scaling.Value_1")})
+		          .value("added")
+		          .toInt() == 3);
+		CHECK(provider->setWatchRowFormat({1}, QStringLiteral("hex")));
+		CHECK(await([&] { return allBound(); }));
+		history.clear();
+	};
+	const auto away = [&] {
+		connection.disconnect();
+		CHECK(await([&] { return !provider->connected() && (list->rowCount() == 0 || !bound(0)); }));
+	};
+	const auto back = [&] {
+		attach(peer);
+		CHECK(await([&] { return allBound(); }));
+	};
+	const auto elsewhere = [&] { attach(other); };
+	const auto tick = [&](const char* name) {
+		return provider->setWatchMany({QVariant::fromValue(endpoint(provider->endpoints(), QString::fromLatin1(name)))}, true);
+	};
+	const auto done = [](const QString& outcome, const QString&) { return outcome == QStringLiteral("done"); };
+	const auto missing = [](const QString& outcome, const QString& note) {
+		return outcome == QStringLiteral("partial") && note.contains(QStringLiteral("not on this device"));
+	};
+	std::vector<undo_kinds::Case> cases;
+	const auto rowsCase = [&](const char* name, std::function<void()> act,
+	                          std::function<bool(const QString&, const QString&)> judge) {
+		cases.push_back({QStringLiteral("watch.rows"), QString::fromLatin1(name), &history, start, std::move(act), rows,
+		                 away, back, elsewhere, judge});
+	};
+	const auto formatCase = [&](const char* name, std::function<void()> act) {
+		cases.push_back({QStringLiteral("watch.format"), QString::fromLatin1(name), &history, start, std::move(act),
+		                 formats, away, back, elsewhere, done});
+	};
+	rowsCase("tick a Field", [&] { CHECK(tick("Value_2").value("changed").toInt() == 1); }, done);
+	rowsCase("untick a Field", [&] {
+		CHECK(provider->setWatchMany({QVariant::fromValue(endpoint(provider->endpoints(), QStringLiteral("Value_0")))}, false)
+		          .value("changed").toInt() == 1);
+	}, missing);
+	rowsCase("add paths", [&] {
+		CHECK(provider->addWatchPaths({QStringLiteral("device.Setpoint"), QStringLiteral("device.Nope")}).value("added").toInt() == 1);
+	}, done);
+	rowsCase("remove rows", [&] { CHECK(provider->removeWatchRows({0, 1}).value("changed").toInt() == 2); }, missing);
+	rowsCase("remove one row", [&] { provider->removeWatch(1); }, missing);
+	rowsCase("clear", [&] { provider->clearWatch(); }, missing);
+	formatCase("choose the Watchlist's format", [&] { CHECK(provider->chooseWatchFormat(QStringLiteral("hex"))); });
+	formatCase("a row's own format", [&] { CHECK(provider->setWatchRowFormat({0, 2}, QStringLiteral("dec"))); });
+	formatCase("reset the formats", [&] { CHECK(provider->resetWatchFormats().value("status") == "ok"); });
+	const auto report = undo_kinds::run(QStringLiteral("qt_connection"), cases);
+	CHECK(report.cases == 9 && report.disconnects == 9 && report.descriptors == 9);
+	std::printf("Qt Session UndoKinds cases=%d disconnects=%d descriptors=%d\n", report.cases, report.disconnects,
+	            report.descriptors);
+
+	// Steps one after another: undone last first, redone in order.
+	start();
+	const auto first = rows();
+	CHECK(tick("Value_3").value("changed").toInt() == 1);
+	const auto second = rows();
+	CHECK(provider->removeWatchRows({0}).value("changed").toInt() == 1);
+	const auto third = rows();
+	CHECK(provider->setWatchRowFormat({0}, QStringLiteral("dec")));
+	const auto fourth = formats();
+	CHECK(history.count() == 3 && history.undoText() == QStringLiteral("Show device.Config.Gain in decimal"));
+	CHECK(history.undo() && history.undo() && rows() == second && history.undo() && rows() == first);
+	CHECK(!history.canUndo() && history.redo() && history.redo() && rows() == third && history.redo() &&
+	      formats() == fourth && !history.canRedo());
+
+	// Changed with no device, and found again on one: removed while the
+	// device is away, put back while it still is - kept by their paths -
+	// then read on the device once it is back.
+	start();
+	const auto before = rows();
+	away();
+	CHECK(provider->removeWatchRows({0, 2}).value("changed").toInt() == 2 && provider->watchCount() == 1);
+	CHECK(history.undoText() == QStringLiteral("Remove 2 values from the Watchlist"));
+	QString said;
+	QObject observer;
+	QObject::connect(&history, &ux::UndoHistory::done, &observer,
+	                 [&](int, const QString& text, bool undone, const QString& note, const QString& outcome) {
+		                 said = history.sentence(text, undone, note, outcome);
+	                 });
+	CHECK(history.undo() && provider->watchCount() == 3 && said == QStringLiteral("Undone: Remove 2 values from the Watchlist"));
+	CHECK(list->index(0, 0).data(ux::WatchlistModel::StatusRole).toString().isEmpty() && !bound(0));
+	back();
+	CHECK(rows() == before);
+	// Removed with no device and put back once it is there: found at once.
+	away();
+	CHECK(provider->removeWatchRows({1}).value("changed").toInt() == 1);
+	back();
+	CHECK(history.undo() && rows() == before);
+	// On another device the rows it lacks come back as rows that say so.
+	CHECK(provider->removeWatchRows({0, 1}).value("changed").toInt() == 2);
+	elsewhere();
+	CHECK(history.undo() && provider->watchCount() == 3);
+	CHECK(said == QStringLiteral("Undone: Remove 2 values from the Watchlist. 2 values are not on this device; "
+	                             "they are back as missing rows."));
+	CHECK(list->index(0, 0).data(ux::WatchlistModel::StatusRole).toString() == QStringLiteral("Missing"));
+	back();
+	CHECK(rows() == before);
+
+	// A step that finds nothing left to change is skipped and goes - one
+	// press, one step - and says why; one that finds some of it does what it
+	// can. A restore records nothing, so it is what changes the list here.
+	start();
+	CHECK(tick("Value_4").value("changed").toInt() == 1);
+	CHECK(provider->restoreWatchBindings({}).value("status") == "ok" && provider->watchCount() == 0);
+	CHECK(history.count() == 1 && history.undo() && history.count() == 0 && !history.canRedo());
+	CHECK(said == QStringLiteral("Skipped: Add scaling.Value_4 to the Watchlist; scaling.Value_4 is no longer in the Watchlist."));
+	start();
+	CHECK(provider->removeWatchRows({0, 2}).value("changed").toInt() == 2);
+	CHECK(provider->addWatchBindings({QVariantMap{{"group", "scaling"}, {"name", "Value_0"}}}).value("added").toInt() == 1);
+	CHECK(history.undo() && provider->watchCount() == 3 && history.count() == 1);
+	CHECK(said == QStringLiteral("Undone: Remove 2 values from the Watchlist. scaling.Value_0 is already watched."));
+	// With no history nothing is recorded, and nothing changes for it.
+	provider->setHistory(nullptr);
+	CHECK(provider->removeWatchRows({0}).value("serial").toInt() == 0 && history.count() == 1);
+	provider->setHistory(&history);
+	connection.disconnect();
+}
+
 static void injectedApplicationLeak()
 {
 	void* memory = std::malloc(123);
@@ -2348,6 +2599,7 @@ int main(int argc, char** argv)
 	watchKeptAcrossReconnect();
 	batchPaths();
 	watchChangesWhilePolling();
+	watchUndoKinds();
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();

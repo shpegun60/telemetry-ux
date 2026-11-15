@@ -8,6 +8,36 @@ ApplicationWindow {
     height: 420
     visible: true
     color: Theme.surfaceWindow
+    // A stand-in for a host's UndoHistory (UR-1): steps with their words and
+    // serials, the last taken back first - what the panel's notice and its
+    // Ctrl+Z read and call.
+    QtObject {
+        id: fakeHistory
+        objectName: "fakeHistory"
+        property var steps: []
+        property int serial: 0
+        readonly property bool canUndo: steps.length > 0
+        readonly property string undoText: steps.length > 0 ? steps[steps.length - 1].text : ""
+        readonly property int undoSerial: steps.length > 0 ? steps[steps.length - 1].serial : 0
+        signal recorded(int serial)
+        signal done(int serial, string text, bool undone, string note, string outcome)
+        function record(text, undo) {
+            serial += 1
+            steps = steps.concat([{ text: text, serial: serial, undo: undo }])
+            recorded(serial)
+            return serial
+        }
+        function undo() {
+            if (steps.length === 0)
+                return false
+            const step = steps[steps.length - 1]
+            steps = steps.slice(0, steps.length - 1)
+            step.undo()
+            done(step.serial, step.text, true, "", "done")
+            return true
+        }
+        function sentence(text, undone, note, outcome) { return (undone ? "Undone: " : "Redone: ") + text }
+    }
     QtObject {
         id: fixtureProvider
         readonly property var watchlist: watchTreeModel
@@ -30,22 +60,20 @@ ApplicationWindow {
         property string watchWriteOutcome: ""
         property string watchWriteKind: ""
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
-        property bool canUndoWatch: false
+        // Its changes go to the history as steps; null, nothing is recorded.
+        property var history: fakeHistory
+        function record(text, undo) { return history ? history.record(text, undo) : 0 }
         property string watchFormat: "original"
         // As the provider's: moves with every change of the rows or a format.
         property int watchRevision: 0
-        // A reset's formats, while Undo can take it back.
-        property var formatUndo: null
-        property bool resetting: false
-        // A format chosen ends what Undo could take back of a reset.
-        function formatChanged() {
-            ++watchRevision
-            if (!resetting && formatUndo !== null) {
-                formatUndo = null
-                canUndoWatch = false
-            }
-        }
+        function formatChanged() { ++watchRevision }
         onWatchFormatChanged: formatChanged()
+        function chooseWatchFormat(name) {
+            const before = watchFormat
+            watchFormat = name
+            record("Show the Watchlist in " + name, () => { watchFormat = before })
+            return true
+        }
         function checkWatchPath(text) { return watchTreeCalls.check(text) }
         function watchEditPreview(row, text) {
             return text === "2" ? { preview: "= 0x40000000", error: "" }
@@ -54,15 +82,17 @@ ApplicationWindow {
         }
         function watchPathCandidates(text) { return watchTreeCalls.candidates(text) }
         function addWatchPaths(lines) {
-            formatUndo = null
-            canUndoWatch = true
             ++watchRevision
-            return watchTreeCalls.addPaths(lines)
+            const result = watchTreeCalls.addPaths(lines)
+            result.serial = record("Add " + lines.length + " values to the Watchlist", () => { watchTreeCalls.undo(); ++watchRevision })
+            return result
         }
         // The rows' own formats by a stand-in path, as the provider keeps them by path.
         property var rowFormats: ({})
         function setWatchRowFormat(rows, format) {
             watchTreeCalls.format(rows, format)
+            const before = Object.assign({}, rowFormats)
+            record("Show " + rows.length + " values in " + format, () => { rowFormats = before; formatChanged() })
             const next = Object.assign({}, rowFormats)
             for (const row of rows) {
                 if (format === "")
@@ -88,41 +118,27 @@ ApplicationWindow {
             const rows = watchOwnFormatCount
             if (watchFormat === "original" && Object.keys(rowFormats).length === 0)
                 return { status: "unchanged", rows: 0 }
-            const undo = { format: watchFormat, rows: Object.assign({}, rowFormats) }
-            resetting = true
+            const before = { format: watchFormat, rows: Object.assign({}, rowFormats) }
             rowFormats = ({})
             watchFormat = "original"
-            resetting = false
-            formatUndo = undo
-            canUndoWatch = true
             ++watchRevision
-            return { status: "ok", rows: rows }
+            const serial = record("Reset number formats to Original", () => {
+                rowFormats = before.rows
+                watchFormat = before.format
+                ++watchRevision
+            })
+            return { status: "ok", rows: rows, serial: serial }
         }
-        function removeWatch(row) { watchTreeCalls.remove([row]) }
+        function removeWatch(row) { removeWatchRows([row]) }
         function removeWatchRows(rows) {
             watchTreeCalls.remove(rows)
-            formatUndo = null
-            // As the provider's: no Undo without a device to put them back against.
-            canUndoWatch = connected
             ++watchRevision
-            return { status: "ok", changed: rows.length }
-        }
-        function undoWatch() {
-            if (formatUndo !== null) {
-                const undo = formatUndo
-                resetting = true
-                rowFormats = undo.rows
-                watchFormat = undo.format
-                resetting = false
-                formatUndo = null
-                canUndoWatch = false
+            // As the provider's: a step even with no device, the rows put back by path.
+            const serial = record("Remove " + rows.length + " values from the Watchlist", () => {
+                watchTreeCalls.undo()
                 ++watchRevision
-                return { status: "ok", changed: Object.keys(undo.rows).length + 1 }
-            }
-            watchTreeCalls.undo()
-            canUndoWatch = false
-            ++watchRevision
-            return { status: "ok", changed: 1 }
+            })
+            return { status: "ok", changed: rows.length, serial: serial }
         }
         function refreshWatch() {}
         function startWatch() {}

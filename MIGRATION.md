@@ -756,6 +756,52 @@ between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
 
+## One history for Undo and Redo: the core, the Watchlist and files (UR-1, UX-A, November 2026)
+
+The Watchlist's single Undo slot and the hex editor's own undo stack give way
+to one kind of history, `UndoHistory` (README, "Undo and Redo"). A host makes
+one for its workspace and gives it to its providers; a file keeps its own.
+
+- **`undoWatch()` and `canUndoWatch` are removed: use `provider.history`.**
+  Both providers have `history` (an `UndoHistory*`, read and write, null by
+  default, `historyChanged`). A host that wants Undo makes `UndoHistory {}`
+  (call `registerQmlTypes()` first, as for `HexView`) and assigns it; its
+  `undo()`, `redo()`, `canUndo`, `undoText` and `undoSerial` replace the old
+  pair. Without a history nothing is recorded. Steps stack: another change no
+  longer takes the last one's Undo away, it goes on top of it.
+- **`FileContent.canUndo`, `canRedo`, `undo()` and `redo()` are removed: use
+  `content.history`.** Its steps are named with the file ("Overwrite 4 bytes in
+  values.bin"); it keeps 1000. Typing merges into the step before only within
+  two seconds now, as well as where it stopped and not across a save.
+- **More is a step, and by path.** `addWatch`, `addWatchMany`, `removeWatch`,
+  `removeWatchRows` and `clearWatch` record a step as the boxes and
+  `addWatchPaths` did; so do `chooseWatchFormat`, `setWatchRowFormat` and
+  `resetWatchFormats`. A step holds rows by path, not by key, so it can be
+  undone with no device - the rows come back kept by their paths and are found
+  again on the next device that has them - and on a device with another
+  descriptor, where what it lacks comes back as rows that say so. Format
+  choices within two seconds merge into one step. Restores stay out of the
+  history: `restoreWatchBindings` no longer drops anything, it adds nothing.
+- **Merging by key.** `UndoHistory::record(text, parts, mergeKey,
+  mergeWindowMs)`: steps of one key merge within two seconds unless the caller
+  says otherwise; `0` merges for as long as the key stays the same, and the
+  caller ends it by changing the key (an editor, when its cell is left).
+- **Results carry the step.** `setWatchMany`, `addWatchMany`, `removeWatchRows`,
+  `addWatchPaths` and `resetWatchFormats` add `serial` to their map: the step's,
+  0 when none was recorded. A notice that offers Undo shows it while
+  `history.undoSerial` is that serial.
+- **`StaticConfiguratorProvider.removeWatchRows(rows)`** is new, as
+  Dynamic's, so the Watchlist removes several rows as one step there too.
+  Static's steps wait while it polls; its `blockedReason` says so.
+- **`DynamicWatchlist.restore(removed)` is replaced by `putBack(rows)`**, rows
+  by place and path, which needs no device.
+- **The Watchlist asks before removing several values only when its provider
+  has no history**: with one, Undo brings them back, device or not. Clear still
+  asks; UX-B removes both questions.
+- Until UX-B, the panels call the history themselves: the Watchlist's Ctrl+Z,
+  the hex view's Ctrl+Z and Ctrl+Y while editing, the notices' "· Undo" and
+  `FileEditTools`' Undo and Redo. UX-B replaces them with one router per window.
+
 ## The live Plot's time axis from the start of reading (LP-1h, November 2026)
 
 `TraceView.fromStart` switches the time axis between the time of day (the

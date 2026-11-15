@@ -518,7 +518,7 @@ void hexEditing(const QString& folder)
 	CHECK(view.status().contains(QStringLiteral("Edited, not saved")));
 	// One step for what was typed in one go.
 	press(&view, Qt::Key_Z, Qt::ControlModifier);
-	CHECK(content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 0 && !content.canUndo());
+	CHECK(content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 0 && !content.history()->canUndo());
 	press(&view, Qt::Key_Y, Qt::ControlModifier);
 	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2);
 	// A letter outside the printable range is not typed; a hex digit in the
@@ -563,9 +563,9 @@ void hexEditing(const QString& folder)
 	clipboard->setText(QString::fromUtf8("\xC3\xA9"));
 	CHECK(view.paste() == QStringLiteral("Pasted 2 bytes") && content.bytes() == QByteArray("ab-\xC3\xA9" "F12"));
 	// One step each: an undo takes back the last paste, the next the one before.
-	content.undo();
+	content.history()->undo();
 	CHECK(content.bytes() == QByteArray("ab-DEF12"));
-	content.undo();
+	content.history()->undo();
 	CHECK(content.bytes() == QByteArray("abBDEF12"));
 	content.discard();
 	content.setEditing(false);
@@ -601,7 +601,7 @@ void hexReplacing(const QString& folder)
 			CHECK(view.replace(QStringLiteral("97"), QStringLiteral("integer"), width,
 			                   QStringLiteral("18446744073709551615"), all).contains(QStringLiteral("does not fit")));
 			CHECK(view.outcome() == QStringLiteral("refused") && content.bytes() == original &&
-			      !content.modified() && !content.canUndo() && view.cursor() == cursor &&
+			      !content.modified() && !content.history()->canUndo() && view.cursor() == cursor &&
 			      view.selectionLength() == selection);
 		}
 	}
@@ -618,9 +618,9 @@ void hexReplacing(const QString& folder)
 	      view.outcome() == QStringLiteral("refused"));
 	CHECK(view.replace(ab, text, 4, xy, true) == QStringLiteral("Replaced 2") && content.bytes() == QByteArray("XY-XY-XY") &&
 	      view.outcome() == QStringLiteral("done"));
-	content.undo();
+	content.history()->undo();
 	CHECK(content.bytes() == QByteArray("XY-ab-ab"));
-	content.undo();
+	content.history()->undo();
 	CHECK(content.bytes() == QByteArray("ab-ab-ab") && !content.modified());
 	// One byte: Replace writes a one-byte match too, in either column's kind.
 	view.clearFind();
@@ -632,8 +632,8 @@ void hexReplacing(const QString& folder)
 	CHECK(view.replace(QStringLiteral("2D"), QStringLiteral("hex"), 4, QStringLiteral("2A"), false) ==
 	          QStringLiteral("Replaced; no more matches") &&
 	      content.bytes() == QByteArray("ab+ab*ab"));
-	content.undo();
-	content.undo();
+	content.history()->undo();
+	content.history()->undo();
 	CHECK(content.bytes() == QByteArray("ab-ab-ab") && !content.modified());
 	// Hex as Find reads it; matches never overlap.
 	CHECK(view.replace(QStringLiteral("2D"), QStringLiteral("hex"), 4, QStringLiteral("2B"), true) ==

@@ -1883,11 +1883,30 @@ QVector<WatchlistModel::Removed> DynamicWatchlist::removeMany(const QSet<WatchKe
 	return removed;
 }
 
-bool DynamicWatchlist::restore(const QVector<WatchlistModel::Removed>& rows)
+bool DynamicWatchlist::putBack(QVector<PathRow> rows)
 {
 	auto p = d;
-	if (p->guarded() || p->reportingCompletion || !p->current() || !p->model.restore(rows))
+	if (p->guarded() || p->reportingCompletion || rows.isEmpty() ||
+	    rows.size() > WatchlistModel::maxRows - p->model.count())
 		return false;
+	std::stable_sort(rows.begin(), rows.end(), [](const PathRow& a, const PathRow& b) { return a.at < b.at; });
+	QVector<WatchlistModel::Removed> kept;
+	kept.reserve(rows.size());
+	const int count = p->model.count();
+	int previous = -1;
+	for (int i = 0; i < rows.size(); ++i) {
+		// Each place among the rows there now and those put back before it.
+		const int at = std::max(previous + 1, std::min(rows[i].at, count + i));
+		kept.push_back({at, missingEntry(rows[i].path)});
+		previous = at;
+	}
+	if (!p->model.restore(kept))
+		return false;
+	// Without a device they say what a disconnect's kept rows say.
+	if (!p->current()) {
+		QScopedValueRollback<bool> publishing(p->publishing, true);
+		p->nextUnresolved = p->model.unbindAll(p->nextUnresolved);
+	}
 	p->membershipChanged(true);
 	return true;
 }

@@ -48,7 +48,11 @@ unknown enum, Stop/drain and session invalidation. Its mode selector does not
 offer ReadMany. `window.png` records the actual rendered window for visual review.
 
 `Contracts.cpp` uses an explicitly fake application API facade to isolate Qt
-presentation contracts. Its checks cover lazy 128-row fetching, stale and foreign
+presentation contracts. It also holds the static Watchlist's steps (UR-1) to
+`tests/helpers/UndoKinds.hpp`: every change - a box, an add, a removal, Clear
+- done, undone and redone the same, also across a session that goes and comes
+back; a step that waits, its words kept, while the Watchlist polls; a gone
+provider's step skipped. The summary's `undoCases` counts the cases. Its checks cover lazy 128-row fetching, stale and foreign
 indices, draft/seed retention after refusal, lifecycle and callback reentry,
 presentation budgets, queued notification coalescing and supported destruction
 boundaries. Those checks are not reported as additional SDK wire transactions.
