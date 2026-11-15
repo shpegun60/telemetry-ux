@@ -802,6 +802,17 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_Backspace);
 			settle(200);
 			CHECK(view->property("valueAuto").toBool() && qFuzzyCompare(view->property("spanSeconds").toDouble(), spanBefore));
+			// A level drag, no taller than a pixel: the time only, the values
+			// left fitted.
+			QTest::qWait(700);
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, QPoint(to.x(), from.y()));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, QPoint(to.x(), from.y()));
+			settle(200);
+			CHECK(view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() < spanBefore * 0.3);
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(200);
 			// Everything gone back on: the button says there is nothing left.
 			while (view->property("canGoBack").toBool())
 				QMetaObject::invokeMethod(view, "goBack");
@@ -1026,6 +1037,82 @@ int main(int argc, char** argv)
 				gone = gone || value->property("text").toString().startsWith(QStringLiteral("not read"));
 			CHECK(!gone);
 			shot(window, argc, argv, QStringLiteral("trace-plot-recorded-760"));
+
+			// The Trend's words and rules (TR-2): a finished run offers no
+			// Follow, the axis counts from the run's start, and a chip with no
+			// cursor gives the reading at the right edge of the view, not the
+			// run's last.
+			auto* trend = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(trend && trend->setProperty("recording", true));
+			view->setProperty("fromStart", true);
+			settle(300);
+			CHECK(!named(content, "plotFollow") && !named(content, "plotBehind") && shown(content, "plotPresets"));
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("From run start (s)")));
+			// Being written: Follow is offered again.
+			trend->setProperty("writing", true);
+			settle(100);
+			CHECK(shown(content, "plotFollow"));
+			trend->setProperty("writing", false);
+			settle(100);
+			// Back an hour from the end: the speed's chip reads at the edge.
+			CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 600)));
+			settle(200);
+			CHECK(QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -6.0)));
+			settle(400);
+			QVariant atRight;
+			CHECK(QMetaObject::invokeMethod(view, "valueAtRight", Q_RETURN_ARG(QVariant, atRight),
+			                                Q_ARG(QString, QStringLiteral("run.Speed"))));
+			const auto* speed = recorded.readings(QStringLiteral("run.Speed"));
+			CHECK(atRight.isValid() && speed && atRight.toDouble() != speed->back().value);
+			bool edge = false;
+			for (auto* chip : all(content, "plotChip"))
+				if (auto* name = named(chip, "plotChipName"); name && name->property("text").toString() == QStringLiteral("run.Speed"))
+					edge = named(chip, "plotChipValue")->property("text").toString() ==
+					       QString::number(atRight.toDouble(), 'g', 6).replace(QLatin1Char('-'), QChar(0x2212));
+			CHECK(edge);
+			// More of a run being written: after its own readings, kept whole;
+			// nothing for a path never given.
+			const auto before = recorded.count(QStringLiteral("run.Speed"));
+			const auto last = speed->back().ns;
+			recorded.appendRecorded(QStringLiteral("run.Speed"), {{last + 100'000'000, 3.5}, {last + 200'000'000, 4.5}});
+			recorded.appendRecorded(QStringLiteral("run.Missing"), {{last, 1}});
+			CHECK(recorded.count(QStringLiteral("run.Speed")) == before + 2 && recorded.latest(QStringLiteral("run.Speed")).toDouble() == 4.5 &&
+			      !recorded.readings(QStringLiteral("run.Missing")) && recorded.newestNs() == last + 200'000'000);
+			// The host's word over the graph.
+			trend->setProperty("message", QStringLiteral("No readings here. Press All to see the whole run."));
+			settle(100);
+			CHECK(shown(content, "plotMessage")->property("text").toString().startsWith(QStringLiteral("No readings here")));
+			trend->setProperty("message", QString());
+			// A short dock keeps the chips to one row; "N more" brings the rest.
+			for (int i = 0; i < 14; ++i) {
+				const auto path = QStringLiteral("run.Extra Value %1").arg(i);
+				recorded.setRecorded(path, {{start, double(i)}, {start + 1'000'000'000, double(i)}}, false);
+				CHECK(recorded.plot(path).isEmpty());
+			}
+			window->resize(760, 320);
+			settle(400);
+			auto* more = shown(content, "plotMoreChips");
+			CHECK(more->property("text").toString().endsWith(QStringLiteral(" more")));
+			const auto oneRow = shown(content, "plotLegend")->height();
+			click(window, more);
+			settle(300);
+			CHECK(trend->property("chipsExpanded").toBool() && shown(content, "plotLegend")->height() > oneRow);
+			shot(window, argc, argv, QStringLiteral("trace-plot-trend-chips-760"));
+			click(window, shown(content, "plotMoreChips"));
+			settle(300);
+			CHECK(!trend->property("chipsExpanded").toBool() && shown(content, "plotLegend")->height() == oneRow);
+			// A narrow dock: the spans become a list, the same four.
+			window->resize(480, 320);
+			settle(400);
+			CHECK(shown(content, "plotPresetChoice") && !named(content, "plotPresets") && shown(content, "plotZoomIn"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-trend-480"));
+			// Narrower still: the zoom buttons and Measure leave the row; their keys stay.
+			window->resize(420, 320);
+			settle(400);
+			CHECK(shown(content, "plotPresetChoice") && !named(content, "plotZoomIn") && !named(content, "plotMeasureToggle"));
+			window->resize(760, 360);
+			trend->setProperty("recording", false);
+			view->setProperty("fromStart", false);
 			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
 			settle(300);
 		}

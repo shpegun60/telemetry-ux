@@ -950,3 +950,19 @@ button, the Measure table (M), copy picture (Ctrl+C), copy values
 (Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
 result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 `WatchTraces.categorical` is invokable from QML.
+
+## The Trend drawn by TracePlot (TR-2, November 2026)
+
+`TracePlot.recording` draws a recorded run, the Trend: its words say so (×
+"Remove from the Trend; the recording is unchanged", the axis "From run start
+(s)"), a chip with no cursor gives the reading at the right edge of the view
+(`TraceView.valueAtRight(path)`), nothing is dropped on it, and Follow, its
+menu entry and the behind chip appear only while `writing`. `runName` names
+the run in the graph's accessible name. `leading` and `trailing` take the
+host's controls at either end of the header row. `emptyText`, `emptyHint`,
+`waitingText` and `message` let the host word the empty, waiting and
+over-the-graph states. In a recording, below 520 px the spans become a list,
+below 440 px the zoom buttons and Measure leave the row, and below 400 px of
+height the chips keep to one row with "N more" (`chipsExpanded`).
+`WatchTraces::appendRecorded(path, readings)` adds a run's newer readings to
+a recorded path without copying the rest. The live Plot is unchanged.
