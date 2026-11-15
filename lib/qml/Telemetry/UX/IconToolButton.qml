@@ -7,6 +7,11 @@
 // when there is one, follows it in the tooltip. `switchedOn` draws the action as
 // switched on - filled with the selection colour, as a checked segment is -
 // without making the button checkable, so the state stays the caller's.
+// `disabledReason` says in a few words why the action cannot run now ("not
+// connected"): while the button is disabled it follows the name in brackets in
+// the tooltip, in place of the shortcut, and is the button's accessible
+// description. A disabled control still gets hover in Qt 6, so the tooltip
+// shows; it is not drawn as hovered, which would look like it can be pressed.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
@@ -15,7 +20,10 @@ Basic.ToolButton {
     id: tool
     property string iconName
     property string shortcutText
+    property string disabledReason
     property bool switchedOn: false
+    // The reason is said: disabled, with one given.
+    readonly property bool reasonShown: !enabled && disabledReason.length > 0
     implicitWidth: Type.controlHeight
     implicitHeight: Type.controlHeight
     padding: Type.spacing
@@ -28,14 +36,16 @@ Basic.ToolButton {
     background: Rectangle {
         radius: 4
         color: tool.switchedOn ? Theme.selectionFill
-             : tool.down ? Theme.statePressed : tool.hovered ? Theme.stateHover : "transparent"
+             : tool.down ? Theme.statePressed : tool.hovered && tool.enabled ? Theme.stateHover : "transparent"
         border.width: tool.visualFocus ? 2 : 0
         border.color: Theme.focusRing
     }
     ToolTip.visible: (hovered || visualFocus) && text.length > 0
-    ToolTip.text: shortcutText.length > 0 ? qsTr("%1 (%2)").arg(text).arg(shortcutText) : text
+    ToolTip.text: reasonShown ? qsTr("%1 (%2)").arg(text).arg(disabledReason)
+                : shortcutText.length > 0 ? qsTr("%1 (%2)").arg(text).arg(shortcutText) : text
     Accessible.role: Accessible.Button
     Accessible.name: text
+    Accessible.description: reasonShown ? disabledReason : ""
     // A switch (Edit): a screen reader says it is one, and whether it is on.
     property bool toggles: false
     Accessible.checkable: toggles

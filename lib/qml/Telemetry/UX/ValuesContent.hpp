@@ -130,6 +130,10 @@ class ValuesContent final : public QObject {
 	Q_PROPERTY(QString connectedFingerprintGroups READ connectedFingerprintGroups CONSTANT)
 	// The descriptor the file needs, in groups of four: "3F2A 91C0 7BE4 0D11".
 	Q_PROPERTY(QString fingerprintGroups READ fingerprintGroups CONSTANT)
+	// While it needs one because the descriptor beside it with this
+	// fingerprint cannot be read, that in a sentence ("values.bin cannot be
+	// decoded: telemetry/descriptor.bin beside it cannot be read."); else empty.
+	Q_PROPERTY(QString besideProblem READ besideProblem CONSTANT)
 	// "4 Fields in 2 groups · 1 unavailable"
 	Q_PROPERTY(QString summary READ summary NOTIFY shownChanged)
 	// The header's fields and every Field's status and value bytes, for the hex view.
@@ -160,6 +164,8 @@ public:
 	QString connectedFingerprintGroups() const { return connectedGroups_; }
 	// Set by the codec when it is made; the view's words depend on it.
 	void setConnectedFingerprint(quint64 fingerprint);
+	QString besideProblem() const { return besideProblem_; }
+	void setBesideProblem(const QString& sentence) { besideProblem_ = sentence; }
 	QString fingerprintGroups() const { return fingerprintGroups_; }
 	QString summary() const;
 	QVariantList regions() const { return regions_; }
@@ -261,7 +267,7 @@ private:
 	bool valid_ = false, held_ = false, needsDescriptor_ = false, findLimited_ = false;
 	mutable bool copyCut_ = false;
 	quint64 fingerprint_ = 0;
-	QString error_, fingerprintGroups_, connectedGroups_;
+	QString error_, fingerprintGroups_, connectedGroups_, besideProblem_;
 	QVariantList regions_;
 	// The file as opened, the shown snapshot, and the newest one waiting while held.
 	QByteArray original_, last_, pending_;

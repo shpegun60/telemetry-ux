@@ -598,6 +598,73 @@ for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
 chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
 Shift+F10).
 
+## A pictogram says why it cannot act (FL-1a, November 2026)
+
+`IconToolButton` gains `disabledReason`, a few words on why the action cannot
+run now ("not connected", "select a file first"). While the button is disabled
+the reason follows its name in brackets in the tooltip, in place of the
+shortcut ("Show the project folder (no project open)"), and is its
+`Accessible.description`; enabled, nothing changes. A disabled control still
+gets hover in Qt 6, so the tooltip shows on a disabled button; it is no longer
+drawn with the hover fill, which looked as if it could be pressed. Callers that
+set no reason see no difference.
+
+## A descriptor's problem in words; values.bin not blocked by it (FL-1b, November 2026)
+
+`DescriptorContent::check(bytes)` returns why bytes are not a descriptor this
+program reads, and `DescriptorContent::phrase()` says it in the files-only
+card's words: "it is empty", "it is N bytes, more than the 4194304 bytes this
+program accepts", "it is version N; this program reads version 3", "it ends
+early, at byte N", "its fingerprint does not match its content", or "its bytes
+are not laid out as a descriptor (at byte N)" - the byte only where the header
+shows it. `DescriptorContent::error()` is that phrase; "not a descriptor this
+program reads (status 1, error 3)" is gone.
+
+`OpenFiles::setCodecProblem(codec, sentence)` lets a codec say its failure in a
+sentence of its own, `%1` the reason and `%2` the view shown instead (Table,
+Text, Hex); `installTelemetryCodecs` gives the Descriptor codec "This descriptor
+cannot be read: %1. It is shown as %2.", and a fingerprint that does not match
+reads "…, so it was changed after it was built". Other codecs keep "Not a valid
+<name> file: <reason>". `FileContent::setCodecs` takes the sentences as an
+optional third argument.
+
+The Values codec, and the context's search of the devices' folders, no longer
+take a descriptor whose header names the right fingerprint but whose bytes do
+not read. values.bin beside such a copy is read with the context's descriptor
+of its fingerprint (the connected device's first); with none it waits as before
+and `ValuesContent::besideProblem` says "values.bin cannot be decoded:
+telemetry/descriptor.bin beside it cannot be read.", which `ValuesView` shows
+in place of "No descriptor with this fingerprint was found".
+
+## Files a host keeps read-only; a broken copy's way back (FL-1c, November 2026)
+
+`OpenFiles::setReadOnlyLookup(lookup)` takes, for a device's path, why its copy
+is not edited in the Viewer (a sentence), or empty. `FileContent` gains
+`readOnlyReason` from it - never for a file opened from disk - and
+`setEditing(true)` does nothing while it is set; a path that becomes read-only
+ends editing, keeping any edits. Restore the device's version, Save, Undo and
+a saved copy elsewhere still work: they are how a broken copy is mended. The
+library sets no lookup itself: the host says which files and in which words.
+
+`FileEditTools`' Edit is off with the reason as its `disabledReason`;
+`HexPane`'s Edit bytes, Paste over the bytes and Replace… say "(read-only)",
+Ctrl+H opens Find with the reason, and the state line says "Read-only" with the
+reason on hover. When a codec cannot read the file, `FileViewer` follows the
+reason with two links - Restore the device's version (when the device's bytes
+are known and differ) and Read again from the device (when `reloadable`) -
+in `fileViewerCodecProblemBar`; the reason keeps its `fileViewerCodecProblem`
+label. New on `FileViewer`: `codecFailed`.
+
+## What a project's copy is before a read replaces it (FL-1d, November 2026)
+
+`DeviceFileTransfers::copyState(localFile, devicePath)` (static, invokable)
+returns `exists`, `known` (the device's bytes as read are kept and check),
+`differs` (bytes of the copy that are not those, a difference in length
+included), `savedAt`, `readAt` and `written`. A host asks before reading the
+device's file over a copy that exists and differs, or whose device's bytes are
+not known; opening reads over a copy the same as the device's bytes as
+before. Nothing else changes: `openIn` still replaces the copy it is given.
+
 ## Plotting from the Watchlist, and the graph's menu (LP-1g, November 2026)
 
 `WatchRows.plotValues(row)` gives the values the Plot takes for a row - every

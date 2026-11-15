@@ -290,9 +290,16 @@ FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(
 	connect(&undo_, &QUndoStack::canRedoChanged, this, &FileContent::editChanged);
 }
 
+QString FileContent::readOnlyReason() const
+{
+	if (devicePath_.isEmpty() || !readOnlyLookup_ || !*readOnlyLookup_)
+		return {};
+	return (*readOnlyLookup_)(devicePath_);
+}
+
 void FileContent::setEditing(bool editing)
 {
-	editing = editing && loaded_ && !loading_;
+	editing = editing && loaded_ && !loading_ && readOnlyReason().isEmpty();
 	if (editing == editing_)
 		return;
 	editing_ = editing;
@@ -555,6 +562,11 @@ void FileContent::setDevicePath(const QString& path)
 	// The device's name may say CSV where the local copy's does not.
 	if (textual_ && !tabular_ && devicePath_.toLower().endsWith(QStringLiteral(".csv")))
 		tabular_ = table_.setText(text_);
+	// A path the host does not let be edited ends editing; edits stay.
+	if (editing_ && !readOnlyReason().isEmpty()) {
+		editing_ = false;
+		Q_EMIT editChanged();
+	}
 	Q_EMIT changed();
 }
 
@@ -687,8 +699,13 @@ FileContent::Decoded FileContent::decodeBytes() const
 		}
 		// The first codec that took the file for its own says why it could not;
 		// one that only guessed says nothing.
-		if (result.error.isEmpty() && !reason.isEmpty())
-			result.error = tr("Not a valid %1 file: %2").arg(codec.name, reason);
+		if (result.error.isEmpty() && !reason.isEmpty()) {
+			const auto sentence = problems_ ? problems_->value(codec.name) : QString{};
+			result.error = sentence.isEmpty() ? tr("Not a valid %1 file: %2").arg(codec.name, reason)
+			                                  : sentence.arg(reason, tabular_   ? tr("Table")
+			                                                         : textual_ ? tr("Text")
+			                                                                    : tr("Hex"));
+		}
 	}
 	return result;
 }
@@ -831,9 +848,10 @@ int OpenFiles::append()
 	// Parented, so QML never takes it over when a script reaches it through
 	// data(); files_ still decides when it goes.
 	auto file = std::make_unique<FileContent>(this);
-	file->setCodecs(&codecs_, &context_);
+	file->setCodecs(&codecs_, &context_, &problems_);
 	file->setLiveFactory(&liveFactory_);
 	file->setReferenceLookup(&referenceLookup_);
+	file->setReadOnlyLookup(&readOnlyLookup_);
 	const auto row = static_cast<int>(files_.size());
 	QPointer<OpenFiles> alive(this);
 	QPointer<FileContent> added(file.get());
