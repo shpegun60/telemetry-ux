@@ -162,6 +162,19 @@ void WatchRows::dropSource()
 	Q_EMIT sourceChanged();
 }
 
+QString WatchRows::parentLabel(const Node& node) const
+{
+	if (!tree_ || node.depth < 2 || node.parent <= 0)
+		return {};
+	const auto& parent = shape_.nodes.at(node.parent);
+	// "[2]" alone reads as "2": an element is named with its array's name,
+	// "Phase[2]", and "M[3]" for an element of an element.
+	const Node* named = &parent;
+	while (element(*named) && named->parent > 0)
+		named = &shape_.nodes.at(named->parent);
+	return parent.path.mid(named->labelStart);
+}
+
 bool WatchRows::element(const Node& node)
 {
 	return node.labelStart < node.path.size() && node.path.at(node.labelStart) == QLatin1Char('[');
@@ -199,8 +212,10 @@ void WatchRows::setSorted(bool sorted)
 	if (sorted_ == sorted)
 		return;
 	sorted_ = sorted;
+	// The rows move into their places, as when the source moves them: a row
+	// being edited keeps its delegate (WL-2c).
 	if (!tree_)
-		reset();
+		refresh();
 	Q_EMIT sortedChanged();
 }
 
@@ -788,7 +803,7 @@ void WatchRows::apply(Shape next)
 	if (count() > 0)
 		Q_EMIT dataChanged(index(0), index(count() - 1),
 		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole,
-		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole});
+		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, ParentLabelRole});
 	setCount(before);
 	// A row that went, or that a fold hid, leaves the selection.
 	pruneSelection();
@@ -1172,6 +1187,8 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 			return tree_ && node.depth >= 2;
 		case SelectedRole:
 			return selected_.contains(node.identity);
+		case ParentLabelRole:
+			return parentLabel(node);
 		default:
 			break;
 	}
@@ -1200,6 +1217,7 @@ QHash<int, QByteArray> WatchRows::roleNames() const
 	names.insert(LeavesRole, "leaves");
 	names.insert(NestedRole, "nested");
 	names.insert(SelectedRole, "selected");
+	names.insert(ParentLabelRole, "parentLabel");
 	return names;
 }
 

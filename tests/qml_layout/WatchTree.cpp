@@ -265,6 +265,63 @@ int main(int argc, char** argv)
 			CHECK(leaf(list, 1) == QStringLiteral("Enabled"));
 			CHECK(!named(content, "watchRowChevron"));
 			shot(window, argc, argv, QStringLiteral("watch-list-480"));
+			// The list by name (WL-2c): the Name header sorts A-Z and back to the
+			// order added; the rows move, nothing is reset.
+			{
+				auto* header = shown(content, "watchColumnName");
+				QSignalSpy resets(&rows, &QAbstractItemModel::modelReset);
+				click(window, header);
+				CHECK(rows.sorted() && header->property("text").toString() == QStringLiteral("Name ▴"));
+				for (int row = 1; row < rows.count(); ++row)
+					CHECK(!telemetry::ux::WatchRows::pathLess(rows.index(row).data(telemetry::ux::WatchRows::NameRole).toString(),
+					                                          rows.index(row - 1).data(telemetry::ux::WatchRows::NameRole).toString()));
+				click(window, header);
+				CHECK(!rows.sorted() && leaf(list, 1) == QStringLiteral("Enabled") && resets.isEmpty());
+				// A value being edited keeps its editor and its text through a
+				// sort: the row moves, it is not made again; the cursor follows.
+				int writable = -1;
+				for (int row = 0; row < rows.count() && writable < 0; ++row)
+					if (rowShown(list, row)->property("writable").toBool())
+						writable = row;
+				CHECK(writable >= 0);
+				list->setProperty("currentIndex", writable);
+				list->forceActiveFocus();
+				settle();
+				key(window, Qt::Key_F2);
+				auto* edited = rowShown(list, writable);
+				CHECK(edited->property("editing").toBool());
+				typeText(window, "7");
+				const auto typed = textOf(edited, "watchValueEditor");
+				click(window, header);
+				CHECK(rows.sorted() && edited->property("editing").toBool() && textOf(edited, "watchValueEditor") == typed);
+				CHECK(list->property("currentIndex").toInt() == edited->property("index").toInt());
+				key(window, Qt::Key_Escape);
+				// The menu's way to the same: checked as the list is sorted.
+				click(window, named(content, "watchMoreButton"));
+				auto* sortItem = shown(content, "watchSortByName");
+				CHECK(sortItem->property("checked").toBool());
+				click(window, sortItem);
+				CHECK(!rows.sorted());
+				// x says Delete does the same only on the cursor's row alone.
+				list->setProperty("currentIndex", 0);
+				list->forceActiveFocus();
+				rows.select(0);
+				settle();
+				const std::function<QQuickItem*(QQuickItem*)> xOf = [&](QQuickItem* root) -> QQuickItem* {
+					if (root->objectName() == QLatin1String("removeWatchButton"))
+						return root;
+					for (auto* child : root->childItems())
+						if (auto* found = xOf(child))
+							return found;
+					return nullptr;
+				};
+				CHECK(xOf(rowShown(list, 0))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				CHECK(!xOf(rowShown(list, 1))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				rows.selectAll();
+				settle();
+				CHECK(!xOf(rowShown(list, 0))->property("tip").toString().endsWith(QStringLiteral("(Delete)")));
+				rows.clearSelection();
+			}
 
 			// The tree: groups and nodes from the paths, descriptor order.
 			click(window, named(content, "watchViewTree"));
@@ -512,6 +569,35 @@ int main(int argc, char** argv)
 				};
 				const auto current = [list] { return list->property("currentIndex").toInt(); };
 				const int count = list->property("count").toInt();
+				// Names as spec F says them: a member or an element by what it
+				// belongs to; x on a node by the values it removes.
+				{
+					const std::function<QQuickItem*(QQuickItem*, const char*)> anyNamed =
+					    [&](QQuickItem* root, const char* name) -> QQuickItem* {
+						if (root->objectName() == QLatin1String(name))
+							return root;
+						for (auto* child : root->childItems())
+							if (auto* found = anyNamed(child, name))
+								return found;
+						return nullptr;
+					};
+					int members = 0, nodes = 0;
+					for (int row = 0; row < count; ++row) {
+						auto* item = rowShown(list, row);
+						const auto label = item->property("parentLabel").toString();
+						if (leaf(list, row) == QStringLiteral("Gain") && ++members)
+							CHECK(label == QStringLiteral("Config"));
+						if (leaf(list, row) == QStringLiteral("[3]") && ++members)
+							CHECK(label == QStringLiteral("Samples"));
+						if (leaf(list, row) == QStringLiteral("Config") && ++nodes) {
+							auto* remove = anyNamed(item, "removeWatchButton");
+							CHECK(remove && remove->property("what").toString() ==
+							                    QStringLiteral("Remove the %1 values of device.Config")
+							                        .arg(item->property("leaves").toInt()));
+						}
+					}
+					CHECK(members == 2 && nodes == 1);
+				}
 				list->setProperty("currentIndex", 0);
 				list->forceActiveFocus();
 				rows.select(0);

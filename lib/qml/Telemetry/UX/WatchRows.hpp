@@ -16,7 +16,7 @@
  * removed, the ones that stay and changed places are moved (the longest run
  * already in order stays put) and the new ones inserted, so a row being
  * edited keeps its delegate while the Watchlist changes around it. Only a
- * switch of view or sort, or a reset of the source, resets the rows. Reading
+ * switch of view or a reset of the source resets the rows; a sort moves them. Reading
  * a value moves no row; the nodes it shows in are told once per event-loop
  * turn.
  *
@@ -86,7 +86,9 @@ public:
 		NodeRole,       // "value", "group", "struct", "array", "element"
 		LeavesRole,     // the values at and under the row
 		NestedRole,     // in the tree, a row inside a Field (its member or element)
-		SelectedRole    // the row is in the selection
+		SelectedRole,   // the row is in the selection
+		ParentLabelRole // in the tree, what a nested row belongs to: "Config",
+		                // "Phase[2]" (an element by its array), "" elsewhere
 	};
 	Q_ENUM(Role)
 
@@ -242,6 +244,9 @@ private:
 	QString linesOf(const QVariantList& sources, bool paths) const;
 	// Whether the node's own step is an element, "[3]".
 	static bool element(const Node& node);
+	// What a nested row belongs to, for a screen reader: its parent's own
+	// step, an element with the array's name before it.
+	QString parentLabel(const Node& node) const;
 
 	QPointer<QAbstractItemModel> source_;
 	QVector<QMetaObject::Connection> connections_;
