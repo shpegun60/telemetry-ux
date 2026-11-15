@@ -708,8 +708,12 @@ Pane {
             Label {
                 objectName: "fileViewerState"
                 visible: viewer.stateText.length > 0
-                // Most of the line at most: the path keeps the rest.
-                Layout.maximumWidth: Math.max(0, viewer.width * 0.6)
+                // Whole while it fits: the size, format and path give way first.
+                readonly property real fits: Math.min(Math.ceil(implicitWidth),
+                                                      Math.max(0, viewer.width - 2 * Type.padding))
+                Layout.minimumWidth: fits
+                Layout.preferredWidth: fits
+                Layout.maximumWidth: fits
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
                 // A change on the device or a read-back that differs is a

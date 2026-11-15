@@ -178,29 +178,32 @@ TreeViewDelegate {
                 Accessible.ignored: true
             }
             Label {
-                // As wide as the name, so the mark stands right after it.
+                id: nameLabel
                 Layout.fillWidth: true
-                Layout.maximumWidth: implicitWidth
-                Layout.minimumWidth: 0
                 textFormat: Text.PlainText
                 elide: Text.ElideMiddle
                 text: fileRow.name
                 color: fileRow.textColor
+                // Room for the mark, which stands right after the name.
+                rightPadding: copyMark.visible ? copyMark.implicitWidth + Type.tight : 0
+                // The project's copy is saved differently from this file as read.
+                Label {
+                    id: copyMark
+                    objectName: "deviceFileCopyDiffers"
+                    visible: fileRow.copyDiffersShown
+                    x: nameLabel.leftPadding + Type.tight
+                       + Math.min(nameLabel.implicitWidth - nameLabel.leftPadding - nameLabel.rightPadding,
+                                  nameLabel.width - nameLabel.leftPadding - nameLabel.rightPadding)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "≠"
+                    color: fileRow.strong ? Theme.selectedForeground : Theme.info
+                    HoverHandler { id: copyHover }
+                    ToolTip.visible: copyHover.hovered
+                    ToolTip.delay: 300
+                    ToolTip.text: fileRow.copyTip
+                    Accessible.ignored: true
+                }
             }
-            // The project's copy is saved differently from this file as read.
-            Label {
-                id: copyMark
-                objectName: "deviceFileCopyDiffers"
-                visible: fileRow.copyDiffersShown
-                text: "≠"
-                color: fileRow.strong ? Theme.selectedForeground : Theme.info
-                HoverHandler { id: copyHover }
-                ToolTip.visible: copyHover.hovered
-                ToolTip.delay: 300
-                ToolTip.text: fileRow.copyTip
-                Accessible.ignored: true
-            }
-            Item { Layout.fillWidth: true }
         }
         // A folder holding selected files: how many, in a pill in the
         // selection's own fill - quiet with it while the tree lacks the
