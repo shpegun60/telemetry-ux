@@ -156,6 +156,8 @@ void orderedOwnedResults()
 	CHECK(batch.count() == 3 && peer.calls == 0);
 	CHECK(batch.canExecute() && batch.execute());
 	CHECK(peer.calls == 1 && peer.submitted[2].request == QByteArray("abc"));
+	// The status line in words (BA-4c).
+	CHECK(batch.status() == QStringLiteral("Sending 3 items in one request…") && !batch.attention());
 	CHECK(peer.submitted[0].id == peer.submitted[1].id);
 	CHECK(batch.pending() && !batch.add(row) && !batch.remove(0) && !batch.move(1, -1) &&
 	      !batch.clear() && !batch.select(0));
@@ -166,6 +168,9 @@ void orderedOwnedResults()
 	      peer.finishes == 0);
 	batch.poll();
 	CHECK(!batch.pending() && peer.finishes == 1 && resets.count() == 1);
+	// "Executed at 14:02:11 - 3 of 3 done.", or the first item not done.
+	CHECK(batch.status().startsWith(QStringLiteral("Executed at ")) && batch.status().contains(QStringLiteral(" of 3 done")) &&
+	      batch.attention() == !batch.status().contains(QStringLiteral(" - 3 of 3 done.")));
 	CHECK(role(batch, 2, ux::BatchListModel::StatusRole)
 	          .toString()
 	          .contains(QStringLiteral("Accepted")));
@@ -173,19 +178,21 @@ void orderedOwnedResults()
 	           .toMap()
 	           .value(QStringLiteral("executed"))
 	           .toBool());
-	CHECK(batch.select(0) && batch.responses()->rowCount() == 1);
-	CHECK(batch.responses()
-	          ->data(batch.responses()->index(0, 0), ux::ValueModel::ValueRole)
+	// A read's value is the item's values (BA-4a); it has no response.
+	CHECK(batch.select(0) && batch.values()->rowCount() == 1 && batch.responses()->rowCount() == 0);
+	CHECK(batch.values()
+	          ->data(batch.values()->index(0, 0), ux::ValueModel::ValueRole)
 	          .toString() == QStringLiteral("18446744073709551615"));
-	CHECK(!batch.responses()
-	           ->data(batch.responses()->index(0, 0), ux::ValueModel::EditableRole)
+	CHECK(!batch.values()
+	           ->data(batch.values()->index(0, 0), ux::ValueModel::EditableRole)
 	           .toBool());
 	const auto facts = role(batch, 2, ux::BatchListModel::ResultRole).toMap();
 	peer.refusal = cl::Status::QueueFull;
 	CHECK(!batch.execute() && !batch.pending() && batch.count() == 3);
 	CHECK(role(batch, 2, ux::BatchListModel::ResultRole).toMap() == facts);
 	CHECK(role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
-	CHECK(batch.status().contains(QStringLiteral("QueueFull")));
+	CHECK(batch.status() == QStringLiteral("The device was busy and ran nothing. Execute the Batch again in a moment.") &&
+	      batch.attention());
 	peer.refusal = cl::Status::Ok;
 	peer.permitted = false;
 	CHECK(!batch.canExecute() && !batch.execute() && peer.calls == 2);
@@ -195,7 +202,7 @@ void orderedOwnedResults()
 	batch.poll();
 	CHECK(!role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
 	CHECK(!role(batch, 0, ux::BatchListModel::ResultRole).toMap().isEmpty());
-	CHECK(batch.responses()->rowCount() == 0);
+	CHECK(batch.values()->rowCount() == 0);
 }
 
 void boundedAdmissionAndHistory()
@@ -218,8 +225,10 @@ void boundedAdmissionAndHistory()
 	CHECK(batch.pending() && !batch.supported() && !batch.clear());
 	peer.finish(cl::Status::OutcomeUnknown);
 	batch.poll();
-	CHECK(!batch.pending() && batch.status().contains(QStringLiteral("OutcomeUnknown")) &&
-	      peer.calls == 1);
+	CHECK(!batch.pending() &&
+	      batch.status() == QStringLiteral("The reply was lost: the items may have run. Check the device before executing again.") &&
+	      batch.attention() && peer.calls == 1);
+	CHECK(role(batch, 0, ux::BatchListModel::StatusRole).toString() == QStringLiteral("Outcome unknown"));
 	for (int i = 0; i < batch.count(); ++i) {
 		CHECK(role(batch, i, ux::BatchListModel::ResultRole).toMap().isEmpty());
 		CHECK(role(batch, i, ux::BatchListModel::HistoricalRole).toBool());
@@ -242,7 +251,7 @@ void boundedAdmissionAndHistory()
 	          .toMap()
 	          .value(QStringLiteral("succeeded"))
 	          .toBool());
-	CHECK(batch.responses()->rowCount() == 0);
+	CHECK(batch.values()->rowCount() == 0);
 }
 
 void reentrantDetach()
@@ -282,7 +291,7 @@ void reentrantInvalidation()
 		CHECK(role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
 		QObject context;
 		bool invalidated = false;
-		QObject::connect(batch.responses(), &QAbstractItemModel::modelAboutToBeReset, &context,
+		QObject::connect(batch.values(), &QAbstractItemModel::modelAboutToBeReset, &context,
 		                 [&] {
 			                 if (!std::exchange(invalidated, true)) {
 				                 if (retire)
@@ -293,7 +302,7 @@ void reentrantInvalidation()
 		                 });
 		CHECK(batch.select(0));
 		CHECK(invalidated && !role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
-		CHECK(batch.responses()->rowCount() == 0);
+		CHECK(batch.values()->rowCount() == 0);
 		CHECK(role(batch, 0, ux::BatchListModel::HistoricalRole).toBool() == retire);
 		CHECK(!role(batch, 0, ux::BatchListModel::ResultRole).toMap().isEmpty());
 	}
@@ -309,7 +318,7 @@ void externalModelInvalidation()
 	CHECK(batch.add(row) && batch.execute());
 	peer.finish();
 	batch.poll();
-	auto* values = batch.responses();
+	auto* values = batch.values();
 	const auto root = values->index(0, 0);
 	CHECK(root.isValid() && values->canFetchMore(root));
 	QObject context;
@@ -380,19 +389,18 @@ void severalRows()
 	CHECK(batch.clear() && batch.canAdd(fresh));
 }
 
-// A Command's or Service's values typed as name=value (BA-2): every argument
-// checked as Details would, its words, and the request's exact bytes. Config
-// stands in for a request with many kinds of value; Inspect's Request has one.
+// A Command's or Service's request as its arguments, for the "+" row's
+// right column. Config stands in for a request with many kinds of value;
+// Inspect's Request has one. The typed values (BA-2) are gone: values are set
+// on the item (BA-4b).
 void requestArguments()
 {
 	namespace ra = ux::request_arguments;
-	using Status = ra::Item::Status;
 	f::Backing backing;
 	const auto& schema = backing.schema;
 	const auto* config = schema.findField("device.Config");
 	const auto* inspect = schema.findService("device.Inspect");
 	CHECK(config && inspect);
-	const auto bytesOf = [](const ra::Result& result) { return result.request.toHex(); };
 	// The inputs, in order, with their types and choices.
 	const auto inputs = ra::arguments(schema, config->typeId);
 	CHECK(inputs.size() == 7 && inputs[0].name == "serial" && inputs[0].typeText == "u64" && inputs[0].scalar);
@@ -401,94 +409,10 @@ void requestArguments()
 	CHECK(inputs[6].name == "samples" && !inputs[6].scalar && inputs[6].typeText == "u16[300]");
 	CHECK(ra::signatureText(schema, inspect->typeId) == "(multiplier: u32)");
 	CHECK(ra::signatureText(schema, config->typeId) == "(serial: u64, offset: i64, gain: f32, precise: f64, …)");
-	// The tail: names and values, spaces around = allowed.
-	const auto given = ra::parse(u"a=1 b = 2  c= 3 d =4 5");
-	CHECK(given.size() == 5 && given[0].name == "a" && given[0].text == "1" && given[1].name == "b" && given[1].text == "2" &&
-	      given[2].name == "c" && given[2].text == "3" && given[3].name == "d" && given[3].text == "4" &&
-	      given[4].name.isEmpty() && given[4].text == "5");
-	// One argument: named, by its name in any case, or bare.
-	for (const auto* tail : {u"multiplier=7", u"MULTIPLIER = 7", u"7", u"0x7"}) {
-		const auto one = ra::check(schema, inspect->typeId, "device.Inspect", tail);
-		CHECK(one.ok() && bytesOf(one) == "07000000" && one.items[0].canonical == "7");
-	}
-	// Nothing given: what it needs; a value that is not one; a name it has not.
-	auto result = ra::check(schema, inspect->typeId, "device.Inspect", u"");
-	CHECK(!result.ok() && result.items[0].status == Status::Missing &&
-	      result.message == "device.Inspect needs multiplier (u32). Enter writes multiplier=; Ctrl+Enter fills it in Details.");
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=-1");
-	CHECK(!result.ok() && result.items[0].status == Status::Error &&
-	      result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF), not \"-1\".");
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=");
-	CHECK(result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF).");
-	// "name=" waits for its value: quiet, and Enter writes nothing more.
-	CHECK(result.error.isEmpty() && result.items[0].status == Status::Missing && result.next == "multiplier" &&
-	      result.adding.isEmpty());
-	// A name half typed is a name, not a value: Enter completes it.
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multi");
-	CHECK(result.error.isEmpty() && !result.unnamed && result.typing == "multi" && result.adding == "multiplier=" &&
-	      result.next == "multiplier");
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"");
-	CHECK(result.typing.isEmpty() && result.adding == " multiplier=");
-	// A fraction for an integer: whole numbers, said first.
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=2.5");
-	CHECK(result.message == "multiplier (u32) takes whole numbers, 0 to 4294967295 (0x00000000 to 0xFFFFFFFF), not \"2.5\".");
-	// A name with a value and one without: the names to type, and no
-	// promise that Enter writes them, since it cannot pair them.
-	result = ra::check(schema, schema.findField("device.Config")->typeId, "device.Config", u"serial=1 2");
-	CHECK(result.unnamed && result.named.isEmpty() && !result.message.contains("Enter"));
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplir=2");
-	CHECK(!result.ok() && result.message == "device.Inspect has no argument multiplir. Did you mean multiplier?");
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"size=2");
-	CHECK(result.message == "device.Inspect has no argument size; it takes multiplier.");
-	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=2 multiplier=3");
-	CHECK(result.message == "multiplier is given twice; keep one.");
-	// Several values with no names: never paired by order behind the user's back.
-	const auto gain = schema.findField("device.Config");
-	CHECK(gain);
-	result = ra::check(schema, config->typeId, "device.Config", u"1 2");
-	CHECK(result.unnamed && !result.ok() && result.named.startsWith("device.Config serial=1 offset=2 gain="));
-	// Many arguments: what is still missing; an enum by name or code; a
-	// struct's array argument goes to Details.
-	result = ra::check(schema, config->typeId, "device.Config", u"serial=1 offset=-2");
-	CHECK(result.message == "device.Config needs gain (f32), precise (f64), limit (u32) and 1 more too. Enter writes gain=." ||
-	      result.aggregate);
-	CHECK(result.items[0].status == Status::Ok && result.items[1].status == Status::Ok && result.items[1].canonical == "-2");
-	// An enum is said by its name; Details' editor takes its code.
-	result = ra::check(schema, config->typeId, "device.Config", u"mode=forward");
-	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Forward" && result.items[5].editorText == "12");
-	result = ra::check(schema, config->typeId, "device.Config", u"mode=-7");
-	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Reverse" && result.items[5].editorText == "-7");
-	result = ra::check(schema, config->typeId, "device.Config", u"mode=0x0C");
-	CHECK(result.items[5].status == Status::Ok && result.items[5].editorText == "12");
-	// An enum's name half typed, last on the line: quiet, and one name
-	// left, Enter writes it.
-	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fo");
-	CHECK(result.error.isEmpty() && result.items[5].status == Status::Missing && result.typing == "Fo" &&
-	      result.adding == "Forward " && result.message == "mode (enum) takes Reverse or Forward, or a code.");
-	// A "name=" waiting before other values: Enter writes nothing, never
-	// that name a second time.
-	result = ra::check(schema, config->typeId, "device.Config", u"serial= offset=1");
-	CHECK(result.error.isEmpty() && result.next == "serial" && result.adding.isEmpty() && result.typing.isEmpty());
-	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fast");
-	CHECK(result.items[5].status == Status::Error &&
-	      result.message == "mode (enum) takes Reverse or Forward, or a code, not \"Fast\".");
-	result = ra::check(schema, config->typeId, "device.Config",
-	                   u"serial=1 offset=-2 gain=1.5 precise=0.25 limit=0x10 mode=Forward");
-	CHECK(result.aggregate && !result.ok() &&
-	      result.message == "device.Config takes samples (u16[300]), which is filled in Details. Enter selects it there "
-	                        "with the values typed here; then Add selected draft.");
-	// Nothing typed: no "values typed here".
-	result = ra::check(schema, config->typeId, "device.Config", u"");
-	CHECK(result.aggregate &&
-	      result.message == "device.Config takes samples (u16[300]), which is filled in Details. Enter selects it there; "
-	                        "then Add selected draft.");
-	// A request that takes no input.
+	CHECK(ra::valueType(schema, inputs[5].type).enumeration && !ra::valueType(schema, inputs[6].type).valid());
+	// A request that takes no input has no arguments.
 	const auto* ping = schema.findService("device.Ping");
-	CHECK(ping);
-	result = ra::check(schema, ping->typeId, "device.Ping", u"");
-	CHECK(result.ok() && result.request.isEmpty());
-	result = ra::check(schema, ping->typeId, "device.Ping", u"now");
-	CHECK(!result.ok() && result.message == "device.Ping takes no input; remove \"now\".");
+	CHECK(ping && ra::signatureText(schema, ping->typeId) == "()");
 }
 
 // The Batch's steps (UR-1): add, remove, move and Clear held to UndoKinds'
@@ -497,6 +421,116 @@ void requestArguments()
 // back with no device, or after a reconnect, come back historical; moves of
 // one item within two seconds are one step; Execute is never a step, and a
 // step waits while a Batch is in flight.
+// A Service item of device.Inspect, its request at its initial values.
+ux::BatchRow serviceRow(Peer& peer)
+{
+	const auto* inspect = peer.storage->schema.findService("device.Inspect");
+	CHECK(inspect);
+	const auto bound = peer.storage->owner.bindService(inspect->id);
+	CHECK(bound);
+	ux::BatchRow row;
+	row.operation = cl::Operation::Service;
+	row.id = inspect->id;
+	row.session = peer.session;
+	row.name = QStringLiteral("device.Inspect");
+	row.requestType = bound.endpoint.requestType();
+	row.responseType = bound.endpoint.responseType();
+	row.responseBytes = bound.endpoint.responseBytes();
+	row.request = QByteArray(qsizetype(bound.endpoint.requestBytes()), '\0');
+	return row;
+}
+
+// The selected item's value of that name, its values loaded.
+QModelIndex itemValue(ux::DynamicBatch& batch, const QString& name)
+{
+	auto* values = batch.values();
+	const auto root = values->index(0, 0);
+	if (values->canFetchMore(root))
+		values->fetchMore(root);
+	for (int at = 0; at < values->rowCount(root); ++at) {
+		const auto index = values->index(at, 0, root);
+		if (values->data(index, ux::ValueModel::NameRole).toString() == name)
+			return index;
+	}
+	return {};
+}
+
+// BA-4a: the selected item as Details shows it - its request's values,
+// edited live into the item as one step per value, the line from its bytes,
+// what Execute sent and what changed since, and Read | Write as one step.
+void itemValues()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	ux::UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	batch.setHistory(&history);
+	const auto line = [&batch](int row) { return role(batch, row, ux::BatchListModel::LineRole).toString(); };
+	CHECK(batch.add(serviceRow(peer)));
+	// A new item is shown at once, its line made from its bytes.
+	CHECK(batch.selection() == 0 && batch.selectedRow() && line(0) == QStringLiteral("multiplier=0"));
+	auto multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(multiplier.isValid() && batch.canEdit() &&
+	      batch.values()->data(multiplier, ux::ValueModel::EditableRole).toBool());
+	// Live: a value is in the item as it is typed; its keystrokes are one step.
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("7")) && line(0) == QStringLiteral("multiplier=7"));
+	CHECK(history.undoText() == QStringLiteral("Set multiplier of item 1"));
+	const auto steps = history.count();
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("70")) && history.count() == steps);
+	CHECK(batch.values()->data(multiplier, ux::ValueModel::EditorTextRole).toString() == QStringLiteral("70"));
+	// Text that is no value leaves the item as it was.
+	CHECK(!batch.setScalarText(multiplier, QStringLiteral("abc")) && line(0) == QStringLiteral("multiplier=70"));
+	// The cell left, the next change is a step of its own.
+	batch.closeValue();
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("71")) && history.count() == steps + 1);
+	CHECK(history.undo() && line(0) == QStringLiteral("multiplier=70"));
+	CHECK(history.undo() && line(0) == QStringLiteral("multiplier=0") && batch.selection() == 0);
+	CHECK(history.redo() && line(0) == QStringLiteral("multiplier=70"));
+	// Bytes of another shape are refused; the right ones go in whole.
+	CHECK(!batch.setRequest(0, QByteArray("\x01", 1)) && line(0) == QStringLiteral("multiplier=70"));
+	CHECK(batch.setRequest(0, QByteArray::fromHex("05000000")) && line(0) == QStringLiteral("multiplier=5"));
+	// Before a run nothing is "changed since".
+	CHECK(!role(batch, 0, ux::BatchListModel::ChangedRole).toBool());
+	// Execute sends each item as it stands, and keeps what it sent.
+	CHECK(batch.execute() && peer.submitted.size() == 1 && peer.submitted[0].request.toHex() == "05000000");
+	CHECK(!batch.canEdit());
+	multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(!batch.setScalarText(multiplier, QStringLiteral("6")) && !batch.setRequest(0, QByteArray::fromHex("06000000")));
+	peer.finish();
+	batch.poll();
+	f::events();
+	CHECK(!role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      !role(batch, 0, ux::BatchListModel::AtRole).toString().isEmpty());
+	// A change after the run: changed since, and the value is marked unsent.
+	CHECK(batch.select(0));
+	multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("6")));
+	CHECK(role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("5")) && !role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      !batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
+	// A read made a write and back: one step each, the same uid, undone whole.
+	CHECK(batch.add(readRow(peer)) && batch.selection() == 1 && line(1).isEmpty());
+	const auto uid = batch.model()->rows()[1].uid;
+	auto write = readRow(peer);
+	write.operation = cl::Operation::FieldWrite;
+	write.requestType = write.responseType;
+	write.request = QByteArray(qsizetype(write.responseBytes), '\0');
+	CHECK(batch.replace(1, write, QStringLiteral("Make item 2 a write")));
+	CHECK(batch.model()->rows()[1].uid == uid && batch.model()->rows()[1].operation == cl::Operation::FieldWrite &&
+	      history.undoText() == QStringLiteral("Make item 2 a write") && batch.canEdit());
+	CHECK(history.undo() && batch.model()->rows()[1].operation == cl::Operation::FieldRead &&
+	      batch.model()->rows()[1].uid == uid);
+	CHECK(history.redo() && batch.model()->rows()[1].operation == cl::Operation::FieldWrite);
+	// Items of an earlier connection keep their values: nothing to edit.
+	++peer.session;
+	batch.setSource(peer.source());
+	CHECK(batch.select(0) && !batch.canEdit() && batch.values()->rowCount() == 0 &&
+	      !batch.setRequest(0, QByteArray::fromHex("01000000")));
+}
+
 void batchUndoKinds()
 {
 	Peer peer;
@@ -555,8 +589,31 @@ void batchUndoKinds()
 		CHECK(batch.move(1, 1));
 	});
 	add("clear", [&] { CHECK(batch.clear()); });
+	// A value set in an item (BA-4a): the request comes back. An item of an
+	// earlier connection is never changed again: its step is skipped.
+	const auto startRequest = [&] {
+		if (!peer.current)
+			back();
+		CHECK(batch.clear());
+		CHECK(batch.add(serviceRow(peer)));
+		history.clear();
+		now += 10000;
+	};
+	const auto requests = [&batch] {
+		QStringList all;
+		for (const auto& row : batch.model()->rows())
+			all << QStringLiteral("%1:%2:%3").arg(row.uid).arg(QString::fromLatin1(row.request.toHex())).arg(row.line);
+		return QVariant(all);
+	};
+	cases.push_back({QStringLiteral("batch.request"), QStringLiteral("set a value"), &history, startRequest,
+	                 [&] { CHECK(batch.setScalarText(itemValue(batch, QStringLiteral("multiplier")), QStringLiteral("9"))); },
+	                 requests, {}, {}, otherSession,
+	                 [](const QString& outcome, const QString& note) {
+		                 return outcome == QStringLiteral("skipped") &&
+		                        note == QStringLiteral("the item is from an earlier connection");
+	                 }});
 	const auto report = undo_kinds::run(QStringLiteral("dynamic_batch"), cases);
-	CHECK(report.cases == 5 && report.disconnects == 5 && report.descriptors == 5);
+	CHECK(report.cases == 6 && report.disconnects == 5 && report.descriptors == 6);
 
 	// The words, each with its serial.
 	start();
@@ -598,6 +655,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	requestArguments();
+	itemValues();
 	orderedOwnedResults();
 	boundedAdmissionAndHistory();
 	reentrantDetach();

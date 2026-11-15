@@ -284,7 +284,8 @@ int main(int argc, char** argv)
 					               item->property("value").toString().startsWith(
 					                   QStringLiteral("230.1"));
 				        });
-				    if (endpointRows == 0 || valueRows < 4 || !voltage) {
+				    // The smoke Field's three members; Details shows no root row.
+				    if (endpointRows == 0 || valueRows < 3 || !voltage) {
 					    std::fprintf(
 					        stderr,
 					        "Inspector delegates missing: endpoints=%d values=%d voltage=%d\n",

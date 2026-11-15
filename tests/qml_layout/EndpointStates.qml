@@ -8,6 +8,15 @@ Window {
     width: 360
     height: 640
     ListModel { id: emptyValues }
+    // A Field's read values, flat: the rows of the family (BA-4·0b).
+    ListModel {
+        id: readValues
+        objectName: "readValues"
+        ListElement { name: "Gain"; detail: "f32"; value: "1.5"; typeText: "f32"; isAggregate: false; childCount: 0; loadedCount: 0; editable: true; editorText: "1.5"; takes: "Enter a number." }
+        ListElement { name: "Counter"; detail: "u64"; value: "18446744073709551615"; typeText: "u64"; isAggregate: false; childCount: 0; loadedCount: 0; editable: true; editorText: "18446744073709551615"; takes: "Enter a number from 0 to 18,446,744,073,709,551,615." }
+        ListElement { name: "Enabled"; detail: "bool"; value: "true"; typeText: "bool"; isAggregate: false; childCount: 0; loadedCount: 0; editable: true; editorText: "true"; takes: "Enter true or false." }
+        ListElement { name: "Name"; detail: "u8[8]"; value: "8 children"; typeText: "u8[8]"; isAggregate: true; childCount: 8; loadedCount: 0; editable: false; editorText: ""; takes: "" }
+    }
     ListModel { id: emptyResponses }
     QtObject {
         id: fake

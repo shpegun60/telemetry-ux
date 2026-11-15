@@ -292,8 +292,9 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	CHECK(provider.selectionInfo().value(QStringLiteral("readable")).toBool());
 	ui.page("details", 320, 820);
 	auto* tree = control(ui.details, "metadataTree");
-	CHECK(QMetaObject::invokeMethod(tree, "expand", Q_ARG(int, 0)));
+	// The Field's members are the top rows: no root row (family spec C).
 	CHECK(await([&] { return visual(tree, QStringLiteral("endpointRow"), QStringLiteral("name"), QStringLiteral("Gain")); }));
+	CHECK(!visual(tree, QStringLiteral("endpointRow"), QStringLiteral("name"), QStringLiteral("Config")));
 	CHECK(control(tree, "endpointRow", "name", QStringLiteral("Gain"))->property("typeText").toString() == "f32");
 	const auto root = provider.definitions()->index(0, 0, provider.definitionRootIndex());
 	CHECK(root.isValid());
@@ -308,8 +309,9 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	}
 	geometry(*ui.window, tree, 200);
 	geometry(*ui.window, control(ui.details, "endpointSelectionInfo"));
-	geometry(*ui.window, control(ui.details, "definitionUnreadNote"));
-	for (const auto& name : {"Config", "Gain", "Counter"}) {
+	geometry(*ui.window, control(ui.details, "endpointStatusLine"));
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString() == QStringLiteral("Not read yet"));
+	for (const auto& name : {"Gain", "Counter"}) {
 		auto* row = control(tree, "endpointRow", "name", QString::fromLatin1(name));
 		std::printf("Metadata geometry %s width=%.1f height=%.1f implicit=%.1f twoLines=%d\n", name,
 		    row->width(), row->height(), row->implicitHeight(), row->property("twoLines").toBool());
@@ -508,6 +510,11 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(await([&] { return !provider.busy() && peer.nativeWrites() == writes + 1; }));
 	CHECK(value(provider, "Enabled", ux::ValueModel::ValueRole) == "false");
 	CHECK(!provider.editing());
+	// The write's outcome, with its time, on the status line (family spec C).
+	CHECK(await([&] {
+		const auto line = control(ui.details, "endpointStatusLine")->property("text").toString();
+		return line.startsWith(QStringLiteral("Applied ")) && line.endsWith(QStringLiteral("read back"));
+	}));
 	std::puts("Endpoint editor journey: Apply true");
 	CHECK(!visual(ui.details, QStringLiteral("applyButton")));
 	ui.choose("Enabled", 1, "true"); CHECK(value(provider, "Enabled") == "true");
@@ -523,15 +530,18 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	click(*ui.window, control(ui.details, "executeButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeCommands() == commands + 1; }));
 	CHECK(peer.executedCommands() == 1 && !provider.commandOutcome().isEmpty());
-	CHECK(control(ui.details, "commandOutcomeLabel"));
+	// The outcome is on the status line, with its time (family spec C).
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString().startsWith(QStringLiteral("Executed ")));
 	std::puts("Endpoint editor journey: Service");
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Transform"))));
 	CHECK(provider.serviceSelected());
 	ui.enter("Gain", "0.1");
 	ui.choose("Enabled", 0, "false");
-	// Canonical zero is unnamed in this enum. Select Idle (-7), then explicitly
+	// A request's enum starts at its first name (BA-4b, the SDK's one
+	// builder): Idle (-7), never an unnamed zero. Choose it, then explicitly
 	// enter another numeric code through the real ComboBox/manual-code control.
-	ui.choose("OperatingMode", 1, "Idle (-7)");
+	CHECK(value(provider, "OperatingMode") == "-7");
+	ui.choose("OperatingMode", 0, "Idle (-7)");
 	CHECK(value(provider, "OperatingMode") == "-7");
 	click(*ui.window, control(ui.valueRow("OperatingMode"), "valueText"));
 	auto* enumChoice = control(ui.valueRow("OperatingMode"), "valueChoice");
@@ -553,13 +563,13 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(control(responseTree, "responseRow", "name", QStringLiteral("Enabled"))->property("value").toString() == "false");
 	CHECK(control(responseTree, "responseRow", "name", QStringLiteral("OperatingMode"))->property("value").toString() == "-123 (unknown)");
 	CHECK(control(responseTree, "responseRow", "name", QStringLiteral("Gain"))->property("value").toString().startsWith(QStringLiteral("0.100000001")));
-	CHECK(!visual(ui.details, QStringLiteral("commandOutcomeLabel")));
-	CHECK(control(ui.details, "serviceOutcomeLabel")); ui.capture("service-request-response-880");
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString().startsWith(QStringLiteral("Called ")));
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString().endsWith(QStringLiteral(" ms")));
+	ui.capture("service-request-response-880");
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Config"))));
 	settle();
 	CHECK(!visual(ui.details, QStringLiteral("responseTree")));
-	CHECK(!visual(ui.details, QStringLiteral("serviceOutcomeLabel")));
-	CHECK(!visual(ui.details, QStringLiteral("commandOutcomeLabel")));
+	CHECK(!control(ui.details, "endpointStatusLine")->property("text").toString().startsWith(QStringLiteral("Called ")));
 	CHECK(!provider.serviceOutcome().isEmpty() && !provider.commandOutcome().isEmpty());
 	const auto finalCommands = peer.nativeCommands(), finalServices = peer.nativeServices();
 	session.disconnect(); settle(200);

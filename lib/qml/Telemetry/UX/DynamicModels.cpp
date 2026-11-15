@@ -259,6 +259,8 @@ struct Reader {
 	bool response = false;
 	const WorkbenchView* view = nullptr;
 	const ins::SnapshotStore* snapshot = nullptr;
+	// A request editor's draft, read and written by its owner.
+	const telemetry::integration::workbench::RequestEditor* draft = nullptr;
 
 	template<class F>
 	decltype(auto) edit(F&& read) const
@@ -270,6 +272,8 @@ struct Reader {
 
 	bool requestEditor() const
 	{
+		if (draft)
+			return true;
 		return editor && (workbench || view) && edit([](const auto& model) {
 			       return model.commandSelected() || model.serviceSelected();
 		       });
@@ -277,7 +281,7 @@ struct Reader {
 
 	explicit operator bool() const noexcept
 	{
-		return inspector || workbench || view || snapshot;
+		return inspector || workbench || view || snapshot || draft;
 	}
 
 	template<class F>
@@ -292,6 +296,8 @@ struct Reader {
 
 	bool isCurrent() const
 	{
+		if (draft)
+			return draft->current();
 		if (snapshot)
 			return snapshot->isCurrent();
 		return *this && visit([](const auto& model) {
@@ -301,6 +307,8 @@ struct Reader {
 
 	auto snapshotInfo() const
 	{
+		if (draft)
+			return draft->snapshotInfo();
 		if (snapshot)
 			return snapshot->snapshotInfo();
 		if (response && (workbench || view))
@@ -318,6 +326,8 @@ struct Reader {
 
 	auto info(const ins::NodeHandle& node) const
 	{
+		if (draft)
+			return draft->info(node);
 		if (snapshot)
 			return snapshot->info(node);
 		if (response && (workbench || view))
@@ -335,6 +345,8 @@ struct Reader {
 
 	auto child(const ins::NodeHandle& node, std::uint32_t index) const
 	{
+		if (draft)
+			return draft->child(node, index);
 		if (snapshot)
 			return snapshot->child(node, index);
 		if (response && (workbench || view))
@@ -352,6 +364,8 @@ struct Reader {
 
 	auto root() const
 	{
+		if (draft)
+			return draft->root();
 		if (snapshot)
 			return snapshot->root();
 		if (response && (workbench || view))
@@ -383,14 +397,28 @@ struct Reader {
 
 	bool editing() const
 	{
+		if (draft)
+			return true;
 		return !response && (workbench || view) && edit([](const auto& model) {
 			return model.editing() &&
 			       model.phase() != telemetry::integration::workbench::Phase::Executing;
 		});
 	}
 
+	// The value read, under a Field's draft.
+	ins::Result<ins::ScalarValue> readScalar(const ins::NodeHandle& node) const
+	{
+		if (snapshot || response || !(workbench || view))
+			return {ins::ModelStatus::NoSnapshot, {}};
+		return visit([&](const auto& model) {
+			return model.scalar(node);
+		});
+	}
+
 	ins::Result<ins::ScalarValue> scalar(const ins::NodeHandle& node) const
 	{
+		if (draft)
+			return draft->scalar(node);
 		if (snapshot)
 			return snapshot->scalar(node);
 		if (response && (workbench || view))
@@ -778,6 +806,8 @@ QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
 	    {QStringLiteral("name"), row->name},         {QStringLiteral("path"), row->path},
 	    {QStringLiteral("typeId"), row->typeId},     {QStringLiteral("typeText"), row->type},
 	    {QStringLiteral("wireBytes"), row->wireBytes},
+	    // Details' line 2: "Field · f32 · 4 bytes · read only".
+	    {QStringLiteral("detail"), endpointDetail(*row)},
 	    {QStringLiteral("accessText"), row->accessText}, {QStringLiteral("unit"), unit},
 	    {QStringLiteral("responseTypeId"), row->responseTypeId},
 	    {QStringLiteral("responseTypeText"), row->responseTypeText},
@@ -1172,7 +1202,34 @@ struct ValueModel::Impl {
 	int category = 0;
 	quint32 endpointId = 0;
 	detail::ScalarEditorMetadata metadata;
-	bool offer = false;
+	bool offer = false, stale = false;
+	QString staleNote;
+	// The values sent last, by path ("" for a scalar root, "factor", "a.b[2]").
+	QHash<QString, QString> baseline;
+
+	static QString pathKey(const QVariantList& path)
+	{
+		QStringList parts;
+		for (const auto& step : path)
+			parts << (step.typeId() == QMetaType::QString ? step.toString()
+			                                              : QLatin1Char('[') + step.toString() + QLatin1Char(']'));
+		return parts.join(QLatin1Char('.')).replace(QStringLiteral(".["), QStringLiteral("["));
+	}
+
+	// A draft's value against the value read, or a value against the one sent.
+	bool unsent(const Row& row) const
+	{
+		if (!row.scalar)
+			return false;
+		if (!baseline.isEmpty()) {
+			const auto found = baseline.constFind(pathKey(row.valuePath));
+			return found != baseline.cend() && *found != row.editorText;
+		}
+		if (!inspector.editing() || inspector.requestEditor())
+			return false;
+		const auto read = inspector.readScalar(row.handle);
+		return read && scalarNumberText(read.value) != row.editorText;
+	}
 
 	// A row takes text: in a draft or a request editor, or a Field's value
 	// while its owner offers an edit.
@@ -1194,6 +1251,9 @@ struct ValueModel::Impl {
 
 	bool metadataCurrent() const
 	{
+		// A draft's owner sets the schema's metadata before each draft it shows.
+		if (inspector.draft)
+			return inspector.isCurrent();
 		if (!inspector || inspector.snapshot || !inspector.isCurrent())
 			return false;
 		detail::ScalarEditorMetadata::EndpointIdentity identity{};
@@ -1217,10 +1277,16 @@ void ValueModel::clear()
 	if (changing())
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
+	const bool wasStale = impl_->stale;
 	beginResetModel();
 	impl_->tree.clear();
 	impl_->inspector = {};
+	impl_->baseline.clear();
+	impl_->stale = false;
+	impl_->staleNote.clear();
 	endResetModel();
+	if (wasStale)
+		Q_EMIT staleChanged();
 }
 
 bool ValueModel::changing() const noexcept
@@ -1292,20 +1358,30 @@ void ValueModel::resetSnapshot(const ins::SnapshotStore& snapshot)
 	resetSource(nullptr, nullptr, false, nullptr, &snapshot);
 }
 
+void ValueModel::resetDraft(const telemetry::integration::workbench::RequestEditor& editor)
+{
+	resetSource(nullptr, nullptr, false, nullptr, nullptr, &editor);
+}
+
 void ValueModel::resetServiceResponse(const WorkbenchView& view)
 {
 	resetSource(nullptr, nullptr, true, &view);
 }
 
 void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbench, bool response,
-                             const WorkbenchView* view, const ins::SnapshotStore* snapshotSource)
+                             const WorkbenchView* view, const ins::SnapshotStore* snapshotSource,
+                             const telemetry::integration::workbench::RequestEditor* draft)
 {
 	if (changing())
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
+	const bool wasStale = impl_->stale;
 	beginResetModel();
 	impl_->tree.clear();
-	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource};
+	impl_->baseline.clear();
+	impl_->stale = false;
+	impl_->staleNote.clear();
+	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource, draft};
 	const auto snapshot = impl_->inspector.snapshotInfo();
 	impl_->admission = snapshot.admission;
 	impl_->revision = snapshot.revision;
@@ -1323,6 +1399,8 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 		}
 	}
 	endResetModel();
+	if (wasStale)
+		Q_EMIT staleChanged();
 }
 
 QModelIndex ValueModel::index(int row, int column, const QModelIndex& parent) const
@@ -1379,6 +1457,12 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return static_cast<int>(row->children.size());
 		case EditableRole:
 			return impl_->editable(*row);
+		case UnsentRole:
+			return impl_->unsent(*row);
+		case StaleRole:
+			return impl_->stale;
+		case StaleNoteRole:
+			return impl_->staleNote;
 		case TakesRole: {
 			if (!row->scalar)
 				return QString{};
@@ -1430,7 +1514,118 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {EditorChoicesTruncatedRole, "editorChoicesTruncated"},
 	        {CanonicalTextRole, "canonicalText"},
 	        {TypeTextRole, "typeText"},
-	        {TakesRole, "takes"}};
+	        {TakesRole, "takes"},
+	        {UnsentRole, "unsent"},
+	        {StaleRole, "stale"},
+	        {StaleNoteRole, "staleNote"}};
+}
+
+QHash<QString, QString> ValueModel::texts() const
+{
+	QHash<QString, QString> out;
+	if (!impl_->current())
+		return out;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->scalar)
+			out.insert(Impl::pathKey(row->valuePath), row->editorText);
+	return out;
+}
+
+void ValueModel::setBaseline(const QHash<QString, QString>& sent)
+{
+	impl_->baseline = sent;
+	if (changing())
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->scalar)
+			indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {UnsentRole});
+	}
+}
+
+void ValueModel::clearBaseline()
+{
+	impl_->baseline.clear();
+}
+
+bool ValueModel::hasBaseline() const noexcept
+{
+	return !impl_->baseline.isEmpty();
+}
+
+QString ValueModel::baselineLine() const
+{
+	QStringList parts;
+	const auto* roots = impl_->tree.children(this, {});
+	const std::vector<std::unique_ptr<Row>>* top = roots;
+	// A struct's members, not its root row.
+	if (roots && roots->size() == 1 && (*roots)[0]->aggregate)
+		top = &(*roots)[0]->children;
+	if (!top)
+		return {};
+	for (const auto& row : *top) {
+		const auto found = impl_->baseline.constFind(Impl::pathKey(row->valuePath));
+		if (found == impl_->baseline.cend())
+			continue;
+		parts << (row->valuePath.isEmpty() ? *found : row->name + QLatin1Char('=') + *found);
+		if (parts.size() == 4)
+			break;
+	}
+	return parts.join(QLatin1Char(' '));
+}
+
+int ValueModel::unsentCount() const
+{
+	if (!impl_->current())
+		return 0;
+	int count = 0;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		count += impl_->unsent(*row) ? 1 : 0;
+	return count;
+}
+
+void ValueModel::setStale(bool stale, const QString& note)
+{
+	if (impl_->stale == stale && impl_->staleNote == note)
+		return;
+	impl_->stale = stale;
+	impl_->staleNote = note;
+	Q_EMIT staleChanged();
+	if (changing())
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {StaleRole, StaleNoteRole});
+	}
+}
+
+bool ValueModel::stale() const noexcept
+{
+	return impl_->stale;
+}
+
+QString ValueModel::staleNote() const
+{
+	return impl_->staleNote;
+}
+
+QModelIndex ValueModel::contentRoot() const
+{
+	if (impl_->tree.roots.size() != 1 || !impl_->tree.roots.front()->aggregate || !impl_->current())
+		return {};
+	return createIndex(0, 0, impl_->tree.roots.front()->token);
 }
 
 void ValueModel::setEditOffer(bool offered)
@@ -1483,7 +1678,7 @@ void ValueModel::updateScalar(const QModelIndex& index)
 	row->value = scalarText(scalar.value);
 	row->editorText = scalarNumberText(scalar.value);
 	row->canonicalText = row->editorText;
-	Q_EMIT dataChanged(index, index, {ValueRole, EditorTextRole, CanonicalTextRole});
+	Q_EMIT dataChanged(index, index, {ValueRole, EditorTextRole, CanonicalTextRole, UnsentRole});
 }
 
 bool ValueModel::canFetchMore(const QModelIndex& parent) const

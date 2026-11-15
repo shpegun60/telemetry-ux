@@ -581,7 +581,7 @@ static void actualExampleInputJourney()
 	select(config, "Ping");
 	events();
 	// A Service that takes nothing says so in a caption, with no empty table.
-	CHECK(control(configPanel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("No arguments."));
+	CHECK(control(configPanel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("Takes no request values."));
 	// Before a call the Response heading says how to fill it, on its own line.
 	CHECK(control(configPanel, "emptyResponseLabel")->property("text").toString() ==
 	      QStringLiteral("Call to see the response."));

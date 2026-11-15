@@ -8,7 +8,10 @@
 //
 // The adapter: check(text) -> {status, message, ...}; candidates(text) ->
 // [{path, completion?, kind?, typeText, note?, watched?, container, next?,
-// values?}]; add(lines) -> {notice, undoable, serial, clear} (serial: the
+// values?, section?}], with headings among them where an adapter groups its
+// candidates - {heading: true, path (the heading's words), completion (what
+// a click writes), count, shown} - which the keys skip (the Batch's Fields,
+// Commands and Services); add(lines) -> {notice, undoable, serial, clear} (serial: the
 // step the addition recorded, 0 when none); enter(text) -> true
 // when it handled Enter itself (before the row adds).
 import QtQuick
@@ -35,6 +38,9 @@ FocusScope {
     property bool hideWhileTyping: true
     // The suggestions' widest; a full-width field need not make them so.
     property real popupMaxWidth: Number.POSITIVE_INFINITY
+    // The suggestions open by themselves on an empty field; without it, Down
+    // opens them (the Batch's first of each kind).
+    property bool openOnEmpty: true
     // Says what an addition did, on the panel's notice line, and the step it
     // recorded (UR-1), 0 when none.
     signal added(string notice, bool undoable, int serial)
@@ -84,18 +90,41 @@ FocusScope {
             field.forceActiveFocus()
         }
     }
+    // A heading among the candidates: never highlighted, never added.
+    function isHeading(c) {
+        return c !== undefined && c !== null && c.heading === true
+    }
+    // The first candidate that is not a heading, from index on in step (+1
+    // or -1); -1 when there is none.
+    function pickFrom(index, step) {
+        for (let at = index; at >= 0 && at < candidates.length; at += step)
+            if (!isHeading(candidates[at]))
+                return at
+        return -1
+    }
+    function firstPick() {
+        return pickFrom(0, 1)
+    }
+    // "Commands, 2 found", or "Fields, 8 of 120 shown".
+    function headingName(c) {
+        return c.shown !== undefined && c.shown < c.count ? qsTr("%1, %L2 of %L3 shown").arg(c.path).arg(c.shown).arg(c.count)
+                                                          : qsTr("%1, %L2 found").arg(c.path).arg(c.count || 0)
+    }
     function candidateName(index) {
         const c = candidates[index]
         if (!c)
             return ""
+        if (isHeading(c))
+            return headingName(c)
         return [completionOf(c), c.kind || "", c.typeText || "", c.note || ""].filter(part => part.length > 0).join(", ")
     }
     function refresh() {
         candidates = editing ? adapter.candidates(field.text) : []
         highlighted = -1
         const typed = field.text.trim()
-        if (editing && candidates.length > 0 && field.activeFocus
-                && !(candidates.length === 1 && completionOf(candidates[0]) === typed)) {
+        const picks = candidates.filter(c => !isHeading(c))
+        if (editing && picks.length > 0 && field.activeFocus && (openOnEmpty || typed.length > 0)
+                && !(picks.length === 1 && completionOf(picks[0]) === typed)) {
             popup.place()
             popup.open()
         }
@@ -108,11 +137,11 @@ FocusScope {
     }
     // The suggestions opened on the first of them, for Enter to take.
     function offer() {
-        if (candidates.length === 0)
+        if (firstPick() < 0)
             return false
         popup.place()
         popup.open()
-        highlighted = 0
+        highlighted = firstPick()
         return true
     }
     // A container's path with the step into it: "." or "[" after it, unless
@@ -122,9 +151,8 @@ FocusScope {
         return path.endsWith(".") || path.endsWith("[") ? path : path + (c.next || ".")
     }
     // A candidate chosen: a container gets "." or "[" and the next step's
-    // candidates; one that continues (a Command's arguments, BA-2) takes its
-    // follow text and shows what comes next; a value fills the field,
-    // waiting for Enter.
+    // candidates; a heading writes its kind word before the text and lists
+    // that kind; a value fills the field, waiting for Enter.
     function choose(index) {
         const c = candidates[index]
         if (!c)
@@ -135,28 +163,25 @@ FocusScope {
             text = text.substring(0, text.lastIndexOf("[") + 1)
         else if (c.container)
             text = into(c)
-        else if (c.follow)
-            text = text + c.follow
         field.text = text
         field.cursorPosition = text.length
         refresh()
         recheck()
-        if (!c.container && !c.continues)
+        if (!c.container && !isHeading(c))
             popup.close()
     }
     // The candidates' common prefix, for Tab.
     function common() {
         if (candidates.length === 0)
             return field.text
+        const picks = candidates.filter(c => !isHeading(c))
+        if (picks.length === 0)
+            return field.text
         // One container left: into it.
-        if (candidates.length === 1 && candidates[0].container && completionOf(candidates[0]).indexOf(" … ") < 0)
-            return into(candidates[0])
+        if (picks.length === 1 && picks[0].container && completionOf(picks[0]).indexOf(" … ") < 0)
+            return into(picks[0])
         const typed = field.text.trim()
-        // One left, typed whole, that goes on: its follow text (a space
-        // before a Command's arguments).
-        if (candidates.length === 1 && candidates[0].follow && completionOf(candidates[0]) === typed)
-            return typed + candidates[0].follow
-        const starting = candidates.map(c => completionOf(c))
+        const starting = picks.map(c => completionOf(c))
                                    .filter(path => path.startsWith(typed) && path.indexOf(" … ") < 0)
         if (starting.length === 0)
             return field.text
@@ -166,8 +191,7 @@ FocusScope {
                 prefix = prefix.substring(0, prefix.length - 1)
         return prefix.length > field.text.length ? prefix : field.text
     }
-    // The line as an adapter writes it (BA-2): the next "name=", or values
-    // with their names written in; the suggestions follow it.
+    // The line as an adapter writes it; the suggestions follow it.
     function setText(value) {
         field.text = value
         field.cursorPosition = value.length
@@ -258,16 +282,24 @@ FocusScope {
                 }
                 Keys.onPressed: event => {
                     if (event.key === Qt.Key_Down) {
+                        // An empty field lists what there is first (the Batch's
+                        // first of each kind).
+                        if (addRow.candidates.length === 0 && text.trim().length === 0)
+                            addRow.candidates = addRow.adapter.candidates(text)
                         if (!popup.visible && addRow.candidates.length > 0) {
                             popup.place()
                             popup.open()
                         }
-                        addRow.highlighted = Math.min(addRow.highlighted + 1, addRow.candidates.length - 1)
+                        // The headings are skipped.
+                        const next = addRow.pickFrom(addRow.highlighted + 1, 1)
+                        if (next >= 0)
+                            addRow.highlighted = next
                         event.accepted = true
                     } else if (event.key === Qt.Key_Up) {
-                        if (addRow.highlighted > 0)
-                            addRow.highlighted -= 1
-                        else if (addRow.highlighted === 0)
+                        const previous = addRow.highlighted > 0 ? addRow.pickFrom(addRow.highlighted - 1, -1) : -1
+                        if (previous >= 0)
+                            addRow.highlighted = previous
+                        else if (addRow.highlighted >= 0)
                             addRow.highlighted = -1
                         else {
                             popup.close()
@@ -292,18 +324,14 @@ FocusScope {
                             addRow.highlighted = -1
                         }
                         addRow.recheck()
-                        // Ctrl+Enter: an adapter's other way (the Batch: to Details).
-                        if ((event.modifiers & Qt.ControlModifier) && typeof addRow.adapter.select === "function") {
-                            popup.close()
-                            addRow.adapter.select(text)
-                        } else if (popup.visible && addRow.highlighted >= 0) {
+                        if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
                         } else if (addRow.adapter.enter(text)) {
                             // the adapter did what Enter means for it
                         } else if (addRow.check.status === "missing" && checkLine.typing) {
                             // A path the suggestions go on from is half typed, not
                             // one a device lacks: Enter takes the first of them.
-                            addRow.choose(0)
+                            addRow.choose(addRow.firstPick())
                         } else if (addRow.addStatuses.indexOf(addRow.check.status) >= 0) {
                             addRow.add([text])
                         }
@@ -356,7 +384,8 @@ FocusScope {
                         required property int index
                         width: candidateList.width
                         height: Type.rowHeight
-                        readonly property bool group: modelData.path.endsWith(".") || modelData.kindCode === "group"
+                        readonly property bool heading: addRow.isHeading(modelData)
+                        readonly property bool group: !heading && (modelData.path.endsWith(".") || modelData.kindCode === "group")
                         readonly property bool chosen: index === addRow.highlighted
                         // A word after the path: "watched", "in Batch".
                         readonly property string note: typeof modelData.note === "string" && modelData.note.length > 0
@@ -364,7 +393,9 @@ FocusScope {
                         readonly property string detail: candidate.group
                             ? (modelData.values === undefined ? qsTr("group")
                                : modelData.values === 1 ? qsTr("1 Field") : qsTr("%L1 Fields").arg(modelData.values))
-                            : [modelData.kind || "", modelData.typeText || ""].filter(part => part.length > 0).join("  ")
+                            // Under a heading the kind goes without saying.
+                            : [modelData.section !== undefined ? "" : modelData.kind || "", modelData.typeText || ""]
+                                  .filter(part => part.length > 0).join("  ")
                         Rectangle {
                             anchors.fill: parent
                             color: candidate.chosen ? Theme.stateSelected : pick.hovered ? Theme.stateHover : "transparent"
@@ -372,9 +403,40 @@ FocusScope {
                         HoverHandler { id: pick }
                         TapHandler {
                             onTapped: addRow.choose(candidate.index)
-                            onDoubleTapped: if (!candidate.modelData.container) addRow.add([addRow.completionOf(candidate.modelData)])
+                            onDoubleTapped: if (!candidate.modelData.container && !candidate.heading)
+                                addRow.add([addRow.completionOf(candidate.modelData)])
+                        }
+                        // A heading: "Commands  2", a click shows that kind only.
+                        RowLayout {
+                            visible: candidate.heading
+                            anchors.fill: parent
+                            anchors.leftMargin: Type.padding
+                            anchors.rightMargin: Type.padding
+                            spacing: Type.spacing
+                            Text {
+                                textFormat: Text.PlainText
+                                text: candidate.modelData.path
+                                font.pointSize: Type.caption
+                                font.weight: Type.headingWeight
+                                color: Theme.textSecondary
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                textFormat: Text.PlainText
+                                text: candidate.modelData.shown !== undefined && candidate.modelData.shown < candidate.modelData.count
+                                      ? qsTr("%L1 of %L2").arg(candidate.modelData.shown).arg(candidate.modelData.count)
+                                      : qsTr("%L1").arg(candidate.modelData.count || 0)
+                                font.pointSize: Type.caption
+                                color: Theme.textMuted
+                            }
+                            PlainToolTip {
+                                visible: candidate.heading && pick.hovered
+                                delay: 700
+                                text: qsTr("Show only %1 - or type \"%2 \" first").arg(candidate.modelData.path).arg(candidate.modelData.word || "")
+                            }
                         }
                         RowLayout {
+                            visible: !candidate.heading
                             anchors.fill: parent
                             anchors.leftMargin: Type.padding
                             anchors.rightMargin: Type.padding
@@ -403,9 +465,10 @@ FocusScope {
                                 color: candidate.chosen ? Theme.selectedForeground : Theme.textMuted
                             }
                         }
-                        Accessible.role: Accessible.ListItem
-                        Accessible.name: [candidate.modelData.path, candidate.detail, candidate.note]
-                            .filter(part => (part || "").length > 0).join(", ")
+                        Accessible.role: candidate.heading ? Accessible.Heading : Accessible.ListItem
+                        Accessible.name: candidate.heading ? addRow.headingName(candidate.modelData)
+                            : [candidate.modelData.path, candidate.detail, candidate.note]
+                                .filter(part => (part || "").length > 0).join(", ")
                     }
                 }
             }
@@ -414,7 +477,8 @@ FocusScope {
         Label {
             id: checkLine
             objectName: addRow.namePrefix + "Check"
-            readonly property bool typing: addRow.candidates.some(c => addRow.completionOf(c).startsWith(field.text.trim())
+            readonly property bool typing: addRow.candidates.some(c => !addRow.isHeading(c)
+                                                                  && addRow.completionOf(c).startsWith(field.text.trim())
                                                                   && addRow.completionOf(c) !== field.text.trim())
             visible: addRow.editing && text.length > 0
                      && !(addRow.hideWhileTyping && typing && addRow.typingStatuses.indexOf(addRow.check.status) < 0)

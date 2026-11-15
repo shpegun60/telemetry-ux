@@ -70,6 +70,18 @@ int nameRank(const QString& path, const QStringList& terms)
 	return last.startsWith(terms.last().toCaseFolded()) ? 1 : 2;
 }
 
+int kindCategory(const QString& word)
+{
+	const auto folded = word.toCaseFolded();
+	if (folded == QLatin1String("read") || folded == QLatin1String("field") || folded == QLatin1String("fields"))
+		return 1;
+	if (folded == QLatin1String("command") || folded == QLatin1String("commands"))
+		return 2;
+	if (folded == QLatin1String("service") || folded == QLatin1String("services"))
+		return 3;
+	return 0;
+}
+
 QString kindWord(int category)
 {
 	switch (category) {
@@ -92,15 +104,13 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	int category = 0;
 	const auto space = text.indexOf(QLatin1Char(' '));
 	if (space > 0) {
-		const auto first = text.left(space).toCaseFolded();
-		category = first == QLatin1String("read") ? 1 : first == QLatin1String("command") ? 2
-		         : first == QLatin1String("service") ? 3 : 0;
+		category = kindCategory(text.left(space));
 		if (category)
 			text = text.mid(space + 1).trimmed();
 	}
-	// A Command's or a Service's values after its path or name (BA-2): the
-	// first word names it when it names a Command or a Service and nothing
-	// else; the rest are its values.
+	// Words after a Command's or a Service's path or name: the first word
+	// names it when it names a Command or a Service and nothing else; the
+	// rest are values, which are set on the item, not here (BA-4b).
 	if (const auto gap = text.indexOf(QRegularExpression(QStringLiteral("\\s"))); gap > 0) {
 		const auto target = text.left(gap);
 		bool callable = false, other = false;
@@ -122,7 +132,7 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	pick.path = text;
 	if (text.contains(QLatin1Char('='))) {
 		pick.status = QStringLiteral("error");
-		pick.message = tr("A Batch item found by name reads. To write a value, select the Field, write it in Details, then Add selected draft.");
+		pick.message = tr("A Batch item found by name reads. To write a value, add the Field, then make it a write on the item.");
 		return pick;
 	}
 	const auto wanted = [category](const EndpointEntry& entry) {
@@ -167,19 +177,15 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 		return pick;
 	}
 	const auto& entry = pick.matches.first();
-	if (entry.category == 1 && !entry.readable) {
-		pick.status = QStringLiteral("error");
-		pick.message = tr("%1 can only be written: select it, write its value in Details, then Add selected draft.").arg(entry.path);
-		return pick;
-	}
 	if (entry.category != 1 && entry.requestBytes == 0 && pick.hasTail && !pick.tail.isEmpty()) {
 		pick.status = QStringLiteral("error");
 		pick.message = tr("%1 takes no input; remove \"%2\".").arg(entry.path, pick.tail);
 		return pick;
 	}
-	if (entry.category != 1 && entry.requestBytes > 0) {
-		pick.status = QStringLiteral("input");
-		pick.message = tr("%1 takes input. Enter selects it: fill it in Details, then Add selected draft.").arg(entry.path);
+	// Values are set on the item, where they start at zero (BA-4b).
+	if (entry.category != 1 && pick.hasTail && !pick.tail.isEmpty()) {
+		pick.status = QStringLiteral("error");
+		pick.message = tr("Set values on the item, not here: remove \"%1\".").arg(pick.tail);
 		return pick;
 	}
 	pick.status = QStringLiteral("adds");

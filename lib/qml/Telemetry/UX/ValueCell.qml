@@ -39,6 +39,12 @@ Item {
     property string takes: ""
     // The row is selected: its text is on the selection colour.
     property bool highlighted: false
+    // From an earlier run (family spec A6): italic and muted, the note in the
+    // tooltip ("from the call at 14:02:11; values changed since").
+    property bool stale: false
+    property string staleNote: ""
+    // The value's own width, for an owner whose column grows to its widest.
+    readonly property real textWidth: shown.implicitWidth
     // Nothing opens: changes are off, or the owner is busy. The value stays.
     property bool locked: false
     // Writes text into the row; returns whether the text is a value.
@@ -174,11 +180,17 @@ Item {
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 text: cell.value
-                color: cell.highlighted ? Theme.selectedForeground : cell.isAggregate ? Theme.textMuted : Theme.textPrimary
+                color: cell.highlighted ? Theme.selectedForeground
+                    : cell.isAggregate || cell.stale ? Theme.textMuted : Theme.textPrimary
                 font.family: cell.isAggregate ? Qt.application.font.family : Type.fixedFamily
+                font.italic: cell.stale
                 horizontalAlignment: cell.numeric ? Text.AlignRight : Text.AlignLeft
+                Accessible.description: cell.stale ? qsTr("From an earlier run; the values have changed since.") : ""
                 HoverHandler { id: shownHover }
-                PlainToolTip { visible: shownHover.hovered && shown.truncated; text: cell.value }
+                PlainToolTip {
+                    visible: shownHover.hovered && (shown.truncated || (cell.stale && cell.staleNote.length > 0))
+                    text: cell.stale && cell.staleNote.length > 0 ? cell.value + " · " + cell.staleNote : cell.value
+                }
             }
             // The pencil sits in the gap after the value, so digits never move.
             Shape {

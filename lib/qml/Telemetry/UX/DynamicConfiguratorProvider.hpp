@@ -12,6 +12,80 @@ struct WatchlistSource;
 struct BatchSource;
 class EndpointPreviews;
 
+class DynamicConfiguratorProvider;
+
+// The Batch's selected item as Details shows it (BA-4a): the right pane is an
+// EndpointPanel over this, under Details' names. Its values are the item's
+// request (a Command's arguments, a Service's request, the value a write
+// writes), edited live into the item, or the value its read returned; its
+// responses a Service's response. An item of an earlier connection shows
+// nothing to edit. Made by the provider (batchItem), on its thread.
+class BatchItemDetails final : public QObject {
+	Q_OBJECT
+	// The item's endpoint path, its number (1-based, 0 for none), its
+	// operation (read, write, command, service) and its values in one line.
+	Q_PROPERTY(QString selection READ selection NOTIFY stateChanged)
+	Q_PROPERTY(int item READ item NOTIFY stateChanged)
+	Q_PROPERTY(QString operation READ operation NOTIFY stateChanged)
+	Q_PROPERTY(QString line READ line NOTIFY stateChanged)
+	// {detail: "Service · (f32, f32) -> struct · 8-byte request", writable}
+	Q_PROPERTY(QVariantMap selectionInfo READ selectionInfo NOTIFY stateChanged)
+	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
+	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
+	Q_PROPERTY(QString serviceResponseEndpoint READ serviceResponseEndpoint NOTIFY stateChanged)
+	// False for an item of an earlier connection.
+	Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
+	Q_PROPERTY(bool historical READ historical NOTIFY stateChanged)
+	// The Batch is running.
+	Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
+	// The item is its own draft: never a Details draft.
+	Q_PROPERTY(bool editing READ editing CONSTANT)
+	Q_PROPERTY(bool commandSelected READ commandSelected NOTIFY stateChanged)
+	Q_PROPERTY(bool serviceSelected READ serviceSelected NOTIFY stateChanged)
+	Q_PROPERTY(bool allowMutations READ allowMutations WRITE setAllowMutations NOTIFY stateChanged)
+	// A Field that can be read and written: the pane's Read | Write switch.
+	Q_PROPERTY(bool switchable READ switchable NOTIFY stateChanged)
+	// The item's values take text now.
+	Q_PROPERTY(bool canEdit READ canEdit NOTIFY stateChanged)
+	// The pane's status line, as DynamicConfiguratorProvider::detailsStatus.
+	Q_PROPERTY(QVariantMap detailsStatus READ detailsStatus NOTIFY stateChanged)
+public:
+	explicit BatchItemDetails(DynamicConfiguratorProvider* provider);
+	QString selection() const;
+	int item() const;
+	QString operation() const;
+	QString line() const;
+	QVariantMap selectionInfo() const;
+	QAbstractItemModel* values() const;
+	QAbstractItemModel* responses() const;
+	QString serviceResponseEndpoint() const;
+	bool connected() const;
+	bool historical() const;
+	bool busy() const;
+	static constexpr bool editing() noexcept { return false; }
+	bool commandSelected() const;
+	bool serviceSelected() const;
+	bool allowMutations() const;
+	void setAllowMutations(bool allowed);
+	bool switchable() const;
+	bool canEdit() const;
+	QVariantMap detailsStatus() const;
+	// A value's text into the item, live; false for text that is no value.
+	Q_INVOKABLE bool setScalarText(const QModelIndex& index, const QString& text);
+	// A cell was left: the next change of it is a new step.
+	Q_INVOKABLE void closeValue();
+	// "read" or "write" for a Field item (Read | Write), as one step; a write
+	// starts from the value last read, else from the type's initial value.
+	Q_INVOKABLE bool setOperation(const QString& operation);
+
+Q_SIGNALS:
+	void stateChanged();
+	void readFinished(bool published);
+
+private:
+	DynamicConfiguratorProvider* provider_;
+};
+
 class DynamicConfiguratorProvider final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
@@ -25,14 +99,16 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QAbstractItemModel* values READ values CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* responses READ responses CONSTANT)
 	Q_PROPERTY(QAbstractItemModel* batchItems READ batchItems CONSTANT)
-	Q_PROPERTY(QAbstractItemModel* batchResponses READ batchResponses CONSTANT)
+	// The selected Batch item as Details shows it (a BatchItemDetails).
+	Q_PROPERTY(QObject* batchItem READ batchItem CONSTANT)
 	Q_PROPERTY(bool batchSupported READ batchSupported NOTIFY stateChanged)
 	Q_PROPERTY(bool batchPending READ batchPending NOTIFY stateChanged)
 	Q_PROPERTY(bool canExecuteBatch READ canExecuteBatch NOTIFY stateChanged)
 	Q_PROPERTY(int batchCount READ batchCount NOTIFY stateChanged)
 	Q_PROPERTY(int batchSelection READ batchSelection NOTIFY stateChanged)
 	Q_PROPERTY(QString batchStatus READ batchStatus NOTIFY stateChanged)
-	Q_PROPERTY(QString batchResponseEndpoint READ batchResponseEndpoint NOTIFY stateChanged)
+	// The status line asks for attention: a run failed, or an item was not done.
+	Q_PROPERTY(bool batchAttention READ batchAttention NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* watchlist READ watchlist CONSTANT)
 	// The Watchlist's rows as shown: a list of whole paths or a tree grouped
 	// by path (a WatchRows over watchlist). Made here, so a host needs no
@@ -112,6 +188,12 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool commandOutcomeNeedsAttention READ commandOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(bool serviceOutcomeNeedsAttention READ serviceOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
+	// Details' status line for the selection (family spec C): {text, failed,
+	// tip}. "Read 12:04:31", "Edited, not applied · 2 changes", "Applied
+	// 12:05:02 · read back", "Executed 12:05:10 · accepted", "Called 12:05:21 ·
+	// took 3 ms", "Reading…", "Not called yet", or "Couldn't read: <why>."
+	// with failed true. Empty with nothing selected.
+	Q_PROPERTY(QVariantMap detailsStatus READ detailsStatus NOTIFY stateChanged)
 	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 public:
 	explicit DynamicConfiguratorProvider(DynamicConfiguratorBinding* binding = nullptr,
@@ -132,42 +214,43 @@ public:
 	QAbstractItemModel* values() const;
 	QAbstractItemModel* responses() const;
 	QAbstractItemModel* batchItems() const;
-	QAbstractItemModel* batchResponses() const;
+	QObject* batchItem() const;
 	bool batchSupported() const;
 	bool batchPending() const;
 	bool canExecuteBatch() const;
 	int batchCount() const;
 	int batchSelection() const;
 	QString batchStatus() const;
-	QString batchResponseEndpoint() const;
-	Q_INVOKABLE bool canAddBatch(const QString& operation) const;
-	Q_INVOKABLE bool addBatch(const QString& operation);
+	bool batchAttention() const;
 	Q_INVOKABLE bool removeBatch(int row);
 	Q_INVOKABLE bool moveBatch(int row, int delta);
 	Q_INVOKABLE bool clearBatch();
 	Q_INVOKABLE bool selectBatch(int row);
 	Q_INVOKABLE bool executeBatch();
-	// Adding to the Batch by name or path (BA-1): a Field is read, a Command
-	// runs and a Service is called - those that take no input; one that does
-	// is selected for Details instead. checkBatchPath: {status: adds; partial
-	// (half typed - Enter takes the first suggestion, path); choose; input;
-	// missing; error; unsupported (no Batch on this device); permission
+	// Adding to the Batch by name or path (BA-1): a Field is read (a
+	// write-only one written), a Command runs and a Service is called, its
+	// request at its initial values, set on the item (BA-4b).
+	// checkBatchPath: {status: adds; partial (half typed - Enter takes the
+	// first suggestion, path); choose; missing; error; unsupported (no Batch
+	// on this device); permission
 	// (changes are off); previous (items of an earlier connection held); busy;
 	// full; or empty; message; path; operation;
 	// item (the place it would take); also (an item that already has it, 0 if
 	// none)}.
 	Q_INVOKABLE QVariantMap checkBatchPath(const QString& text) const;
-	// What may follow typed text: [{path, completion (what to put in the
-	// field), kind, typeText, operation, input, note, container, next}].
+	// What may follow typed text, under the headings Fields, Commands and
+	// Services, in that order (BA-4b): a heading is {heading: true, path (the
+	// kind's word, "Commands"), completion ("command "), category, count
+	// (found), shown}; a candidate is {path, completion (what to put in the
+	// field), kind, kindCode, typeText, operation, input, note, section}.
+	// Empty text lists up to eight of each kind. A leading kind word ("field",
+	// "command", "service", singular or plural; "read") lists that kind only.
 	Q_INVOKABLE QVariantList batchPathCandidates(const QString& text) const;
 	// Every line, in order, or none, as one step: {status: ok, refused,
 	// unsupported, permission, previous, busy or full; added; first (the first
 	// new item); items: [{path, operation, what}]; refused: [{line, path,
 	// reason}]; message; serial (the step's, 0 when none was recorded)}.
 	Q_INVOKABLE QVariantMap addBatchPaths(const QStringList& lines);
-	// The endpoint one line names, selected in the Device tree (for one that
-	// takes input). False when the line names none, or several.
-	Q_INVOKABLE bool selectBatchPath(const QString& text);
 	QAbstractItemModel* watchlist() const;
 	QObject* watchRows() const;
 	QObject* watchTraces() const;
@@ -320,6 +403,7 @@ public:
 	bool commandOutcomeNeedsAttention() const;
 	bool serviceOutcomeNeedsAttention() const;
 	QString statusText() const;
+	QVariantMap detailsStatus() const;
 	Q_INVOKABLE bool setPresentation(const QByteArray& json);
 	QString presentationError() const;
 	Q_INVOKABLE bool selectEndpoint(const QModelIndex& index);
@@ -348,6 +432,7 @@ Q_SIGNALS:
 
 private:
 	friend class QtConnectionBinding;
+	friend class BatchItemDetails;
 	friend class ConnectionViews;
 	void setEndpointPreviews(EndpointPreviews* previews);
 	void setWatchSource(WatchlistSource source);

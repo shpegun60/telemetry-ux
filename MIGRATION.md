@@ -799,6 +799,53 @@ device…" shown on time, while the session publishes nothing.
   that counts reads after selecting a Field with changes allowed counts one
   more; one that wants the unread definition turns changes off first.
 
+## Details looks like the family (BA-4·0b, November 2026)
+
+- **Header, line 2, status line.** The header holds the path (elided in the
+  middle) and the panel's actions in a row at the right, which take their own
+  row below 360 px. Under it a `ProgressLine` (`endpointProgress`) runs while
+  the provider is busy; the BusyIndicator is gone. Line 2
+  (`endpointSelectionInfo`, a caption) says the selection in words, from the
+  provider's `selectionInfo.detail` ("Field · f32 · 4 bytes · read only"),
+  which the Dynamic provider now supplies; other providers get it composed.
+  The status line (`endpointStatusLine`) replaces "Local draft",
+  `definitionUnreadNote`, "Previous connection" and the bottom
+  `writeOutcomeLabel`, `commandOutcomeLabel` and `serviceOutcomeLabel`, which
+  are removed. After a disconnect a category panel's status line keeps its
+  outcomes as "Before the connection dropped: …". A check that read those
+  labels reads the status line.
+- **`DynamicConfiguratorProvider::detailsStatus`** (new, `{text, failed,
+  tip}`): "Read 12:04:31", "Edited, not applied · 2 changes", "Applied
+  12:05:02 · read back", "Executed 12:05:10 · accepted", "Called 12:05:21 ·
+  took 3 ms", "Reading…", "Not read yet", "Not executed yet", "Not called
+  yet", and on a failure "Couldn't write: the device does not take this
+  value." with `failed` true (an error glyph, the text in the primary colour).
+  A provider without it gets a status line made from its outcomes.
+- **Tables.** No root rows: a struct's or a request's members are the top rows
+  (`ValueModel::contentRoot()`, used as the TreeView's `rootIndex`; the model
+  keeps its root, so C++ code that walks `index(0, 0)` is unchanged). Rows are
+  striped with `surfaceAlternate`, hovered with `stateHover`, selected with
+  `stateSelected` (`stateSelectedInactive` without focus). Columns follow
+  family spec A3: Name fills, Value grows to the widest value shown, Type to
+  the widest type (40 to 128 px) and hides before Name is narrower than 96 px;
+  nothing scrolls sideways any more (the horizontal scroll bars are gone).
+  New token `Type.columnGap` (12 px at the default body).
+- **Section headings and captions.** A Command's values are headed
+  "Arguments", a Service's "Request" and "Response", each once, under the
+  caption "Start at zero, not at the device's defaults."; a Service that takes
+  nothing says "Takes no request values.". The panel has no card and no radius
+  any more (`framed` keeps only its padding).
+- **Unsent and stale.** New `ValueModel` roles `unsent`, `stale` and
+  `staleNote`, properties `stale` and `staleNote`, and `texts()`,
+  `setBaseline()`, `clearBaseline()`, `unsentCount()`, `baselineLine()` and
+  `setStale()`. A draft's value that differs from the value read, and a
+  request's value that differs from the one last sent, have a 2 px accent line
+  at the row's left. A Service's response whose request changed since the call
+  is italic and muted under "From the call at 14:02:11, with value=2 factor=3;
+  the values changed since." (`responseStaleNote`).
+- **For the Batch's pane (BA-4a)** the panel takes `title`, `infoPrefix`,
+  `actionsComponent` (replaces Read, Cancel, Apply, Execute and Call) and
+  `emptyResponseText`; `refusalText` and `contextHelp` may be set.
 ## One history for Undo and Redo: the core, the Watchlist and files (UR-1, UX-A, November 2026)
 
 The Watchlist's single Undo slot and the hex editor's own undo stack give way
@@ -987,6 +1034,100 @@ button, the Measure table (M), copy picture (Ctrl+C), copy values
 (Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
 result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 `WatchTraces.categorical` is invokable from QML.
+
+## The Batch's items carry their values (BA-4a, November 2026)
+
+- **The right pane is Details.** `BatchPanel` shows the selected item in an
+  `EndpointPanel` over the new `provider.batchItem` (a `BatchItemDetails`):
+  a Command's arguments, a Service's request and response, a write's value, a
+  read's value read, under the item's path and "Item 3 · Service · …". Choosing
+  an item shows it at once: the Select button is gone, and the keys move the
+  selection too.
+- **Values are set on the item, live.** A cell's text goes into the item's
+  request as it is typed (`BatchItemDetails::setScalarText`), the row's line
+  follows ("value=2 factor=0.1"), and each value is one step of the central
+  Undo ("Set factor of item 3", kind `batch.request`, merged until the cell is
+  left: `closeValue()`). Items of an earlier connection keep their values and
+  are not edited; their steps are skipped.
+- **Read | Write.** A Field that can be read and written has a Read | Write
+  switch in the pane's header; a write starts from the value last read, else
+  from the type's initial value; the change is one `batch.items` step that
+  keeps the item's uid ("Make item 2 a write").
+- **`BatchRow`** gains `sent` (the request as Execute last sent it), `line` and
+  `at`; `BatchListModel` the roles `line`, `changed` (the request differs from
+  what was sent), `at` and `uid`, and `update(row, value)`.
+- **`DynamicBatch`** gains `values()`, `selectedRow()`, `canEdit()`,
+  `setScalarText()`, `closeValue()`, `setRequest()`, `replace()` and
+  `lineOf()`. A read's value is now in `values()`, not `responses()`, which
+  holds a Service's response only.
+- **`ValueModel::resetDraft(RequestEditor)`**: an editable projection of a
+  request editor's draft.
+- **Removed:** `DynamicConfiguratorProvider::batchResponses` and
+  `batchResponseEndpoint`, and the Batch panel's response tree
+  (`batchResponseTree`, `batchResponseHeading`, `batchResponseEmpty`). Read
+  the selected item's values and response from `batchItem`.
+- `EndpointPanel` takes `emptyText`, what it says with nothing selected, and
+  asks a provider with `closeValue()` to close a value when its cell closes.
+
+## The Batch's "+" is a finder (BA-4b, November 2026)
+
+- **Commands and Services are added at their initial values.** A Command or a
+  Service that takes input is added like one that takes none, its request at
+  the SDK's initial values (zero, false, an enum's first named enumerator:
+  `RequestEditor::initialize`, from telemetry-sdk #64), and its values are set
+  on the item. The line under the row says what it starts at: "Adds a call of
+  Service control.Scale as item 3, with value 0 and factor 0; …". A write-only
+  Field is added as a write.
+- **Values typed after a path are refused:** `Set values on the item, not here:
+  remove "value=2".` The `needs`, `unnamed` and `input` statuses of
+  `checkBatchPath`, its `arguments`, `next`, `line` and `named` keys, and the
+  argument and value candidates are gone.
+- **Headings.** `batchPathCandidates` lists its candidates under headings,
+  Fields, Commands and Services in that order: a heading is `{heading: true,
+  path, completion, word, category, count, shown}`, a candidate carries
+  `section`. Empty text lists up to eight of each kind. No group rows. A kind
+  word first may be `field`, `command` or `service`, singular or plural, or
+  `read` (`endpoint_paths::kindCategory`). `PathAddRow` skips headings with the
+  keys, and a heading's click writes its kind word before the text.
+- **Removed:** `DynamicConfiguratorProvider::canAddBatch(operation)`,
+  `addBatch(operation)` and `selectBatchPath(text)`; the Batch panel's
+  operation box, **Add selected draft** and **Fill in Details**;
+  `BatchAddRow`'s `selected` signal and its Ctrl+Enter; `PathAddRow`'s
+  `follow` and `continues`; and from the installed `RequestArguments.hpp`,
+  `parse`, `check`, `Given`, `Item` and `Result` (`arguments`,
+  `signatureText` and `valueType` stay). A host that added a prepared draft
+  with `addBatch` adds the path with `addBatchPaths` and sets the values on
+  the item (`batchItem.setScalarText`).
+
+## The Batch's rows, drop and status line (BA-4c, November 2026)
+
+- **Rows.** The Up, Down and Remove buttons are gone. The hovered or current
+  row shows `...` (`batchRowMenuButton`, the row's menu) and × (`removeBatchButton`,
+  "Remove item 3", Delete). A right click or Shift+F10 opens the menu (`batchRowMenu`):
+  Move up (Alt+Up), Move down (Alt+Down), Make it a read, Make it a write (a
+  Field that can be both, as the pane's Read | Write switch) and Remove (Delete).
+- **Drop.** Paths dragged from the Device tree or the Watchlist
+  (`application/x-telemetry-paths`, as the Watchlist and the Plot accept) can be
+  dropped on the list (`batchDrop`): a focus-ring frame and "Drop to add 3 items
+  to the Batch"; they are added as the "+" row adds them, at their initial
+  values (`BatchPanel.dropPaths(paths)` over `addBatchPaths`).
+- **The status line in words.** `DynamicBatch::status()` (`batchStatus`) says
+  "Sending 3 items in one request…", "Executed at 14:02:11 - 3 of 3 done." (or
+  "…; item 3: invalidargument." for the first item not done), and for a run that
+  failed as a whole: "No reply in time. The items may have run; nothing is sent
+  again by itself.", "The reply was lost: the items may have run. Check the
+  device before executing again.", "The device was busy and ran nothing.
+  Execute the Batch again in a moment." Items of an earlier connection: "These
+  items are from an earlier connection and are never sent again. Clear them to
+  start a new Batch." It is empty while there is nothing to say. The old words
+  ("Pending - one ordered Batch request", "Batch reply received - inspect each
+  item", "OutcomeUnknown - may have executed; no automatic retry", "QueueFull -
+  …") are gone; a host that matched them matches the new ones, or the item
+  facts in the `result` role. An item with no checked outcome reads "Outcome
+  unknown", "No reply" or "Not sent".
+- **`batchAttention`** (`DynamicBatch::attention()`): the status line asks for
+  attention - a run that failed, or an item not done; the panel draws it in
+  the warning colour, else muted.
 
 ## The designer's fixes to the Plot's analysis tools (November 2026)
 

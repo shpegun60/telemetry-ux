@@ -147,6 +147,10 @@ private:
 
 class ValueModel final : public QAbstractItemModel {
 	Q_OBJECT
+	// Every value is from an earlier run (a response whose request changed
+	// since), and the note that says which.
+	Q_PROPERTY(bool stale READ stale NOTIFY staleChanged)
+	Q_PROPERTY(QString staleNote READ staleNote NOTIFY staleChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -165,7 +169,13 @@ public:
 		TypeTextRole,
 		// What the cell says while its text is not a value of its type:
 		// "Enter a number from 0 to 255." Empty on rows that take no text.
-		TakesRole
+		TakesRole,
+		// Not yet sent (family spec C): a draft's value that differs from the
+		// value read, or a request's value that differs from the one sent last.
+		UnsentRole,
+		// A value from an earlier run, shown italic and muted, and why.
+		StaleRole,
+		StaleNoteRole
 	};
 	Q_ENUM(Role)
 	static constexpr int fetchBatch = 128;
@@ -178,6 +188,10 @@ public:
 	void resetSnapshot(const WorkbenchView& view);
 	// Read-only projection of a caller-owned, admission-guarded value snapshot.
 	void resetSnapshot(const telemetry::integration::inspector::SnapshotStore& snapshot);
+	// An editable projection of a caller-owned request editor's draft (the
+	// Batch's item, BA-4a): every scalar row takes text; the owner writes it
+	// through the editor and updateScalar() shows it.
+	void resetDraft(const telemetry::integration::workbench::RequestEditor& editor);
 	void resetServiceResponse(const WorkbenchView& view);
 	[[nodiscard]] telemetry::integration::inspector::NodeResult
 	node(const QModelIndex& index) const;
@@ -187,6 +201,24 @@ public:
 	// a draft or a request editor makes the cells editable on their own.
 	void setEditOffer(bool offered);
 	[[nodiscard]] bool editOffer() const noexcept;
+	// The values as sent last, by path, for the unsent marks of a request:
+	// texts() is the rows' values now ({"factor": "0.1"}), setBaseline takes
+	// them as the values sent, clearBaseline drops them. A reset drops them too.
+	[[nodiscard]] QHash<QString, QString> texts() const;
+	void setBaseline(const QHash<QString, QString>& sent);
+	void clearBaseline();
+	[[nodiscard]] bool hasBaseline() const noexcept;
+	// "value=2 factor=3": the baseline's top-level values, for a stale note.
+	[[nodiscard]] QString baselineLine() const;
+	// The rows whose value is not yet sent.
+	[[nodiscard]] int unsentCount() const;
+	// Every row is from an earlier run; note says which, for the tooltip.
+	void setStale(bool stale, const QString& note = {});
+	[[nodiscard]] bool stale() const noexcept;
+	[[nodiscard]] QString staleNote() const;
+	// The rows to show without the root row the model keeps: the root of a
+	// struct or array, or an invalid index (a scalar has no root row to hide).
+	Q_INVOKABLE QModelIndex contentRoot() const;
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;
 	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
@@ -204,12 +236,16 @@ public:
 	void fetchMore(const QModelIndex& parent) override;
 	bool hasChildren(const QModelIndex& parent = {}) const override;
 
+Q_SIGNALS:
+	void staleChanged();
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 	void resetSource(const Inspector* inspector, const Workbench* workbench, bool response = false,
 	                 const WorkbenchView* view = nullptr,
-	                 const telemetry::integration::inspector::SnapshotStore* snapshot = nullptr);
+	                 const telemetry::integration::inspector::SnapshotStore* snapshot = nullptr,
+	                 const telemetry::integration::workbench::RequestEditor* draft = nullptr);
 };
 
 } // namespace telemetry::ux

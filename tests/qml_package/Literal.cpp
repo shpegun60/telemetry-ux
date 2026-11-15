@@ -164,11 +164,13 @@ QtObject {
 		};
 
 		// Disconnected with a Field selected: the tree, the values, the
-		// Watchlist and every outcome.
+		// Watchlist and the Field's own outcome, on Details' status line
+		// (family spec C: the outcomes of a Command and a Service show on
+		// theirs).
 		QList<QQuickItem*> items;
 		expectMarkers(shownMarkers(items),
 		              {"selection", "endpoint", "member", "enum", "watchName", "watchStatus", "watchValue",
-		               "watchSummary", "writeOutcome", "commandOutcome", "serviceOutcome", "status"});
+		               "watchSummary", "writeOutcome", "status"});
 		for (const auto* name : {"endpointToolTip", "valueToolTip"})
 			expectToolTip(items, name);
 

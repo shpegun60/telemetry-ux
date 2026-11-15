@@ -33,24 +33,30 @@ namespace telemetry::ux::endpoint_paths {
 
 // A typed line, as a Batch reads it.
 struct Pick {
-	// adds, choose (several match), input (takes input), missing, error, empty
+	// adds, choose (several match), missing, error, empty
 	QString status;
 	QString message;
 	QVector<EndpointEntry> matches;
 	// The line named a value inside matches.first(), a Field read whole.
 	bool member = false;
 	QString path;  // the line's path, without a leading kind word
-	// What follows a Command's or a Service's path or name: its values
-	// (BA-2), "value=2 factor=3"; empty without any.
+	// What follows a Command's or a Service's path or name, "value=2"; empty
+	// without any. Values are set on the item, so a tail is refused (BA-4b).
 	QString tail;
 	bool hasTail = false;
 };
 
-// category 0 when the line does not say; "read", "command" or "service" first
-// chooses one. A Command or a Service may be followed by its values after a
-// space (Pick::tail); a "path = value" line naming a Field is refused: writing
-// from here is later.
+// category 0 when the line does not say; a kind word first chooses one (see
+// kindCategory). A Command or a Service followed by anything after a space
+// (Pick::tail) is refused: its values are set on the item. A "path = value"
+// line naming a Field is refused: the item is made a write instead. A
+// write-only Field is added as a write.
 [[nodiscard]] Pick resolve(const QString& line, const QVector<EndpointEntry>& list);
+
+// The category a leading kind word chooses: 1 for "read", "field" or
+// "fields"; 2 for "command" or "commands"; 3 for "service" or "services";
+// 0 for anything else. Case does not matter.
+[[nodiscard]] int kindCategory(const QString& word);
 
 // The kind word for a category: "Field", "Command", "Service".
 [[nodiscard]] QString kindWord(int category);

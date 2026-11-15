@@ -21,6 +21,12 @@ struct BatchRow {
 	// Who the row is to the history (UR-1): given when the Batch takes it,
 	// kept through Execute, the same when Undo puts the row back.
 	quint64 uid = 0;
+	// The request as Execute last sent it (BA-4a): a value that differs is
+	// not yet sent, and a result from then is stale. Null before any run.
+	QByteArray sent;
+	// The request's values in one line, "value=2 factor=0.1", and when the
+	// item last ran, "14:02:11".
+	QString line, at;
 	bool operator==(const BatchRow&) const = default;
 };
 
@@ -34,7 +40,13 @@ public:
 		StatusRole,
 		HasValueRole,
 		HistoricalRole,
-		ResultRole
+		ResultRole,
+		// BA-4a: the values in one line; whether they changed since the run;
+		// when it ran; the item's uid.
+		LineRole,
+		ChangedRole,
+		AtRole,
+		UidRole
 	};
 	Q_ENUM(Role)
 	int rowCount(const QModelIndex& parent = {}) const override;
@@ -43,6 +55,8 @@ public:
 	bool changing() const noexcept;
 	const std::vector<BatchRow>& rows() const noexcept;
 	void replace(std::vector<BatchRow> rows);
+	// One row changed in place: its roles say so, the list is not reset.
+	void update(int row, BatchRow value);
 	void setValueGuard(std::function<bool()> guard);
 
 private:
@@ -130,11 +144,37 @@ public:
 	// The serial of the step the last change recorded; 0 when it recorded none.
 	[[nodiscard]] int lastSerial() const;
 	bool select(int row);
+	// The selected item as Details shows it (BA-4a): its request's values
+	// (a Command's, a Service's, a write's), editable while it may change, or
+	// the value its read returned; responses() a Service's response.
+	ValueModel* values() const;
+	[[nodiscard]] const BatchRow* selectedRow() const;
+	// The selected item's values take text now: not while the Batch runs,
+	// never for an item of an earlier connection.
+	[[nodiscard]] bool canEdit() const;
+	// Puts a value's text into the selected item's request, live: one step
+	// "Set factor of item 3" per value until the cell is left (closeValue).
+	bool setScalarText(const QModelIndex& index, const QString& text);
+	void closeValue();
+	// A row's request bytes, checked against its type; the line follows and
+	// the result and what was sent stay. Refused while the Batch runs, for an
+	// item of an earlier connection and for bytes of another shape.
+	bool setRequest(int row, const QByteArray& bytes);
+	// A row made another operation of the same endpoint (Read | Write), as
+	// one step in words ("Make item 2 a write"); its uid stays.
+	bool replace(int row, BatchRow value, const QString& words);
+	// "value=2 factor=0.1", "3", "{Gain 1, …}": a request's values in one line.
+	[[nodiscard]] static QString lineOf(const runtime::RuntimeSchema& schema, TypeId type, const QByteArray& bytes);
 	bool canExecute() const;
 	bool execute();
 	int count() const;
 	int selection() const;
+	// The status line: "Sending 3 items in one request…", "Executed at
+	// 14:02:11 - 3 of 3 done.", or why a run failed, in words (BA-4c).
 	QString status() const;
+	// The status line asks for attention: a run that failed as a whole, or an
+	// item that was not done.
+	bool attention() const;
 	QString responseEndpoint() const;
 	BatchListModel* model() const;
 	ValueModel* responses() const;

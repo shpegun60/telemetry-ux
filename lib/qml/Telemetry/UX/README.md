@@ -95,6 +95,17 @@ Actions retain the existing provider signatures:
 - **A Field picked with changes allowed is read once** by Details, so its cells
   can be edited at once: one read per selection, none while another is
   pending, none for a Field already read. With changes off nothing is read.
+- **Details reads as the row family (BA-4·0b).** The header holds the path and
+  the actions, a `ProgressLine` runs while the provider is busy, line 2 says the
+  selection in words (`selectionInfo.detail`, composed when a provider has
+  none) and one status line says what happened last (`detailsStatus`, or one
+  made from the outcomes). The tables have no root rows (`contentRoot()`),
+  stripes, columns after family spec A3 (`Type.columnGap`, nothing sideways),
+  and the headings Arguments, Request and Response once each. A value not yet
+  sent has a 2 px accent line (`unsent`), and a response whose request changed
+  since the call is italic and muted under a note (`stale`, `staleNote`). A host
+  may set `title`, `infoPrefix`, `actionsComponent`, `emptyResponseText`,
+  `refusalText` and `contextHelp`.
 - `addWatch() -> bool`, `removeWatch(int)`, `clearWatch()`, `refreshWatch()`,
   `startWatch()` and `stopWatch()`.
 - **The Watchlist's two views (WL-2).** `watchRows` (a `WatchRows`, both
