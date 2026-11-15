@@ -117,6 +117,19 @@ FocusScope {
                 plot.notice = ""
         }
     }
+    // Each number in a lane of its own (L, the graph's menu): the Plot's
+    // setting, kept with its look and one step to undo. Only while every lane
+    // can be 40 px tall; otherwise it says why and changes nothing.
+    readonly property string stackRefusal: qsTr("Too many numbers to stack at this height. Make the Plot taller or remove a curve.")
+    function toggleStack() {
+        if (!plot.traces)
+            return
+        if (!plot.traces.stacked && !view.stackFits) {
+            plot.tell(plot.stackRefusal, "find")
+            return
+        }
+        plot.traces.stacked = !plot.traces.stacked
+    }
     // The graph with its table or chips, as shown, onto the clipboard: not
     // the toolbar, the notice or the pointer's cursor; the reference, the
     // end and their chips stay.
@@ -1273,6 +1286,11 @@ FocusScope {
                             event.accepted = true
                             return
                         }
+                        if (event.key === Qt.Key_L && event.modifiers === Qt.NoModifier) {
+                            plot.toggleStack()
+                            event.accepted = true
+                            return
+                        }
                         if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
                             if (event.modifiers & Qt.ShiftModifier)
                                 plot.copyValues()
@@ -1300,7 +1318,7 @@ FocusScope {
                         return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                          : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                     }
-                    Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again.")
+                    Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again; L stacks the numbers in lanes of their own.")
                 }
                 // The keys are on the graph: the lists' focus frame round it.
                 Rectangle {
@@ -1328,7 +1346,8 @@ FocusScope {
                     id: autoValues
                     objectName: "plotAuto"
                     visible: view.visible && !view.valueAuto
-                    x: view.valuesArea.left + Type.padding
+                    x: view.numberLanes.length > 0 ? view.numberLanes[0].nameRect.right + Type.padding
+                                                   : view.valuesArea.left + Type.padding
                     y: view.valuesArea.top + Type.padding
                     height: Type.chipHeight
                     padding: Type.tight
@@ -1357,7 +1376,7 @@ FocusScope {
                 // the curves.
                 Rectangle {
                     objectName: "plotFittedChip"
-                    visible: view.visible && view.valueAuto && view.focusedPath.length > 0
+                    visible: view.visible && view.valueAuto && view.focusedPath.length > 0 && view.numberLanes.length === 0
                     x: view.valuesArea.left + Type.padding
                     y: view.valuesArea.top + Type.padding
                     width: fitted.implicitWidth + 2 * Type.padding
@@ -1701,6 +1720,18 @@ FocusScope {
             }
         }
         MenuItem {
+            objectName: "plotMenuStack"
+            text: qsTr("Stack numbers in lanes") + "\t" + qsTr("L")
+            checkable: true
+            checked: plot.traces !== null && plot.traces.stacked
+            // Too many numbers for this height: L says why.
+            enabled: plot.traces !== null && (plot.traces.stacked || view.stackFits)
+            onTriggered: {
+                plot.toggleStack()
+                checked = Qt.binding(() => plot.traces !== null && plot.traces.stacked)
+            }
+        }
+        MenuItem {
             objectName: "plotMenuUnpin"
             text: qsTr("Remove reference") + "\t" + qsTr("Esc")
             enabled: view.referenceShown
@@ -1962,7 +1993,7 @@ FocusScope {
             }
             Label {
                 Layout.fillWidth: true
-                text: qsTr("The readings stay as they were read; the chip and the cursor give them. All plotted numbers share one value axis.")
+                text: qsTr("The readings stay as they were read; the chip and the cursor give them. All plotted numbers share one value axis unless they are stacked in lanes (L).")
                 color: Theme.textMuted
                 font.pointSize: Type.caption
                 wrapMode: Text.Wrap

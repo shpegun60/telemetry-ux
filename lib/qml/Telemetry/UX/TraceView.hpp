@@ -7,11 +7,13 @@
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariantList>
+#include <QtCore/QVector>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickPaintedItem>
 #include <utility>
+#include <vector>
 
 namespace telemetry::ux {
 class WatchTraces;
@@ -55,6 +57,17 @@ class WatchTraces;
 // value the chips and the cursor give stays the reading - and its
 // measurement points: a 5 px dot at each reading while the curve is drawn raw,
 // never closer than 6 px to the last.
+//
+// Stacked (analysis, L): with WatchTraces::stacked, each number is drawn in a
+// lane of its own, one above another over the bool and enum lanes, with its
+// own values - fitted to it alone while Auto - its leaf name and a colour bar.
+// Only while every lane can be at least 40 px tall (stackFits); otherwise the
+// numbers share one axis as before. A value zoom or pan - Ctrl and the wheel,
+// the wheel or a drag over a lane's labels, Up and Down, a box - acts on the
+// lane under the pointer (the keys: else the focused curve's, else every
+// lane); A fits every lane, a double-click on a lane's labels that lane. A
+// click on a lane's name focuses its curve. The cursor's dot on each number is
+// in that number's lane.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -146,6 +159,13 @@ class TraceView : public QQuickPaintedItem {
 	// coordinates; an empty rect with no box), for its checks.
 	Q_PROPERTY(QVariantList timeLabelRects READ timeLabelRects NOTIFY drawn)
 	Q_PROPERTY(QRectF boxCaptionRect READ boxCaptionRect NOTIFY drawn)
+	// Stacked: the traces' setting; whether every number's lane has room at
+	// this height; the lanes the last paint drew, top down - {path, rect,
+	// low, high, labels, nameRect, cursorY (-1 with no cursor dot)}, empty
+	// while the numbers share one axis.
+	Q_PROPERTY(bool stacked READ stacked NOTIFY viewChanged)
+	Q_PROPERTY(bool stackFits READ stackFits NOTIFY drawn)
+	Q_PROPERTY(QVariantList numberLanes READ numberLanes NOTIFY drawn)
 public:
 	explicit TraceView(QQuickItem* parent = nullptr);
 
@@ -171,7 +191,7 @@ public:
 	Q_INVOKABLE void toOldest();
 	Q_INVOKABLE void follow() { setFollowing(true); }
 
-	bool valueAuto() const { return valueAuto_; }
+	bool valueAuto() const { return numberLanes_.empty() ? valueAuto_ : laneManual_.isEmpty(); }
 	QString focusedPath() const { return focusedPath_; }
 	void setFocusedPath(const QString& path);
 	QRectF valuesArea() const { return valuesArea_; }
@@ -295,6 +315,9 @@ public:
 	void setChipHeight(qreal height);
 	QVariantList timeLabelRects() const { return timeLabelRects_; }
 	QRectF boxCaptionRect() const { return boxCaptionRect_; }
+	bool stacked() const;
+	bool stackFits() const { return stackFits_; }
+	QVariantList numberLanes() const { return numberLanesShown_; }
 
 	void paint(QPainter* painter) override;
 
@@ -324,6 +347,9 @@ private:
 		double low = 0, high = 0;
 		bool valid() const { return high > low; }
 	};
+	// range times factor about a point of its height (0 top, 1 bottom); an
+	// invalid one when that is too narrow or too wide to draw.
+	static Range zoomed(const Range& range, qreal factor, qreal at);
 	qint64 rightNs() const;
 	qint64 spanNs() const;
 	// The oldest and newest reading of the plotted values; 0 when none.
@@ -386,6 +412,7 @@ private:
 		qint64 heldAllNs = 0, frozenNs = 0;
 		qreal spanSeconds = 60;
 		double manualLow = 0, manualHigh = 0;
+		QHash<QString, Range> laneManual;
 	};
 	std::vector<ViewState> back_;
 	qint64 rememberedAtMs_ = 0;
@@ -403,6 +430,32 @@ private:
 	qreal chipHeight_ = 0;
 	QVariantList timeLabelRects_;
 	QRectF boxCaptionRect_;
+	// Stacked: a number's lane as the last paint drew it.
+	struct NumberLane {
+		QString path;
+		// The whole lane, the part its values span (clear of a label's half
+		// height at either end, so every label is whole), its name.
+		QRectF rect, valueRect, nameRect;
+		Range shown;
+		QVector<double> ticks;
+		QStringList labels;
+		qreal cursorY = -1;
+	};
+	std::vector<NumberLane> numberLanes_;
+	const NumberLane* numberLane(const QString& path) const;
+	QVariantList numberLanesShown_;
+	// Per number: its fitted values, since when narrower, and its values by
+	// hand (a lane in Manual).
+	QHash<QString, Range> laneRange_, laneManual_;
+	QHash<QString, qint64> laneNarrowSince_;
+	bool stackFits_ = true, stackedSeen_ = false;
+	// The lane drawn at item y, or -1.
+	int laneAt(qreal y) const;
+	// The lanes a value zoom or pan by the keys acts on.
+	QStringList valueLanes() const;
+	// The lane a press on the value labels pans; the pointer's item y.
+	QString pressLane_;
+	qreal pointerY_ = -1;
 };
 } // namespace telemetry::ux
 #endif

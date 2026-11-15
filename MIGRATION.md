@@ -1046,3 +1046,24 @@ words (`trailingGivesWay`), and Back and Measure stay. Below 400 px of height
 the chips keep to one row and scroll.
 `WatchTraces::appendRecorded(path, readings)` adds a run's newer readings to
 a recorded path without copying the rest. The live Plot is unchanged.
+
+## The Plot's numbers stacked in lanes (November 2026)
+
+New, nothing removed. `WatchTraces.stacked` (L, or "Stack numbers in lanes"
+in the graph's menu) draws each plotted number in a lane of its own, one above
+another over the bool and enum lanes, with its own values, its leaf name and a
+colour bar; it is the Plot's setting, kept by `capture()` and `restore()`
+(`"stacked"`) and one step of the new `plot.stack` kind ("Stack the numbers in
+lanes", "Put the numbers on one axis"), so `UndoHistory::kinds()` names one
+more kind. Stacking needs 40 px a lane: while the Plot is shorter the numbers
+share one axis again, and L says "Too many numbers to stack at this height.
+Make the Plot taller or remove a curve." `TraceView` gains `stacked`,
+`stackFits` and, for checks and hosts, `numberLanes` (each lane's path, rect,
+valueRect, nameRect, low, high, labels and cursorY). While stacked, Auto fits
+each lane to its own number; a value zoom or pan, a drag or the wheel over the
+labels, and a box act on the lane under the pointer (the keys: else the
+focused curve's, else every lane); A fits every lane and a double-click on a
+lane's labels fits that lane; a click on a lane's name focuses its curve; Back
+remembers the lanes' values; `valueAuto` is false while any lane is zoomed by
+hand. `TracePlot` puts Auto (A) after the first lane's name while stacked,
+and has no "Fitted to" chip then.

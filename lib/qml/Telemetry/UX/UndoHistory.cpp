@@ -12,7 +12,8 @@ QStringList& declared()
 {
 	static QStringList kinds{QStringLiteral("batch.items"), QStringLiteral("file.bytes"),
 	                         QStringLiteral("plot.curves"), QStringLiteral("plot.look"),
-	                         QStringLiteral("plot.points"), QStringLiteral("watch.format"),
+	                         QStringLiteral("plot.points"), QStringLiteral("plot.stack"),
+	                         QStringLiteral("watch.format"),
 	                         QStringLiteral("watch.rows")};
 	return kinds;
 }

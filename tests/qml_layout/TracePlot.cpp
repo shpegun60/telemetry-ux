@@ -1027,6 +1027,183 @@ int main(int argc, char** argv)
 			settle(150);
 		}
 
+		// Analysis: the numbers stacked in lanes of their own (L). A lane each,
+		// apart, in the order plotted, each fitted to its own number with its
+		// own labels; the cursor's dot on each number in its lane at its
+		// reading; a click on a lane's name focuses it; a box and the keys act
+		// on the lane under the pointer, and Back takes it back. The traces keep
+		// it (a project) and it is one step to undo. Too short for 40 px a
+		// lane, the numbers share one axis again and L says why.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			const auto plottedBefore = traces.plotted();
+			const QString voltage = QStringLiteral("device.Voltage"), gainPath = QStringLiteral("device.Config.Gain");
+			for (const auto& path : {voltage, gainPath})
+				if (!traces.plotted().contains(path))
+					CHECK(traces.plot(path).isEmpty());
+			CHECK(view->setProperty("following", false));
+			settle(200);
+			CHECK(view->property("stackFits").toBool() && view->property("numberLanes").toList().isEmpty() &&
+			      !view->property("stacked").toBool());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_L);
+			settle(300);
+			CHECK(traces.stacked() && view->property("stacked").toBool());
+			// One step, the newest.
+			CHECK(history.undoText() == QStringLiteral("Stack the numbers in lanes") &&
+			      traces.capture().value(QStringLiteral("stacked")).toBool());
+			QStringList numbers;
+			for (const auto& path : traces.plotted())
+				if (!traces.categorical(path))
+					numbers << path;
+			auto lanes = view->property("numberLanes").toList();
+			CHECK(numbers.size() >= 2 && lanes.size() == numbers.size() && view->property("valueAuto").toBool());
+			const auto valuesArea = view->property("valuesArea").toRectF();
+			const auto lane = [&](int i) { return view->property("numberLanes").toList().value(i).toMap(); };
+			// A lane fitted to its own number: its readings in view, drawn as
+			// k x value + b, inside its values with no more than the margins.
+			const auto fitted = [&](int i) {
+				const auto drawn = lane(i);
+				const auto path = drawn.value(QStringLiteral("path")).toString();
+				QVariantMap measured;
+				if (!QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, measured), Q_ARG(QString, path)))
+					return false;
+				const double k = traces.multiplier(path), b = traces.offset(path);
+				const double one = k * measured.value(QStringLiteral("min")).toDouble() + b,
+				             other = k * measured.value(QStringLiteral("max")).toDouble() + b;
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				return measured.value(QStringLiteral("count")).toInt() > 1 && low <= std::min(one, other) &&
+				       high >= std::max(one, other) && high - low <= std::abs(other - one) * 1.25 + 1e-9;
+			};
+			QRectF above;
+			for (int i = 0; i < lanes.size(); ++i) {
+				const auto drawn = lanes[i].toMap();
+				const auto path = drawn.value(QStringLiteral("path")).toString();
+				const auto rect = drawn.value(QStringLiteral("rect")).toRectF();
+				const auto values = drawn.value(QStringLiteral("valueRect")).toRectF();
+				// Its own lane: at least 40 px, inside the numbers' part, under
+				// the one above and never over it, its values inside it.
+				CHECK(path == numbers[i] && rect.height() >= 40 && rect.top() >= valuesArea.top() - 0.5 &&
+				      rect.bottom() <= valuesArea.bottom() + 0.5 && !rect.intersects(above) &&
+				      (i == 0 || rect.top() >= above.bottom() - 0.01) && rect.contains(values));
+				// Its own values: fitted to its own readings in view, drawn as
+				// k x value + b, with labels of its own.
+				QVariantMap measured;
+				CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, measured), Q_ARG(QString, path)));
+				const double k = traces.multiplier(path), b = traces.offset(path);
+				const double drawnMin = std::min(k * measured.value(QStringLiteral("min")).toDouble() + b,
+				                                 k * measured.value(QStringLiteral("max")).toDouble() + b);
+				const double drawnMax = std::max(k * measured.value(QStringLiteral("min")).toDouble() + b,
+				                                 k * measured.value(QStringLiteral("max")).toDouble() + b);
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				CHECK(measured.value(QStringLiteral("count")).toInt() > 1 && low <= drawnMin && high >= drawnMax &&
+				      high - low <= (drawnMax - drawnMin) * 1.25 + 1e-9);
+				const auto labels = drawn.value(QStringLiteral("labels")).toStringList();
+				CHECK(labels.size() >= 2 && labels.size() <= 4);
+				above = rect;
+			}
+			// The two numbers apart: one axis would hold both.
+			CHECK(lane(0).value(QStringLiteral("high")).toDouble() < lane(1).value(QStringLiteral("high")).toDouble() ||
+			      lane(0).value(QStringLiteral("low")).toDouble() > lane(1).value(QStringLiteral("low")).toDouble());
+			CHECK(!named(content, "plotFittedChip") || !shown(content, "plotFittedChip")->isVisible());
+			// The cursor: a dot on each number, in its lane, at its reading.
+			const auto area = view->property("plotArea").toRectF();
+			const auto middle = view->mapToScene(QPointF(area.left() + area.width() * 0.6, lane(0).value(QStringLiteral("rect")).toRectF().center().y())).toPoint();
+			QTest::mouseMove(window, middle + QPoint(-5, 0));
+			QTest::mouseMove(window, middle);
+			settle(200);
+			CHECK(view->property("cursorShown").toBool());
+			for (int i = 0; i < numbers.size(); ++i) {
+				const auto drawn = lane(i);
+				const auto values = drawn.value(QStringLiteral("valueRect")).toRectF();
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				const double y = drawn.value(QStringLiteral("cursorY")).toDouble();
+				QVariant at;
+				CHECK(QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, at), Q_ARG(QString, numbers[i])) && at.isValid());
+				const double expected = traces.multiplier(numbers[i]) * at.toDouble() + traces.offset(numbers[i]);
+				const double read = high - (y - values.top()) / values.height() * (high - low);
+				CHECK(y >= drawn.value(QStringLiteral("rect")).toRectF().top() && y <= drawn.value(QStringLiteral("rect")).toRectF().bottom() &&
+				      std::abs(read - expected) <= (high - low) * 0.01);
+			}
+			shot(window, argc, argv, QStringLiteral("trace-plot-stacked-760"));
+			// A click on a lane's name focuses its curve, again unfocuses it.
+			const auto name = view->mapToScene(lane(1).value(QStringLiteral("nameRect")).toRectF().center()).toPoint();
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, name);
+			settle(150);
+			CHECK(view->property("focusedPath").toString() == numbers[1]);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, name);
+			settle(150);
+			CHECK(view->property("focusedPath").toString().isEmpty());
+			// A box in the second lane zooms its values and leaves the first.
+			const double secondBeforeBox = lane(1).value(QStringLiteral("high")).toDouble() - lane(1).value(QStringLiteral("low")).toDouble();
+			const auto second = lane(1).value(QStringLiteral("valueRect")).toRectF();
+			const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.3, second.top() + second.height() * 0.2)).toPoint();
+			const auto to = view->mapToScene(QPointF(area.left() + area.width() * 0.5, second.top() + second.height() * 0.7)).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, (from + to) / 2);
+			QTest::mouseMove(window, to);
+			settle(100);
+			CHECK(view->property("boxShown").toBool() && view->property("boxCaptionRect").toRectF().isValid());
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, to);
+			settle(250);
+			const double secondSpan = lane(1).value(QStringLiteral("high")).toDouble() - lane(1).value(QStringLiteral("low")).toDouble();
+			// The first lane still fits its own readings, now in the boxed time.
+			CHECK(!view->property("valueAuto").toBool() && secondSpan < secondBeforeBox * 0.6 && secondSpan > secondBeforeBox * 0.4 &&
+			      fitted(0));
+			// Auto (A) stands after the first lane's name, not over it.
+			auto* autoButton = shown(content, "plotAuto");
+			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(0).value(QStringLiteral("nameRect")).toRectF().right());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(250);
+			CHECK(view->property("valueAuto").toBool());
+			// Up over the first lane moves its values, not the second's.
+			const auto firstCentre = view->mapToScene(QPointF(area.center().x(), lane(0).value(QStringLiteral("rect")).toRectF().center().y())).toPoint();
+			QTest::mouseMove(window, firstCentre);
+			settle(100);
+			const auto secondBefore = lane(1);
+			const double firstLow = lane(0).value(QStringLiteral("low")).toDouble();
+			QTest::keyClick(window, Qt::Key_Up);
+			settle(250);
+			CHECK(lane(0).value(QStringLiteral("low")).toDouble() > firstLow &&
+			      lane(1).value(QStringLiteral("low")) == secondBefore.value(QStringLiteral("low")) && !view->property("valueAuto").toBool());
+			// A fits every lane again.
+			QTest::keyClick(window, Qt::Key_A);
+			settle(250);
+			CHECK(view->property("valueAuto").toBool());
+			// Too short for a 40 px lane each: one axis again, and L says why.
+			const int tall = window->height();
+			window->setHeight(170);
+			settle(300);
+			CHECK(!view->property("stackFits").toBool() && view->property("numberLanes").toList().isEmpty() &&
+			      !view->property("valueLabels").toStringList().isEmpty());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_L);
+			settle(150);
+			CHECK(!traces.stacked());
+			QTest::keyClick(window, Qt::Key_L);
+			settle(150);
+			CHECK(!traces.stacked() &&
+			      plotRoot->property("notice").toString() ==
+			          QStringLiteral("Too many numbers to stack at this height. Make the Plot taller or remove a curve."));
+			plotRoot->setProperty("notice", QString());
+			window->setHeight(tall);
+			settle(300);
+			// One step: undo stacks them again, and undo once more puts them on
+			// one axis.
+			CHECK(history.undoText() == QStringLiteral("Put the numbers on one axis") && history.undo() && traces.stacked());
+			settle(200);
+			CHECK(view->property("numberLanes").toList().size() == numbers.size());
+			CHECK(history.undo() && !traces.stacked());
+			settle(200);
+			CHECK(view->property("numberLanes").toList().isEmpty() && view->property("valueAuto").toBool());
+			for (const auto& path : traces.plotted())
+				if (!plottedBefore.contains(path))
+					traces.unplot(path);
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
 		// Analysis: the readings in view as text for a spreadsheet and as a
 		// CSV file, and the picture onto the clipboard, each said once.
 		{
