@@ -597,7 +597,14 @@ Pane {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumWidth: 160
-                Layout.minimumHeight: Type.rowHeight * 3
+                // A Service's request over its response (one column) takes its
+                // rows' whole height - headings, the table's header and every
+                // row - so the Response heading never covers one; a dock too
+                // short for both scrolls the pane instead.
+                Layout.minimumHeight: panel.showResponse && valueColumns.columns === 1
+                    ? Math.max(Type.rowHeight * 3, headingsHeight
+                        + (panel.noArguments || panel.showMetadata ? 0 : valueHeading.implicitHeight + valueTree.contentHeight))
+                    : Type.rowHeight * 3
                 // The heading and caption above the table count too, so a
                 // request's rows keep their whole height before its response.
                 readonly property real headingsHeight: (valueSectionHeading.visible ? valueSectionHeading.implicitHeight + spacing : 0)

@@ -1808,19 +1808,20 @@ ApplicationWindow {
 			return editor;
 		};
 		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
-		CHECK(openEditor()->property("text").toString() == QStringLiteral("-0"));
+		auto* opened = openEditor();
+		CHECK(opened->property("text").toString() == QStringLiteral("-0"));
 		const auto writes = peer.nativeWrites();
-		// Workbench only applies dirty drafts. Opening -0 and immediately
-		// accepting it must therefore leave the device unchanged, with no write.
+		// The text the editor opened with commits nothing: Enter on -0 closes
+		// the editor, asks for no write and leaves the device unchanged.
 		QTest::keyClick(window, Qt::Key_Return);
-		CHECK(await([&] { return finished.count() == row * 3 + 1 && !provider->watchActive(); }));
-		CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == writes);
+		CHECK(await([&] { return !opened->isVisible() && list->hasActiveFocus(); }));
+		CHECK(finished.count() == row * 2 && peer.nativeWrites() == writes && !provider->watchActive());
 		CHECK(sampleBits() == UINT64_C(0x8000000000000000));
 		// Set +0 through this same real editor, then deliberately enter -0.
 		CHECK(openEditor()->property("text").toString() == QStringLiteral("-0"));
 		QTest::keyClick(window, Qt::Key_0);
 		QTest::keyClick(window, Qt::Key_Return);
-		CHECK(await([&] { return finished.count() == row * 3 + 2 && !provider->watchActive(); }));
+		CHECK(await([&] { return finished.count() == row * 2 + 1 && !provider->watchActive(); }));
 		CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
 		CHECK(peer.lastWritePayload() == QByteArray(row == 0 ? 4 : 8, '\0'));
 		CHECK(sampleBits() == 0);
@@ -1828,7 +1829,7 @@ ApplicationWindow {
 		QTest::keyClick(window, Qt::Key_Minus);
 		QTest::keyClick(window, Qt::Key_0);
 		QTest::keyClick(window, Qt::Key_Return);
-		CHECK(await([&] { return finished.count() == row * 3 + 3 && !provider->watchActive(); }));
+		CHECK(await([&] { return finished.count() == row * 2 + 2 && !provider->watchActive(); }));
 		CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 2);
 		const auto expected = QByteArray::fromHex(row == 0 ? "00000080" : "0000000000000080");
 		std::fprintf(stderr, "Signed zero F%d TCP payload=%s expected=%s\n", row == 0 ? 32 : 64,
@@ -1840,7 +1841,7 @@ ApplicationWindow {
 	// exactly, and a row in hex shows them back.
 	CHECK(provider->property("watchFormat").toString() == QStringLiteral("original"));
 	CHECK(provider->writeWatch(0, QStringLiteral("0x4000_0000")));
-	CHECK(await([&] { return finished.count() == 7 && !provider->watchActive(); }));
+	CHECK(await([&] { return finished.count() == 5 && !provider->watchActive(); }));
 	CHECK(finished.last().at(0).toBool() && peer.lastWritePayload() == QByteArray::fromHex("00000040"));
 	CHECK(provider->setWatchRowFormat({0}, QStringLiteral("hex")));
 	CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::ShownTextRole).toString() == QStringLiteral("0x40000000"));

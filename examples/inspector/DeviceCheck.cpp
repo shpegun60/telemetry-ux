@@ -161,7 +161,7 @@ int checkSerialDevice(QCoreApplication& app, InspectorController& controller,
 					    ++scalarCount;
 					    if (field == QStringLiteral("measure.Voltage") &&
 					        model->data(index, ValueModel::TypeRole).toString() ==
-					            QStringLiteral("float32")) {
+					            QStringLiteral("f32")) {
 						    bool valid = false;
 						    const auto number = value.toFloat(&valid);
 						    const auto matches = [&](float expected) {
@@ -204,9 +204,9 @@ int checkSerialDevice(QCoreApplication& app, InspectorController& controller,
 			    probe = values.size() == expected.size();
 			    for (qsizetype i = 0; probe && i < values.size(); ++i) {
 				    const auto item = values[i].toObject();
-				    const auto type = i < 6    ? QStringLiteral("int32")
+				    const auto type = i < 6    ? QStringLiteral("i32")
 				                      : i == 6 ? QStringLiteral("bool")
-				                               : QStringLiteral("enum (int16)");
+				                               : QStringLiteral("enum (i16)");
 				    probe = item.value(QStringLiteral("value")).toString() == expected[i] &&
 				            item.value(QStringLiteral("type")).toString() == type &&
 				            item.value(QStringLiteral("path")).toString().endsWith(suffixes[i]);

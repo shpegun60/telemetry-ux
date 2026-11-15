@@ -1459,3 +1459,20 @@ Per editor:
   suggestions shut, now empties the field before leaving it. The Watchlist's
   "+" row (no `enterAdds`) is unchanged. A click on a Batch item now takes
   the keys to the list, as a click on a Watchlist row does.
+
+### A Service's Request keeps its rows over the Response; one form for types
+
+- `EndpointPanel`: when a Service's Request stands over its Response (one
+  column, a narrow dock such as the Batch item's pane), the Request's minimum
+  height is now its rows' whole height: its headings, the table's header and
+  every row (`valueTree.contentHeight`). The Response heading starts below the
+  last request row and no longer covers the "factor" row of a two-value
+  request. Side by side, or with no response, the minimum is three rows as
+  before. In a dock too short for both, the panel still overflows at its
+  bottom: it does not scroll yet.
+- The value models (`DynamicModels`' `ValueModel`, which feeds Details'
+  values and a Service's Response) name scalar types in the short form the
+  Request and the Device tree already use: `u8 i8 u16 i16 u32 i32 u64 i64
+  f32 f64`, and `enum (i16)`. They were `uint8 ... float64` and `enum (int16)`.
+  A host that compares the `typeText` role with the long names must use the
+  short ones. The Inspector's device check does.
