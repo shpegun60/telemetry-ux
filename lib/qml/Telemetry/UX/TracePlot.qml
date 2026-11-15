@@ -20,6 +20,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 FocusScope {
@@ -29,8 +30,41 @@ FocusScope {
     // The provider, optional: with it, values dropped from the Device tree
     // join the Watchlist first, so they are read and plotted (LP-1g3).
     property var provider: null
-    // What the last drop or plotting did, until the next one or ×.
+    // What the last drop, copy or save did, until the next one or ×.
     property string notice: ""
+    // The Plot as shown, onto the clipboard.
+    function copyPicture() {
+        plot.grabToImage(result => {
+            plot.notice = Clipboard.setImage(result.image) ? qsTr("Copied the picture.")
+                                                           : qsTr("The picture could not be copied.")
+        })
+    }
+    // The readings in view, for a spreadsheet: tabs, this PC's decimal sign.
+    function copyValues() {
+        const readings = view.readingsInRange()
+        Clipboard.setText(view.valuesText(false))
+        notice = qsTr("Copied %L1 readings of %L2 values.").arg(readings).arg(plotted.length)
+    }
+    // "plot 2026-11-15 12-04-31.csv"
+    function csvName() {
+        return "plot " + Qt.formatDateTime(new Date(), "yyyy-MM-dd HH-mm-ss") + ".csv"
+    }
+    function saveValuesTo(url) {
+        const readings = view.readingsInRange()
+        const why = view.saveValues(url)
+        const name = String(url).replace(/^.*[\\/]/, "")
+        notice = why.length > 0 ? why : qsTr("Saved %L1 readings of %L2 values to %3.").arg(readings).arg(plotted.length).arg(name)
+        return why.length === 0
+    }
+    FileDialog {
+        id: saveDialog
+        objectName: "plotSaveDialog"
+        title: qsTr("Save the values in view")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Comma-separated values (*.csv)")]
+        defaultSuffix: "csv"
+        onAccepted: plot.saveValuesTo(selectedFile)
+    }
     // Puts dropped values on the Plot: a Watchlist drag's paths are its
     // values; a Device tree drag's are Fields, Commands, Services or values
     // inside a Field, added to the Watchlist and plotted value by value.
@@ -553,6 +587,14 @@ FocusScope {
                 visible: plot.plotted.length > 0 && !plot.waiting
                 // The graph's menu from the keyboard.
                 Keys.onPressed: (event) => {
+                    if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
+                        if (event.modifiers & Qt.ShiftModifier)
+                            plot.copyValues()
+                        else
+                            plot.copyPicture()
+                        event.accepted = true
+                        return
+                    }
                     if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
                         graphMenu.at = -1
                         graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
@@ -911,6 +953,28 @@ FocusScope {
             onTriggered: {
                 plot.traces.showPoints = !plot.traces.showPoints
                 checked = Qt.binding(() => plot.traces !== null && plot.traces.showPoints)
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotMenuCopyPicture"
+            text: qsTr("Copy picture") + "\t" + qsTr("Ctrl+C")
+            enabled: plot.plotted.length > 0
+            onTriggered: plot.copyPicture()
+        }
+        MenuItem {
+            objectName: "plotMenuCopyValues"
+            text: qsTr("Copy values") + "\t" + qsTr("Ctrl+Shift+C")
+            enabled: plot.plotted.length > 0
+            onTriggered: plot.copyValues()
+        }
+        MenuItem {
+            objectName: "plotMenuSaveValues"
+            text: qsTr("Save values as CSV…")
+            enabled: plot.plotted.length > 0
+            onTriggered: {
+                saveDialog.selectedFile = saveDialog.currentFolder + "/" + plot.csvName()
+                saveDialog.open()
             }
         }
         MenuSeparator {}

@@ -9,6 +9,8 @@
 #include "Telemetry/UX/QmlTypes.hpp"
 #include "Telemetry/UX/WatchTraces.hpp"
 #include <QtCore/QDir>
+#include <QtGui/QClipboard>
+#include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QGuiApplication>
@@ -703,7 +705,11 @@ int main(int argc, char** argv)
 			CHECK(view->property("following").toBool());
 			const auto before = traces.capture();
 			openGraphMenu(0.4);
-			click(window, shown(content, "plotMenuRemoveAll"));
+			// The menu is taller than this 360 px window: the item is chosen
+			// as a key would choose it, and the menu closed.
+			QMetaObject::invokeMethod(shown(content, "plotMenuRemoveAll"), "triggered");
+			if (auto* menu = window->findChild<QObject*>(QStringLiteral("plotGraphMenu")))
+				QMetaObject::invokeMethod(menu, "close");
 			settle(200);
 			CHECK(traces.plotted().isEmpty() && traces.count(voltage) > 0 && shown(content, "plotEmpty"));
 			CHECK(traces.restore(before) && traces.plotted() == order);
@@ -785,6 +791,43 @@ int main(int argc, char** argv)
 			CHECK(!shown(content, "plotBack")->property("enabled").toBool());
 			CHECK(view->setProperty("following", true));
 			settle(150);
+		}
+
+		// Analysis: the readings in view as text for a spreadsheet and as a
+		// CSV file, and the picture onto the clipboard, each said once.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(plotRoot);
+			int readings = 0;
+			CHECK(QMetaObject::invokeMethod(view, "readingsInRange", Q_RETURN_ARG(int, readings)) && readings > 0);
+			QString text;
+			CHECK(QMetaObject::invokeMethod(view, "valuesText", Q_RETURN_ARG(QString, text), Q_ARG(bool, false)));
+			const auto lines = text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+			CHECK(lines.size() == readings + 1 && lines.first().startsWith(QStringLiteral("Time of day\tSeconds from start\t")) &&
+			      lines.first().contains(QStringLiteral("device.Voltage")));
+			// A state in words, a number as read.
+			CHECK(text.contains(QStringLiteral("\ttrue")) || text.contains(QStringLiteral("\tfalse")));
+			CHECK(QMetaObject::invokeMethod(plotRoot, "copyValues"));
+			settle(50);
+			CHECK(QGuiApplication::clipboard()->text() == text &&
+			      plotRoot->property("notice").toString().startsWith(QStringLiteral("Copied ")));
+			const auto file = QDir::temp().filePath(QStringLiteral("telemetry-plot-check.csv"));
+			QFile::remove(file);
+			QVariant savedOk;
+			CHECK(QMetaObject::invokeMethod(plotRoot, "saveValuesTo", Q_RETURN_ARG(QVariant, savedOk),
+			                                Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(file)))) && savedOk.toBool());
+			QFile csv(file);
+			const bool saved = csv.open(QIODevice::ReadOnly);
+			const auto written = saved ? QString::fromUtf8(csv.readAll()) : QString();
+			CHECK(saved && written.startsWith(QStringLiteral("Time of day,Seconds from start,")) &&
+			      written.count(QLatin1Char('\n')) == readings + 1);
+			csv.close();
+			QFile::remove(file);
+			CHECK(plotRoot->property("notice").toString().startsWith(QStringLiteral("Saved ")));
+			QGuiApplication::clipboard()->clear();
+			CHECK(QMetaObject::invokeMethod(plotRoot, "copyPicture"));
+			CHECK(QTest::qWaitFor([] { return !QGuiApplication::clipboard()->image().isNull(); }, 3000));
+			CHECK(plotRoot->property("notice").toString() == QStringLiteral("Copied the picture."));
 		}
 
 		// The chip's × takes a value off the Plot; its readings stay.

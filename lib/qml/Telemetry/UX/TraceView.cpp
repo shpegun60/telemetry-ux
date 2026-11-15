@@ -2,6 +2,8 @@
 #include "TraceView.hpp"
 #include "WatchTraces.hpp"
 #include <QtCore/QDateTime>
+#include <QtCore/QSaveFile>
+#include <QtCore/QUrl>
 #include <QtCore/QLocale>
 #include <QtCore/QTime>
 #include <QtCore/QVector>
@@ -510,6 +512,107 @@ void TraceView::goBack()
 		range_ = {};
 	Q_EMIT viewChanged();
 	update();
+}
+
+namespace {
+// The rows of the readings between left and right: every reading time of any
+// path, and each path's reading at that time, if it has one.
+struct ValueRows {
+	std::vector<qint64> times;
+	std::vector<std::vector<std::optional<double>>> cells; // [path][row]
+};
+ValueRows rowsBetween(const WatchTraces& traces, const QStringList& paths, qint64 left, qint64 right)
+{
+	ValueRows out;
+	for (const auto& path : paths) {
+		const auto* readings = traces.readings(path);
+		if (!readings)
+			continue;
+		for (auto it = std::lower_bound(readings->begin(), readings->end(), left,
+		                                [](const TraceReading& r, qint64 at) { return r.ns < at; });
+		     it != readings->end() && it->ns <= right; ++it)
+			out.times.push_back(it->ns);
+	}
+	std::sort(out.times.begin(), out.times.end());
+	out.times.erase(std::unique(out.times.begin(), out.times.end()), out.times.end());
+	for (const auto& path : paths) {
+		std::vector<std::optional<double>> column(out.times.size());
+		if (const auto* readings = traces.readings(path)) {
+			auto it = std::lower_bound(readings->begin(), readings->end(), left,
+			                           [](const TraceReading& r, qint64 at) { return r.ns < at; });
+			for (std::size_t row = 0; row < out.times.size() && it != readings->end(); ++row) {
+				while (it != readings->end() && it->ns < out.times[row])
+					++it;
+				if (it != readings->end() && it->ns == out.times[row] && !std::isnan(it->value))
+					column[row] = it->value;
+			}
+		}
+		out.cells.push_back(std::move(column));
+	}
+	return out;
+}
+} // namespace
+
+int TraceView::readingsInRange() const
+{
+	if (!traces_)
+		return 0;
+	const auto right = rightNs();
+	return int(rowsBetween(*traces_, traces_->plotted(), right - spanNs(), right).times.size());
+}
+
+QString TraceView::valuesText(bool csv) const
+{
+	if (!traces_)
+		return {};
+	const auto paths = traces_->plotted();
+	const auto right = rightNs(), left = right - spanNs();
+	const auto rows = rowsBetween(*traces_, paths, left, right);
+	const auto anchor = traces_->anchor();
+	const QLocale locale = csv ? QLocale::c() : QLocale();
+	const QChar separator = csv ? QLatin1Char(',') : QLatin1Char('\t');
+	// A cell with the separator or a quote is quoted, as CSV wants.
+	const auto cell = [&](const QString& text) {
+		if (!csv || !(text.contains(separator) || text.contains(QLatin1Char('"')) || text.contains(QLatin1Char('\n'))))
+			return text;
+		auto quoted = text;
+		quoted.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+		return QLatin1Char('"') + quoted + QLatin1Char('"');
+	};
+	QStringList lines;
+	QStringList header{tr("Time of day"), tr("Seconds from start")};
+	for (const auto& path : paths)
+		header << cell(path);
+	lines << header.join(separator);
+	for (std::size_t row = 0; row < rows.times.size(); ++row) {
+		const auto ns = rows.times[row];
+		const auto utc = double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6;
+		QStringList fields{QDateTime::fromMSecsSinceEpoch(qint64(utc)).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
+		                   locale.toString(double(ns - rows.times.front()) / 1e9, 'f', 3)};
+		for (int column = 0; column < paths.size(); ++column) {
+			const auto& value = rows.cells[std::size_t(column)][row];
+			if (!value) {
+				fields << QString();
+				continue;
+			}
+			const auto words = traces_->categorical(paths[column]) ? traces_->stateText(paths[column], *value) : QString();
+			fields << cell(words.isEmpty() ? locale.toString(*value, 'g', 15) : words);
+		}
+		lines << fields.join(separator);
+	}
+	return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+}
+
+QString TraceView::saveValues(const QUrl& url) const
+{
+	const auto path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+	QSaveFile file(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+		return tr("%1 could not be written: %2").arg(path, file.errorString());
+	file.write(valuesText(true).toUtf8());
+	if (!file.commit())
+		return tr("%1 could not be written: %2").arg(path, file.errorString());
+	return {};
 }
 
 void TraceView::zoomToBox(QPointF from, QPointF to)

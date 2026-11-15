@@ -230,6 +230,16 @@ public:
 	bool canGoBack() const { return !back_.empty(); }
 	bool boxShown() const { return boxing_; }
 	Q_INVOKABLE void goBack();
+	// The readings of every plotted value in the time in view, one row per
+	// reading time: "Time of day", "Seconds from start" and a column per
+	// path; a missing or failed read is an empty cell, a state is its word,
+	// a number is the reading (never k x value + b). For the clipboard (tabs,
+	// this PC's decimal sign) or a CSV file ("." and ","). readingsInRange
+	// counts its rows.
+	Q_INVOKABLE QString valuesText(bool csv) const;
+	Q_INVOKABLE int readingsInRange() const;
+	// Writes valuesText(true) to the file at url; empty, or why not.
+	Q_INVOKABLE QString saveValues(const QUrl& url) const;
 	// Zooms to the box between two points of the item: the time to its width,
 	// the values to its height when it is at least 8 px tall and over the
 	// numbers.
