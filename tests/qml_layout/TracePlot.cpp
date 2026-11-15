@@ -467,6 +467,92 @@ int main(int argc, char** argv)
 		CHECK(view->setProperty("following", true));
 		settle(150);
 
+		// LP-1e. Ctrl and the wheel zoom the values about the pointer, by hand:
+		// the time stays, and "Auto (A)" offers the fit back.
+		{
+			const auto valuesArea = view->property("valuesArea").toRectF();
+			const double spanBefore = view->property("spanSeconds").toDouble();
+			const auto labelsBefore = view->property("valueLabels").toStringList();
+			const QPointF inside(valuesArea.center());
+			QWheelEvent zoomIn(inside, view->mapToGlobal(inside), QPoint(), QPoint(0, 240), Qt::NoButton, Qt::ControlModifier,
+			                   Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(view, &zoomIn);
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() == spanBefore &&
+			      view->property("valueLabels").toStringList() != labelsBefore && shown(content, "plotAuto"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-values-zoomed-760"));
+			// A fits them again.
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_A);
+			settle(150);
+			CHECK(view->property("valueAuto").toBool() && !named(content, "plotAuto"));
+			// The wheel over the value labels zooms the values too.
+			const QPointF labels(valuesArea.left() - 8, valuesArea.center().y());
+			QWheelEvent overLabels(labels, view->mapToGlobal(labels), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+			                       Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(view, &overLabels);
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() == spanBefore);
+			// Up pans them a tenth; the Follow and the time are left as they are.
+			const auto manualLabels = view->property("valueLabels").toStringList();
+			QTest::keyClick(window, Qt::Key_Up);
+			settle(150);
+			CHECK(view->property("valueLabels").toStringList() != manualLabels && view->property("following").toBool());
+			// A double-click on the value labels fits them again.
+			QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, view->mapToScene(labels).toPoint());
+			settle(150);
+			CHECK(view->property("valueAuto").toBool());
+			// A drag over the value labels pans them.
+			const auto fittedLabels = view->property("valueLabels").toStringList();
+			const auto from = view->mapToScene(labels).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+			QTest::mouseMove(window, from + QPoint(0, 30));
+			QTest::mouseMove(window, from + QPoint(0, 60));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(0, 60));
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("valueLabels").toStringList() != fittedLabels &&
+			      !view->property("referenceShown").toBool());
+			QTest::keyClick(window, Qt::Key_A);
+			settle(150);
+			// A click on a chip's name fits the values to that curve alone:
+			// Voltage, 1 to 8, not Gain's -100 to 100.
+			auto* voltageName = all(content, "plotChipName").first();
+			click(window, voltageName);
+			settle(200);
+			CHECK(view->property("focusedPath").toString() == QStringLiteral("device.Voltage") &&
+			      shown(content, "plotFitted")->property("text").toString() == QStringLiteral("Fitted to device.Voltage"));
+			double highest = -1e9;
+			for (const auto& label : view->property("valueLabels").toStringList())
+				highest = std::max(highest, label.toDouble());
+			CHECK(highest < 20);
+			shot(window, argc, argv, QStringLiteral("trace-plot-focused-760"));
+			click(window, voltageName);
+			settle(200);
+			CHECK(view->property("focusedPath").toString().isEmpty() && !named(content, "plotFitted"));
+			// The cursor's chip never covers the reference's: beside it.
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			const auto area = view->property("plotArea").toRectF();
+			const auto at = view->mapToScene(QPointF(area.left() + area.width() * 0.5, area.center().y())).toPoint();
+			QTest::mouseMove(window, at + QPoint(-20, 0));
+			settle(60);
+			QTest::mouseMove(window, at);
+			settle(100);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, at);
+			settle(150);
+			QTest::mouseMove(window, at + QPoint(3, 0));
+			settle(150);
+			auto* cursorChip = shown(content, "plotCursorChip");
+			auto* referenceChip = shown(content, "plotReferenceChip");
+			const double cx = cursorChip->x(), cw = cursorChip->width(), rx = referenceChip->x(), rw = referenceChip->width();
+			CHECK(cx >= rx + rw + 3.5 || cx + cw <= rx - 3.5);
+			shot(window, argc, argv, QStringLiteral("trace-plot-chips-apart-760"));
+			QTest::keyClick(window, Qt::Key_Escape);
+			QTest::mouseMove(window, QPoint(4, 4));
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);

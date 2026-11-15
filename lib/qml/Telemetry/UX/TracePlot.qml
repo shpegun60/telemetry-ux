@@ -9,7 +9,10 @@
 // follows again (End). The cursor follows the pointer, snapped to a reading;
 // its time shows under the axis and each chip shows its value there. A click
 // or Enter pins a reference: the cursor then says the time since it, each
-// chip its value's difference; Esc takes it away. Presentation only:
+// chip its value's difference; Esc takes it away. The values fit what is in
+// view, or the curve whose name was clicked; Ctrl and the wheel, the wheel
+// over the value labels, a drag there or Up and Down move them by hand, and
+// Auto (A) fits them again. Presentation only:
 // WatchTraces keeps the readings and TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
@@ -247,10 +250,11 @@ FocusScope {
                         return reference === undefined || current === undefined ? "Δ –"
                                                                                 : "Δ " + plot.deltaText(current - reference)
                     }
+                    readonly property bool focused: view.focusedPath === path
                     implicitWidth: chipRow.implicitWidth + 2 * Type.padding
                     implicitHeight: Type.controlHeight
                     radius: Type.radius
-                    color: Theme.surface
+                    color: focused ? Theme.stateSelectedInactive : Theme.surface
                     border.color: Theme.outlineVariant
                     RowLayout {
                         id: chipRow
@@ -274,7 +278,16 @@ FocusScope {
                             font.pointSize: Type.body
                             text: chip.path
                             HoverHandler { id: nameHover }
-                            PlainToolTip { visible: nameHover.hovered && chipName.truncated; text: chip.path; delay: 700 }
+                            // A click focuses the curve: the values fit it.
+                            TapHandler {
+                                onTapped: view.focusedPath = chip.focused ? "" : chip.path
+                            }
+                            PlainToolTip {
+                                visible: nameHover.hovered
+                                text: chip.focused ? qsTr("%1. Click to fit the values to every curve again.").arg(chip.path)
+                                                   : qsTr("%1. Click to fit the values to this curve.").arg(chip.path)
+                                delay: 700
+                            }
                         }
                         Text {
                             objectName: "plotChipValue"
@@ -362,7 +375,7 @@ FocusScope {
                     return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                      : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                 }
-                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
+                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again.")
             }
             // The keys are on the graph: the lists' focus frame round it.
             Rectangle {
@@ -377,8 +390,60 @@ FocusScope {
                 border.color: Theme.focusRing
                 Accessible.ignored: true
             }
+            // Values zoomed or panned by hand: a way back to fitting them.
+            Basic.Button {
+                id: autoValues
+                objectName: "plotAuto"
+                visible: view.visible && !view.valueAuto
+                x: view.valuesArea.left + Type.padding
+                y: view.valuesArea.top + Type.padding
+                height: Type.chipHeight
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                text: qsTr("Auto (A)")
+                onClicked: view.autoValues()
+                Accessible.name: qsTr("Fit the values again")
+                Accessible.description: qsTr("A, or a double-click on the value labels")
+                contentItem: Text {
+                    text: autoValues.text
+                    font: autoValues.font
+                    color: Theme.textPrimary
+                    Accessible.ignored: true
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: autoValues.down ? Theme.statePressed : autoValues.hovered ? Theme.stateHover : Theme.surface
+                    border.width: autoValues.visualFocus ? 2 : 1
+                    border.color: autoValues.visualFocus ? Theme.focusRing : Theme.outline
+                }
+            }
+            // Fitted to one curve: says which, on a chip so it reads over
+            // the curves.
+            Rectangle {
+                objectName: "plotFittedChip"
+                visible: view.visible && view.valueAuto && view.focusedPath.length > 0
+                x: view.valuesArea.left + Type.padding
+                y: view.valuesArea.top + Type.padding
+                width: fitted.implicitWidth + 2 * Type.padding
+                height: Type.chipHeight
+                radius: Type.radius
+                color: Theme.surface
+                border.color: Theme.outlineVariant
+                Label {
+                    id: fitted
+                    objectName: "plotFitted"
+                    anchors.centerIn: parent
+                    color: Theme.textSecondary
+                    font.pointSize: Type.caption
+                    text: qsTr("Fitted to %1").arg(view.focusedPath)
+                }
+            }
             // The reference's time, under the axis where it is pinned.
             Rectangle {
+                id: referenceChip
                 objectName: "plotReferenceChip"
                 visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
                          && view.referenceX <= view.plotArea.right
@@ -410,7 +475,21 @@ FocusScope {
                          && view.cursorX <= view.plotArea.right
                 width: cursorText.implicitWidth + 2 * Type.padding
                 height: Type.chipHeight
-                x: Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
+                // Centred on its line, but never over the reference's chip:
+                // beside it, 4 px apart, on the cursor's side.
+                x: {
+                    const centred = Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
+                    if (!referenceChip.visible)
+                        return centred
+                    const gap = 4
+                    if (centred + width + gap <= referenceChip.x || centred >= referenceChip.x + referenceChip.width + gap)
+                        return centred
+                    const after = referenceChip.x + referenceChip.width + gap
+                    const before = referenceChip.x - width - gap
+                    if (view.cursorX >= view.referenceX)
+                        return after + width <= parent.width ? after : Math.max(0, before)
+                    return before >= 0 ? before : Math.min(parent.width - width, after)
+                }
                 y: view.height - height
                 radius: Type.radius
                 color: Theme.surface

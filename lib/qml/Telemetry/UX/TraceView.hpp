@@ -42,6 +42,13 @@ class WatchTraces;
 // own, a row high, never on their axis - a bool as a band while true and a
 // line while false, an enum as a band per state with its name where it fits
 // and a mark where it changes. Lanes take at most 40 % of the height.
+//
+// The values (LP-1e): Auto fits every number in view, or only the focused
+// curve while one is focused; Manual starts with a value zoom or pan - Ctrl
+// and the wheel over the graph, or the wheel over the value labels, zoom about
+// the pointer; a drag over the labels pans; Up and Down pan a tenth, Ctrl+Up
+// and Ctrl+Down zoom - and stays through Follow, the presets and time zoom.
+// A double-click on the labels, or A, returns to Auto.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -54,6 +61,12 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(int preset READ preset NOTIFY viewChanged)
 	// Held, how far the right edge is behind the newest reading.
 	Q_PROPERTY(qreal behindSeconds READ behindSeconds NOTIFY drawn)
+	// Auto (fitted) or Manual (zoomed or panned by hand) values.
+	Q_PROPERTY(bool valueAuto READ valueAuto NOTIFY viewChanged)
+	// The curve the values are fitted to while Auto; empty for every one.
+	Q_PROPERTY(QString focusedPath READ focusedPath WRITE setFocusedPath NOTIFY viewChanged)
+	// The numbers' part of the plot area, above the lanes.
+	Q_PROPERTY(QRectF valuesArea READ valuesArea NOTIFY drawn)
 	// The cursor: shown, its time on this PC's clock (ms since the epoch),
 	// how long before the newest reading, and where it is drawn (item x;
 	// outside the plot area when it has scrolled out).
@@ -118,6 +131,18 @@ public:
 	Q_INVOKABLE void toOldest();
 	Q_INVOKABLE void follow() { setFollowing(true); }
 
+	bool valueAuto() const { return valueAuto_; }
+	QString focusedPath() const { return focusedPath_; }
+	void setFocusedPath(const QString& path);
+	QRectF valuesArea() const { return valuesArea_; }
+	// The values times factor (below 1 zooms in) about a point of the
+	// height (0 top, 1 bottom); Manual.
+	Q_INVOKABLE void zoomValues(qreal factor, qreal at = 0.5);
+	// The values by a part of their range (positive: higher ones); Manual.
+	Q_INVOKABLE void panValues(qreal part);
+	// Fitted again: Auto.
+	Q_INVOKABLE void autoValues();
+
 	bool cursorShown() const { return cursorShown_; }
 	qreal cursorUtcMs() const;
 	qreal cursorAgoSeconds() const;
@@ -176,6 +201,7 @@ protected:
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;
+	void mouseDoubleClickEvent(QMouseEvent* event) override;
 	void wheelEvent(QWheelEvent* event) override;
 	void keyPressEvent(QKeyEvent* event) override;
 	void hoverMoveEvent(QHoverEvent* event) override;
@@ -224,6 +250,9 @@ private:
 	qreal pressX_ = 0;
 	qint64 pressRightNs_ = 0;
 	bool dragging_ = false;
+	// A press on the value labels pans the values.
+	bool valueDrag_ = false;
+	qreal pressY_ = 0;
 	qint64 frozenNs_ = 0;
 	QVariantList colors_;
 	QColor gridColor_{0x3a, 0x3f, 0x47}, labelColor_{0x9a, 0xa4, 0xb0};
@@ -231,6 +260,11 @@ private:
 	// The value axis widens at once and narrows after two seconds, so a
 	// following plot does not jump with every reading.
 	Range range_;
+	// Manual values, the range last drawn, the one at a press.
+	bool valueAuto_ = true;
+	Range manual_, shown_, pressRange_;
+	QString focusedPath_;
+	QRectF valuesArea_;
 	qint64 narrowSinceNs_ = 0;
 	// Per path: drawn per pixel rather than raw, for the hysteresis.
 	QHash<QString, bool> aggregated_;

@@ -481,17 +481,93 @@ void TraceView::toOldest()
 	hold(oldest + spanNs());
 }
 
+void TraceView::setFocusedPath(const QString& path)
+{
+	if (path == focusedPath_)
+		return;
+	focusedPath_ = path;
+	// Focusing a curve, or leaving it, fits the values afresh.
+	valueAuto_ = true;
+	range_ = {};
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::zoomValues(qreal factor, qreal at)
+{
+	if (!(factor > 0) || !shown_.valid())
+		return;
+	const double pinned = shown_.high - std::clamp<qreal>(at, 0, 1) * (shown_.high - shown_.low);
+	Range next{pinned - (pinned - shown_.low) * factor, pinned + (shown_.high - pinned) * factor};
+	if (!(next.high - next.low > std::abs(pinned) * 1e-12 + 1e-300) || next.low < -valueLimit || next.high > valueLimit)
+		return;
+	valueAuto_ = false;
+	manual_ = next;
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::panValues(qreal part)
+{
+	if (!shown_.valid())
+		return;
+	const double shift = (shown_.high - shown_.low) * part;
+	valueAuto_ = false;
+	manual_ = {shown_.low + shift, shown_.high + shift};
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::autoValues()
+{
+	if (valueAuto_)
+		return;
+	valueAuto_ = true;
+	range_ = {};
+	Q_EMIT viewChanged();
+	update();
+}
+
 void TraceView::mousePressEvent(QMouseEvent* event)
 {
 	forceActiveFocus(Qt::MouseFocusReason);
 	pressX_ = event->position().x();
+	pressY_ = event->position().y();
 	pressRightNs_ = rightNs();
+	pressRange_ = shown_;
+	valueDrag_ = event->position().x() < plotArea_.left();
 	dragging_ = false;
+	event->accept();
+}
+
+void TraceView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+	// On the value labels: fitted again.
+	if (event->position().x() < plotArea_.left())
+		autoValues();
 	event->accept();
 }
 
 void TraceView::mouseMoveEvent(QMouseEvent* event)
 {
+	if (valueDrag_) {
+		// Over the value labels: the values follow the pointer up and down.
+		const qreal down = event->position().y() - pressY_;
+		if (!dragging_ && std::abs(down) < 4)
+			return;
+		if (!dragging_)
+			setCursor(Qt::ClosedHandCursor);
+		dragging_ = true;
+		if (pressRange_.valid() && valuesArea_.height() > 0) {
+			const double shift = (pressRange_.high - pressRange_.low) * down / valuesArea_.height();
+			valueAuto_ = false;
+			manual_ = {pressRange_.low + shift, pressRange_.high + shift};
+			Q_EMIT viewChanged();
+			update();
+		}
+		event->accept();
+		return;
+	}
 	const qreal moved = event->position().x() - pressX_;
 	// A drag of more than a few pixels pans; less is a click.
 	if (!dragging_ && std::abs(moved) < 4)
@@ -508,7 +584,7 @@ void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
 	if (dragging_) {
 		setCursor(Qt::CrossCursor);
-	} else if (plotArea_.contains(event->position())) {
+	} else if (!valueDrag_ && plotArea_.contains(event->position())) {
 		// A click: on the reference takes it away, anywhere else pins it
 		// where the cursor snapped.
 		setCursorAt(event->position().x());
@@ -518,6 +594,7 @@ void TraceView::mouseReleaseEvent(QMouseEvent* event)
 			pinReference();
 	}
 	dragging_ = false;
+	valueDrag_ = false;
 	event->accept();
 }
 
@@ -528,6 +605,13 @@ void TraceView::wheelEvent(QWheelEvent* event)
 		event->ignore();
 		return;
 	}
+	// Ctrl over the graph, or over the value labels: the values.
+	if ((event->modifiers() & Qt::ControlModifier) || event->position().x() < plotArea_.left()) {
+		const qreal heightPx = std::max<qreal>(1, valuesArea_.height());
+		zoomValues(std::pow(0.8, steps), (event->position().y() - valuesArea_.top()) / heightPx);
+		event->accept();
+		return;
+	}
 	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
 	zoom(std::pow(0.8, steps), (event->position().x() - plotArea_.left()) / widthPx);
 	event->accept();
@@ -536,7 +620,23 @@ void TraceView::wheelEvent(QWheelEvent* event)
 void TraceView::keyPressEvent(QKeyEvent* event)
 {
 	const bool shift = event->modifiers() & Qt::ShiftModifier;
+	const bool control = event->modifiers() & Qt::ControlModifier;
 	switch (event->key()) {
+		case Qt::Key_Up:
+			if (control)
+				zoomValues(0.8);
+			else
+				panValues(0.1);
+			break;
+		case Qt::Key_Down:
+			if (control)
+				zoomValues(1.25);
+			else
+				panValues(-0.1);
+			break;
+		case Qt::Key_A:
+			autoValues();
+			break;
 		case Qt::Key_Left:
 			if (shift)
 				stepCursor(-1);
@@ -683,10 +783,12 @@ void TraceView::paint(QPainter* painter)
 	for (const auto& path : plotted)
 		(traces_->categorical(path) ? lanes : numbers) << path;
 
-	// The value range of the numbers in view.
+	// The value range of the numbers in view - only the focused curve's
+	// while one is focused.
+	const QStringList fitted = numbers.contains(focusedPath_) ? QStringList{focusedPath_} : numbers;
 	Range wanted;
 	bool any = false;
-	for (const auto& path : std::as_const(numbers)) {
+	for (const auto& path : std::as_const(fitted)) {
 		const auto* readings = traces_->readings(path);
 		if (!readings || readings->empty())
 			continue;
@@ -732,7 +834,8 @@ void TraceView::paint(QPainter* painter)
 			narrowSinceNs_ = 0;
 		}
 	}
-	const Range values = range_.valid() ? range_ : Range{0, 1};
+	const Range values = !valueAuto_ && manual_.valid() ? manual_ : range_.valid() ? range_ : Range{0, 1};
+	shown_ = values;
 
 	// The value labels first, so the plot starts after the widest.
 	const qreal labelsHeight = metrics.height() * 2 + pad + bottomInset_;
@@ -837,7 +940,8 @@ void TraceView::paint(QPainter* painter)
 			continue;
 		const int colorAt = traces_->colorIndex(path);
 		const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
-		QPen pen(color, 1.8);
+		// The focused curve stands out.
+		QPen pen(color, path == focusedPath_ ? 2.6 : 1.8);
 		pen.setCapStyle(Qt::RoundCap);
 		pen.setJoinStyle(Qt::RoundJoin);
 		painter->setPen(pen);
@@ -1032,6 +1136,7 @@ void TraceView::paint(QPainter* painter)
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
 	plotArea_ = area;
+	valuesArea_ = numbersArea;
 	rightUtcMs_ = qreal(utcOf(right));
 	const auto newest = traces_ ? traces_->newestNs() : 0;
 	const qreal behind = !following_ && newest > right ? qreal(newest - right) / 1e9 : 0;
