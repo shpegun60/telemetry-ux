@@ -195,6 +195,13 @@ int main(int argc, char** argv)
 		CHECK(enabledChoice->isVisible() && enabledChoice->width() < enabled->width());
 		CHECK(qAbs(enabledChoice->height() - rowHeight) < 1);
 		CHECK(enabledChoice->property("count").toInt() == 2);
+		// Each name with its code, in the list and in the closed box.
+		QString first, second;
+		CHECK(QMetaObject::invokeMethod(enabledChoice, "textAt", Q_RETURN_ARG(QString, first), Q_ARG(int, 0)));
+		CHECK(QMetaObject::invokeMethod(enabledChoice, "textAt", Q_RETURN_ARG(QString, second), Q_ARG(int, 1)));
+		CHECK(first == QStringLiteral("false (0)") && second == QStringLiteral("true (1)"));
+		CHECK(enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (0)")) ||
+		      enabledChoice->property("displayText").toString().endsWith(QStringLiteral(" (1)")));
 		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-choice.png"))));
 		CHECK(QMetaObject::invokeMethod(enabledChoice, "activated", Q_ARG(int, 1)));
 		settle();
@@ -205,6 +212,16 @@ int main(int argc, char** argv)
 		settle();
 		auto* modeChoice = named(mode, QStringLiteral("valueChoice"));
 		CHECK(modeChoice->isVisible() && modeChoice->property("count").toInt() == 4);
+		QString idle;
+		CHECK(QMetaObject::invokeMethod(modeChoice, "textAt", Q_RETURN_ARG(QString, idle), Q_ARG(int, 0)));
+		CHECK(idle == QStringLiteral("Idle (0)") && modeChoice->property("displayText").toString().endsWith(QLatin1Char(')')));
+		// In hex, as the Watchlist's hex form: "Idle (0x00)".
+		CHECK(mode->setProperty("hexCodes", true));
+		settle();
+		CHECK(QMetaObject::invokeMethod(modeChoice, "textAt", Q_RETURN_ARG(QString, idle), Q_ARG(int, 0)));
+		CHECK(idle == QStringLiteral("Idle (0x00)"));
+		CHECK(mode->setProperty("hexCodes", false));
+		settle();
 		CHECK(QMetaObject::invokeMethod(modeChoice, "activated", Q_ARG(int, 3)));
 		settle();
 		auto* modeEditor = named(mode, QStringLiteral("scalarEditor"));

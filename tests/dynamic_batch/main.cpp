@@ -588,6 +588,7 @@ void batchUndoKinds()
 		now += 500;
 		CHECK(batch.move(1, 1));
 	});
+	add("drag an item", [&] { CHECK(batch.moveTo(0, 2)); });
 	add("clear", [&] { CHECK(batch.clear()); });
 	// A value set in an item (BA-4a): the request comes back. An item of an
 	// earlier connection is never changed again: its step is skipped.
@@ -613,7 +614,7 @@ void batchUndoKinds()
 		                        note == QStringLiteral("the item is from an earlier connection");
 	                 }});
 	const auto report = undo_kinds::run(QStringLiteral("dynamic_batch"), cases);
-	CHECK(report.cases == 6 && report.disconnects == 5 && report.descriptors == 6);
+	CHECK(report.cases == 7 && report.disconnects == 6 && report.descriptors == 7);
 
 	// The words, each with its serial.
 	start();
@@ -627,6 +628,29 @@ void batchUndoKinds()
 	// Moved back where it started within two seconds: no step is left.
 	const auto steps = history.count();
 	CHECK(batch.move(1, -1) && history.count() == steps - 1);
+	// A drag (BA-4c): one item to another place, the others closing up, as
+	// one step; Undo puts every item back.
+	now += 10000;
+	{
+		const auto order = [&batch] {
+			QStringList all;
+			for (const auto& row : batch.model()->rows())
+				all << row.name;
+			return all;
+		};
+		const auto before = order();
+		CHECK(before == QStringList({"device.B", "device.C", "device.D", "device.E", "device.F"}));
+		CHECK(!batch.moveTo(0, 0) && !batch.moveTo(0, 5) && !batch.moveTo(-1, 2));
+		const auto dragSteps = history.count();
+		CHECK(batch.moveTo(0, 2) && history.count() == dragSteps + 1 &&
+		      history.undoText() == QStringLiteral("Move device.B to item 3 in the Batch"));
+		CHECK(order() == QStringList({"device.C", "device.D", "device.B", "device.E", "device.F"}));
+		CHECK(history.undo() && order() == before);
+		now += 10000;
+		CHECK(batch.moveTo(4, 1) && history.count() == dragSteps + 1 &&
+		      order() == QStringList({"device.B", "device.F", "device.C", "device.D", "device.E"}));
+		CHECK(history.undo() && order() == before);
+	}
 	CHECK(batch.clear() && history.undoText() == QStringLiteral("Clear the Batch") && batch.count() == 0);
 	CHECK(history.undo() && batch.count() == 5);
 	// Rows put back after a reconnect come back historical: never sent again.

@@ -279,13 +279,15 @@ The provider exposes `batchSupported`, `batchItems`, `batchCount`, `batchPending
 `canExecuteBatch`, `batchStatus`, `batchSelection` and `batchItem`. Its
 invokables are `checkBatchPath(text)`, `batchPathCandidates(text)` and
 `addBatchPaths(lines)` (the **+** row), `removeBatch(row)`, `moveBatch(row,
-delta)` (delta -1/+1), `clearBatch()`, `selectBatch(row)` and `executeBatch()`.
+delta)` (delta -1/+1), `moveBatchTo(row, to)` (a drag: one item to another
+place, one undo step), `clearBatch()`, `selectBatch(row)` and `executeBatch()`.
 Operation names are `read`, `write`, `command` and `service`. `batchFinished()`
 is emitted after native progress
 returns; it does not imply that every item succeeded. The row model provides
 `name`, `operation`, `endpointId`, `status`, `hasValue`, `historical`, `line`
 (the request's values in one line), `changed` (they differ from what Execute
-sent), `at` (when it ran), `uid`, and a `result` map containing checked native
+sent), `at` (when it ran), `uid`, `failed` (the outcome is a refusal, an
+unreadable value or no checked outcome after a run), and a `result` map containing checked native
 status facts. That map is empty when no
 checked per-item outcome exists.
 

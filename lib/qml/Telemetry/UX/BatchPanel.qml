@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 
 Pane {
     id: panel
@@ -9,43 +10,116 @@ Pane {
     property int providerRevision: 0
     objectName: "batchPane"
     implicitHeight: batchLayout.implicitHeight + topPadding + bottomPadding
-    background: Rectangle { color: "#17202b"; radius: 10 }
+    // The family's surface: no card, no radius (BA-4c).
+    background: Rectangle { color: Theme.surfaceWindow }
+    // The panel's one primary action, as Details' (BA-4c).
+    component AccentButton: Button {
+        font.weight: Type.headingWeight
+        palette.button: Theme.accent
+        palette.buttonText: Theme.accentForeground
+        palette.brightText: Theme.accentForeground
+        palette.disabled.button: Theme.surfaceDisabled
+        palette.disabled.buttonText: Theme.textDisabled
+    }
+    // A failure's 12 px glyph: a ring with "!", as Details draws it.
+    component ErrorGlyph: Shape {
+        id: glyph
+        readonly property real s: width / 12
+        implicitWidth: Math.round(Type.bodyPixels * 0.9)
+        implicitHeight: implicitWidth
+        preferredRendererType: Shape.CurveRenderer
+        Accessible.ignored: true
+        ShapePath {
+            strokeColor: Theme.error
+            strokeWidth: Math.max(1, glyph.s * 1.2)
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            startX: glyph.s * 6
+            startY: glyph.s * 0.9
+            PathArc { x: glyph.s * 6; y: glyph.s * 11.1; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
+            PathArc { x: glyph.s * 6; y: glyph.s * 0.9; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
+            PathMove { x: glyph.s * 6; y: glyph.s * 3.4 }
+            PathLine { x: glyph.s * 6; y: glyph.s * 6.9 }
+            PathMove { x: glyph.s * 6; y: glyph.s * 8.9 }
+            PathLine { x: glyph.s * 6; y: glyph.s * 9.0 }
+        }
+    }
+    // The widths of the list's fixed columns: the item number and the kind.
+    FontMetrics {
+        id: captionFixed
+        font.family: Type.fixedFamily
+        font.pointSize: Type.caption
+    }
+    FontMetrics {
+        id: captionFont
+        font.pointSize: Type.caption
+    }
+    readonly property real numberWidth: Math.ceil(captionFixed.advanceWidth("32"))
+    readonly property real kindWidth: Math.ceil(Math.max(captionFont.advanceWidth(kindWord("read")),
+                                                         captionFont.advanceWidth(kindWord("write")),
+                                                         captionFont.advanceWidth(kindWord("command")),
+                                                         captionFont.advanceWidth(kindWord("service"))))
+    // Whether the items can be moved now: by the keys, the menu or a drag.
+    readonly property bool canReorder: !provider.busy && !provider.batchPending && provider.batchCount > 1
+    // An item's kind in the list's column, in the design's words.
+    function kindWord(operation) {
+        return operation === "read" ? qsTr("read")
+             : operation === "write" ? qsTr("write")
+             : operation === "command" ? qsTr("command")
+             : operation === "service" ? qsTr("service") : operation
+    }
     ColumnLayout {
         id: batchLayout
         anchors.fill: parent
         spacing: Type.spacing
+        // The header (BA-4c): the fold with "3 of 32 items", Clear flat at
+        // the left, Execute Batch the accent at the right.
         RowLayout {
+            objectName: "batchHeader"
             Layout.fillWidth: true
+            spacing: Type.spacing
             FoldTitle {
                 id: expanded
                 objectName: "batchToggle"
                 text: qsTr("Batch")
-                countText: qsTr("%L1/32").arg(panel.provider.batchCount)
+                countText: qsTr("%L1 of %L2 items").arg(panel.provider.batchCount).arg(32)
                 checked: false
             }
             Button {
-                objectName: "executeBatchButton"
-                text: "Execute Batch"
-                enabled: panel.provider.canExecuteBatch
+                objectName: "clearBatchButton"
+                text: qsTr("Clear")
+                flat: true
+                enabled: panel.provider.batchCount > 0 && !panel.provider.batchPending && !panel.provider.busy
                 ToolTip.visible: hovered
                 ToolTip.delay: 700
-                ToolTip.text: qsTr("Run every item on the device in order. Undo does not take back what it sends.")
+                ToolTip.text: qsTr("Remove every item. Ctrl+Z puts them back.")
                 Accessible.description: ToolTip.text
-                onClicked: {
-                    batchNotice.text = ""
-                    panel.provider.executeBatch()
-                }
-            }
-            Button {
-                objectName: "clearBatchButton"
-                text: "Clear"
-                enabled: panel.provider.batchCount > 0 && !panel.provider.batchPending && !panel.provider.busy
                 onClicked: {
                     batchNotice.text = ""
                     panel.provider.clearBatch()
                 }
             }
             Item { Layout.fillWidth: true }
+            AccentButton {
+                objectName: "executeBatchButton"
+                text: qsTr("Execute Batch")
+                enabled: panel.provider.canExecuteBatch
+                ToolTip.visible: hovered
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Sends every item in one request, in order. This cannot be undone.")
+                Accessible.description: ToolTip.text
+                onClicked: {
+                    batchNotice.text = ""
+                    panel.provider.executeBatch()
+                }
+            }
+        }
+        // The run, under the header.
+        ProgressLine {
+            objectName: "batchProgress"
+            Layout.fillWidth: true
+            running: panel.provider.batchPending === true
+            description: panel.provider.batchStatus
         }
         // The status line (BA-4c): what the Batch is doing or did, in words;
         // muted unless something went wrong.
@@ -85,6 +159,9 @@ Pane {
                     Layout.fillHeight: true
                     model: panel.provider.batchItems
                     clip: true
+                    // A mouse drag moves an item (BA-4c); the wheel, touch
+                    // and the scroll bar scroll.
+                    acceptedButtons: Qt.NoButton
                     // The current item, the one just added among them.
                     highlight: Rectangle { color: Theme.stateSelectedInactive; radius: Type.radius }
                     highlightMoveDuration: 0
@@ -126,6 +203,26 @@ Pane {
                             event.accepted = true
                         }
                     }
+                    // A drag in progress (BA-4c): the item dragged and the gap
+                    // it would drop into, 0 to count; -1 when none.
+                    property int dragFrom: -1
+                    property int dragSlot: -1
+                    readonly property bool dragMoves: dragFrom >= 0 && dragSlot >= 0
+                                                      && dragSlot !== dragFrom && dragSlot !== dragFrom + 1
+                    // Where a dragged item would land: a 2 px accent line in the gap.
+                    Rectangle {
+                        objectName: "batchMoveLine"
+                        visible: items.dragMoves
+                        z: 3
+                        x: 0
+                        y: Math.max(0, items.dragSlot * Type.rowHeight - 1)
+                        width: items.width
+                        height: 2
+                        color: Theme.accent
+                        Accessible.ignored: true
+                    }
+                    // One line per item (BA-4c): the number, the kind, the line
+                    // and the outcome, Type.rowHeight tall, striped.
                     delegate: Item {
                         id: item
                         objectName: "batchRow"
@@ -139,10 +236,24 @@ Pane {
                         // A host's own list may lack these roles.
                         readonly property string line: typeof model.line === "string" ? model.line : ""
                         readonly property bool changed: model.changed === true
+                        readonly property bool failed: model.failed === true
+                        readonly property bool current: ListView.isCurrentItem
+                        readonly property bool selectedLook: current && items.activeFocus
+                        // The values after the path: "value=2 factor=0.1", "= 3" for a write.
+                        readonly property string values: line.length === 0 ? ""
+                            : operation === "write" && line.indexOf("=") < 0 ? "= " + line : line
+                        // The outcome in words; nothing for a draft.
+                        readonly property string outcome: historical ? qsTr("earlier connection")
+                            : status === "Draft" ? ""
+                            : status === "Pending" ? qsTr("Sending\u2026")
+                            : status + (changed ? qsTr(", changed since") : "")
                         width: items.width
-                        height: 64
+                        height: Type.rowHeight
+                        opacity: items.dragFrom === index ? 0.55 : 1
                         Accessible.role: Accessible.ListItem
-                        Accessible.name: qsTr("Item %1, %2 %3, %4").arg(item.index + 1).arg(item.operation).arg(item.name).arg(item.status)
+                        Accessible.name: [qsTr("Item %L1").arg(item.index + 1),
+                                          panel.kindWord(item.operation) + " " + item.name,
+                                          item.line, item.outcome].filter(part => part.length > 0).join(", ")
                         HoverHandler { id: rowHover }
                         TapHandler {
                             onTapped: {
@@ -154,63 +265,177 @@ Pane {
                             acceptedButtons: Qt.RightButton
                             onTapped: panel.openRowMenu(item.index, item)
                         }
+                        // Dragged by the mouse to another place (touch keeps
+                        // scrolling the list): one move on release.
+                        DragHandler {
+                            id: rowDrag
+                            objectName: "batchRowDrag"
+                            target: null
+                            xAxis.enabled: false
+                            acceptedDevices: PointerDevice.Mouse | PointerDevice.Stylus
+                            grabPermissions: PointerHandler.CanTakeOverFromAnything
+                            enabled: panel.canReorder
+                            onActiveChanged: {
+                                if (active) {
+                                    items.dragFrom = item.index
+                                    items.dragSlot = -1
+                                    items.currentIndex = item.index
+                                    return
+                                }
+                                const from = items.dragFrom, slot = items.dragSlot
+                                items.dragFrom = -1
+                                items.dragSlot = -1
+                                if (from >= 0 && slot >= 0 && slot !== from && slot !== from + 1)
+                                    panel.moveItem(from, slot > from ? slot - 1 : slot)
+                            }
+                            onCentroidChanged: {
+                                if (!active || items.dragFrom < 0)
+                                    return
+                                const at = item.mapToItem(items.contentItem, centroid.position.x, centroid.position.y)
+                                items.dragSlot = Math.max(0, Math.min(items.count, Math.round(at.y / Type.rowHeight)))
+                            }
+                            onCanceled: {
+                                items.dragFrom = -1
+                                items.dragSlot = -1
+                            }
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            color: item.current ? (items.activeFocus ? Theme.stateSelected : Theme.stateSelectedInactive)
+                                 : rowHover.hovered ? Theme.stateHover
+                                 : item.index % 2 === 1 ? Theme.surfaceAlternate : "transparent"
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "transparent"
+                            border.width: 2
+                            border.color: Theme.focusRing
+                            visible: item.current && items.activeFocus
+                            Accessible.ignored: true
+                        }
                         RowLayout {
                             anchors.fill: parent
-                            ColumnLayout {
+                            anchors.leftMargin: Type.padding
+                            spacing: Type.columnGap
+                            Label {
+                                objectName: "batchRowNumber"
+                                textFormat: Text.PlainText
+                                text: item.index + 1
+                                font.family: Type.fixedFamily
+                                font.pointSize: Type.caption
+                                color: item.selectedLook ? Theme.selectedForeground : Theme.textMuted
+                                horizontalAlignment: Text.AlignRight
+                                Layout.preferredWidth: panel.numberWidth
+                            }
+                            Label {
+                                objectName: "batchRowKind"
+                                textFormat: Text.PlainText
+                                text: panel.kindWord(item.operation)
+                                font.pointSize: Type.caption
+                                color: item.selectedLook ? Theme.selectedForeground : Theme.textSecondary
+                                Layout.preferredWidth: panel.kindWidth
+                            }
+                            // The path bright, its values quieter, in one
+                            // monospace line; cut short in the middle.
+                            Item {
+                                id: lineBox
+                                objectName: "batchRowName"
+                                readonly property string text: item.name + (item.values.length > 0 ? " " + item.values : "")
+                                readonly property bool truncated: pathLabel.truncated || valuesLabel.truncated
                                 Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
                                 Label {
-                                    id: itemName
-                                    objectName: "batchRowName"
+                                    id: pathLabel
+                                    anchors.verticalCenter: parent.verticalCenter
                                     textFormat: Text.PlainText
-                                    // The values follow the path: "control.Scale value=2 factor=0.1".
-                                    text: (item.index + 1) + ". " + item.operation + " - " + item.name
-                                        + (item.line.length === 0 ? "" : item.operation === "write" && item.line.indexOf("=") < 0
-                                           ? " = " + item.line : " " + item.line)
-                                    Layout.fillWidth: true
+                                    text: item.name
+                                    font.family: Type.fixedFamily
+                                    color: item.selectedLook ? Theme.selectedForeground
+                                         : item.historical ? Theme.textMuted : Theme.textPrimary
                                     elide: Text.ElideMiddle
-                                    // Cut short: the whole of it on hover.
-                                    HoverHandler { id: itemNameHover }
-                                    PlainToolTip {
-                                        visible: itemNameHover.hovered && itemName.truncated
-                                        text: itemName.text
-                                        delay: 700
-                                    }
+                                    width: Math.min(implicitWidth, lineBox.width
+                                        - (valuesLabel.text.length > 0 ? Math.min(valuesLabel.implicitWidth + Type.tight, lineBox.width / 2) : 0))
                                 }
                                 Label {
+                                    id: valuesLabel
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    x: pathLabel.width + Type.tight
+                                    width: Math.max(0, lineBox.width - x)
                                     textFormat: Text.PlainText
-                                    text: item.status + (item.historical ? " - previous session" : "")
-                                        + (item.changed ? qsTr(", changed since") : "")
-                                    color: Theme.textSecondary; Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: item.values
+                                    font.family: Type.fixedFamily
+                                    color: item.selectedLook ? Theme.selectedForeground
+                                         : item.historical ? Theme.textMuted : Theme.textSecondary
+                                    elide: Text.ElideRight
+                                }
+                                HoverHandler { id: lineHover }
+                                PlainToolTip {
+                                    visible: lineHover.hovered && lineBox.truncated
+                                    text: lineBox.text
+                                    delay: 700
                                 }
                             }
-                            // On the hovered or the current row: its menu and Remove.
-                            ToolButton {
-                                id: rowMore
-                                objectName: "batchRowMenuButton"
-                                property int batchRowIndex: item.index
-                                visible: rowHover.hovered || item.ListView.isCurrentItem
-                                text: "\u2026"
-                                focusPolicy: Qt.NoFocus
-                                implicitWidth: Type.controlHeight
-                                ToolTip.visible: hovered
-                                ToolTip.delay: 700
-                                ToolTip.text: qsTr("Item %L1: move, read or write, remove (Shift+F10)").arg(item.index + 1)
-                                Accessible.name: qsTr("Menu of item %L1").arg(item.index + 1)
-                                onClicked: panel.openRowMenu(item.index, rowMore)
+                            // The outcome: a failure with the glyph and in the error colour.
+                            Row {
+                                spacing: Type.tight
+                                visible: item.outcome.length > 0
+                                ErrorGlyph {
+                                    objectName: "batchRowFailed"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    visible: item.failed && !item.historical
+                                }
+                                Label {
+                                    objectName: "batchRowOutcome"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    textFormat: Text.PlainText
+                                    text: item.outcome
+                                    font.pointSize: Type.caption
+                                    font.italic: item.changed
+                                    color: item.failed && !item.historical ? Theme.error
+                                         : item.selectedLook ? Theme.selectedForeground : Theme.textMuted
+                                    horizontalAlignment: Text.AlignRight
+                                    elide: Text.ElideRight
+                                    width: Math.min(implicitWidth, Math.max(Type.bodyPixels * 6, item.width * 0.35))
+                                }
                             }
-                            ToolButton {
-                                objectName: "removeBatchButton"
-                                property int batchRowIndex: item.index
-                                visible: rowHover.hovered || item.ListView.isCurrentItem
-                                text: "×"
-                                focusPolicy: Qt.NoFocus
-                                implicitWidth: Type.controlHeight
-                                enabled: !panel.provider.busy && !panel.provider.batchPending
-                                ToolTip.visible: hovered
-                                ToolTip.delay: 700
-                                ToolTip.text: qsTr("Remove item %L1 (Delete)").arg(item.index + 1)
-                                Accessible.name: qsTr("Remove item %L1").arg(item.index + 1)
-                                onClicked: panel.provider.removeBatch(item.index)
+                            // On the hovered or the current row: its menu and
+                            // Remove. Their place is kept, so nothing moves.
+                            Row {
+                                Layout.preferredWidth: Type.rowHeight * 2
+                                Layout.fillHeight: true
+                                ToolButton {
+                                    id: rowMore
+                                    objectName: "batchRowMenuButton"
+                                    property int batchRowIndex: item.index
+                                    visible: rowHover.hovered || item.current
+                                    text: "\u2026"
+                                    focusPolicy: Qt.NoFocus
+                                    padding: 0
+                                    implicitWidth: Type.rowHeight
+                                    implicitHeight: Type.rowHeight
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 700
+                                    ToolTip.text: qsTr("Item %L1: move, read or write, remove (Shift+F10)").arg(item.index + 1)
+                                    Accessible.name: qsTr("Menu of item %L1").arg(item.index + 1)
+                                    onClicked: panel.openRowMenu(item.index, rowMore)
+                                }
+                                ToolButton {
+                                    objectName: "removeBatchButton"
+                                    property int batchRowIndex: item.index
+                                    visible: rowHover.hovered || item.current
+                                    text: "\u00d7"
+                                    focusPolicy: Qt.NoFocus
+                                    padding: 0
+                                    implicitWidth: Type.rowHeight
+                                    implicitHeight: Type.rowHeight
+                                    enabled: !panel.provider.busy && !panel.provider.batchPending
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 700
+                                    ToolTip.text: qsTr("Remove item %L1 (Delete)").arg(item.index + 1)
+                                    Accessible.name: qsTr("Remove item %L1").arg(item.index + 1)
+                                    onClicked: panel.provider.removeBatch(item.index)
+                                }
                             }
                         }
                     }
@@ -386,6 +611,26 @@ Pane {
                 items.positionViewAtEnd()
             })
         return result.clear === true
+    }
+    // An item dragged from one place to another (BA-4c): one step where the
+    // provider moves to a place, else one place at a time.
+    function moveItem(from, to) {
+        if (from === to || from < 0 || to < 0 || provider.batchPending || provider.busy)
+            return false
+        let moved = false
+        if (typeof provider.moveBatchTo === "function") {
+            moved = provider.moveBatchTo(from, to)
+        } else {
+            const step = to > from ? 1 : -1
+            moved = true
+            for (let at = from; at !== to && moved; at += step)
+                moved = provider.moveBatch(at, step)
+        }
+        if (!moved)
+            return false
+        items.currentIndex = to
+        provider.selectBatch(to)
+        return true
     }
     // The current item one place up or down (Alt+Up, Alt+Down, the menu).
     function moveCurrent(delta) {

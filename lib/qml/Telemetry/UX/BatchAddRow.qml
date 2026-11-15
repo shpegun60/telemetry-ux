@@ -26,6 +26,10 @@ PathAddRow {
     quietStatuses: ["adds", "partial", "choose", "busy"]
     addStatuses: ["adds"]
     hideWhileTyping: false
+    // Enter adds the highlighted suggestion or the best match at once; the
+    // best match is highlighted as the suggestions come (BA-4b's design).
+    enterAdds: true
+    highlightBest: true
     openOnEmpty: false
     popupMaxWidth: Type.bodyPixels * 46
     enabled: usable && provider.batchPending !== true

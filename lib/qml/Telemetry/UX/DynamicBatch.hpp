@@ -46,7 +46,10 @@ public:
 		LineRole,
 		ChangedRole,
 		AtRole,
-		UidRole
+		UidRole,
+		// Whether the item's outcome is a failure: a refusal, or no checked
+		// outcome after a run (BA-4c).
+		FailedRole
 	};
 	Q_ENUM(Role)
 	int rowCount(const QModelIndex& parent = {}) const override;
@@ -131,6 +134,9 @@ public:
 	[[nodiscard]] int itemLimit() const;
 	bool remove(int row);
 	bool move(int row, int delta);
+	// The item at row to place to, the others closing up (a drag, BA-4c): one
+	// step, merged with the item's other moves as move() is.
+	bool moveTo(int row, int to);
 	bool clear();
 	// Where the Batch's changes go as steps (UR-1): add, remove, move and
 	// Clear, as "batch.items" by uid with each row's place and the row itself
