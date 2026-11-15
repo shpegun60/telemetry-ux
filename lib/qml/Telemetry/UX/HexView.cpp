@@ -696,7 +696,7 @@ QString HexView::replace(const QString& query, const QString& kind, int width, c
 			return ended(tr("Not found"), refused);
 		const auto count = static_cast<int>(runs.size());
 		const auto last = runs.back().first;
-		content_->overwriteRuns(runs, tr("Replace %n places", nullptr, count));
+		content_->overwriteRuns(runs, count == 1 ? tr("Replace 1 place") : tr("Replace %L1 places").arg(count));
 		anchor_ = last + needle.size() - 1;
 		cursor_ = last;
 		ensureVisible(last, true);
@@ -1124,9 +1124,9 @@ void HexView::keyPressEvent(QKeyEvent* event)
 		}
 		if (control && (event->key() == Qt::Key_Z || event->key() == Qt::Key_Y)) {
 			if (event->key() == Qt::Key_Y || extend)
-				content_->redo();
+				content_->history()->redo();
 			else
-				content_->undo();
+				content_->history()->undo();
 			event->accept();
 			return;
 		}

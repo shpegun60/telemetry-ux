@@ -8,6 +8,7 @@
 #include "EndpointPreviews.hpp"
 #include "SchemaText.hpp"
 #include "ScalarEditorMetadata.hpp"
+#include "ValueWords.hpp"
 #include "WatchLeaves.hpp"
 
 #include <QtCore/QCoreApplication>
@@ -113,6 +114,9 @@ struct Row {
 	int category = 0;
 	bool readable = false, writable = false, endpoint = false, aggregate = false;
 	bool previewOwner = false, previewReadable = false, previewChild = false, previewRange = false;
+	// A value row's scalar: its code, and whether it is an enum's.
+	Code code = Code::Bool;
+	bool scalar = false, enumeration = false;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
@@ -426,6 +430,9 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 	} else if (info.value.kind == Kind::Void) {
 		row->type = QStringLiteral("void");
 	} else {
+		row->scalar = true;
+		row->code = info.value.code;
+		row->enumeration = info.value.kind == Kind::Enum;
 		row->type = info.value.kind == Kind::Enum
 		                ? QStringLiteral("enum (") + scalarType(info.value.code) + QLatin1Char(')')
 		                : scalarType(info.value.code);
@@ -1165,6 +1172,17 @@ struct ValueModel::Impl {
 	int category = 0;
 	quint32 endpointId = 0;
 	detail::ScalarEditorMetadata metadata;
+	bool offer = false;
+
+	// A row takes text: in a draft or a request editor, or a Field's value
+	// while its owner offers an edit.
+	bool editable(const Row& row) const
+	{
+		if (row.aggregate || row.type.isEmpty() || row.type == QStringLiteral("void"))
+			return false;
+		return inspector.editing() ||
+		       (offer && !inspector.response && !inspector.snapshot && !inspector.requestEditor());
+	}
 
 	bool current() const
 	{
@@ -1360,8 +1378,19 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 		case LoadedCountRole:
 			return static_cast<int>(row->children.size());
 		case EditableRole:
-			return impl_->inspector.editing() && !row->aggregate && !row->type.isEmpty() &&
-			       row->type != QStringLiteral("void");
+			return impl_->editable(*row);
+		case TakesRole: {
+			if (!row->scalar)
+				return QString{};
+			QStringList names;
+			if (const auto* type = row->enumeration && impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
+				for (const auto& choice : type->choices) {
+					const auto label = choice.toMap().value(QStringLiteral("label")).toString();
+					const auto open = label.lastIndexOf(QStringLiteral(" ("));
+					names << (open > 0 ? label.left(open) : label);
+				}
+			return value_words::takes(int(row->code), row->enumeration, names);
+		}
 		case EditorTextRole:
 			return row->editorText;
 		case CanonicalTextRole:
@@ -1400,7 +1429,34 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {EditorChoicesRole, "editorChoices"},
 	        {EditorChoicesTruncatedRole, "editorChoicesTruncated"},
 	        {CanonicalTextRole, "canonicalText"},
-	        {TypeTextRole, "typeText"}};
+	        {TypeTextRole, "typeText"},
+	        {TakesRole, "takes"}};
+}
+
+void ValueModel::setEditOffer(bool offered)
+{
+	if (impl_->offer == offered)
+		return;
+	impl_->offer = offered;
+	// While the rows change a reset follows, and data() reads the offer then.
+	if (changing())
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (!row->aggregate)
+			indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {EditableRole});
+	}
+}
+
+bool ValueModel::editOffer() const noexcept
+{
+	return impl_->offer;
 }
 
 ins::NodeResult ValueModel::node(const QModelIndex& index) const

@@ -4,6 +4,7 @@
 #include <Telemetry/UX/StaticConfiguratorProvider.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/WatchSample.hpp>
+#include "../helpers/UndoKinds.hpp"
 #include <QAbstractItemModel>
 #include <QCoreApplication>
 #include <QEvent>
@@ -1229,17 +1230,20 @@ static void bulkWatch()
 }
 
 // The Device tree's watch boxes (T-1), with the Dynamic provider's contracts: a
-// group's box covers its Fields and shows all, some or none; one change and no
-// request; Undo puts rows back in their places and goes once anything else
-// changes the Watchlist; a group that does not fit changes nothing.
+// group's box covers its Fields and shows all, some or none; one step and no
+// request; Undo puts rows back in their places, the last step first (UR-1); a
+// group that does not fit changes nothing.
 static void groupWatchBoxes()
 {
 	Api api, other;
 	StaticConfiguratorProvider p(watchBinding(api, 65)), foreign(watchBinding(other));
+	UndoHistory history;
+	p.setHistory(&history);
+	CHECK(p.history() == &history && foreign.history() == nullptr);
 	const auto group = p.endpoints()->index(0, 0);
 	const auto watched = [](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
 	CHECK(p.watchState(group) == Qt::Unchecked && p.watchState(endpoint(p, 0)) == Qt::Unchecked &&
-	      !p.canUndoWatch() && p.watchLimit() == watchlistRowLimit);
+	      !history.canUndo() && p.watchLimit() == watchlistRowLimit);
 	auto result = p.setWatchMany(watched(endpoint(p, 0)), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(p.watchState(endpoint(p, 0)) == Qt::Checked && p.watchState(group) == Qt::PartiallyChecked);
@@ -1248,10 +1252,12 @@ static void groupWatchBoxes()
 	result = p.setWatchMany(watched(group), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 64 &&
 	      result.value("unchanged").toInt() == 1 && result.value("fields").toInt() == 65);
-	CHECK(inserts == 1 && p.watchCount() == 65 && p.watchState(group) == Qt::Checked && p.canUndoWatch());
-	result = p.undoWatch();
-	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 64);
-	CHECK(p.watchCount() == 1 && p.watchState(group) == Qt::PartiallyChecked && !p.canUndoWatch());
+	CHECK(inserts == 1 && p.watchCount() == 65 && p.watchState(group) == Qt::Checked && history.canUndo());
+	CHECK(result.value("serial").toInt() == history.undoSerial() &&
+	      history.undoText() == QStringLiteral("Add 64 values to the Watchlist"));
+	CHECK(history.undo());
+	CHECK(p.watchCount() == 1 && p.watchState(group) == Qt::PartiallyChecked && history.canRedo() &&
+	      history.undoText().startsWith(QStringLiteral("Add ")) && history.undoText().endsWith(QStringLiteral(" to the Watchlist")));
 	// Unwatching the group, then Undo: the rows come back in their order.
 	CHECK(p.setWatchMany(watched(endpoint(p, 2)), true).value("changed").toInt() == 1);
 	CHECK(p.setWatchMany(watched(endpoint(p, 1)), true).value("changed").toInt() == 1);
@@ -1266,20 +1272,24 @@ static void groupWatchBoxes()
 	result = p.setWatchMany(watched(group), false);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 3 && p.watchCount() == 0 &&
 	      p.watchState(group) == Qt::Unchecked);
-	CHECK(p.undoWatch().value("changed").toInt() == 3 && names() == before);
+	CHECK(history.undoText() == QStringLiteral("Remove 3 values from the Watchlist") && history.undo() && names() == before);
 	// Rows apart from one another: taken out run by run, put back in place,
 	// fresh and not read yet.
 	CHECK(p.setWatchMany(watched(endpoint(p, 3)), true).value("changed").toInt() == 1);
 	const auto four = names();
 	result = p.setWatchMany({QVariant::fromValue(endpoint(p, 0)), QVariant::fromValue(endpoint(p, 1))}, false);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 2 && p.watchCount() == 2);
-	CHECK(p.undoWatch().value("changed").toInt() == 2 && names() == four);
+	CHECK(history.undo() && names() == four);
 	CHECK(p.watchlist()->index(0, 0).data(role(p.watchlist(), "status")).toString() == "NotRead");
 	CHECK(p.setWatchMany(watched(endpoint(p, 3)), false).value("changed").toInt() == 1);
-	// Another change of the Watchlist takes Undo away.
-	CHECK(p.setWatchMany(watched(group), true).value("status") == "ok" && p.canUndoWatch());
+	// Steps stack: a row removed after the group was ticked is put back first,
+	// then the tick is taken back.
+	CHECK(p.setWatchMany(watched(group), true).value("status") == "ok");
+	const auto ticked = history.undoSerial();
+	const auto every = names();
 	p.removeWatch(0);
-	CHECK(!p.canUndoWatch() && p.undoWatch().value("status") == "refused");
+	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove ")));
+	CHECK(history.undo() && history.undoSerial() == ticked && names() == every);
 	// Another provider's index is refused; nothing reached the device.
 	CHECK(p.setWatchMany(watched(endpoint(foreign, 0)), true).value("status") == "invalid");
 	CHECK(api.calls.isEmpty());
@@ -1291,7 +1301,7 @@ static void groupWatchBoxes()
 	result = large.setWatchMany(watched(all), true);
 	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == watchlistRowLimit + 6 &&
 	      result.value("room").toInt() == watchlistRowLimit && large.watchCount() == 0 &&
-	      large.watchState(all) == Qt::Unchecked && !large.canUndoWatch());
+	      large.watchState(all) == Qt::Unchecked && large.history() == nullptr);
 }
 
 static void groupWatchPublicationLifetime()
@@ -1301,6 +1311,8 @@ static void groupWatchPublicationLifetime()
 		Api api;
 		QPointer<StaticConfiguratorProvider> provider =
 		    new StaticConfiguratorProvider(watchBinding(api, 4));
+		UndoHistory history;
+		provider->setHistory(&history);
 		const QVariantList separated{QVariant::fromValue(endpoint(*provider, 0)),
 		                             QVariant::fromValue(endpoint(*provider, 2))};
 		if (scenario == 1 || scenario == 3) {
@@ -1331,13 +1343,97 @@ static void groupWatchPublicationLifetime()
 		else if (scenario == 1)
 			provider->setWatchMany(separated, false);
 		else {
-			CHECK(provider->canUndoWatch());
-			provider->undoWatch();
+			CHECK(history.canUndo());
+			history.undo();
 		}
 		CHECK(!provider && !model && publications == 1);
 		CHECK(api.calls.isEmpty() && api.issued == 0);
 		api.changed(); // The API's old subscription context was retired too.
 		CHECK(api.calls.isEmpty());
+	}
+}
+
+// The central Undo's property for the static Watchlist (UR-1): rows by path,
+// done, undone and redone the same, and across a session that goes and comes
+// back - the rows go back with no session, and are read on the next. A
+// generated binding has one descriptor, so none changes under a step. A step
+// waits while the Watchlist polls, keeping its words.
+static int undoCases = 0;
+
+static void undoKinds()
+{
+	Api api;
+	StaticConfiguratorProvider p(watchBinding(api, 6));
+	UndoHistory history;
+	p.setHistory(&history);
+	const auto one = [&p](int n) { return QVariantList{QVariant::fromValue(endpoint(p, n))}; };
+	const auto rows = [&p] {
+		QStringList all;
+		for (int row = 0; row < p.watchlist()->rowCount(); ++row)
+			all << p.watchlist()->index(row, 0).data(Qt::DisplayRole).toString();
+		return QVariant(all);
+	};
+	const auto back = [&api] {
+		api.ready = true;
+		api.valid = true;
+		++api.epoch;
+		api.changed();
+		watchEvents();
+	};
+	const auto start = [&] {
+		if (!api.ready)
+			back();
+		p.clearWatch();
+		CHECK(p.setWatchMany({QVariant::fromValue(endpoint(p, 0)), QVariant::fromValue(endpoint(p, 2)),
+		                      QVariant::fromValue(endpoint(p, 3))}, true)
+		          .value("changed")
+		          .toInt() == 3);
+		history.clear();
+	};
+	const auto away = [&api] {
+		api.invalidate();
+		watchEvents();
+	};
+	std::vector<undo_kinds::Case> cases;
+	const auto rowsCase = [&](const char* name, std::function<void()> act) {
+		cases.push_back({QStringLiteral("watch.rows"), QString::fromLatin1(name), &history, start, std::move(act), rows,
+		                 away, back, {}, {}});
+	};
+	rowsCase("tick a Field", [&] { CHECK(p.setWatchMany(one(4), true).value("changed").toInt() == 1); });
+	rowsCase("untick a Field", [&] { CHECK(p.setWatchMany(one(2), false).value("changed").toInt() == 1); });
+	rowsCase("add Fields", [&] { CHECK(p.addWatchMany(one(5)).value("added").toInt() == 1); });
+	rowsCase("remove rows", [&] { CHECK(p.removeWatchRows({0, 2}).value("changed").toInt() == 2); });
+	rowsCase("remove one row", [&] { p.removeWatch(1); });
+	rowsCase("clear", [&] { p.clearWatch(); });
+	const auto report = undo_kinds::run(QStringLiteral("static_qml_configurator"), cases);
+	CHECK(report.cases == 6 && report.disconnects == 6 && report.descriptors == 0);
+	undoCases = report.cases;
+	// The words of each step, by path.
+	start();
+	auto second = rows().toStringList().value(1);
+	second.replace(QStringLiteral(" / "), QStringLiteral("."));
+	CHECK(p.removeWatchRows({1}).value("serial").toInt() == history.undoSerial());
+	CHECK(history.undoText() == QStringLiteral("Remove %1 from the Watchlist").arg(second));
+	p.clearWatch();
+	CHECK(history.undoText() == QStringLiteral("Clear the Watchlist") && history.undo() && p.watchCount() == 2);
+	// Polling: the step waits, its words kept; it goes once polling stops.
+	p.startWatch();
+	CHECK(p.watchActive() && !history.canUndo() && history.undoText().startsWith(QStringLiteral("Remove ")) &&
+	      history.blockedReason() == QStringLiteral("Stop polling to change the Watchlist.") && !history.undo());
+	p.stopWatch();
+	api.finish(true, {}, false, quint32{1});
+	watchEvents();
+	CHECK(!p.watchActive() && history.canUndo() && history.blockedReason().isEmpty() && history.undo() &&
+	      p.watchCount() == 3);
+	// A provider gone: its step is skipped and goes.
+	{
+		Api gone;
+		auto* doomed = new StaticConfiguratorProvider(watchBinding(gone, 3));
+		doomed->setHistory(&history);
+		CHECK(doomed->setWatchMany({QVariant::fromValue(endpoint(*doomed, 0))}, true).value("changed").toInt() == 1);
+		const auto steps = history.count();
+		delete doomed;
+		CHECK(history.canUndo() && history.undo() && history.count() == steps - 1);
 	}
 }
 
@@ -1408,7 +1504,8 @@ int main(int argc, char** argv)
 	bulkWatch();
 	groupWatchBoxes();
 	groupWatchPublicationLifetime();
+	undoKinds();
 	largeWatchCycle();
-	std::printf("{\"passed\":%s,\"checks\":%u}\n", failures ? "false" : "true", checks);
+	std::printf("{\"passed\":%s,\"checks\":%u,\"undoCases\":%d}\n", failures ? "false" : "true", checks, undoCases);
 	return failures ? 1 : 0;
 }

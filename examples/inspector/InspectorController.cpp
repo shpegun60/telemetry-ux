@@ -176,6 +176,10 @@ struct InspectorController::State : telemetry::integration::qt::ConnectionStorag
 
 InspectorController::InspectorController(QObject* parent) : QObject(parent)
 {
+	// A Field's cells take text while it may be edited; the first change opens
+	// the draft (setScalarText).
+	connect(this, &InspectorController::stateChanged, this,
+	        [this] { values_.setEditOffer(editing() || canEdit()); });
 	using Session = telemetry::integration::qt::ConnectionSession;
 	tcpSession_ = std::make_unique<Session>([](QByteArray bytes) {
 		auto state = std::make_shared<State>(std::move(bytes), false);
@@ -1036,15 +1040,17 @@ void InspectorController::cancelEdit()
 
 bool InspectorController::setScalarText(const QModelIndex& index, const QString& text)
 {
+	const bool request = commandSelected() || serviceSelected();
+	// The draft is implicit: the first change opens it, and a draft that no
+	// longer differs from the value read closes itself.
 	if (updating_ || values_.changing() || responses_.changing() || endpoints_.changing() ||
-	    (!editing() && !commandSelected() && !serviceSelected()) || busy_)
+	    (!editing() && !request && !canEdit()) || busy_)
 		return false;
 	const auto node = values_.node(index);
 	if (!node)
 		return false;
-	const auto info = (commandSelected() || serviceSelected())
-	                      ? state_->inspector.editorInfo(node.value)
-	                      : state_->inspector.info(node.value);
+	const auto info = request ? state_->inspector.editorInfo(node.value)
+	                          : state_->inspector.info(node.value);
 	if (!info || (info.value.kind != telemetry::TypeKind::Scalar &&
 	              info.value.kind != telemetry::TypeKind::Enum))
 		return false;
@@ -1057,25 +1063,26 @@ bool InspectorController::setScalarText(const QModelIndex& index, const QString&
 		Q_EMIT stateChanged();
 		return true;
 	}
+	if (!request && !editing() && state_->inspector.beginEdit() != rt::Status::Ok)
+		return false;
 	bool parsed = false;
 	const auto status = telemetry::ux::detail::setScalarText(state_->inspector, node.value,
 	                                                         info.value.code, text, parsed);
-	if (!parsed || status != rt::Status::Ok) {
+	const bool valid = parsed && status == rt::Status::Ok;
+	if (valid) {
+		updating_ = true;
+		invalidEditors_.remove(index.internalId());
+		values_.updateScalar(index);
+		updating_ = false;
+	} else
 		invalidEditors_.insert(index.internalId());
-		status_ =
-		    parsed ? QStringLiteral("Draft edit refused (runtime %1).")
-		                 .arg(static_cast<unsigned>(status))
-		           : QStringLiteral("Invalid value for the exact scalar type · draft unchanged.");
-		Q_EMIT stateChanged();
-		return false;
-	}
-	updating_ = true;
-	invalidEditors_.remove(index.internalId());
-	values_.updateScalar(index);
-	status_ = QStringLiteral("Draft changed · not yet written to the device.");
-	updating_ = false;
+	if (!request && editing() && !state_->inspector.dirty() && invalidEditors_.isEmpty())
+		state_->inspector.cancelEdit();
+	status_ = valid ? QStringLiteral("Draft changed · not yet written to the device.")
+	          : parsed ? QStringLiteral("Draft edit refused (runtime %1).").arg(static_cast<unsigned>(status))
+	                   : QStringLiteral("Invalid value for the exact scalar type · draft unchanged.");
 	Q_EMIT stateChanged();
-	return true;
+	return valid;
 }
 
 bool InspectorController::apply()

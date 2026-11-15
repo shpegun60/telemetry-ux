@@ -13,6 +13,7 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QVariant>
 #include <QtQml/qqmlregistration.h>
 
 namespace telemetry::ux {
@@ -24,6 +25,9 @@ public:
 	using QObject::QObject;
 	Q_INVOKABLE void setText(const QString& text);
 	Q_INVOKABLE QString text() const;
+	// A picture: an ItemGrabResult's image, or any QImage.
+	Q_INVOKABLE bool setImage(const QVariant& image);
+	Q_INVOKABLE bool hasImage() const;
 };
 } // namespace telemetry::ux
 #endif

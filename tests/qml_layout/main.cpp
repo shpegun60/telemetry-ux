@@ -286,14 +286,15 @@ int main(int argc, char** argv)
 		CHECK(statePanel && stateProvider);
 		auto* title = item(statePanel, QStringLiteral("endpointSelectionTitle"));
 		auto* actions = item(statePanel, QStringLiteral("endpointSelectionActions"));
-		auto* edit = item(statePanel, QStringLiteral("editButton"));
 		auto* cancel = item(statePanel, QStringLiteral("cancelEditButton"));
 		auto* apply = item(statePanel, QStringLiteral("applyButton"));
 		auto* refresh = item(statePanel, QStringLiteral("refreshButton"));
 		auto* command = item(statePanel, QStringLiteral("executeButton"));
 		auto* service = item(statePanel, QStringLiteral("callServiceButton"));
 		auto* values = item(statePanel, QStringLiteral("valueTree"));
-		CHECK(title && actions && edit && cancel && apply && refresh && command && service && values);
+		CHECK(title && actions && cancel && apply && refresh && command && service && values);
+		// There is no Edit button: the cells are the editor (BA-4).
+		CHECK(!item(statePanel, QStringLiteral("editButton")));
 		// Every visible action lies inside the panel's content area (not merely
 		// its outer frame) and no two overlap, at each narrow dock width. The
 		// window ends at the narrowest width, so the clicks below happen there.
@@ -310,7 +311,7 @@ int main(int argc, char** argv)
 				CHECK(rectangle(title).left() >= left - 1 && rectangle(title).right() <= right + 1);
 				CHECK(rectangle(values).right() <= right + 1);
 				QList<QQuickItem*> visibleButtons;
-				for (auto* button : {edit, cancel, apply, refresh, command, service})
+				for (auto* button : {cancel, apply, refresh, command, service})
 					if (button->isVisible()) visibleButtons.append(button);
 				CHECK(!visibleButtons.isEmpty());
 				for (int i = 0; i < visibleButtons.size(); ++i) {
@@ -325,12 +326,14 @@ int main(int argc, char** argv)
 				}
 			}
 		};
-		CHECK(edit->isVisible() && refresh->isVisible() && !cancel->isVisible() &&
+		CHECK(refresh->isVisible() && !cancel->isVisible() &&
 		      !apply->isVisible() && !command->isVisible() && !service->isVisible());
 		checkGeometry();
-		click(stateWindow, edit);
-		CHECK(stateProvider->property("edits").toInt() == 1 && stateProvider->property("editing").toBool());
-		CHECK(!edit->isVisible() && cancel->isVisible() && apply->isVisible() && refresh->isVisible());
+		// A draft exists from the first change: Cancel and Apply come, Read goes.
+		CHECK(stateProvider->setProperty("editing", true));
+		settle();
+		CHECK(stateProvider->property("edits").toInt() == 0);
+		CHECK(cancel->isVisible() && apply->isVisible() && !refresh->isVisible());
 		checkGeometry();
 		CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) +
 		                                     QStringLiteral("/endpoint-edit-280.png")));
@@ -340,14 +343,14 @@ int main(int argc, char** argv)
 		CHECK(stateProvider->property("cancels").toInt() == 1 && !stateProvider->property("editing").toBool());
 		CHECK(stateProvider->setProperty("commandSelected", true));
 		settle();
-		CHECK(command->isVisible() && !service->isVisible() && !edit->isVisible() && !refresh->isVisible());
+		CHECK(command->isVisible() && !service->isVisible() && !refresh->isVisible());
 		checkGeometry();
 		click(stateWindow, command);
 		CHECK(stateProvider->property("commands").toInt() == 1);
 		CHECK(stateProvider->setProperty("commandSelected", false));
 		CHECK(stateProvider->setProperty("serviceSelected", true));
 		settle();
-		CHECK(service->isVisible() && !command->isVisible() && !edit->isVisible() && !refresh->isVisible());
+		CHECK(service->isVisible() && !command->isVisible() && !refresh->isVisible());
 		checkGeometry();
 		click(stateWindow, service);
 		CHECK(stateProvider->property("services").toInt() == 1);

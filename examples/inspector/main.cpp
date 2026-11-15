@@ -168,12 +168,15 @@ int main(int argc, char** argv)
 				    return;
 			    }
 			    QTimer::singleShot(150, &app, [&] {
+				    // No Edit button: the Gain cell opens in place (BA-4).
 				    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
-				    auto* button =
-				        window ? findVisual(window->contentItem(), QStringLiteral("editButton"))
-				               : nullptr;
-				    if (!button || !button->isEnabled() ||
-				        !QMetaObject::invokeMethod(button, "clicked")) {
+				    auto* cell = window ? findVisual(window->contentItem(), QStringLiteral("valueCell"),
+				                                     QStringLiteral("Gain"))
+				                        : nullptr;
+				    QVariant opened;
+				    if (!cell || findVisual(window->contentItem(), QStringLiteral("editButton")) ||
+				        !QMetaObject::invokeMethod(cell, "begin", Q_RETURN_ARG(QVariant, opened)) ||
+				        !opened.toBool()) {
 					    app.exit(21);
 					    return;
 				    }
@@ -183,16 +186,22 @@ int main(int argc, char** argv)
 					                                       QStringLiteral("scalarEditor"),
 					                                       QStringLiteral("Gain"))
 					                          : nullptr;
-					    auto* apply = window ? findVisual(window->contentItem(),
-					                                      QStringLiteral("applyButton"))
-					                         : nullptr;
-					    // Typed, as a person types: the editor commits on finishing
-					    // only what was edited, so the smoke marks it edited too.
+					    // Typed, as a person types: each edit goes into the draft at
+					    // once, and the first opens it, so Apply is there.
 					    if (!editor || !editor->setProperty("text", QStringLiteral("25")) ||
-					        !editor->setProperty("inputDirty", true) ||
-					        !QMetaObject::invokeMethod(editor, "editingFinished") || !apply ||
-					        !apply->isEnabled() || !QMetaObject::invokeMethod(apply, "clicked"))
+					        !QMetaObject::invokeMethod(editor, "textEdited") ||
+					        !QMetaObject::invokeMethod(editor, "accepted")) {
 						    app.exit(22);
+						    return;
+					    }
+					    QTimer::singleShot(150, &app, [&] {
+						    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+						    auto* apply = window ? findVisual(window->contentItem(),
+						                                      QStringLiteral("applyButton"))
+						                         : nullptr;
+						    if (!apply || !apply->isEnabled() || !QMetaObject::invokeMethod(apply, "clicked"))
+							    app.exit(26);
+					    });
 				    });
 			    });
 		    });
@@ -225,7 +234,7 @@ int main(int argc, char** argv)
 					    return;
 				    }
 				    std::printf(
-				        "Inspector QML edit smoke: writes=1 refreshed=1 gain=10 controls=Edit,TextField,Apply\n");
+				        "Inspector QML edit smoke: writes=1 refreshed=1 gain=10 controls=Cell,TextField,Apply\n");
 				    app.exit(0);
 			    });
 		    });

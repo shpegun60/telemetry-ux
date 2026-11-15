@@ -34,6 +34,15 @@ It then types +0 and -0, checking one device write per deliberate change, exact
 TCP payload bytes, and the sign bit in each separate confirming readback. These
 use test-only scalar Fields; the normal demonstration Descriptor is unchanged.
 
+The central Undo (UR-1) runs over the same TCP session: every Watchlist kind
+(`watch.rows`, `watch.format`) is held to `tests/helpers/UndoKinds.hpp`'s
+property - done, undone and redone the same, across a disconnect and across a
+device with another descriptor - then steps one after another, rows removed
+and put back with no device and found again on reconnect, the words said after
+an undo (a partial one, a skipped one), Undo and Redo while the Watchlist
+polls, a restore that records nothing, and format choices merging on a clock of
+the check's own.
+
 The same gate also executes `tests/dynamic_watchlist`: controlled ticks and
 completion slots check 65-row chunking, smaller capability budgets, explicit
 Individual mode, Stop/drain, stale-source replacement and reentrant model
