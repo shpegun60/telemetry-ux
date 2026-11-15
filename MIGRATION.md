@@ -597,3 +597,13 @@ for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
 `TracePlot` opens a curve's settings from its chip's colour mark, tags a scaled
 chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
 Shift+F10).
+
+## The Watchlist holds 8192 values, the Plot's rings 256 MB (WL-7, November 2026)
+
+`watchlistRowLimit` is 8192 (it was 1024) in both providers, for whole Fields
+and values inside struct and array Fields; `watchLimit` reports it, and
+adding past it still counts the rest as `capacity`. A cycle then needs at
+most 256 ReadMany portions of 32. `WatchTraces::keptTotal` is 16,777,216
+readings, 256 MB (it was 64 MB); the drop order and the ten minutes and
+65,536 readings a value are unchanged. Code that assumed 1024 should read
+the constant.

@@ -394,7 +394,7 @@ struct Peer {
 			source.schema = [this] { return schema ? schema->schema : twin->schema; };
 			source.readMembers = [this](quint32 field, std::span<const std::uint32_t> leaves,
 			                            ux::WatchlistSource::Completion done) -> cl::Submission {
-				CHECK(current && !busy && !completion && !leaves.empty() && leaves.size() <= 1024);
+				CHECK(current && !busy && !completion && !leaves.empty() && leaves.size() <= std::size_t(ux::watchlistRowLimit));
 				CHECK(std::is_sorted(leaves.begin(), leaves.end()));
 				memberField = field;
 				pending.assign(leaves.begin(), leaves.end());
@@ -639,8 +639,9 @@ void rowLimit()
 	CHECK(result.value("added").toInt() == ux::watchlistRowLimit);
 	CHECK(result.value("capacity").toInt() == 5);
 	CHECK(watch.count() == ux::watchlistRowLimit);
-	CHECK(!watch.canAdd(5000) && !watch.add(5000, QStringLiteral("over")));
-	const auto over = watch.addMany({{6000, QStringLiteral("over")}});
+	const auto beyond = quint32(ux::watchlistRowLimit) + 1000;
+	CHECK(!watch.canAdd(beyond) && !watch.add(beyond, QStringLiteral("over")));
+	const auto over = watch.addMany({{beyond + 1, QStringLiteral("over")}});
 	CHECK(over.value("added").toInt() == 0 && over.value("capacity").toInt() == 1);
 	CHECK(watch.count() == ux::watchlistRowLimit && peer.calls.empty());
 }
@@ -1312,16 +1313,19 @@ void missingRows()
 	// member below keeps its own value.
 	watch.clear();
 	QVector<ux::WatchEntry> crowd;
-	for (int i = 0; i < 750; ++i)
+	// The Watchlist all but full: room for the struct's row and the member's,
+	// not for the struct's values.
+	constexpr int pads = ux::watchlistRowLimit - 2;
+	for (int i = 0; i < pads; ++i)
 		crowd.push_back(watch.missingEntry(QStringLiteral("pad.P%1").arg(i)));
 	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config")));
 	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config.gain")));
-	CHECK(watch.addEntries(crowd).value("added").toInt() == 752);
+	CHECK(watch.addEntries(crowd).value("added").toInt() == pads + 2);
 	reattach();
-	CHECK(model->count() == 752 && model->isUnbound(750) && !model->isUnbound(751));
-	CHECK(model->data(model->index(750, 0), ux::WatchlistModel::StatusRole) == "Unwatchable");
-	CHECK(model->data(model->index(750, 0), ux::WatchlistModel::WriteRefusalRole).toString().contains("do not fit"));
-	CHECK(model->data(model->index(751, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	CHECK(model->count() == pads + 2 && model->isUnbound(pads) && !model->isUnbound(pads + 1));
+	CHECK(model->data(model->index(pads, 0), ux::WatchlistModel::StatusRole) == "Unwatchable");
+	CHECK(model->data(model->index(pads, 0), ux::WatchlistModel::WriteRefusalRole).toString().contains("do not fit"));
+	CHECK(model->data(model->index(pads + 1, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
 }
 
 // A typed path as the rows it adds, and what may come next (WL-4b).

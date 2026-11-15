@@ -466,13 +466,13 @@ void groupWatchBoxes()
 	int holdable = 0;
 	for (int row = 0; row < model->rowCount(group); ++row)
 		holdable += provider->watchState(model->index(row, 0, group)) >= 0 ? 1 : 0;
-	CHECK(holdable >= 3 && holdable <= 1024);
+	CHECK(holdable >= 3 && holdable <= ux::watchlistRowLimit);
 	const auto requests = peer.requests();
 	const auto watched = [&](const QModelIndex& index) { return QVariantList{QVariant::fromValue(index)}; };
 	// A Command has no box; the Fields start empty.
 	CHECK(provider->watchState(command) == -1 && provider->watchState(first) == Qt::Unchecked &&
 	      provider->watchState(group) == Qt::Unchecked && !provider->canUndoWatch());
-	CHECK(provider->watchLimit() == 1024);
+	CHECK(provider->watchLimit() == ux::watchlistRowLimit && ux::watchlistRowLimit == 8192);
 	auto result = provider->setWatchMany(watched(first), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(provider->watchState(first) == Qt::Checked && provider->watchState(group) == Qt::PartiallyChecked);
@@ -627,11 +627,11 @@ void memberWatchBoxes()
 	result = dataProvider->setWatchMany(one(samples), true);
 	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == 16384 &&
 	      result.value("adding").toInt() == 16384 &&
-	      result.value("room").toInt() == 1024 && result.value("values").toBool() && dataProvider->watchCount() == 0);
+	      result.value("room").toInt() == ux::watchlistRowLimit && result.value("values").toBool() && dataProvider->watchCount() == 0);
 	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
 	// Typed, the same room is said before Enter, and a paste adds all or nothing.
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
-	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(1024))));
+	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(ux::watchlistRowLimit))));
 	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
 	      dataProvider->watchCount() == 0);
 	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
