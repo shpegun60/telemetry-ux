@@ -205,13 +205,15 @@ ApplicationWindow {
 		CHECK(tree->setProperty("animate", animate));
 		return row;
 	}
+	// A cell is a value until it is opened (BA-4): a click on a choice's value
+	// opens its list at once.
 	void choose(const char* name, int index, const char* expectedLabel) {
-		const QPointer<QQuickItem> choice = control(valueRow(name), "valueChoice");
 		auto* tree = control(details, "valueTree");
-		const auto choiceRect = choice->mapRectToScene(choice->boundingRect());
 		const auto viewport = tree->mapRectToScene(tree->boundingRect());
 		const auto beforeClick = window->grabWindow();
-		click(*window, choice);
+		click(*window, control(valueRow(name), "valueText"));
+		const QPointer<QQuickItem> choice = control(valueRow(name), "valueChoice");
+		const auto choiceRect = choice->mapRectToScene(choice->boundingRect());
 		const QPointer<QObject> popup = choice ? choice->property("popup").value<QObject*>() : nullptr;
 		const bool opened = popup && await([&] { return popup && popup->property("visible").toBool(); });
 		if (!opened) {
@@ -230,8 +232,18 @@ ApplicationWindow {
 		QTest::keyClick(window, Qt::Key_Return); settle();
 		CHECK(await([&] { return choice && choice->property("currentText").toString() == QString::fromLatin1(expectedLabel); }));
 	}
+	// Opens the cell and types, leaving it open: the text is in the draft live.
 	void enter(const char* name, const char* text) {
-		type(*window, control(valueRow(name), "scalarEditor"), QString::fromLatin1(text));
+		auto* row = valueRow(name);
+		// A cell left open by the last entry takes the text as it is.
+		if (!visual(row, QStringLiteral("scalarEditor")))
+			click(*window, control(row, "valueText"));
+		auto* editor = control(row, "scalarEditor");
+		CHECK(await([&] { return editor->hasActiveFocus(); }));
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		QTest::keyClick(window, Qt::Key_Backspace);
+		for (const auto letter : QString::fromLatin1(text).toLatin1()) QTest::keyClick(window, letter);
+		settle();
 	}
 };
 
@@ -244,19 +256,34 @@ void editorBounds(Window& ui) {
 	settle();
 	for (const auto& name : {"Gain", "Counter", "Offset", "Enabled", "OperatingMode"}) {
 		auto* row = ui.valueRow(name);
-		auto* input = control(row, (QString::fromLatin1(name) == "Enabled" ||
-		    QString::fromLatin1(name) == "OperatingMode") ? "valueChoice" : "scalarEditor");
+		// A cell shows its value, or its editor while it is open.
+		auto* input = visual(row, QStringLiteral("valueText"));
+		if (!input) input = visual(row, QStringLiteral("scalarEditor"));
+		if (!input) input = visual(row, QStringLiteral("valueChoice"));
+		CHECK(input && input->width() > 0 && input->height() > 0);
 		const auto area = input->mapRectToItem(row, input->boundingRect());
 		CHECK(area.top() >= -1 && area.bottom() <= row->height() + 1);
 		CHECK(area.left() >= -1 && area.right() <= row->width() + 1);
 		geometry(*ui.window, input);
 	}
+	// Open, the editor takes the cell's place, one row tall.
+	ui.enter("Counter", "7");
+	auto* row = ui.valueRow("Counter");
+	auto* editor = control(row, "scalarEditor");
+	const auto area = editor->mapRectToItem(row, editor->boundingRect());
+	CHECK(area.top() >= -1 && area.bottom() <= row->height() + 1);
+	CHECK(area.left() >= -1 && area.right() <= row->width() + 1);
+	geometry(*ui.window, editor);
+	QTest::keyClick(ui.window, Qt::Key_Escape); settle();
 }
 
 void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
                         inspector_qml::TcpDemoServer& peer) {
 	CHECK(peer.fieldReads() == 0 && peer.nativeCommands() == 0 && peer.nativeServices() == 0);
 	CHECK(!ui.treePanel->property("previewValues").toBool());
+	// With changes off a picked Field is not read: Details shows its
+	// definition (with changes allowed it would read it, below).
+	provider.setAllowMutations(false);
 	click(*ui.window, control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config")));
 	CHECK(provider.selection().endsWith(QStringLiteral("Config")));
 	CHECK(peer.fieldReads() == 0 && provider.values()->rowCount() == 0);
@@ -290,6 +317,7 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	CHECK(peer.fieldReads() == 0 && provider.values()->rowCount() == 0);
 	ui.capture("details-unread-320");
 	ui.page("details", 480, 820); geometry(*ui.window, tree, 200); ui.capture("details-unread-480");
+	provider.setAllowMutations(true);
 }
 
 void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
@@ -433,17 +461,31 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
 
 void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider,
                            host::ConnectionSession& session, inspector_qml::TcpDemoServer& peer) {
+	// With changes allowed, picking a Field reads it once, so its cells can be
+	// edited at once (BA-4); the same Field again reads nothing more.
+	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Execute"))));
+	settle();
+	CHECK(await([&] { return !session.busy() && !provider.busy(); }));
+	const auto readsBefore = peer.fieldReads();
+	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Config"))));
+	CHECK(await([&] { return peer.fieldReads() == readsBefore + 1 && !provider.busy() && provider.values()->rowCount() == 1; }));
+	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Config"))));
+	settle(200);
+	CHECK(peer.fieldReads() == readsBefore + 1);
 	click(*ui.window, control(ui.details, "refreshButton"));
 	CHECK(await([&] { return !provider.busy() && provider.values()->rowCount() == 1; }));
-	click(*ui.window, control(ui.details, "editButton"));
-	CHECK(provider.editing());
-	ui.choose("Enabled", 0, "false (0)");
+	// No Edit button: the cells are the editor, and the draft opens with the
+	// first change (BA-4).
+	CHECK(!visual(ui.details, QStringLiteral("editButton")) && !provider.editing());
+	ui.choose("Enabled", 0, "false");
 	CHECK(value(provider, "Enabled") == "false");
+	ui.enter("Gain", "0.25");
+	CHECK(provider.editing());
 	ui.enter("Gain", "0.1");
 	CHECK(control(ui.valueRow("Gain"), "scalarEditor")->property("text").toString() == "0.1");
 	CHECK(value(provider, "Gain").startsWith(QStringLiteral("0.100000001")));
 	const auto canonicalGain = value(provider, "Gain");
-	auto* caption = control(ui.valueRow("Gain"), "valueEncodedCaption");
+	auto* caption = control(ui.valueRow("Gain"), "valueCaption");
 	CHECK(caption->property("text").toString().startsWith(QStringLiteral("Encoded: 0.100000001")));
 	CHECK(caption->property("text").toString().endsWith(QStringLiteral("(f32)")));
 	const auto draftSelection = provider.selectedEndpointIndex();
@@ -456,7 +498,8 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	ui.capture("details-edit-480");
 	ui.page("details", 320, 820);
 	editorBounds(ui);
-	geometry(*ui.window, control(ui.valueRow("Gain"), "valueEncodedCaption"));
+	ui.enter("Gain", "0.1");
+	geometry(*ui.window, control(ui.valueRow("Gain"), "valueCaption"));
 	ui.capture("details-edit-320");
 	ui.page("details", 880, 820);
 	const auto writes = peer.nativeWrites();
@@ -466,15 +509,16 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(value(provider, "Enabled", ux::ValueModel::ValueRole) == "false");
 	CHECK(!provider.editing());
 	std::puts("Endpoint editor journey: Apply true");
-	click(*ui.window, control(ui.details, "editButton"));
-	ui.choose("Enabled", 1, "true (1)"); CHECK(value(provider, "Enabled") == "true");
+	CHECK(!visual(ui.details, QStringLiteral("applyButton")));
+	ui.choose("Enabled", 1, "true"); CHECK(value(provider, "Enabled") == "true");
+	CHECK(provider.editing());
 	click(*ui.window, control(ui.details, "applyButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeWrites() == writes + 2; }));
 	CHECK(value(provider, "Enabled", ux::ValueModel::ValueRole) == "true");
 	std::puts("Endpoint editor journey: Command");
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Execute"))));
 	CHECK(provider.commandSelected());
-	ui.choose("Enabled", 1, "true (1)"); CHECK(value(provider, "Enabled") == "true");
+	ui.choose("Enabled", 1, "true"); CHECK(value(provider, "Enabled") == "true");
 	const auto commands = peer.nativeCommands();
 	click(*ui.window, control(ui.details, "executeButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeCommands() == commands + 1; }));
@@ -484,15 +528,21 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Transform"))));
 	CHECK(provider.serviceSelected());
 	ui.enter("Gain", "0.1");
-	ui.choose("Enabled", 0, "false (0)");
+	ui.choose("Enabled", 0, "false");
 	// Canonical zero is unnamed in this enum. Select Idle (-7), then explicitly
 	// enter another numeric code through the real ComboBox/manual-code control.
 	ui.choose("OperatingMode", 1, "Idle (-7)");
 	CHECK(value(provider, "OperatingMode") == "-7");
+	click(*ui.window, control(ui.valueRow("OperatingMode"), "valueText"));
 	auto* enumChoice = control(ui.valueRow("OperatingMode"), "valueChoice");
-	click(*ui.window, enumChoice);
+	const QPointer<QObject> enumPopup = enumChoice->property("popup").value<QObject*>();
+	CHECK(await([&] { return enumPopup && enumPopup->property("visible").toBool(); }));
 	QTest::keyClick(ui.window, Qt::Key_End); QTest::keyClick(ui.window, Qt::Key_Return); settle();
-	ui.enter("OperatingMode", "-123"); CHECK(value(provider, "OperatingMode") == "-123");
+	auto* code = control(ui.valueRow("OperatingMode"), "scalarEditor");
+	CHECK(await([&] { return code->hasActiveFocus(); }));
+	for (const auto letter : QByteArrayLiteral("-123")) QTest::keyClick(ui.window, letter);
+	QTest::keyClick(ui.window, Qt::Key_Return); settle();
+	CHECK(value(provider, "OperatingMode") == "-123");
 	const auto services = peer.nativeServices();
 	click(*ui.window, control(ui.details, "callServiceButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeServices() == services + 1 && provider.responses()->rowCount() == 1; }));
