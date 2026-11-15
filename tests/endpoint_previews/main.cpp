@@ -94,6 +94,12 @@ struct Peer {
 	ux::EndpointPreviewSource::Completion completion;
 	std::function<void()> onRead;
 	std::shared_ptr<void> backing;
+	// Set: the device has ReadMany or Batch, with these budgets.
+	bool many = false, batch = false, refuseOnce = false;
+	ux::read_portions::Budget manyBudget{32, 130, 514}, batchBudget{32, 4096, 65536};
+	QList<QList<quint32>> manyCalls, batchCalls;
+	QList<quint32> asked;
+	ux::EndpointPreviewSource::ManyCompletion manyDone;
 
 	ux::EndpointPreviewSource source() {
 		ux::EndpointPreviewSource out;
@@ -103,16 +109,52 @@ struct Peer {
 		out.schema = [this] { return schema; };
 		out.session = [this] { return session; };
 		out.watched = [this](quint32 id) { return watched.contains(id); };
+		const auto several = [this](QList<QList<quint32>>& calls) {
+			return [this, &calls](std::span<const std::uint32_t> ids, ux::EndpointPreviewSource::ManyCompletion done) {
+				CHECK(admitted && !busy && !completion && !manyDone && !ids.empty());
+				asked = QList<quint32>(ids.begin(), ids.end());
+				calls.append(asked);
+				if (refusal != cl::Status::Ok) return cl::Submission{refusal, {}};
+				manyDone = std::move(done);
+				busy = true;
+				return cl::Submission{cl::Status::Ok, {}};
+			};
+		};
+		if (many) {
+			out.readManyBudget = [this] { return std::optional<ux::read_portions::Budget>{manyBudget}; };
+			out.readMany = several(manyCalls);
+		}
+		if (batch) {
+			out.batchBudget = [this] { return std::optional<ux::read_portions::Budget>{batchBudget}; };
+			out.readBatch = several(batchCalls);
+		}
 		out.read = [this](quint32 id, ux::EndpointPreviewSource::Completion done) {
-			CHECK(admitted && !busy && !completion);
+			CHECK(admitted && !busy && !completion && !manyDone);
 			calls.append(id);
-			if (refusal != cl::Status::Ok) return cl::Submission{refusal, {}};
+			if (refusal != cl::Status::Ok) {
+				const auto refused = refusal;
+				if (refuseOnce) refusal = cl::Status::Ok;
+				return cl::Submission{refused, {}};
+			}
 			completion = std::move(done);
 			busy = true;
 			if (onRead) onRead();
 			return cl::Submission{cl::Status::Ok, {}};
 		};
 		return out;
+	}
+	// Answers several Fields: each value as value(id) gives it.
+	void finishMany(const std::function<QByteArray(quint32)>& value, cl::Status status = cl::Status::Ok) {
+		CHECK(manyDone && busy);
+		inCallback = true;
+		auto done = std::exchange(manyDone, {});
+		busy = false;
+		ux::EndpointPreviewManyResult result;
+		result.status = status;
+		for (auto id : asked)
+			result.items.emplace_back(id, ux::EndpointPreviewResult{cl::Status::Ok, true, value(id), {}});
+		*done = std::move(result);
+		inCallback = false;
 	}
 	void finish(QByteArray bytes, bool hasValue = true, cl::Status status = cl::Status::Ok) {
 		CHECK(completion && busy);
@@ -144,7 +186,11 @@ void bind(ux::EndpointPreviews& previews, Peer& peer) {
 	CHECK(previews.current());
 }
 
-void schedulingAndOwnedValues() {
+// One cycle reads every Field in view, one request at a time and only while
+// the session is idle, and its values land together when the last reply is
+// in; the next cycle comes an interval later; a value is stale after three
+// intervals; a failed read keeps the last value, stale, with its reason.
+void cycleLandsTogether() {
 	auto parsed = std::make_shared<fixture::Backing>();
 	Peer peer;
 	peer.schema = parsed->schema;
@@ -156,26 +202,28 @@ void schedulingAndOwnedValues() {
 	CHECK(previews.setDemand(&view, {0, 1, 0, 0xffffffffu}));
 	CHECK(peer.calls.isEmpty() && state(previews, 0) == "Queued");
 	CHECK(!previews.info(0).isEmpty() && previews.value(0, peer.type(0), 0).isEmpty());
-	CHECK(peer.calls.isEmpty());
 	peer.busy = true; // foreground and Watch own priority at the common FIFO.
 	previews.poll();
 	CHECK(peer.calls.isEmpty());
 	peer.busy = false;
 	previews.poll();
-	CHECK(peer.calls == QList<quint32>{0} && previews.pending());
-	CHECK(state(previews, 0) == "Reading");
+	CHECK(peer.calls == QList<quint32>{0} && previews.pending() && state(previews, 0) == "Reading");
 	for (unsigned n = 0; n < 20; ++n) previews.poll();
 	CHECK(peer.calls.size() == 1);
-	const auto config = encoded(fixture::device.config);
-	peer.finish(config);
-	CHECK(state(previews, 0) == "Reading" && !hasValue(previews, 0));
+	peer.finish(encoded(fixture::device.config));
 	previews.poll();
-	CHECK(hasValue(previews, 0) && state(previews, 0) == "Current");
+	// The next Field at once; nothing lands before the last reply.
+	CHECK(peer.calls == QList<quint32>({0, 1}) && !hasValue(previews, 0) && !hasValue(previews, 1));
+	QByteArray borrowed = encoded(UINT64_MAX);
+	peer.finish(borrowed);
+	borrowed.fill(char(0x55));
+	previews.poll();
+	CHECK(hasValue(previews, 0) && hasValue(previews, 1) && state(previews, 0) == "Current" &&
+	      state(previews, 1) == "Current");
+	CHECK(previews.value(1, peer.type(1), 0) == "18446744073709551615" && previews.info(1).value("ageMs").toLongLong() == 0);
 	// A folded struct reads as its first members, as values.bin writes it.
 	const auto summary = previews.value(0, peer.type(0), 0);
 	CHECK(summary.startsWith(QLatin1Char('{')) && summary.endsWith(QLatin1Char('}')) && summary.contains(QStringLiteral("…")));
-	const auto* structure = peer.schema.type(peer.type(0));
-	CHECK(structure && structure->memberCount == 7);
 	bool serial = false, mode = false;
 	for (const auto& member : peer.schema.members(peer.type(0))) {
 		if (member.name == "serial") {
@@ -188,35 +236,119 @@ void schedulingAndOwnedValues() {
 		}
 	}
 	CHECK(serial && mode);
-	peer.now = 499;
-	previews.poll();
-	CHECK(peer.calls.size() == 1);
-	peer.now = 500;
-	previews.poll();
-	CHECK(peer.calls == QList<quint32>({0, 1}));
-	QByteArray borrowed = encoded(UINT64_MAX);
-	peer.finish(borrowed);
-	borrowed.fill(char(0x55));
-	previews.poll();
-	CHECK(previews.value(1, peer.type(1), 0) == "18446744073709551615");
-	CHECK(previews.info(1).value("ageMs").toLongLong() == 0);
-	peer.now = 4999;
-	previews.poll();
-	CHECK(peer.calls.size() == 2 && state(previews, 0) == "Current");
-	peer.now = 5000;
-	CHECK(state(previews, 0) == "Stale");
-	// A scan at 4999 consumes the global spacing interval, even if TTL excludes all.
+	// The next cycle an interval after the last landed.
+	CHECK(previews.interval() == ux::EndpointPreviews::intervalDefaultMs);
+	peer.now = 1999;
 	previews.poll();
 	CHECK(peer.calls.size() == 2);
-	peer.now = 5499;
+	peer.now = 2000;
 	previews.poll();
 	CHECK(peer.calls.size() == 3 && peer.calls.last() == 0);
+	// Stale after three intervals.
+	peer.now = 5999;
+	CHECK(state(previews, 0) == "Current");
+	peer.now = 6000;
+	CHECK(state(previews, 0) == "Stale");
+	// A failed read: the last value stays, stale, and says why.
 	peer.finish({}, false);
 	previews.poll();
-	CHECK(state(previews, 0) == "Unavailable" && !hasValue(previews, 0));
-	CHECK(previews.value(0, peer.type(0), 0).isEmpty());
+	peer.finish(encoded(std::uint64_t{7}));
+	previews.poll();
+	CHECK(hasValue(previews, 0) && state(previews, 0) == "Stale" && previews.value(1, peer.type(1), 0) == "7");
+	// The interval is the host's, within its bounds.
+	previews.setInterval(10);
+	CHECK(previews.interval() == ux::EndpointPreviews::intervalMinimumMs);
+	previews.setInterval(60000);
+	CHECK(previews.interval() == ux::EndpointPreviews::intervalMaximumMs);
 }
 
+// As few requests as the device allows: scalars by ReadMany within its item
+// and reply budgets, structs and arrays whole in one Batch, a scalar in the
+// ReadMany open beside them; a Batch carries scalars too where there is no
+// ReadMany; with neither, a FieldRead each. All land together.
+void portionsByBudget() {
+	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
+	const auto u64 = [](quint32) { return encoded(UINT64_MAX); };
+	{
+		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		peer.many = peer.batch = true;
+		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
+		QObject view;
+		QList<quint32> ids;
+		for (quint32 id = 0; id < 40; ++id) ids.append(id);
+		ids += {bounds_fixture::blockId(0), bounds_fixture::blockId(1), bounds_fixture::boolId};
+		CHECK(previews.setDemand(&view, ids));
+		previews.poll();
+		QList<quint32> first;
+		for (quint32 id = 0; id < 32; ++id) first.append(id);
+		CHECK(peer.manyCalls.size() == 1 && peer.manyCalls[0] == first && peer.calls.isEmpty());
+		peer.finishMany(u64);
+		previews.poll();
+		QList<quint32> second;
+		for (quint32 id = 32; id < 40; ++id) second.append(id);
+		second.append(bounds_fixture::boolId);
+		CHECK(peer.manyCalls.size() == 2 && peer.manyCalls[1] == second && !hasValue(previews, 0));
+		peer.finishMany([](quint32 id) { return id == bounds_fixture::boolId ? QByteArray(1, '\1') : encoded(UINT64_MAX); });
+		previews.poll();
+		CHECK(peer.batchCalls.size() == 1 &&
+		      peer.batchCalls[0] == QList<quint32>({bounds_fixture::blockId(0), bounds_fixture::blockId(1)}) &&
+		      !hasValue(previews, 39));
+		peer.finishMany([](quint32 id) { return QByteArray(8192, char(id & 0xff)); });
+		previews.poll();
+		CHECK(hasValue(previews, 0) && hasValue(previews, 39) && hasValue(previews, bounds_fixture::boolId) &&
+		      hasValue(previews, bounds_fixture::blockId(1)) && peer.calls.isEmpty());
+		CHECK(previews.value(bounds_fixture::boolId, peer.type(bounds_fixture::boolId), 0) == "true");
+	}
+	{
+		// A small reply budget: six eight-byte values a ReadMany.
+		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		peer.many = true; peer.manyBudget = {32, 130, 100};
+		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
+		QObject view;
+		QList<quint32> ids;
+		for (quint32 id = 0; id < 40; ++id) ids.append(id);
+		CHECK(previews.setDemand(&view, ids));
+		QList<int> sizes;
+		previews.poll();
+		while (peer.manyDone) {
+			sizes.append(int(peer.manyCalls.last().size()));
+			peer.finishMany(u64);
+			previews.poll();
+		}
+		CHECK(sizes == QList<int>({6, 6, 6, 6, 6, 6, 4}) && hasValue(previews, 39));
+	}
+	{
+		// Batch without ReadMany: the scalars in one Batch.
+		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		peer.batch = true;
+		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
+		QObject view;
+		CHECK(previews.setDemand(&view, {0, 1, 2}));
+		previews.poll();
+		CHECK(peer.batchCalls.size() == 1 && peer.batchCalls[0] == QList<quint32>({0, 1, 2}));
+		peer.finishMany(u64);
+		previews.poll();
+		CHECK(hasValue(previews, 2) && peer.calls.isEmpty());
+	}
+	{
+		// Neither: a FieldRead each, landing once.
+		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
+		QObject view;
+		CHECK(previews.setDemand(&view, {0, 1, 2}));
+		previews.poll();
+		for (int n = 0; n < 3; ++n) {
+			CHECK(peer.calls.size() == n + 1 && !hasValue(previews, 0));
+			peer.finish(encoded(UINT64_MAX));
+			previews.poll();
+		}
+		CHECK(hasValue(previews, 0) && hasValue(previews, 2) && peer.calls == QList<quint32>({0, 1, 2}));
+	}
+}
+
+// A refusal the queue may lift (busy, full) tries the same request again; any
+// other leaves those Fields unread this cycle and the cycle goes on. A reply
+// that does not decode as the Field's type is not a value.
 void refusalAndPayloadValidation() {
 	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
 	Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
@@ -226,90 +358,93 @@ void refusalAndPayloadValidation() {
 	CHECK(previews.setDemand(&view, {bounds_fixture::emptyId}));
 	peer.refusal = cl::Status::QueueFull;
 	previews.poll();
-	CHECK(peer.calls.size() == 1 && !previews.pending());
-	CHECK(state(previews, bounds_fixture::emptyId) == "Queued");
-	CHECK(!previews.info(bounds_fixture::emptyId).value("reason").toString().isEmpty());
-	peer.now = 499; previews.poll(); CHECK(peer.calls.size() == 1);
-	peer.now = 500; peer.refusal = cl::Status::Ok; previews.poll();
+	CHECK(peer.calls.size() == 1 && !previews.pending() && state(previews, bounds_fixture::emptyId) == "Reading");
+	peer.refusal = cl::Status::Ok;
+	previews.poll();
 	CHECK(peer.calls.size() == 2 && previews.pending());
 	peer.finish({}, true);
 	previews.poll();
 	CHECK(hasValue(previews, bounds_fixture::emptyId));
 	CHECK(previews.value(bounds_fixture::emptyId, peer.type(bounds_fixture::emptyId), 0) == "{}");
-	previews.invalidateValues();
-	peer.now += 500; previews.poll(); peer.finish({}, false); previews.poll();
-	CHECK(!hasValue(previews, bounds_fixture::emptyId));
-	CHECK(state(previews, bounds_fixture::emptyId) == "Unavailable");
+	// Refused for good: unread, with the reason; the next Field is read.
+	CHECK(previews.setDemand(&view, {bounds_fixture::modeId, 3}));
+	peer.now = 500;
+	peer.refusal = cl::Status::NotAdmitted;
+	peer.refuseOnce = true;
+	previews.poll();
+	CHECK(peer.calls.size() == 4 && previews.pending());
+	peer.finish(encoded(std::uint64_t{3}));
+	previews.poll();
+	CHECK(!hasValue(previews, bounds_fixture::modeId) && state(previews, bounds_fixture::modeId) == "Unavailable" &&
+	      previews.info(bounds_fixture::modeId).value("reason") == "Not read: the request was refused." &&
+	      previews.value(3, peer.type(3), 0) == "3");
+	// A value that is not the Field's type.
 	CHECK(previews.setDemand(&view, {bounds_fixture::boolId}));
-	peer.now += 500; previews.poll(); peer.finish(QByteArray(1, char(2))); previews.poll();
-	CHECK(!hasValue(previews, bounds_fixture::boolId));
-	CHECK(previews.info(bounds_fixture::boolId).value("reason") == "Invalid preview payload.");
-	CHECK(previews.setDemand(&view, {0}));
-	peer.now += 500; previews.poll(); peer.finish(QByteArray(9, '\0')); previews.poll();
-	CHECK(!hasValue(previews, 0));
-	CHECK(previews.info(0).value("reason") == "Invalid preview payload.");
-	previews.invalidateValues(); peer.now += 500; previews.poll();
-	peer.finish(encoded(UINT64_MAX), true, cl::Status::TransportError); previews.poll();
-	CHECK(!hasValue(previews, 0) && previews.cachedBytes() == 0);
+	peer.now = 1000;
+	previews.poll(); peer.finish(QByteArray(1, char(2))); previews.poll();
+	CHECK(!hasValue(previews, bounds_fixture::boolId) &&
+	      previews.info(bounds_fixture::boolId).value("reason") == "Invalid preview payload.");
+	CHECK(previews.setDemand(&view, {4}));
+	peer.now = 1500;
+	previews.poll(); peer.finish(QByteArray(9, '\0')); previews.poll();
+	CHECK(!hasValue(previews, 4) && previews.info(4).value("reason") == "Invalid preview payload.");
+	CHECK(previews.setDemand(&view, {5}));
+	peer.now = 2000;
+	previews.poll(); peer.finish(encoded(UINT64_MAX), true, cl::Status::TransportError); previews.poll();
+	CHECK(!hasValue(previews, 5));
 }
 
+// At most 64 Fields and 256 KiB: the Fields past the limit say so.
 void cacheBoundsAndPreflight() {
 	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
 	{
 		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		peer.many = true;
 		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
 		QObject view;
 		CHECK(previews.setDemand(&view, {bounds_fixture::oversizedId}));
-		previews.poll(); CHECK(peer.calls.isEmpty() && previews.cachedFields() == 0);
+		previews.poll();
+		CHECK(peer.calls.isEmpty() && peer.manyCalls.isEmpty() && previews.cachedFields() == 0);
 		CHECK(state(previews, bounds_fixture::oversizedId) == "Open Details");
 		QList<quint32> ids; for (quint32 id = 0; id < 65; ++id) ids.append(id);
 		CHECK(previews.setDemand(&view, ids));
-		for (unsigned n = 0; n < 64; ++n) {
-			peer.now += 500; previews.poll();
-			CHECK(peer.calls.size() == int(n + 1));
-			peer.finish(encoded(UINT64_MAX)); previews.poll();
-			CHECK(previews.cachedFields() <= ux::EndpointPreviews::fieldLimit);
-		}
-		CHECK(previews.cachedFields() == 64 && previews.cachedBytes() == 64 * 8);
-		peer.now += 500; previews.poll();
-		// Refresh of an existing demanded Field is allowed; the 65th must never
-		// reach read() while all 64 cache slots belong to live demand.
-		CHECK(!peer.calls.contains(64));
-		if (peer.completion) { peer.finish(encoded(UINT64_MAX)); previews.poll(); }
-		CHECK(state(previews, 64) == "Preview limit");
+		peer.now = 500;
+		previews.poll();
+		while (peer.manyDone) { peer.finishMany([](quint32) { return encoded(UINT64_MAX); }); previews.poll(); }
+		CHECK(peer.manyCalls.size() == 2 && !peer.manyCalls[1].contains(64));
+		CHECK(previews.cachedFields() == 64 && previews.cachedBytes() == 64 * 8 && state(previews, 64) == "Preview limit");
+		// Out of view, room is made for it.
 		CHECK(previews.setDemand(&view, {64}));
-		for (unsigned n = 0; n < 65 && !peer.calls.contains(64); ++n) {
-			peer.now += 500; previews.poll();
-			if (peer.completion) { peer.finish(encoded(UINT64_MAX)); previews.poll(); }
-		}
-		CHECK(peer.calls.contains(64) && previews.cachedFields() <= 64 && hasValue(previews, 64));
+		peer.now = 1000;
+		previews.poll();
+		peer.finishMany([](quint32) { return encoded(UINT64_MAX); });
+		previews.poll();
+		CHECK(hasValue(previews, 64) && previews.cachedFields() <= 64);
 	}
 	{
 		Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
+		peer.batch = true; peer.batchBudget = {32, 4096, 300000};
 		ux::EndpointPreviews previews(nullptr, [&] { return peer.now; }); bind(previews, peer);
 		QObject view;
 		QList<quint32> ids;
 		for (unsigned n = 0; n < 33; ++n) ids.append(bounds_fixture::blockId(n));
 		CHECK(previews.setDemand(&view, ids));
-		for (unsigned n = 0; n < 32; ++n) {
-			peer.now += 500; previews.poll(); CHECK(peer.calls.size() == int(n + 1));
-			peer.finish(QByteArray(8192, char(n))); previews.poll();
-			CHECK(previews.cachedBytes() <= ux::EndpointPreviews::payloadLimit);
-		}
-		CHECK(previews.cachedBytes() == ux::EndpointPreviews::payloadLimit);
-		peer.now += 500; previews.poll();
-		CHECK(!peer.calls.contains(bounds_fixture::blockId(32)));
-		if (peer.completion) { peer.finish(QByteArray(8192, '\0')); previews.poll(); }
-		CHECK(previews.cachedBytes() == ux::EndpointPreviews::payloadLimit);
-		CHECK(previews.setDemand(&view, {bounds_fixture::blockId(32)}));
-		peer.now += 500; previews.poll();
-		CHECK(peer.calls.last() == bounds_fixture::blockId(32));
-		peer.finish(QByteArray(8192, '\0')); previews.poll();
-		CHECK(previews.cachedBytes() <= ux::EndpointPreviews::payloadLimit &&
-		      hasValue(previews, bounds_fixture::blockId(32)));
+		previews.poll();
+		CHECK(peer.batchCalls.size() == 1 && peer.batchCalls[0].size() == 32);
+		peer.finishMany([](quint32 id) { return QByteArray(8192, char(id & 0xff)); });
+		previews.poll();
+		CHECK(peer.calls == QList<quint32>{bounds_fixture::blockId(32)});
+		peer.finish(QByteArray(8192, '\0'));
+		previews.poll();
+		CHECK(previews.cachedBytes() == ux::EndpointPreviews::payloadLimit &&
+		      state(previews, bounds_fixture::blockId(32)) == "Preview limit");
 	}
 }
 
+// Demand, epochs and sources: a reply for a Field no longer in view does not
+// land; values invalidated mid-cycle are dropped and the next cycle waits its
+// interval; a retired source drains its last request; a Field newly in view is
+// read soon, but never sooner than half a second after the last cycle.
 void demandLifecycleAndEpochs() {
 	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
 	Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
@@ -318,34 +453,42 @@ void demandLifecycleAndEpochs() {
 	CHECK(previews.setDemand(&view, {0})); previews.poll();
 	previews.clearDemand(&view);
 	CHECK(previews.pending()); // accepted native read must drain normally.
-	CHECK(previews.setDemand(&view, {0}));
 	peer.finish(encoded(UINT64_MAX)); previews.poll();
-	CHECK(!hasValue(previews, 0)); // an old visibility lease cannot warm a new one.
-	CHECK(state(previews, 0) != "Reading" || previews.pending());
-	peer.now = 5000; previews.poll(); peer.finish(encoded(std::uint64_t{42})); previews.poll();
+	CHECK(!hasValue(previews, 0) && !previews.pending());
+	CHECK(previews.setDemand(&view, {0}));
+	peer.now = 300;
+	previews.poll();
+	CHECK(peer.calls.size() == 1); // half a second after the last cycle
+	peer.now = 500;
+	previews.poll();
+	CHECK(peer.calls.size() == 2);
+	peer.finish(encoded(std::uint64_t{42})); previews.poll();
 	CHECK(previews.value(0, peer.type(0), 0) == "42");
-	peer.now = 10000; previews.poll(); CHECK(previews.pending());
+	// Invalidated mid-cycle: dropped, and the next cycle waits its interval.
+	peer.now = 2500;
+	previews.poll(); CHECK(previews.pending());
 	previews.invalidateValues();
 	CHECK(!hasValue(previews, 0) && previews.value(0, peer.type(0), 0).isEmpty());
 	peer.finish(encoded(UINT64_MAX)); previews.poll();
-	// Draining an invalidated read does not bypass the global spacing budget.
-	CHECK(!hasValue(previews, 0));
-	CHECK(!previews.pending());
-	peer.now += 500; previews.poll();
-	CHECK(previews.pending()); peer.finish(encoded(std::uint64_t{7})); previews.poll();
+	CHECK(!hasValue(previews, 0) && !previews.pending() && peer.calls.size() == 3);
+	peer.now = 4499; previews.poll(); CHECK(peer.calls.size() == 3);
+	peer.now = 4500; previews.poll(); CHECK(previews.pending());
+	peer.finish(encoded(std::uint64_t{7})); previews.poll();
 	CHECK(previews.value(0, peer.type(0), 0) == "7");
-	peer.now += 5000; previews.poll();
+	// Retired with a request out: it drains, and nothing stays cached.
+	peer.now = 6500; previews.poll(); CHECK(previews.pending());
 	previews.retire();
 	CHECK(!previews.current() && previews.pending() && previews.cachedFields() == 0);
 	peer.finish(encoded(UINT64_MAX)); previews.poll();
 	CHECK(!previews.pending() && previews.value(0, peer.type(0), 0).isEmpty());
+	// A new source reads at once.
 	previews.setSource(peer.source());
 	CHECK(previews.setDemand(&view, {0}));
 	auto ephemeral = std::make_unique<QObject>();
 	CHECK(previews.setDemand(ephemeral.get(), {1})); ephemeral.reset();
-	peer.now += 500; previews.poll(); CHECK(peer.calls.last() == 0);
+	previews.poll(); CHECK(peer.calls.last() == 0);
 	peer.finish(encoded(std::uint64_t{8})); previews.poll();
-	peer.now += 500; previews.poll(); CHECK(peer.calls.last() == 0);
+	CHECK(!previews.pending() && previews.value(0, peer.type(0), 0) == "8");
 	// Oversized lease updates fail atomically and preserve existing demand.
 	CHECK(!previews.setDemand(&view, QList<quint32>(257, 1)));
 	CHECK(!previews.setDemand(nullptr, {0}));
@@ -358,6 +501,8 @@ void demandLifecycleAndEpochs() {
 	owners[0].reset(); CHECK(previews.setDemand(owners[15].get(), {1}));
 }
 
+// Repeated invalidations (a run of writes) do not turn into a run of reads:
+// each drops the cycle, and the next waits its interval.
 void invalidationCannotBurstRequests() {
 	const auto parsed = std::make_shared<bounds_fixture::Parsed>();
 	Peer peer; peer.schema = parsed->schema; peer.backing = parsed;
@@ -365,17 +510,12 @@ void invalidationCannotBurstRequests() {
 	QObject view; CHECK(previews.setDemand(&view, {0}));
 	previews.poll(); CHECK(peer.calls.size() == 1);
 	peer.finish(encoded(UINT64_MAX)); previews.poll();
-	for (const qint64 time : {1, 100, 499}) {
+	for (const qint64 time : {1, 100, 1999}) {
 		peer.now = time; previews.invalidateValues(); previews.poll();
 		CHECK(peer.calls.size() == 1 && !previews.pending());
 	}
-	peer.now = 500; previews.poll(); CHECK(peer.calls.size() == 2);
-	peer.finish(encoded(UINT64_MAX)); previews.poll();
-	peer.now = 501; previews.setSource(peer.source());
-	CHECK(previews.setDemand(&view, {0})); previews.poll();
-	CHECK(peer.calls.size() == 2 && !previews.pending());
-	peer.now = 999; previews.poll(); CHECK(peer.calls.size() == 2);
-	peer.now = 1000; previews.poll(); CHECK(peer.calls.size() == 3 && previews.pending());
+	peer.now = 3998; previews.poll(); CHECK(peer.calls.size() == 1);
+	peer.now = 3999; previews.poll(); CHECK(peer.calls.size() == 2);
 	peer.finish(encoded(UINT64_MAX)); previews.poll();
 }
 
@@ -488,7 +628,8 @@ int main(int argc, char** argv) {
 			std::fprintf(stderr, "Qt preview warning: %s\n", qPrintable(message));
 		}
 	});
-	schedulingAndOwnedValues();
+	cycleLandsTogether();
+	portionsByBudget();
 	refusalAndPayloadValidation();
 	cacheBoundsAndPreflight();
 	demandLifecycleAndEpochs();

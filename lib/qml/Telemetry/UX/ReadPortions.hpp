@@ -47,7 +47,7 @@ struct Portion {
 	};
 	quint32 field = 0;
 	std::vector<std::uint32_t> ids;    // Many: the Fields, at most 32
-	std::vector<std::uint32_t> leaves; // Members: ascending ordinals
+	std::vector<std::uint32_t> leaves; // Members: ascending ordinals; none: the whole Field
 	std::vector<Member> fields;        // Batch: two or more Fields, at most 32
 	Failure failure = Failure::None;   // Fail only
 
@@ -73,6 +73,11 @@ struct Portion {
 struct Source {
 	bool individual = false;
 	bool readMany = false, readField = false, readMembers = false, readBatch = false;
+	// The Device tree's previews (PV-2): a whole Field ReadMany cannot carry -
+	// a struct, an array, or a scalar where the device has no ReadMany - is
+	// read whole, in a Batch where it can (a Members portion with no leaves),
+	// on its own otherwise. The Watchlist reads values inside such Fields.
+	bool wholeReads = false;
 	std::function<std::optional<Budget>()> budget, batchBudget;
 	std::function<std::optional<unsigned>(quint32)> fieldBytes, valueBytes;
 };

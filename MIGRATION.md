@@ -422,3 +422,25 @@ since it corrects the interval the toolbar shows; a wait, a failure or a stop
 still shows only with the status. A host that shows the polling period
 elsewhere should take `watchPace.achievedPeriodMs`. A Read once ends with
 "65 values read in 150 ms".
+
+## Device tree previews in one snapshot a cycle (PV-2, November 2026)
+
+`EndpointPreviews` no longer reads one Field every 500 ms. A cycle reads every
+Field in view in as few requests as the device allows - scalars by ReadMany,
+structs, arrays and scalars without ReadMany whole in a Batch of FieldReads, a
+FieldRead each without either - one request at a time while the Session is
+idle, and the values land together when the last reply is in. The next cycle
+starts an interval after the last landed (`interval()`, `setInterval()`: 2 s by
+default, 1 to 10 s); `readNow()`, or a Field in view without a value, reads
+sooner but never within 500 ms of the last cycle; a value is stale after three
+intervals, at least 5 s, and a failed read keeps the last value, stale, with its
+reason. `EndpointPreviewSource` gains the optional `readMany`, `readBatch` and
+their budgets (the Qt connection binding supplies them), and `read_portions`
+gains `wholeReads`. `refreshMs` and `spacingMs` are gone.
+
+The Device tree's "Preview values" check box is now a menu button, "Values:
+off" or "Values: every 2 s", offering Off, Every 1 s, Every 2 s, Every 5 s and
+Read now. `EndpointTreePanel.previewValues` still turns previews on and off;
+`previewIntervalMs` (2000 by default) is new, and a host saves both with its
+project. The provider gains `previewIntervalMs` (one value for every tree on a
+connection) and `readPreviewsNow()`.

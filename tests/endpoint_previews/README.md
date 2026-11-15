@@ -45,7 +45,33 @@ notifications can be recognized by `previewOnlyChange(roles)` so search need not
 rescan the entire tree on every age/value change.
 
 Metadata access, `data()` and local `fetchMore()` never submit I/O. The shared
-progress owner polls previews after foreground work, Watchlist and Batch. The
+progress owner polls previews after foreground work, Watchlist and Batch.
+
+## One snapshot a cycle (PV-2)
+
+A cycle reads every Field in view together and its values land together, when
+the last reply is in; nothing is filled in row by row.
+
+- **How the reads are grouped.** It uses as few requests as the device allows,
+  planned by `ReadPortions` (the Watchlist's planner) with whole-Field reads:
+  - scalars and enums by ReadMany, within its item, request and reply budgets;
+  - structs, arrays, and scalars where there is no ReadMany, whole, in a Batch
+    of FieldReads within the Batch's budgets;
+  - a FieldRead each where neither is offered, or for a Field too large for any
+    Batch.
+- **One at a time.** One request is out at a time, and the next is sent only
+  while the Session is idle. A busy or full queue tries the same request
+  again; any other refusal leaves its Fields unread this cycle, and the cycle
+  goes on.
+- **When cycles run.** The next cycle starts an interval after the last landed:
+  2 s by default, 1 to 10 s through `setInterval`.
+  - A Field in view without a value, or `readNow()`, is read sooner, but never
+    sooner than 500 ms after the last cycle.
+  - Values invalidated by a write drop the cycle in hand, and the next comes an
+    interval later, so a run of writes is not a run of reads.
+- **Stale and failed values.** A value is stale after three intervals, and
+  never sooner than 5 s. A failed read keeps the last value, stale, with its
+  reason. The
 preview reader does not select a Details Field, replace its snapshot, edit its
 draft, or invoke a Command or Service. Watch frames can warm a matching preview
 cache without a duplicate read.
@@ -54,8 +80,8 @@ cache without a duplicate read.
 
 | Limit | Contract |
 | --- | --- |
-| Refresh age | 5,000 ms per Field; older values are visibly stale |
-| Request spacing | At least 500 ms between attempts; at most two starts per second |
+| Interval | 2,000 ms by default, 1,000 to 10,000 ms; a value is stale after three intervals, at least 5,000 ms |
+| Cycle spacing | A cycle starts at least 500 ms after the last landed |
 | Accepted preview requests | At most one pending; no timer backlog |
 | Cached Fields | At most 64 |
 | Total cached payload | At most 256 KiB, also subject to the Field count limit |
