@@ -830,6 +830,78 @@ int main(int argc, char** argv)
 			CHECK(plotRoot->property("notice").toString() == QStringLiteral("Copied the picture."));
 		}
 
+		// Analysis: the measurements. M turns the chips into a table of every
+		// curve over the time in view; a reference and an end (Shift and a
+		// click) make the range theirs, shaded; a state gives its shares of
+		// the time; Min and Max put the cursor on their reading.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			CHECK(plotRoot->setProperty("measuring", true));
+			settle(300);
+			CHECK(shown(content, "plotMeasure") && !named(content, "plotLegend") &&
+			      all(content, "plotMeasureRow").size() == traces.plotted().size());
+			CHECK(shown(content, "plotMeasureRange")->property("text").toString().startsWith(QStringLiteral("In view · ")));
+			const auto stat = [&](const QString& path) {
+				QVariantMap out;
+				CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, out), Q_ARG(QString, path)));
+				return out;
+			};
+			const auto voltage = stat(QStringLiteral("device.Voltage"));
+			const double low = voltage.value("min").toDouble(), high = voltage.value("max").toDouble(),
+			             mean = voltage.value("mean").toDouble();
+			CHECK(voltage.value("count").toInt() > 0 && low <= mean && mean <= high &&
+			      qFuzzyCompare(voltage.value("peakToPeak").toDouble() + 1, high - low + 1) && voltage.value("deviation").toDouble() >= 0);
+			const auto ready = stat(QStringLiteral("device.Ready"));
+			double shares = 0;
+			for (const auto& share : ready.value("shares").toList())
+				shares += share.toMap().value("share").toDouble();
+			CHECK(ready.value("count").toInt() > 0 && std::abs(shares - 1) < 1e-9 && ready.value("changes").toInt() >= 0);
+			CHECK(shown(content, "plotMeasureShares")->property("text").toString().contains(QStringLiteral("% of the time")));
+			// Min puts the cursor on the lowest reading.
+			CHECK(QMetaObject::invokeMethod(view, "putCursorAt", Q_ARG(qreal, voltage.value("minUtcMs").toDouble())));
+			settle(100);
+			CHECK(view->property("cursorShown").toBool() &&
+			      std::abs(view->property("cursorUtcMs").toDouble() - voltage.value("minUtcMs").toDouble()) < 1);
+			// A reference, then Shift and a click: the end; the range is theirs.
+			const auto area = view->property("plotArea").toRectF();
+			const auto at = [&](double part) {
+				return view->mapToScene(QPointF(area.left() + area.width() * part, area.center().y())).toPoint();
+			};
+			QTest::mouseMove(window, at(0.4) + QPoint(-5, 0));
+			QTest::mouseMove(window, at(0.4));
+			settle(60);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, at(0.4));
+			settle(60);
+			QTest::mouseMove(window, at(0.6) + QPoint(-5, 0));
+			QTest::mouseMove(window, at(0.6));
+			settle(60);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::ShiftModifier, at(0.6));
+			settle(200);
+			QVariantMap range;
+			CHECK(QMetaObject::invokeMethod(view, "measureRange", Q_RETURN_ARG(QVariantMap, range)));
+			CHECK(view->property("referenceShown").toBool() && view->property("endShown").toBool() && range.value("pinned").toBool() &&
+			      range.value("seconds").toDouble() > 0 &&
+			      shown(content, "plotMeasureRange")->property("text").toString().startsWith(QStringLiteral("Reference to end · ")));
+			shot(window, argc, argv, QStringLiteral("trace-plot-measure-760"));
+			// Esc: the end first, then the reference.
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle(100);
+			CHECK(!view->property("endShown").toBool() && view->property("referenceShown").toBool());
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle(100);
+			CHECK(!view->property("referenceShown").toBool());
+			// M turns it off again.
+			QTest::keyClick(window, Qt::Key_M);
+			settle(200);
+			CHECK(!plotRoot->property("measuring").toBool() && shown(content, "plotLegend"));
+			QTest::mouseMove(window, QPoint(4, 4));
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);

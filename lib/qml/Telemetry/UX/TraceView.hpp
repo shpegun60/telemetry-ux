@@ -129,6 +129,12 @@ class TraceView : public QQuickPaintedItem {
 	// view by hand can be gone back on (Backspace, Alt+Left), one gesture a
 	// step, the last 50. Not the Undo of edits: views are not changes.
 	Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY viewChanged)
+	// The end pin (analysis): with the reference, the range measured. Shift
+	// and a click, or Shift+Enter, pin it at the cursor - the reference first
+	// when there is none; a click on it, or Esc, takes it away.
+	Q_PROPERTY(bool endShown READ endShown NOTIFY cursorChanged)
+	Q_PROPERTY(qreal endUtcMs READ endUtcMs NOTIFY cursorChanged)
+	Q_PROPERTY(qreal endX READ endX NOTIFY drawn)
 	Q_PROPERTY(bool boxShown READ boxShown NOTIFY cursorChanged)
 	Q_PROPERTY(qreal originUtcMs READ originUtcMs NOTIFY drawn)
 public:
@@ -230,6 +236,22 @@ public:
 	bool canGoBack() const { return !back_.empty(); }
 	bool boxShown() const { return boxing_; }
 	Q_INVOKABLE void goBack();
+	bool endShown() const { return endShown_; }
+	qreal endUtcMs() const;
+	qreal endX() const { return endX_; }
+	Q_INVOKABLE void pinEnd();
+	Q_INVOKABLE void clearEnd();
+	// The range measured, copied and saved: the reference to the end when
+	// both are pinned, else the time in view - {fromUtcMs, toUtcMs, seconds,
+	// pinned, readings}.
+	Q_INVOKABLE QVariantMap measureRange() const;
+	// A plotted value over that range, from its readings as read (never
+	// k x value + b). A number: {count, failed, min, max, minUtcMs, maxUtcMs,
+	// mean, peakToPeak, deviation}; a state: {count, failed, changes,
+	// shares: [{name, share}]}, the shares by time.
+	Q_INVOKABLE QVariantMap statistics(const QString& path) const;
+	// Puts the cursor at utcMs, bringing it into view (Go to minimum).
+	Q_INVOKABLE void putCursorAt(qreal utcMs);
 	// The readings of every plotted value in the time in view, one row per
 	// reading time: "Time of day", "Seconds from start" and a column per
 	// path; a missing or failed read is an empty cell, a state is its word,
@@ -339,6 +361,11 @@ private:
 	// Before a view changes by hand: what it was, once a gesture.
 	void remember();
 	bool boxing_ = false;
+	bool endShown_ = false;
+	qint64 endNs_ = 0;
+	qreal endX_ = -1;
+	// The range measured, in the readings' time.
+	std::pair<qint64, qint64> measuredNs() const;
 	QPointF boxFrom_, boxTo_;
 	qreal originUtcMs_ = 0;
 };

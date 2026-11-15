@@ -72,7 +72,7 @@ public:
 	void append(const WatchFrame& frame);
 
 	[[nodiscard]] const std::deque<TraceReading>* readings(const QString& path) const;
-	[[nodiscard]] bool categorical(const QString& path) const;
+	Q_INVOKABLE bool categorical(const QString& path) const;
 	// A bool's or an enum's reading in words: "true", "Idle"; an enum code
 	// with no name "Code 7"; empty for a number.
 	Q_INVOKABLE QString stateText(const QString& path, const QVariant& value) const;

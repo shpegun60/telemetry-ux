@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace telemetry::ux {
 namespace {
@@ -395,7 +396,148 @@ void TraceView::clearReference()
 	if (!referenceShown_)
 		return;
 	referenceShown_ = false;
+	endShown_ = false;
 	referenceValues_.clear();
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::pinEnd()
+{
+	if (!cursorShown_ || !traces_)
+		return;
+	// The reference first: a range needs both.
+	if (!referenceShown_) {
+		pinReference();
+		return;
+	}
+	endShown_ = true;
+	endNs_ = cursorNs_;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::clearEnd()
+{
+	if (!endShown_)
+		return;
+	endShown_ = false;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+qreal TraceView::endUtcMs() const
+{
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	return qreal(anchor.utcMs) + qreal(endNs_ - anchor.monotonicNs) / 1e6;
+}
+
+std::pair<qint64, qint64> TraceView::measuredNs() const
+{
+	if (referenceShown_ && endShown_)
+		return {std::min(referenceNs_, endNs_), std::max(referenceNs_, endNs_)};
+	const auto right = rightNs();
+	return {right - spanNs(), right};
+}
+
+QVariantMap TraceView::measureRange() const
+{
+	const auto [from, to] = measuredNs();
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	return {{QStringLiteral("fromUtcMs"), utc(from)}, {QStringLiteral("toUtcMs"), utc(to)},
+	        {QStringLiteral("seconds"), double(to - from) / 1e9}, {QStringLiteral("pinned"), referenceShown_ && endShown_},
+	        {QStringLiteral("readings"), readingsInRange()}};
+}
+
+QVariantMap TraceView::statistics(const QString& path) const
+{
+	const auto* readings = traces_ ? traces_->readings(path) : nullptr;
+	if (!readings)
+		return {};
+	const auto [from, to] = measuredNs();
+	const auto anchor = traces_->anchor();
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	auto it = std::lower_bound(readings->begin(), readings->end(), from,
+	                           [](const TraceReading& r, qint64 at) { return r.ns < at; });
+	int count = 0, failed = 0;
+	if (traces_->categorical(path)) {
+		// Shares by time: each reading holds until the next one, or the end.
+		QHash<qint64, qint64> held;
+		QList<qint64> order;
+		int changes = 0;
+		std::optional<double> previous;
+		qint64 total = 0;
+		for (; it != readings->end() && it->ns <= to; ++it) {
+			if (std::isnan(it->value)) {
+				++failed;
+				previous.reset();
+				continue;
+			}
+			++count;
+			const auto next = std::next(it);
+			const qint64 until = next != readings->end() && next->ns <= to ? next->ns : to;
+			const auto key = qint64(it->value);
+			if (!held.contains(key))
+				order << key;
+			held[key] += std::max<qint64>(0, until - it->ns);
+			total += std::max<qint64>(0, until - it->ns);
+			if (previous && *previous != it->value)
+				++changes;
+			previous = it->value;
+		}
+		std::sort(order.begin(), order.end(), [&](qint64 a, qint64 b) { return held.value(a) > held.value(b); });
+		QVariantList shares;
+		for (const auto key : order)
+			shares << QVariantMap{{QStringLiteral("name"), traces_->stateText(path, double(key))},
+			                      {QStringLiteral("share"), total > 0 ? double(held.value(key)) / double(total) : 0.0}};
+		return {{QStringLiteral("count"), count}, {QStringLiteral("failed"), failed},
+		        {QStringLiteral("changes"), changes}, {QStringLiteral("shares"), shares}};
+	}
+	// One pass: the extremes with their times, and Welford's mean and spread.
+	double low = 0, high = 0, mean = 0, squares = 0;
+	qint64 lowAt = 0, highAt = 0;
+	for (; it != readings->end() && it->ns <= to; ++it) {
+		if (std::isnan(it->value)) {
+			++failed;
+			continue;
+		}
+		++count;
+		if (count == 1 || it->value < low) {
+			low = it->value;
+			lowAt = it->ns;
+		}
+		if (count == 1 || it->value > high) {
+			high = it->value;
+			highAt = it->ns;
+		}
+		const double delta = it->value - mean;
+		mean += delta / count;
+		squares += delta * (it->value - mean);
+	}
+	if (!count)
+		return {{QStringLiteral("count"), 0}, {QStringLiteral("failed"), failed}};
+	return {{QStringLiteral("count"), count}, {QStringLiteral("failed"), failed},
+	        {QStringLiteral("min"), low}, {QStringLiteral("max"), high},
+	        {QStringLiteral("minUtcMs"), utc(lowAt)}, {QStringLiteral("maxUtcMs"), utc(highAt)},
+	        {QStringLiteral("mean"), mean}, {QStringLiteral("peakToPeak"), high - low},
+	        {QStringLiteral("deviation"), std::sqrt(squares / count)}};
+}
+
+void TraceView::putCursorAt(qreal utcMs)
+{
+	if (!traces_)
+		return;
+	const auto anchor = traces_->anchor();
+	const auto ns = anchor.monotonicNs + qint64((double(utcMs) - double(anchor.utcMs)) * 1e6);
+	const auto right = rightNs(), left = right - spanNs();
+	// Out of view: centred, held.
+	if (ns < left || ns > right) {
+		remember();
+		hold(ns + spanNs() / 2);
+	}
+	cursorShown_ = true;
+	cursorNs_ = ns;
 	Q_EMIT cursorChanged();
 	update();
 }
@@ -557,8 +699,8 @@ int TraceView::readingsInRange() const
 {
 	if (!traces_)
 		return 0;
-	const auto right = rightNs();
-	return int(rowsBetween(*traces_, traces_->plotted(), right - spanNs(), right).times.size());
+	const auto [left, right] = measuredNs();
+	return int(rowsBetween(*traces_, traces_->plotted(), left, right).times.size());
 }
 
 QString TraceView::valuesText(bool csv) const
@@ -566,7 +708,7 @@ QString TraceView::valuesText(bool csv) const
 	if (!traces_)
 		return {};
 	const auto paths = traces_->plotted();
-	const auto right = rightNs(), left = right - spanNs();
+	const auto [left, right] = measuredNs();
 	const auto rows = rowsBetween(*traces_, paths, left, right);
 	const auto anchor = traces_->anchor();
 	const QLocale locale = csv ? QLocale::c() : QLocale();
@@ -851,8 +993,12 @@ void TraceView::mouseReleaseEvent(QMouseEvent* event)
 		// A click: on the reference takes it away, anywhere else pins it
 		// where the cursor snapped.
 		setCursorAt(event->position().x());
-		if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
+		if (endShown_ && std::abs(event->position().x() - endX_) <= 4)
+			clearEnd();
+		else if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
 			clearReference();
+		else if (event->modifiers() & Qt::ShiftModifier)
+			pinEnd();
 		else
 			pinReference();
 	}
@@ -921,11 +1067,16 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 		case Qt::Key_Enter:
 			if (!cursorShown_)
 				stepCursor(0);
-			pinReference();
+			if (shift)
+				pinEnd();
+			else
+				pinReference();
 			break;
 		case Qt::Key_Escape:
-			// The reference first, then the keyboard's cursor.
-			if (referenceShown_)
+			// The end first, then the reference, then the keyboard's cursor.
+			if (endShown_)
+				clearEnd();
+			else if (referenceShown_)
 				clearReference();
 			else if (cursorShown_)
 				hideCursor();
@@ -1454,7 +1605,22 @@ void TraceView::paint(QPainter* painter)
 	// The reference, dashed, and the cursor with a dot on each number's
 	// reading at or before it.
 	const auto lineAt = [&](qint64 ns) { return std::round(xOf(ns)) + 0.5; };
-	qreal cursorX = -1, referenceX = -1;
+	qreal cursorX = -1, referenceX = -1, endX = -1;
+	if (referenceShown_ && endShown_) {
+		const auto from = std::max(std::min(referenceNs_, endNs_), left), to = std::min(std::max(referenceNs_, endNs_), right);
+		if (to > from) {
+			QColor band = referenceColor_;
+			band.setAlphaF(0.1);
+			painter->fillRect(QRectF(QPointF(xOf(from), area.top()), QPointF(xOf(to), area.bottom())), band);
+		}
+		if (endNs_ >= left && endNs_ <= right) {
+			endX = lineAt(endNs_);
+			QPen dashed(referenceColor_, 1, Qt::DashLine);
+			dashed.setCosmetic(true);
+			painter->setPen(dashed);
+			painter->drawLine(QPointF(endX, area.top()), QPointF(endX, area.bottom()));
+		}
+	}
 	if (referenceShown_ && referenceNs_ >= left && referenceNs_ <= right) {
 		referenceX = lineAt(referenceNs_);
 		QPen dashed(referenceColor_, 1, Qt::DashLine);
@@ -1530,6 +1696,7 @@ void TraceView::paint(QPainter* painter)
 	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2);
 	cursorX_ = cursorX;
 	referenceX_ = referenceX;
+	endX_ = endX;
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
