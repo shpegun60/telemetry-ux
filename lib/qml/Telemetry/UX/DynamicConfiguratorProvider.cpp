@@ -341,7 +341,23 @@ struct DynamicConfiguratorProvider::Impl {
 				const auto index = model->index(row, 0, {});
 				const auto path = index.data(WatchlistModel::NameRole).toString();
 				paths.insert(quint64(key), path);
-				categorical.insert(path, index.data(WatchlistModel::CategoricalRole).toBool());
+				const bool states = index.data(WatchlistModel::CategoricalRole).toBool();
+				categorical.insert(path, states);
+				// An enum's names by code, from its editor's choices
+				// ("Idle (0)" and "0").
+				if (states) {
+					QHash<qint64, QString> names;
+					for (const auto& choice : index.data(WatchlistModel::EditorChoicesRole).toList()) {
+						const auto map = choice.toMap();
+						bool ok = false;
+						const auto code = map.value(QStringLiteral("text")).toString().toLongLong(&ok);
+						auto label = map.value(QStringLiteral("label")).toString();
+						const auto open = label.lastIndexOf(QStringLiteral(" ("));
+						if (ok && open > 0)
+							names.insert(code, label.left(open));
+					}
+					traces.setStates(path, std::move(names));
+				}
 			}
 			traces.setPaths(model->membership(), std::move(paths), std::move(categorical), frame.completed.monotonicNs);
 		}

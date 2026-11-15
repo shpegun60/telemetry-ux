@@ -37,6 +37,24 @@ class WatchTraces;
 // trimmed meanwhile never changes them - and Esc takes it away. valueAt() and
 // referenceValue() give each value at the cursor and at the reference, for
 // the chips and their differences.
+//
+// Lanes (LP-1d): a bool or an enum is drawn under the numbers in a lane of its
+// own, a row high, never on their axis - a bool as a band while true and a
+// line while false, an enum as a band per state with its name where it fits
+// and a mark where it changes. Lanes take at most 40 % of the height.
+//
+// The values (LP-1e): Auto fits every number in view, or only the focused
+// curve while one is focused; Manual starts with a value zoom or pan - Ctrl
+// and the wheel over the graph, or the wheel over the value labels, zoom about
+// the pointer; a drag over the labels pans; Up and Down pan a tenth, Ctrl+Up
+// and Ctrl+Down zoom - and stays through Follow, the presets and time zoom.
+// A double-click on the labels, or A, returns to Auto.
+//
+// A curve's look (LP-1f): its own colour, if it has one, and its multiplier
+// and offset - a number is drawn and fitted as k x value + b, while every
+// value the chips and the cursor give stays the reading - and its
+// measurement points: a 5 px dot at each reading while the curve is drawn raw,
+// never closer than 6 px to the last.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -49,6 +67,14 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(int preset READ preset NOTIFY viewChanged)
 	// Held, how far the right edge is behind the newest reading.
 	Q_PROPERTY(qreal behindSeconds READ behindSeconds NOTIFY drawn)
+	// Auto (fitted) or Manual (zoomed or panned by hand) values.
+	Q_PROPERTY(bool valueAuto READ valueAuto NOTIFY viewChanged)
+	// The curve the values are fitted to while Auto; empty for every one.
+	Q_PROPERTY(QString focusedPath READ focusedPath WRITE setFocusedPath NOTIFY viewChanged)
+	// The numbers' part of the plot area, above the lanes.
+	Q_PROPERTY(QRectF valuesArea READ valuesArea NOTIFY drawn)
+	// Measurement points the last paint drew, for its checks.
+	Q_PROPERTY(int drawnDots READ drawnDots NOTIFY drawn)
 	// The cursor: shown, its time on this PC's clock (ms since the epoch),
 	// how long before the newest reading, and where it is drawn (item x;
 	// outside the plot area when it has scrolled out).
@@ -66,6 +92,14 @@ class TraceView : public QQuickPaintedItem {
 	// Room kept under the time labels for the cursor's and the reference's
 	// chips, so they never cover a label.
 	Q_PROPERTY(qreal bottomInset READ bottomInset WRITE setBottomInset NOTIFY styleChanged)
+	// A lane's height, and its colours: an enum state's band and its text.
+	Q_PROPERTY(qreal laneHeight READ laneHeight WRITE setLaneHeight NOTIFY styleChanged)
+	Q_PROPERTY(QColor laneFillColor READ laneFillColor WRITE setLaneFillColor NOTIFY styleChanged)
+	Q_PROPERTY(QColor laneTextColor READ laneTextColor WRITE setLaneTextColor NOTIFY styleChanged)
+	// The lanes the last paint drew, by their leaf names, and the states it
+	// named in them.
+	Q_PROPERTY(QStringList laneLabels READ laneLabels NOTIFY drawn)
+	Q_PROPERTY(QStringList laneStates READ laneStates NOTIFY drawn)
 	// A colour per palette place (WatchTraces::colorIndex).
 	Q_PROPERTY(QVariantList colors READ colors WRITE setColors NOTIFY styleChanged)
 	Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY styleChanged)
@@ -105,6 +139,21 @@ public:
 	Q_INVOKABLE void toOldest();
 	Q_INVOKABLE void follow() { setFollowing(true); }
 
+	bool valueAuto() const { return valueAuto_; }
+	QString focusedPath() const { return focusedPath_; }
+	void setFocusedPath(const QString& path);
+	QRectF valuesArea() const { return valuesArea_; }
+	int drawnDots() const { return drawnDots_; }
+	// The colour a path is drawn in: its own, else its palette place's.
+	Q_INVOKABLE QColor curveColor(const QString& path) const;
+	// The values times factor (below 1 zooms in) about a point of the
+	// height (0 top, 1 bottom); Manual.
+	Q_INVOKABLE void zoomValues(qreal factor, qreal at = 0.5);
+	// The values by a part of their range (positive: higher ones); Manual.
+	Q_INVOKABLE void panValues(qreal part);
+	// Fitted again: Auto.
+	Q_INVOKABLE void autoValues();
+
 	bool cursorShown() const { return cursorShown_; }
 	qreal cursorUtcMs() const;
 	qreal cursorAgoSeconds() const;
@@ -120,6 +169,14 @@ public:
 	void setDotRingColor(const QColor& color);
 	qreal bottomInset() const { return bottomInset_; }
 	void setBottomInset(qreal inset);
+	qreal laneHeight() const { return laneHeight_; }
+	void setLaneHeight(qreal height);
+	QColor laneFillColor() const { return laneFillColor_; }
+	void setLaneFillColor(const QColor& color);
+	QColor laneTextColor() const { return laneTextColor_; }
+	void setLaneTextColor(const QColor& color);
+	QStringList laneLabels() const { return laneLabels_; }
+	QStringList laneStates() const { return laneStates_; }
 	// The cursor at item x, snapped to the nearest reading within 8 px.
 	Q_INVOKABLE void setCursorAt(qreal x);
 	Q_INVOKABLE void hideCursor();
@@ -155,6 +212,7 @@ protected:
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;
+	void mouseDoubleClickEvent(QMouseEvent* event) override;
 	void wheelEvent(QWheelEvent* event) override;
 	void keyPressEvent(QKeyEvent* event) override;
 	void hoverMoveEvent(QHoverEvent* event) override;
@@ -194,13 +252,18 @@ private:
 	QHash<QString, double> referenceValues_;
 	qreal cursorX_ = -1, referenceX_ = -1;
 	QPointF hoverAt_{-1, -1};
-	qreal bottomInset_ = 0;
+	qreal bottomInset_ = 0, laneHeight_ = 22;
+	QColor laneFillColor_{0x2a, 0x2f, 0x37}, laneTextColor_{0xe6, 0xed, 0xf3};
+	QStringList laneLabels_, laneStates_;
 	QColor cursorColor_{0x8b, 0x94, 0x9e}, referenceColor_{0x58, 0xa6, 0xff}, dotRingColor_{0x0d, 0x11, 0x17};
 	qreal behindSeconds_ = 0;
 	// A drag: where it started and the right edge then.
 	qreal pressX_ = 0;
 	qint64 pressRightNs_ = 0;
 	bool dragging_ = false;
+	// A press on the value labels pans the values.
+	bool valueDrag_ = false;
+	qreal pressY_ = 0;
 	qint64 frozenNs_ = 0;
 	QVariantList colors_;
 	QColor gridColor_{0x3a, 0x3f, 0x47}, labelColor_{0x9a, 0xa4, 0xb0};
@@ -208,6 +271,12 @@ private:
 	// The value axis widens at once and narrows after two seconds, so a
 	// following plot does not jump with every reading.
 	Range range_;
+	// Manual values, the range last drawn, the one at a press.
+	bool valueAuto_ = true;
+	Range manual_, shown_, pressRange_;
+	QString focusedPath_;
+	QRectF valuesArea_;
+	int drawnDots_ = 0;
 	qint64 narrowSinceNs_ = 0;
 	// Per path: drawn per pixel rather than raw, for the hysteresis.
 	QHash<QString, bool> aggregated_;

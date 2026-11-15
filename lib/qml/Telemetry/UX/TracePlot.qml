@@ -9,7 +9,13 @@
 // follows again (End). The cursor follows the pointer, snapped to a reading;
 // its time shows under the axis and each chip shows its value there. A click
 // or Enter pins a reference: the cursor then says the time since it, each
-// chip its value's difference; Esc takes it away. Presentation only:
+// chip its value's difference; Esc takes it away. The values fit what is in
+// view, or the curve whose name was clicked; Ctrl and the wheel, the wheel
+// over the value labels, a drag there or Up and Down move them by hand, and
+// Auto (A) fits them again. A chip's colour mark opens its settings - its
+// colour, and the multiplier and offset it is drawn with (Trend's words) - and
+// its menu (right-click) focuses it, shows its points or removes it; the
+// graph's menu shows every curve's points. Presentation only:
 // WatchTraces keeps the readings and TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
@@ -80,6 +86,17 @@ FocusScope {
     // its reading scrolls out they go back to the newest.
     readonly property bool cursorInView: view.cursorShown && view.cursorX >= view.plotArea.left
                                          && view.cursorX <= view.plotArea.right
+    // "×100 +0.5": how a curve is drawn when not as read; empty when it is.
+    function transformText(k, b) {
+        if (k === 1 && b === 0)
+            return ""
+        const parts = []
+        if (k !== 1)
+            parts.push("×" + String(k).replace("-", "−"))
+        if (b !== 0)
+            parts.push((b < 0 ? "−" : "+") + String(Math.abs(b)))
+        return parts.join(" ")
+    }
     // "12:04:31.250": a time on this PC's clock, always to the millisecond.
     function clockText(ms) {
         return Qt.formatTime(new Date(ms), "HH:mm:ss.zzz")
@@ -223,8 +240,12 @@ FocusScope {
                     objectName: "plotChip"
                     readonly property string path: modelData
                     readonly property color curve: {
-                        const at = plot.traces ? plot.traces.colorIndex(path) : -1
-                        return at >= 0 && at < plot.curveColors.length ? plot.curveColors[at] : Theme.textSecondary
+                        plot.traces ? plot.traces.appearanceRevision : 0
+                        return view.curveColor(path)
+                    }
+                    readonly property string drawnAs: {
+                        plot.traces ? plot.traces.appearanceRevision : 0
+                        return plot.traces ? plot.transformText(plot.traces.multiplier(path), plot.traces.offset(path)) : ""
                     }
                     // Its newest reading; its reading at the cursor while the
                     // cursor is shown.
@@ -235,19 +256,23 @@ FocusScope {
                             return undefined
                         return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
                     }
-                    readonly property string shown: plot.valueText(current)
+                    // A bool or an enum in words ("true", "Idle"), a number as one.
+                    readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
+                    readonly property string shown: words.length > 0 ? words : plot.valueText(current)
                     // Its difference from the reference, once one is pinned.
                     readonly property string delta: {
-                        if (!view.referenceShown)
+                        // A state has no difference: a number does.
+                        if (!view.referenceShown || words.length > 0)
                             return ""
                         const reference = view.referenceValue(path)
                         return reference === undefined || current === undefined ? "Δ –"
                                                                                 : "Δ " + plot.deltaText(current - reference)
                     }
+                    readonly property bool focused: view.focusedPath === path
                     implicitWidth: chipRow.implicitWidth + 2 * Type.padding
                     implicitHeight: Type.controlHeight
                     radius: Type.radius
-                    color: Theme.surface
+                    color: focused ? Theme.stateSelectedInactive : Theme.surface
                     border.color: Theme.outlineVariant
                     RowLayout {
                         id: chipRow
@@ -255,11 +280,37 @@ FocusScope {
                         anchors.leftMargin: Type.padding
                         anchors.rightMargin: Type.tight
                         spacing: Type.spacing
-                        Rectangle {
-                            Layout.preferredWidth: Type.iconSize
-                            Layout.preferredHeight: 2
-                            color: chip.curve
-                            Accessible.ignored: true
+                        ToolButton {
+                            id: curveMark
+                            objectName: "plotChipSettings"
+                            Layout.preferredWidth: Type.chipHeight
+                            Layout.preferredHeight: Type.chipHeight
+                            padding: 0
+                            flat: true
+                            focusPolicy: Qt.TabFocus
+                            Accessible.name: qsTr("Curve settings for %1").arg(chip.path)
+                            ToolTip.text: qsTr("Curve settings: color, multiplier and offset")
+                            ToolTip.visible: hovered || visualFocus
+                            ToolTip.delay: 700
+                            onClicked: curveSettings.openFor(chip.path)
+                            // The chip's menu from the keyboard.
+                            Keys.onPressed: (event) => {
+                                if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                                    chipMenu.path = chip.path
+                                    chipMenu.popup(curveMark, 0, curveMark.height)
+                                    event.accepted = true
+                                }
+                            }
+                            contentItem: Item {
+                                implicitWidth: Type.iconSize
+                                implicitHeight: Type.iconSize
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: parent.width
+                                    height: 2
+                                    color: chip.curve
+                                }
+                            }
                         }
                         Text {
                             id: chipName
@@ -271,7 +322,36 @@ FocusScope {
                             font.pointSize: Type.body
                             text: chip.path
                             HoverHandler { id: nameHover }
-                            PlainToolTip { visible: nameHover.hovered && chipName.truncated; text: chip.path; delay: 700 }
+                            // A click focuses the curve: the values fit it.
+                            TapHandler {
+                                onTapped: view.focusedPath = chip.focused ? "" : chip.path
+                            }
+                            PlainToolTip {
+                                visible: nameHover.hovered
+                                text: chip.focused ? qsTr("%1. Click to fit the values to every curve again.").arg(chip.path)
+                                                   : qsTr("%1. Click to fit the values to this curve.").arg(chip.path)
+                                delay: 700
+                            }
+                        }
+                        // Drawn as other than read: says how, in the warning
+                        // colour, so the line is never read as the value.
+                        Rectangle {
+                            objectName: "plotChipTransform"
+                            visible: chip.drawnAs.length > 0
+                            Layout.preferredWidth: transformText.implicitWidth + 2 * Type.tight
+                            Layout.preferredHeight: Type.chipHeight - 2
+                            radius: Type.radius
+                            color: "transparent"
+                            border.color: Theme.warning
+                            Text {
+                                id: transformText
+                                anchors.centerIn: parent
+                                textFormat: Text.PlainText
+                                font.family: Type.fixedFamily
+                                font.pointSize: Type.caption
+                                color: Theme.warning
+                                text: chip.drawnAs
+                            }
                         }
                         Text {
                             objectName: "plotChipValue"
@@ -322,7 +402,13 @@ FocusScope {
                             onClicked: plot.traces.unplot(chip.path)
                         }
                     }
+                    // Its menu: right-click, or the Menu key on its settings.
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: chipMenu.openFor(chip.path)
+                    }
                     Accessible.role: Accessible.StaticText
+                    Accessible.description: chip.drawnAs.length > 0 ? qsTr("Drawn %1; the value is the reading").arg(chip.drawnAs) : ""
                     Accessible.name: plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
                                                       : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
                 }
@@ -343,11 +429,22 @@ FocusScope {
                 cursorColor: Theme.textMuted
                 // A row of its own under the time labels for the chips.
                 bottomInset: Type.chipHeight + Type.tight
+                // A bool's or an enum's lane, a row high.
+                laneHeight: Type.rowHeight
+                laneFillColor: Theme.neutralContainer
+                laneTextColor: Theme.textPrimary
                 referenceColor: Theme.info
                 dotRingColor: Theme.surfaceWindow
                 font.family: Type.fixedFamily
                 font.pointSize: Type.caption
                 visible: plot.plotted.length > 0 && !plot.waiting
+                // The graph's menu from the keyboard.
+                Keys.onPressed: (event) => {
+                    if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                        graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
+                        event.accepted = true
+                    }
+                }
                 Accessible.role: Accessible.Graphic
                 Accessible.name: {
                     const state = view.following ? qsTr("following")
@@ -355,7 +452,7 @@ FocusScope {
                     return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                      : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                 }
-                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
+                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again.")
             }
             // The keys are on the graph: the lists' focus frame round it.
             Rectangle {
@@ -370,8 +467,65 @@ FocusScope {
                 border.color: Theme.focusRing
                 Accessible.ignored: true
             }
+            // The graph's menu: right-click.
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: graphMenu.popup()
+            }
+            // Values zoomed or panned by hand: a way back to fitting them.
+            Basic.Button {
+                id: autoValues
+                objectName: "plotAuto"
+                visible: view.visible && !view.valueAuto
+                x: view.valuesArea.left + Type.padding
+                y: view.valuesArea.top + Type.padding
+                height: Type.chipHeight
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                text: qsTr("Auto (A)")
+                onClicked: view.autoValues()
+                Accessible.name: qsTr("Fit the values again")
+                Accessible.description: qsTr("A, or a double-click on the value labels")
+                contentItem: Text {
+                    text: autoValues.text
+                    font: autoValues.font
+                    color: Theme.textPrimary
+                    Accessible.ignored: true
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: autoValues.down ? Theme.statePressed : autoValues.hovered ? Theme.stateHover : Theme.surface
+                    border.width: autoValues.visualFocus ? 2 : 1
+                    border.color: autoValues.visualFocus ? Theme.focusRing : Theme.outline
+                }
+            }
+            // Fitted to one curve: says which, on a chip so it reads over
+            // the curves.
+            Rectangle {
+                objectName: "plotFittedChip"
+                visible: view.visible && view.valueAuto && view.focusedPath.length > 0
+                x: view.valuesArea.left + Type.padding
+                y: view.valuesArea.top + Type.padding
+                width: fitted.implicitWidth + 2 * Type.padding
+                height: Type.chipHeight
+                radius: Type.radius
+                color: Theme.surface
+                border.color: Theme.outlineVariant
+                Label {
+                    id: fitted
+                    objectName: "plotFitted"
+                    anchors.centerIn: parent
+                    color: Theme.textSecondary
+                    font.pointSize: Type.caption
+                    text: qsTr("Fitted to %1").arg(view.focusedPath)
+                }
+            }
             // The reference's time, under the axis where it is pinned.
             Rectangle {
+                id: referenceChip
                 objectName: "plotReferenceChip"
                 visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
                          && view.referenceX <= view.plotArea.right
@@ -403,7 +557,21 @@ FocusScope {
                          && view.cursorX <= view.plotArea.right
                 width: cursorText.implicitWidth + 2 * Type.padding
                 height: Type.chipHeight
-                x: Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
+                // Centred on its line, but never over the reference's chip:
+                // beside it, 4 px apart, on the cursor's side.
+                x: {
+                    const centred = Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
+                    if (!referenceChip.visible)
+                        return centred
+                    const gap = 4
+                    if (centred + width + gap <= referenceChip.x || centred >= referenceChip.x + referenceChip.width + gap)
+                        return centred
+                    const after = referenceChip.x + referenceChip.width + gap
+                    const before = referenceChip.x - width - gap
+                    if (view.cursorX >= view.referenceX)
+                        return after + width <= parent.width ? after : Math.max(0, before)
+                    return before >= 0 ? before : Math.min(parent.width - width, after)
+                }
                 y: view.height - height
                 radius: Type.radius
                 color: Theme.surface
@@ -531,6 +699,236 @@ FocusScope {
                     font.pointSize: Type.caption
                     text: qsTr("Right-click a row and choose Plot.")
                 }
+            }
+        }
+    }
+
+    Menu {
+        id: graphMenu
+        objectName: "plotGraphMenu"
+        MenuItem {
+            objectName: "plotShowPoints"
+            text: qsTr("Show measurement points")
+            checkable: true
+            checked: plot.traces !== null && plot.traces.showPoints
+            onTriggered: {
+                plot.traces.showPoints = !plot.traces.showPoints
+                checked = Qt.binding(() => plot.traces !== null && plot.traces.showPoints)
+            }
+        }
+    }
+
+    // One menu for a chip: what it was opened on.
+    Menu {
+        id: chipMenu
+        objectName: "plotChipMenu"
+        property string path: ""
+        readonly property int points: {
+            plot.traces ? plot.traces.appearanceRevision : 0
+            return plot.traces && path.length > 0 ? plot.traces.points(path) : 0
+        }
+        function openFor(target) {
+            path = target
+            popup()
+        }
+        MenuItem {
+            objectName: "plotChipFocus"
+            text: view.focusedPath === chipMenu.path ? qsTr("Unfocus") : qsTr("Focus")
+            onTriggered: view.focusedPath = view.focusedPath === chipMenu.path ? "" : chipMenu.path
+        }
+        MenuSeparator {}
+        ButtonGroup { id: pointModes }
+        MenuItem {
+            objectName: "plotChipPointsPlot"
+            text: qsTr("Points as the Plot")
+            checkable: true
+            checked: chipMenu.points === 0
+            ButtonGroup.group: pointModes
+            onTriggered: plot.traces.setPoints(chipMenu.path, 0)
+        }
+        MenuItem {
+            objectName: "plotChipPointsShow"
+            text: qsTr("Show points")
+            checkable: true
+            checked: chipMenu.points === 1
+            ButtonGroup.group: pointModes
+            onTriggered: plot.traces.setPoints(chipMenu.path, 1)
+        }
+        MenuItem {
+            objectName: "plotChipPointsHide"
+            text: qsTr("Hide points")
+            checkable: true
+            checked: chipMenu.points === 2
+            ButtonGroup.group: pointModes
+            onTriggered: plot.traces.setPoints(chipMenu.path, 2)
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotChipSettingsItem"
+            text: qsTr("Curve settings…")
+            onTriggered: curveSettings.openFor(chipMenu.path)
+        }
+        MenuItem {
+            objectName: "plotChipRemoveItem"
+            text: qsTr("Remove from the Plot")
+            onTriggered: plot.traces.unplot(chipMenu.path)
+        }
+    }
+
+    // A curve's settings, in Trend's words: its colour, and the multiplier
+    // and offset it is drawn with. Display only: the readings stay.
+    Dialog {
+        id: curveSettings
+        objectName: "plotCurveSettings"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, (parent ? parent.width : 460) - 2 * Type.groupSpacing)
+        modal: true
+        title: qsTr("%1 curve").arg(path)
+        closePolicy: Popup.CloseOnEscape
+        property string path: ""
+        readonly property bool validColor: /^#[0-9a-fA-F]{6}$/.test(colorField.text.trim())
+        readonly property var multiplier: finiteDecimal(multiplierField.text)
+        readonly property var offset: finiteDecimal(offsetField.text)
+        readonly property bool valid: validColor && multiplier !== null && offset !== null
+        function finiteDecimal(text) {
+            const clean = text.trim()
+            if (!/^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(clean))
+                return null
+            const value = Number(clean)
+            return Number.isFinite(value) ? value : null
+        }
+        function openFor(target) {
+            path = target
+            colorField.text = String(view.curveColor(target)).toLowerCase()
+            multiplierField.text = String(plot.traces.multiplier(target))
+            offsetField.text = String(plot.traces.offset(target))
+            open()
+        }
+        function apply() {
+            if (!valid)
+                return
+            // Its palette colour is kept as no colour of its own.
+            const own = colorField.text.trim().toLowerCase()
+            const palette = plot.traces.colorIndex(path)
+            const color = palette >= 0 && palette < plot.curveColors.length && plot.curveColors[palette] === own ? "" : own
+            if (plot.traces.setAppearance(path, color, multiplier, offset))
+                close()
+        }
+        onOpened: {
+            multiplierField.forceActiveFocus(Qt.TabFocusReason)
+            multiplierField.selectAll()
+        }
+        contentItem: ColumnLayout {
+            spacing: Type.spacing
+            Label { text: qsTr("Color"); color: Theme.textSecondary }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 8
+                columnSpacing: Type.tight
+                rowSpacing: Type.tight
+                Repeater {
+                    model: plot.curveColors
+                    delegate: ToolButton {
+                        id: swatch
+                        required property string modelData
+                        required property int index
+                        objectName: "plotColorPreset_" + index
+                        implicitWidth: Type.controlHeight
+                        implicitHeight: Type.controlHeight
+                        Accessible.name: qsTr("Use color %1").arg(modelData)
+                        onClicked: colorField.text = swatch.modelData
+                        contentItem: Rectangle {
+                            implicitWidth: Type.iconSize
+                            implicitHeight: Type.iconSize
+                            color: swatch.modelData
+                            radius: Type.radius
+                            border.width: colorField.text.toLowerCase() === swatch.modelData ? 2 : 0
+                            border.color: Theme.textPrimary
+                        }
+                    }
+                }
+            }
+            TextField {
+                id: colorField
+                objectName: "plotCurveColor"
+                Layout.fillWidth: true
+                maximumLength: 7
+                selectByMouse: true
+                Accessible.name: qsTr("Curve color in hexadecimal")
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Display only: y = k × reading + b")
+                color: Theme.textSecondary
+                wrapMode: Text.Wrap
+            }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: Type.spacing
+                rowSpacing: Type.spacing
+                Label { text: qsTr("Multiplier k"); color: Theme.textSecondary }
+                TextField {
+                    id: multiplierField
+                    objectName: "plotCurveMultiplier"
+                    Layout.fillWidth: true
+                    selectByMouse: true
+                    Accessible.name: qsTr("Display multiplier k")
+                    onAccepted: curveSettings.apply()
+                }
+                Label { text: qsTr("Offset b"); color: Theme.textSecondary }
+                TextField {
+                    id: offsetField
+                    objectName: "plotCurveOffset"
+                    Layout.fillWidth: true
+                    selectByMouse: true
+                    Accessible.name: qsTr("Display offset b")
+                    onAccepted: curveSettings.apply()
+                }
+            }
+            Button {
+                objectName: "plotCurveResetTransform"
+                text: qsTr("Reset transform")
+                flat: true
+                Layout.leftMargin: -leftPadding
+                onClicked: {
+                    multiplierField.text = "1"
+                    offsetField.text = "0"
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("The readings stay as they were read; the chip and the cursor give them. All plotted numbers share one value axis.")
+                color: Theme.textMuted
+                font.pointSize: Type.caption
+                wrapMode: Text.Wrap
+            }
+            Label {
+                objectName: "plotCurveSettingsProblem"
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: !curveSettings.validColor ? qsTr("Use a six-digit color, for example #58a6ff.")
+                    : curveSettings.multiplier === null || curveSettings.offset === null
+                        ? qsTr("Enter finite numbers for k and b.") : ""
+                textFormat: Text.PlainText
+                color: Theme.error
+                wrapMode: Text.Wrap
+            }
+        }
+        footer: DialogButtonBox {
+            Button {
+                objectName: "plotCurveApply"
+                text: qsTr("Apply")
+                enabled: curveSettings.valid
+                DialogButtonBox.buttonRole: DialogButtonBox.ApplyRole
+                onClicked: curveSettings.apply()
+            }
+            Button {
+                objectName: "plotCurveCancel"
+                text: qsTr("Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                onClicked: curveSettings.close()
             }
         }
     }

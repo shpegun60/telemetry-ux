@@ -39,6 +39,10 @@ class WatchTraces final : public QObject {
 	Q_PROPERTY(QStringList plotted READ plotted NOTIFY plottedChanged)
 	Q_PROPERTY(int plotLimit READ plotLimit CONSTANT)
 	Q_PROPERTY(quint64 revision READ revision NOTIFY appended)
+	// Measurement points on every curve whose own setting is "as the Plot".
+	Q_PROPERTY(bool showPoints READ showPoints WRITE setShowPoints NOTIFY appearanceChanged)
+	// Bumped whenever a curve's colour, multiplier, offset or points change.
+	Q_PROPERTY(quint64 appearanceRevision READ appearanceRevision NOTIFY appearanceChanged)
 public:
 	static constexpr qint64 keptNs = 600'000'000'000; // ten minutes
 	static constexpr std::size_t keptReadings = 65'536;
@@ -57,6 +61,8 @@ public:
 	// that left or came back breaks its line just before it.
 	[[nodiscard]] quint64 membership() const noexcept { return membership_; }
 	void setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical = {}, qint64 at = 0);
+	// An enum value's state names by code, for its lane and its chip (LP-1d).
+	void setStates(const QString& path, QHash<qint64, QString> names);
 	// Every reading kept, over every ring.
 	[[nodiscard]] std::size_t total() const noexcept { return total_; }
 	// A completed read: each of its rows appended to its value's ring.
@@ -64,6 +70,9 @@ public:
 
 	[[nodiscard]] const std::deque<TraceReading>* readings(const QString& path) const;
 	[[nodiscard]] bool categorical(const QString& path) const;
+	// A bool's or an enum's reading in words: "true", "Idle"; an enum code
+	// with no name "Code 7"; empty for a number.
+	Q_INVOKABLE QString stateText(const QString& path, const QVariant& value) const;
 	// The time origin every reading's ns is measured against, as this PC's
 	// clock: utcMs at monotonicNs (the first frame's stamp).
 	[[nodiscard]] WatchTimestamp anchor() const noexcept { return anchor_; }
@@ -88,6 +97,28 @@ public:
 	Q_INVOKABLE int count(const QString& path) const;
 	// Every ring emptied; what is plotted stays.
 	Q_INVOKABLE void clear();
+
+	// A curve's look (LP-1f), kept for its path whether it is plotted or not:
+	// its own colour ("#rrggbb", or "" for its palette place), and the
+	// multiplier k and offset b it is drawn with, y = k x value + b - for
+	// display only, the readings stay as they were read. False, and nothing
+	// changed, for a colour that is not #rrggbb or a k or b not finite.
+	Q_INVOKABLE bool setAppearance(const QString& path, const QString& color, double multiplier, double offset);
+	Q_INVOKABLE QString color(const QString& path) const { return appearance_.value(path).color; }
+	Q_INVOKABLE double multiplier(const QString& path) const { return appearance_.value(path).multiplier; }
+	Q_INVOKABLE double offset(const QString& path) const { return appearance_.value(path).offset; }
+	// Its measurement points: 0 as the Plot, 1 shown, 2 hidden.
+	Q_INVOKABLE void setPoints(const QString& path, int mode);
+	Q_INVOKABLE int points(const QString& path) const { return appearance_.value(path).points; }
+	// Whether its points are drawn, the Plot's setting applied.
+	Q_INVOKABLE bool pointsShown(const QString& path) const;
+	bool showPoints() const noexcept { return showPoints_; }
+	void setShowPoints(bool show);
+	quint64 appearanceRevision() const noexcept { return appearanceRevision_; }
+	// What a project keeps of the Plot: the curves plotted, in order, and
+	// every curve's look, and the Plot's points; restore() plots them again.
+	Q_INVOKABLE QVariantMap capture() const;
+	Q_INVOKABLE bool restore(const QVariantMap& state);
 	// Every line ends here - the Watchlist stopped, the device went - so
 	// the time not read is never drawn as if it were.
 	void breakAll();
@@ -98,6 +129,7 @@ public:
 Q_SIGNALS:
 	void appended();
 	void plottedChanged();
+	void appearanceChanged();
 
 private:
 	struct Trace {
@@ -112,8 +144,18 @@ private:
 	QHash<QString, Trace> traces_;
 	QHash<quint64, QString> paths_;
 	QHash<QString, bool> categorical_;
+	QHash<QString, QHash<qint64, QString>> states_;
 	QStringList plotted_;
 	QHash<QString, int> colors_;
+	struct Appearance {
+		QString color;
+		double multiplier = 1, offset = 0;
+		int points = 0;
+		bool plain() const { return color.isEmpty() && multiplier == 1 && offset == 0 && points == 0; }
+	};
+	QHash<QString, Appearance> appearance_;
+	bool showPoints_ = false;
+	quint64 appearanceRevision_ = 0;
 	WatchTimestamp anchor_;
 	quint64 membership_ = ~quint64{0};
 	qint64 newestNs_ = 0;

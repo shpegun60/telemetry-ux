@@ -558,6 +558,46 @@ shows its value at the cursor and its difference from the reference. New on
 `hideCursor()`, `stepCursor()`, `pinReference()`, `clearReference()`,
 `valueAt(path)`, `referenceValue(path)`.
 
+## Lanes for booleans and enums on the live Plot (LP-1d, November 2026)
+
+A plotted bool or enum is no longer drawn on the numbers' axis: `TraceView`
+gives each a lane of its own under the numbers, a row high (`laneHeight`, at
+most 40 % of the graph together): a bool a band while true and a line while
+false, an enum a band per state (`laneFillColor`) with its name where it fits
+(`laneTextColor`) and a mark where it changes. The value axis spans the numbers
+only. `WatchTraces` gains `stateText(path, value)` ("true", "Idle", "Code 7")
+and `setStates(path, names)`; the provider fills the names from each enum row's
+editor choices. The chips say a state in words, with no difference.
+
+## Zooming the values on the live Plot (LP-1e, November 2026)
+
+The values axis is no longer fixed to the curves in view. `TraceView` has two
+modes for it, reported by `valueAuto`: Auto fits every number in view (only the
+focused curve while one is focused), and Manual starts as soon as the values are
+zoomed or panned by hand - Ctrl and the wheel, or the wheel over the value
+labels (`valuesArea`), a drag over the labels, Up/Down and Ctrl+Up/Down - and
+keeps its range through Follow, the presets and time zoom. A, a double-click on
+the labels or `autoValues()` returns to Auto. `focusedPath` (read-write) fits
+the values to one curve and draws it heavier; setting it returns to Auto. New
+invokables: `zoomValues(factor, at)` and `panValues(part)`. `TracePlot` shows
+an "Auto (A)" chip in Manual, a "Fitted to ..." chip while focused, and focuses
+a curve on a click on its chip's name.
+
+## Curve settings and measurement points on the live Plot (LP-1f, November 2026)
+
+Each curve has a look of its own again, kept for its path whether plotted or
+not: `WatchTraces.setAppearance(path, color, k, b)` sets its colour (`""` for
+its palette place, else `#rrggbb`) and the multiplier and offset it is drawn
+with, y = k x reading + b, for display only - the rings, the chips and the
+cursor keep the readings. `setPoints(path, mode)` (0 as the Plot, 1 show, 2
+hide) and the Plot-wide `showPoints` draw a dot at each reading of a raw curve.
+`appearanceChanged` and `appearanceRevision` report a change. `capture()` and
+`restore(map)` carry the plotted curves in order, every look and `showPoints`,
+for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
+`TracePlot` opens a curve's settings from its chip's colour mark, tags a scaled
+chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
+Shift+F10).
+
 ## A pictogram says why it cannot act (FL-1a, November 2026)
 
 `IconToolButton` gains `disabledReason`, a few words on why the action cannot

@@ -204,10 +204,13 @@ int main(int argc, char** argv)
 		CHECK(chips.size() == 2 && chips[0]->property("text").toString() == QStringLiteral("device.Voltage"));
 		const auto values = all(content, "plotChipValue");
 		CHECK(values.size() == 2 && values[0]->property("text").toString() == QStringLiteral("7.25") &&
-		      values[1]->property("text").toString() == QStringLiteral("1"));
+		      values[1]->property("text").toString() == QStringLiteral("true"));
 		auto* view = shown(content, "plotView");
 		CHECK(view->property("following").toBool() && view->property("spanSeconds").toDouble() == 60.0);
 		CHECK(view->property("drawnCurves").toInt() == 2 && view->property("rawCurves").toInt() == 2);
+		// LP-1d. A bool has a lane of its own under the numbers, named by its
+		// leaf; it is never on their axis.
+		CHECK(view->property("laneLabels").toStringList() == QStringList({QStringLiteral("Ready")}));
 		const QRegularExpression seconds(QStringLiteral("^\\d\\d:\\d\\d:\\d\\d$"));
 		const auto timeLabels = view->property("timeLabels").toStringList();
 		CHECK(timeLabels.size() >= 3);
@@ -258,6 +261,31 @@ int main(int argc, char** argv)
 		const auto area = view->property("plotArea").toRectF();
 		CHECK(area.width() > 400 && view->property("drawnPoints").toInt() < 400 + int(area.width() * window->effectiveDevicePixelRatio()) * 4 + 8);
 		shot(window, argc, argv, QStringLiteral("trace-plot-dense-760"));
+
+		// LP-1d. An enum's lane names its states where they fit; its chip says
+		// the state in words, a code no name has as "Code 7".
+		traces.setPaths(5, {{1, QStringLiteral("device.Voltage")}, {2, QStringLiteral("device.Ready")},
+		                    {gain, QStringLiteral("device.Config.Gain")}, {10, QStringLiteral("device.Mode")}},
+		                {{QStringLiteral("device.Ready"), true}, {QStringLiteral("device.Mode"), true}});
+		traces.setStates(QStringLiteral("device.Mode"), {{0, QStringLiteral("Idle")}, {1, QStringLiteral("Run")}});
+		const qint64 modeAt = ux::WatchTraces::nowNs();
+		for (int i = 0; i < 20; ++i)
+			traces.append(frame(modeAt - 20'000'000'000 + qint64(i) * 1'000'000'000,
+			                    {{10, 0, bits(S::U8, 1, quint64(i < 10 ? 0 : i < 18 ? 1 : 7), true)}}));
+		CHECK(traces.categorical(QStringLiteral("device.Mode")) &&
+		      traces.stateText(QStringLiteral("device.Mode"), 1.0) == QStringLiteral("Run") &&
+		      traces.stateText(QStringLiteral("device.Mode"), 7.0) == QStringLiteral("Code 7") &&
+		      traces.stateText(QStringLiteral("device.Voltage"), 1.0).isEmpty());
+		CHECK(traces.plot(QStringLiteral("device.Mode")).isEmpty());
+		settle(400);
+		CHECK(view->property("laneLabels").toStringList() == QStringList({QStringLiteral("Ready"), QStringLiteral("Mode")}));
+		const auto states = view->property("laneStates").toStringList();
+		CHECK(states.contains(QStringLiteral("Idle")) && states.contains(QStringLiteral("Run")));
+		const auto modeValues = all(content, "plotChipValue");
+		CHECK(modeValues.size() == 4 && modeValues[3]->property("text").toString() == QStringLiteral("Code 7"));
+		shot(window, argc, argv, QStringLiteral("trace-plot-lanes-760"));
+		traces.unplot(QStringLiteral("device.Mode"));
+		settle();
 
 		// LP-1b. Nine minutes kept, so there is somewhere to go.
 		traces.append(frame(dense - 540'000'000'000, {{3, 1, bits(S::S16, 2, 0)}}));
@@ -439,6 +467,219 @@ int main(int argc, char** argv)
 		CHECK(view->setProperty("following", true));
 		settle(150);
 
+		// LP-1e. Ctrl and the wheel zoom the values about the pointer, by hand:
+		// the time stays, and "Auto (A)" offers the fit back.
+		{
+			const auto valuesArea = view->property("valuesArea").toRectF();
+			const double spanBefore = view->property("spanSeconds").toDouble();
+			const auto labelsBefore = view->property("valueLabels").toStringList();
+			const QPointF inside(valuesArea.center());
+			QWheelEvent zoomIn(inside, view->mapToGlobal(inside), QPoint(), QPoint(0, 240), Qt::NoButton, Qt::ControlModifier,
+			                   Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(view, &zoomIn);
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() == spanBefore &&
+			      view->property("valueLabels").toStringList() != labelsBefore && shown(content, "plotAuto"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-values-zoomed-760"));
+			// A fits them again.
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_A);
+			settle(150);
+			CHECK(view->property("valueAuto").toBool() && !named(content, "plotAuto"));
+			// The wheel over the value labels zooms the values too.
+			const QPointF labels(valuesArea.left() - 8, valuesArea.center().y());
+			QWheelEvent overLabels(labels, view->mapToGlobal(labels), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+			                       Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(view, &overLabels);
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() == spanBefore);
+			// Up pans them a tenth; the Follow and the time are left as they are.
+			const auto manualLabels = view->property("valueLabels").toStringList();
+			QTest::keyClick(window, Qt::Key_Up);
+			settle(150);
+			CHECK(view->property("valueLabels").toStringList() != manualLabels && view->property("following").toBool());
+			// A double-click on the value labels fits them again.
+			QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, view->mapToScene(labels).toPoint());
+			settle(150);
+			CHECK(view->property("valueAuto").toBool());
+			// A drag over the value labels pans them.
+			const auto fittedLabels = view->property("valueLabels").toStringList();
+			const auto from = view->mapToScene(labels).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+			QTest::mouseMove(window, from + QPoint(0, 30));
+			QTest::mouseMove(window, from + QPoint(0, 60));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(0, 60));
+			settle(150);
+			CHECK(!view->property("valueAuto").toBool() && view->property("valueLabels").toStringList() != fittedLabels &&
+			      !view->property("referenceShown").toBool());
+			QTest::keyClick(window, Qt::Key_A);
+			settle(150);
+			// A click on a chip's name fits the values to that curve alone:
+			// Voltage, 1 to 8, not Gain's -100 to 100.
+			auto* voltageName = all(content, "plotChipName").first();
+			click(window, voltageName);
+			settle(200);
+			CHECK(view->property("focusedPath").toString() == QStringLiteral("device.Voltage") &&
+			      shown(content, "plotFitted")->property("text").toString() == QStringLiteral("Fitted to device.Voltage"));
+			double highest = -1e9;
+			for (const auto& label : view->property("valueLabels").toStringList())
+				highest = std::max(highest, label.toDouble());
+			CHECK(highest < 20);
+			shot(window, argc, argv, QStringLiteral("trace-plot-focused-760"));
+			click(window, voltageName);
+			settle(200);
+			CHECK(view->property("focusedPath").toString().isEmpty() && !named(content, "plotFitted"));
+			// The cursor's chip never covers the reference's: beside it.
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			const auto area = view->property("plotArea").toRectF();
+			const auto at = view->mapToScene(QPointF(area.left() + area.width() * 0.5, area.center().y())).toPoint();
+			QTest::mouseMove(window, at + QPoint(-20, 0));
+			settle(60);
+			QTest::mouseMove(window, at);
+			settle(100);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, at);
+			settle(150);
+			QTest::mouseMove(window, at + QPoint(3, 0));
+			settle(150);
+			auto* cursorChip = shown(content, "plotCursorChip");
+			auto* referenceChip = shown(content, "plotReferenceChip");
+			const double cx = cursorChip->x(), cw = cursorChip->width(), rx = referenceChip->x(), rw = referenceChip->width();
+			CHECK(cx >= rx + rw + 3.5 || cx + cw <= rx - 3.5);
+			shot(window, argc, argv, QStringLiteral("trace-plot-chips-apart-760"));
+			QTest::keyClick(window, Qt::Key_Escape);
+			QTest::mouseMove(window, QPoint(4, 4));
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
+		// LP-1f. A curve's look: its colour, k and b, kept for its path; a
+		// colour not #rrggbb or a k or b not finite is refused and changes
+		// nothing.
+		{
+			const QString voltage = QStringLiteral("device.Voltage");
+			CHECK(!traces.setAppearance(voltage, QStringLiteral("red"), 1, 0) &&
+			      !traces.setAppearance(voltage, QString(), std::numeric_limits<double>::quiet_NaN(), 0) &&
+			      !traces.setAppearance(voltage, QString(), 1, std::numeric_limits<double>::infinity()) &&
+			      traces.multiplier(voltage) == 1 && traces.color(voltage).isEmpty());
+			QColor drawnIn;
+			CHECK(QMetaObject::invokeMethod(view, "curveColor", Q_RETURN_ARG(QColor, drawnIn), Q_ARG(QString, voltage)) &&
+			      drawnIn == QColor(QStringLiteral("#58a6ff")));
+			const auto valueBefore = all(content, "plotChipValue").first()->property("text").toString();
+			CHECK(traces.setAppearance(voltage, QStringLiteral("#FF7E8F"), 100, 0.5) && traces.color(voltage) == QStringLiteral("#ff7e8f"));
+			settle(150);
+			CHECK(QMetaObject::invokeMethod(view, "curveColor", Q_RETURN_ARG(QColor, drawnIn), Q_ARG(QString, voltage)) &&
+			      drawnIn == QColor(QStringLiteral("#ff7e8f")));
+			// The chip says how it is drawn, and still gives the reading.
+			CHECK(all(content, "plotChipTransform").size() == 1 &&
+			      all(content, "plotChipValue").first()->property("text").toString() == valueBefore);
+			bool tagged = false;
+			for (auto* child : all(content, "plotChipTransform").first()->childItems())
+				tagged = tagged || child->property("text").toString() == QStringLiteral("×100 +0.5");
+			CHECK(tagged);
+			// Focused, the values fit the drawn curve: 100 x 1..8 + 0.5.
+			view->setProperty("focusedPath", voltage);
+			settle(200);
+			double highest = -1e9;
+			for (const auto& label : view->property("valueLabels").toStringList())
+				highest = std::max(highest, QString(label).remove(QChar(',')).toDouble());
+			CHECK(highest > 300);
+			shot(window, argc, argv, QStringLiteral("trace-plot-transformed-760"));
+			view->setProperty("focusedPath", QString());
+			settle(150);
+
+			// Measurement points: none by default, every number's with the
+			// Plot's setting, none on a curve that hides its own.
+			CHECK(view->property("drawnDots").toInt() == 0);
+			traces.setShowPoints(true);
+			settle(200);
+			const int allDots = view->property("drawnDots").toInt();
+			CHECK(allDots > 0 && traces.pointsShown(voltage));
+			shot(window, argc, argv, QStringLiteral("trace-plot-points-760"));
+			traces.setPoints(voltage, 2);
+			settle(200);
+			const int hidden = view->property("drawnDots").toInt();
+			CHECK(hidden < allDots && !traces.pointsShown(voltage));
+			traces.setShowPoints(false);
+			traces.setPoints(voltage, 1);
+			settle(200);
+			CHECK(view->property("drawnDots").toInt() == allDots - hidden);
+			traces.setPoints(voltage, 0);
+			settle(200);
+			CHECK(view->property("drawnDots").toInt() == 0);
+
+			// What a project keeps: the curves in order and their looks.
+			const auto saved = traces.capture();
+			const auto order = traces.plotted();
+			traces.unplot(voltage);
+			CHECK(traces.setAppearance(voltage, QString(), 1, 0));
+			traces.setShowPoints(true);
+			CHECK(traces.restore(saved) && traces.plotted() == order && traces.multiplier(voltage) == 100 &&
+			      traces.offset(voltage) == 0.5 && traces.color(voltage) == QStringLiteral("#ff7e8f") && !traces.showPoints());
+			// A saved look that is not one is skipped; the rest is restored.
+			auto damaged = saved;
+			damaged[QStringLiteral("curves")] = QVariantMap{{voltage, QVariantMap{{QStringLiteral("color"), QStringLiteral("blue")}}}};
+			CHECK(!traces.restore(damaged) && traces.plotted() == order);
+			CHECK(traces.setAppearance(voltage, QString(), 1, 0) && all(content, "plotChipTransform").isEmpty());
+			settle(150);
+
+			// The chip's colour mark opens its settings: a swatch, k and b, Apply.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			auto* colorField = shown(content, "plotCurveColor");
+			CHECK(colorField->property("text").toString() == QStringLiteral("#58a6ff"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-curve-settings-760"));
+			click(window, shown(content, "plotColorPreset_4"));
+			shown(content, "plotCurveMultiplier")->setProperty("text", QStringLiteral("2"));
+			shown(content, "plotCurveOffset")->setProperty("text", QStringLiteral("-1.5"));
+			settle();
+			CHECK(colorField->property("text").toString() == QStringLiteral("#ff7e8f"));
+			click(window, shown(content, "plotCurveApply"));
+			settle(300);
+			CHECK(!named(content, "plotCurveColor") && traces.multiplier(voltage) == 2 && traces.offset(voltage) == -1.5 &&
+			      traces.color(voltage) == QStringLiteral("#ff7e8f"));
+			// Not a number: said in words, Apply off; Cancel changes nothing.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			shown(content, "plotCurveMultiplier")->setProperty("text", QStringLiteral("abc"));
+			settle();
+			CHECK(shown(content, "plotCurveSettingsProblem")->property("text").toString() ==
+			      QStringLiteral("Enter finite numbers for k and b.") &&
+			      !shown(content, "plotCurveApply")->property("enabled").toBool());
+			click(window, shown(content, "plotCurveCancel"));
+			settle(300);
+			CHECK(!named(content, "plotCurveColor") && traces.multiplier(voltage) == 2);
+			// Its palette colour and Reset transform make it plain again.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			click(window, shown(content, "plotColorPreset_0"));
+			click(window, shown(content, "plotCurveResetTransform"));
+			click(window, shown(content, "plotCurveApply"));
+			settle(300);
+			CHECK(traces.color(voltage).isEmpty() && traces.multiplier(voltage) == 1 && traces.offset(voltage) == 0);
+
+			// The chip's menu (right-click): its points shown.
+			auto* chipName = all(content, "plotChipName").first();
+			QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+			                  chipName->mapToScene(QPointF(chipName->width() / 2, chipName->height() / 2)).toPoint());
+			settle(300);
+			click(window, shown(content, "plotChipPointsShow"));
+			settle(300);
+			CHECK(traces.points(voltage) == 1 && !named(content, "plotChipPointsShow"));
+			traces.setPoints(voltage, 0);
+			// The graph's menu (right-click): every curve's points.
+			const auto graph = view->property("plotArea").toRectF();
+			QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+			                  view->mapToScene(QPointF(graph.left() + graph.width() * 0.3, graph.center().y())).toPoint());
+			settle(300);
+			click(window, shown(content, "plotShowPoints"));
+			settle(300);
+			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
+			traces.setShowPoints(false);
+			QTest::mouseMove(window, QPoint(4, 4));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);
@@ -473,7 +714,7 @@ int main(int argc, char** argv)
 			traces.append(frame(start + qint64(i) * 1000, {{5, 0, bits(S::U8, 1, quint64(i & 0xff))}}));
 		CHECK(traces.count(QStringLiteral("device.Fast")) == int(ux::WatchTraces::keptReadings));
 		std::size_t sum = 0;
-		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Fast"})
+		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Mode", "device.Fast"})
 			sum += std::size_t(traces.count(QString::fromLatin1(path)));
 		CHECK(traces.total() == sum);
 		for (int i = 0; i < 700; ++i)
