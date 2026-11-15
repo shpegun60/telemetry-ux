@@ -1011,6 +1011,24 @@ has its own chip (`plotEndChip`). Copy picture takes the table or chips and
 the graph (`plotPicture`) without the cursor. `notice` gains `noticeKind`
 and `tell(words, kind)`: "Copied …", "Saved …" and a failed find leave after
 5 s, refusals stay until ×. `dropWords(payload)` gives what a drop will do.
+
+## The Plot's header in a narrow dock (November 2026)
+
+`TracePlot`'s header now fits a 320 px dock instead of holding the whole Plot
+at its own width. As the Plot narrows it gives way in a fixed order,
+measured from the controls as the Watchlist's toolbar is: the zoom buttons
+hide (the wheel, + and - still zoom); then 10 s | 1 min | 10 min | All fold
+into one button showing the span, "1 min ▾", with the four in its menu
+(`plotSpanButton`, `plotSpanMenu`; keys 1 to 4 still choose); then Follow
+becomes an icon-only toggle, "Follow the newest reading (End)"
+(`plotFollowIcon`, the new `ToolIcon` "follow"); and last the time axis
+switch reads "Clock ▾" or "Start ▾", its accessible name unchanged. Back and
+Measure always stay. `narrowStep` (0 to 4), `headerMinimum` and `spans` are
+new. The graph keeps at least `graphMinimumHeight` (six rows): the chips and
+the Measure table scroll before it shrinks below that. The pins' and the
+cursor's chips step beside the axis switch, and a chip whose line is on the
+plot area's last pixel shows (`onPlot(x)`).
+
 ## The Trend drawn by TracePlot (TR-2, November 2026)
 
 `TracePlot.recording` draws a recorded run, the Trend: its words say so (×
@@ -1021,8 +1039,10 @@ menu entry and the behind chip appear only while `writing`. `runName` names
 the run in the graph's accessible name. `leading` and `trailing` take the
 host's controls at either end of the header row. `emptyText`, `emptyHint`,
 `waitingText` and `message` let the host word the empty, waiting and
-over-the-graph states. In a recording, below 520 px the spans become a list,
-below 440 px the zoom buttons and Measure leave the row, and below 400 px of
-height the chips keep to one row and scroll.
+over-the-graph states. In a narrow dock a recording's header gives way in the
+live Plot's order (`narrowStep`, above): the leading controls keep their
+width, the trailing ones give way after Follow's icon and before the axis'
+words (`trailingGivesWay`), and Back and Measure stay. Below 400 px of height
+the chips keep to one row and scroll.
 `WatchTraces::appendRecorded(path, readings)` adds a run's newer readings to
 a recorded path without copying the rest. The live Plot is unchanged.
