@@ -75,6 +75,7 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 	setAntialiasing(true);
 	setOpaquePainting(false);
 	setAcceptedMouseButtons(Qt::LeftButton);
+	setAcceptHoverEvents(true);
 	setActiveFocusOnTab(true);
 	setCursor(Qt::CrossCursor);
 	// New readings mark the picture; it is drawn again at most every 50 ms,
@@ -163,6 +164,217 @@ void TraceView::choosePreset(int seconds)
 	following_ = true;
 	Q_EMIT viewChanged();
 	update();
+}
+
+namespace {
+// The reading at or before ns, or none.
+const TraceReading* atOrBefore(const std::deque<TraceReading>& readings, qint64 ns)
+{
+	auto it = std::upper_bound(readings.begin(), readings.end(), ns, [](qint64 at, const TraceReading& r) { return at < r.ns; });
+	if (it == readings.begin())
+		return nullptr;
+	return &*std::prev(it);
+}
+} // namespace
+
+qreal TraceView::cursorUtcMs() const
+{
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	return qreal(anchor.utcMs) + qreal(cursorNs_ - anchor.monotonicNs) / 1e6;
+}
+
+qreal TraceView::cursorAgoSeconds() const
+{
+	const auto newest = traces_ ? traces_->newestNs() : 0;
+	return newest > cursorNs_ ? qreal(newest - cursorNs_) / 1e9 : 0;
+}
+
+qreal TraceView::referenceUtcMs() const
+{
+	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
+	return qreal(anchor.utcMs) + qreal(referenceNs_ - anchor.monotonicNs) / 1e6;
+}
+
+void TraceView::setCursorColor(const QColor& color)
+{
+	cursorColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setReferenceColor(const QColor& color)
+{
+	referenceColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setBottomInset(qreal inset)
+{
+	if (qFuzzyCompare(inset + 1, bottomInset_ + 1))
+		return;
+	bottomInset_ = std::max<qreal>(0, inset);
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setDotRingColor(const QColor& color)
+{
+	dotRingColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setCursorAt(qreal x)
+{
+	if (!traces_ || plotArea_.width() <= 0)
+		return;
+	const auto span = spanNs();
+	const auto right = rightNs();
+	const auto left = right - span;
+	const double perPx = double(span) / plotArea_.width();
+	const qint64 at = left + qint64((std::clamp(x, plotArea_.left(), plotArea_.right()) - plotArea_.left()) * perPx);
+	// The nearest reading of any plotted value within 8 px, else here.
+	qint64 best = at, distance = qint64(8 * perPx);
+	for (const auto& path : traces_->plotted()) {
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->empty())
+			continue;
+		auto it = std::lower_bound(readings->begin(), readings->end(), at, [](const TraceReading& r, qint64 t) { return r.ns < t; });
+		for (auto near : {it, it == readings->begin() ? it : std::prev(it)}) {
+			if (near == readings->end() || std::isnan(near->value))
+				continue;
+			const auto d = std::abs(near->ns - at);
+			if (d <= distance) {
+				distance = d;
+				best = near->ns;
+			}
+		}
+	}
+	if (cursorShown_ && cursorNs_ == best)
+		return;
+	cursorShown_ = true;
+	cursorNs_ = best;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::hideCursor()
+{
+	if (!cursorShown_)
+		return;
+	cursorShown_ = false;
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::stepCursor(int direction)
+{
+	if (!traces_)
+		return;
+	// No cursor yet: it starts on the newest reading in view.
+	if (!cursorShown_) {
+		const auto right = rightNs();
+		qint64 newest = 0;
+		for (const auto& path : traces_->plotted())
+			if (const auto* readings = traces_->readings(path))
+				if (const auto* at = atOrBefore(*readings, right))
+					newest = std::max(newest, at->ns);
+		if (!newest)
+			return;
+		cursorShown_ = true;
+		cursorNs_ = newest;
+		Q_EMIT cursorChanged();
+		update();
+		return;
+	}
+	const auto start = cursorNs_;
+	qint64 next = 0;
+	for (const auto& path : traces_->plotted()) {
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->empty())
+			continue;
+		if (direction > 0) {
+			auto it = std::upper_bound(readings->begin(), readings->end(), start, [](qint64 t, const TraceReading& r) { return t < r.ns; });
+			if (it != readings->end() && (!next || it->ns < next))
+				next = it->ns;
+		} else {
+			auto it = std::lower_bound(readings->begin(), readings->end(), start, [](const TraceReading& r, qint64 t) { return r.ns < t; });
+			if (it != readings->begin() && (!next || std::prev(it)->ns > next))
+				next = std::prev(it)->ns;
+		}
+	}
+	if (!next)
+		return;
+	cursorShown_ = true;
+	cursorNs_ = next;
+	// Stepping out of the picture brings the picture along.
+	const auto right = rightNs(), span = spanNs();
+	if (next > right || next < right - span)
+		hold(next + span / 2);
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::pinReference()
+{
+	if (!cursorShown_ || !traces_)
+		return;
+	referenceShown_ = true;
+	referenceNs_ = cursorNs_;
+	referenceValues_.clear();
+	for (const auto& path : traces_->plotted())
+		if (const auto* readings = traces_->readings(path))
+			if (const auto* at = atOrBefore(*readings, referenceNs_); at && !std::isnan(at->value))
+				referenceValues_.insert(path, at->value);
+	Q_EMIT cursorChanged();
+	update();
+}
+
+void TraceView::clearReference()
+{
+	if (!referenceShown_)
+		return;
+	referenceShown_ = false;
+	referenceValues_.clear();
+	Q_EMIT cursorChanged();
+	update();
+}
+
+QVariant TraceView::valueAt(const QString& path) const
+{
+	if (!cursorShown_ || !traces_)
+		return {};
+	const auto* readings = traces_->readings(path);
+	const auto* at = readings ? atOrBefore(*readings, cursorNs_) : nullptr;
+	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
+}
+
+QVariant TraceView::referenceValue(const QString& path) const
+{
+	const auto it = referenceValues_.constFind(path);
+	return referenceShown_ && it != referenceValues_.cend() ? QVariant(*it) : QVariant();
+}
+
+void TraceView::hoverMoveEvent(QHoverEvent* event)
+{
+	// Qt Quick repeats a hover each frame the scene changes, and when the
+	// graph moves under a still pointer (the legend gaining a row); only a
+	// pointer that moved in the window moves the cursor, so the keys' cursor
+	// stays where they put it.
+	if (event->scenePosition() == hoverAt_)
+		return;
+	hoverAt_ = event->scenePosition();
+	if (plotArea_.contains(event->position()))
+		setCursorAt(event->position().x());
+	else
+		hideCursor();
+}
+
+void TraceView::hoverLeaveEvent(QHoverEvent*)
+{
+	hoverAt_ = QPointF(-1, -1);
+	hideCursor();
 }
 
 std::pair<qint64, qint64> TraceView::kept() const
@@ -273,8 +485,17 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 
 void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
-	if (dragging_)
+	if (dragging_) {
 		setCursor(Qt::CrossCursor);
+	} else if (plotArea_.contains(event->position())) {
+		// A click: on the reference takes it away, anywhere else pins it
+		// where the cursor snapped.
+		setCursorAt(event->position().x());
+		if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
+			clearReference();
+		else
+			pinReference();
+	}
 	dragging_ = false;
 	event->accept();
 }
@@ -293,12 +514,36 @@ void TraceView::wheelEvent(QWheelEvent* event)
 
 void TraceView::keyPressEvent(QKeyEvent* event)
 {
+	const bool shift = event->modifiers() & Qt::ShiftModifier;
 	switch (event->key()) {
 		case Qt::Key_Left:
-			pan(-0.1);
+			if (shift)
+				stepCursor(-1);
+			else
+				pan(-0.1);
 			break;
 		case Qt::Key_Right:
-			pan(0.1);
+			if (shift)
+				stepCursor(1);
+			else
+				pan(0.1);
+			break;
+		case Qt::Key_Return:
+		case Qt::Key_Enter:
+			if (!cursorShown_)
+				stepCursor(0);
+			pinReference();
+			break;
+		case Qt::Key_Escape:
+			// The reference first, then the keyboard's cursor.
+			if (referenceShown_)
+				clearReference();
+			else if (cursorShown_)
+				hideCursor();
+			else
+				event->ignore();
+			if (!event->isAccepted())
+				return;
 			break;
 		case Qt::Key_Plus:
 		case Qt::Key_Equal:
@@ -465,7 +710,7 @@ void TraceView::paint(QPainter* painter)
 	const Range values = range_.valid() ? range_ : Range{0, 1};
 
 	// The value labels first, so the plot starts after the widest.
-	const qreal labelsHeight = metrics.height() * 2 + pad;
+	const qreal labelsHeight = metrics.height() * 2 + pad + bottomInset_;
 	const qreal top = pad, bottom = std::max<qreal>(top + 1, height() - labelsHeight);
 	const double rows = std::max<qreal>(1, (bottom - top) / 40.0);
 	const double valueStep = niceStep((values.high - values.low) / rows);
@@ -636,6 +881,36 @@ void TraceView::paint(QPainter* painter)
 			flush();
 		}
 	}
+	// The reference, dashed, and the cursor with a dot on each number's
+	// reading at or before it.
+	const auto lineAt = [&](qint64 ns) { return std::round(xOf(ns)) + 0.5; };
+	qreal cursorX = -1, referenceX = -1;
+	if (referenceShown_ && referenceNs_ >= left && referenceNs_ <= right) {
+		referenceX = lineAt(referenceNs_);
+		QPen dashed(referenceColor_, 1, Qt::DashLine);
+		dashed.setCosmetic(true);
+		painter->setPen(dashed);
+		painter->drawLine(QPointF(referenceX, area.top()), QPointF(referenceX, area.bottom()));
+	}
+	if (cursorShown_ && cursorNs_ >= left && cursorNs_ <= right) {
+		cursorX = lineAt(cursorNs_);
+		QPen line(cursorColor_, 1);
+		line.setCosmetic(true);
+		painter->setPen(line);
+		painter->drawLine(QPointF(cursorX, area.top()), QPointF(cursorX, area.bottom()));
+		for (const auto& path : plotted) {
+			const auto* readings = traces_->readings(path);
+			const auto* at = readings ? atOrBefore(*readings, cursorNs_) : nullptr;
+			if (!at || std::isnan(at->value) || at->ns < left)
+				continue;
+			const int colorAt = traces_->colorIndex(path);
+			const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
+			painter->setPen(QPen(dotRingColor_, 1));
+			painter->setBrush(color);
+			painter->drawEllipse(QPointF(xOf(at->ns), yOf(std::clamp(at->value, -valueLimit, valueLimit))), 3.5, 3.5);
+		}
+		painter->setBrush(Qt::NoBrush);
+	}
 	painter->restore();
 
 	const bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
@@ -651,10 +926,13 @@ void TraceView::paint(QPainter* painter)
 	const qreal behind = !following_ && newest > right ? qreal(newest - right) / 1e9 : 0;
 	const bool behindChanged = !qFuzzyCompare(behind + 1, behindSeconds_ + 1);
 	behindSeconds_ = behind;
+	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2);
+	cursorX_ = cursorX;
+	referenceX_ = referenceX;
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
-	if (changed || following_ || behindChanged)
+	if (changed || following_ || behindChanged || linesMoved)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
 }
 } // namespace telemetry::ux

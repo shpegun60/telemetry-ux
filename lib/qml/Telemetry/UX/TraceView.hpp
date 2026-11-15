@@ -30,6 +30,13 @@ class WatchTraces;
 // reading kept, End follows again, Space and H hold or follow, 1 to 4 choose
 // 10 s, 1 min, 10 min or All. Panning, zooming and Home stop following;
 // reading goes on.
+//
+// The cursor (LP-1c): under the pointer, snapped to the nearest reading within
+// 8 px, else free; Shift+Left and Shift+Right step it reading by reading. A
+// click, or Enter, pins a reference there - its readings copied, so a ring
+// trimmed meanwhile never changes them - and Esc takes it away. valueAt() and
+// referenceValue() give each value at the cursor and at the reference, for
+// the chips and their differences.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -42,6 +49,23 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(int preset READ preset NOTIFY viewChanged)
 	// Held, how far the right edge is behind the newest reading.
 	Q_PROPERTY(qreal behindSeconds READ behindSeconds NOTIFY drawn)
+	// The cursor: shown, its time on this PC's clock (ms since the epoch),
+	// how long before the newest reading, and where it is drawn (item x;
+	// outside the plot area when it has scrolled out).
+	Q_PROPERTY(bool cursorShown READ cursorShown NOTIFY cursorChanged)
+	Q_PROPERTY(qreal cursorUtcMs READ cursorUtcMs NOTIFY cursorChanged)
+	Q_PROPERTY(qreal cursorAgoSeconds READ cursorAgoSeconds NOTIFY cursorChanged)
+	Q_PROPERTY(qreal cursorX READ cursorX NOTIFY drawn)
+	// The pinned reference, likewise.
+	Q_PROPERTY(bool referenceShown READ referenceShown NOTIFY cursorChanged)
+	Q_PROPERTY(qreal referenceUtcMs READ referenceUtcMs NOTIFY cursorChanged)
+	Q_PROPERTY(qreal referenceX READ referenceX NOTIFY drawn)
+	Q_PROPERTY(QColor cursorColor READ cursorColor WRITE setCursorColor NOTIFY styleChanged)
+	Q_PROPERTY(QColor referenceColor READ referenceColor WRITE setReferenceColor NOTIFY styleChanged)
+	Q_PROPERTY(QColor dotRingColor READ dotRingColor WRITE setDotRingColor NOTIFY styleChanged)
+	// Room kept under the time labels for the cursor's and the reference's
+	// chips, so they never cover a label.
+	Q_PROPERTY(qreal bottomInset READ bottomInset WRITE setBottomInset NOTIFY styleChanged)
 	// A colour per palette place (WatchTraces::colorIndex).
 	Q_PROPERTY(QVariantList colors READ colors WRITE setColors NOTIFY styleChanged)
 	Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY styleChanged)
@@ -80,6 +104,34 @@ public:
 	// The oldest reading kept at the left edge; stops following.
 	Q_INVOKABLE void toOldest();
 	Q_INVOKABLE void follow() { setFollowing(true); }
+
+	bool cursorShown() const { return cursorShown_; }
+	qreal cursorUtcMs() const;
+	qreal cursorAgoSeconds() const;
+	qreal cursorX() const { return cursorX_; }
+	bool referenceShown() const { return referenceShown_; }
+	qreal referenceUtcMs() const;
+	qreal referenceX() const { return referenceX_; }
+	QColor cursorColor() const { return cursorColor_; }
+	void setCursorColor(const QColor& color);
+	QColor referenceColor() const { return referenceColor_; }
+	void setReferenceColor(const QColor& color);
+	QColor dotRingColor() const { return dotRingColor_; }
+	void setDotRingColor(const QColor& color);
+	qreal bottomInset() const { return bottomInset_; }
+	void setBottomInset(qreal inset);
+	// The cursor at item x, snapped to the nearest reading within 8 px.
+	Q_INVOKABLE void setCursorAt(qreal x);
+	Q_INVOKABLE void hideCursor();
+	// The cursor to the previous (-1) or next (1) reading of any value.
+	Q_INVOKABLE void stepCursor(int direction);
+	// A reference where the cursor is; taken away again.
+	Q_INVOKABLE void pinReference();
+	Q_INVOKABLE void clearReference();
+	// path's reading at or before the cursor, and at the reference: its
+	// number, or undefined when there is none or it brought none.
+	Q_INVOKABLE QVariant valueAt(const QString& path) const;
+	Q_INVOKABLE QVariant referenceValue(const QString& path) const;
 	QVariantList colors() const { return colors_; }
 	void setColors(const QVariantList& colors);
 	QColor gridColor() const { return gridColor_; }
@@ -105,10 +157,13 @@ protected:
 	void mouseReleaseEvent(QMouseEvent* event) override;
 	void wheelEvent(QWheelEvent* event) override;
 	void keyPressEvent(QKeyEvent* event) override;
+	void hoverMoveEvent(QHoverEvent* event) override;
+	void hoverLeaveEvent(QHoverEvent* event) override;
 
 Q_SIGNALS:
 	void tracesChanged();
 	void viewChanged();
+	void cursorChanged();
 	void styleChanged();
 	void drawn();
 
@@ -133,6 +188,14 @@ private:
 	// All, held: its span when it was held, so new readings do not
 	// rescale a picture that should stand still.
 	qint64 heldAllNs_ = 0;
+	// The cursor's time, and the reference's with each value's reading then.
+	bool cursorShown_ = false, referenceShown_ = false;
+	qint64 cursorNs_ = 0, referenceNs_ = 0;
+	QHash<QString, double> referenceValues_;
+	qreal cursorX_ = -1, referenceX_ = -1;
+	QPointF hoverAt_{-1, -1};
+	qreal bottomInset_ = 0;
+	QColor cursorColor_{0x8b, 0x94, 0x9e}, referenceColor_{0x58, 0xa6, 0xff}, dotRingColor_{0x0d, 0x11, 0x17};
 	qreal behindSeconds_ = 0;
 	// A drag: where it started and the right edge then.
 	qreal pressX_ = 0;

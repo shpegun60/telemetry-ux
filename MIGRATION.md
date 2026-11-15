@@ -541,3 +541,19 @@ and the view stays between the oldest and the newest reading kept. New on
 `TraceView`: `showAll`, `preset` (10, 60, 600, 0 for All, -1 after a zoom),
 `behindSeconds`, `choosePreset()`, `zoom(factor, at)`, `pan(part)`,
 `toOldest()`, `follow()`.
+
+## The live Plot's cursor and reference (LP-1c, November 2026)
+
+`TraceView` draws a cursor under the pointer, snapped to the nearest reading
+within 8 px, with a dot on each value's reading at or before it; Shift+Left and
+Shift+Right step it reading by reading (from the newest in view when there is
+none). A click, or Enter, pins a reference whose readings are copied then; a
+click on it, or Esc, takes it away. `TracePlot` shows the cursor's time under
+the axis ("12:04:31.250", "· 12.4 s ago" while following, "Δ 1.250 s · …"
+with a reference) in a row of its own (`TraceView.bottomInset`), and each chip
+shows its value at the cursor and its difference from the reference. New on
+`TraceView`: `cursorShown`, `cursorUtcMs`, `cursorAgoSeconds`, `cursorX`,
+`referenceShown`, `referenceUtcMs`, `referenceX`, `cursorColor`,
+`referenceColor`, `dotRingColor`, `bottomInset`, `setCursorAt()`,
+`hideCursor()`, `stepCursor()`, `pinReference()`, `clearReference()`,
+`valueAt(path)`, `referenceValue(path)`.

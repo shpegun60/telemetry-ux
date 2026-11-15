@@ -368,6 +368,77 @@ int main(int argc, char** argv)
 		settle(150);
 		CHECK(following() && span() == 60);
 
+		// LP-1c. The cursor follows the pointer, snapped to a reading; its
+		// time shows under the axis, each chip its value there.
+		CHECK(view->setProperty("following", false));
+		settle(150);
+		const auto plotArea = view->property("plotArea").toRectF();
+		const auto pointAt = [&](qreal part) {
+			return view->mapToScene(QPointF(plotArea.left() + plotArea.width() * part, plotArea.center().y())).toPoint();
+		};
+		// Two moves: the first enters the window as offscreen delivers it.
+		QTest::mouseMove(window, pointAt(0.55));
+		settle(60);
+		QTest::mouseMove(window, pointAt(0.6));
+		settle(150);
+		CHECK(view->property("cursorShown").toBool() && shown(content, "plotCursorChip"));
+		const QRegularExpression clock(QStringLiteral("^\\d\\d:\\d\\d:\\d\\d\\.\\d{3}$"));
+		CHECK(clock.match(shown(content, "plotCursorText")->property("text").toString()).hasMatch());
+		QVariant gainAt;
+		CHECK(QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, gainAt), Q_ARG(QString, QStringLiteral("device.Config.Gain"))));
+		const auto cursorValues = all(content, "plotChipValue");
+		CHECK(gainAt.isValid() && cursorValues.size() == 3 &&
+		      cursorValues[2]->property("text").toString() ==
+		          QString::number(qint64(gainAt.toDouble())).replace(QLatin1Char('-'), QChar(0x2212)));
+		// Snapped: the cursor's time is a reading's time exactly.
+		const auto* gainReadings = traces.readings(QStringLiteral("device.Config.Gain"));
+		const double cursorMs = view->property("cursorUtcMs").toDouble();
+		bool onReading = false;
+		for (const auto& reading : *gainReadings)
+			onReading = onReading || std::abs(traces.anchor().utcMs + double(reading.ns - traces.anchor().monotonicNs) / 1e6 - cursorMs) < 1e-3;
+		CHECK(onReading);
+		shot(window, argc, argv, QStringLiteral("trace-plot-cursor-760"));
+		// A click pins a reference there; the cursor then says the time since
+		// it and each chip its value's difference; Esc takes it away.
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pointAt(0.6));
+		settle(150);
+		CHECK(view->property("referenceShown").toBool() && shown(content, "plotReferenceChip") &&
+		      !view->property("following").toBool());
+		QTest::mouseMove(window, pointAt(0.3));
+		settle(150);
+		CHECK(shown(content, "plotCursorText")->property("text").toString().startsWith(QStringLiteral("Δ −")));
+		const auto deltas = all(content, "plotChipDelta");
+		CHECK(deltas.size() == 3 && deltas[2]->property("text").toString().startsWith(QStringLiteral("Δ ")));
+		shot(window, argc, argv, QStringLiteral("trace-plot-reference-760"));
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		CHECK(!view->property("referenceShown").toBool() && all(content, "plotChipDelta").isEmpty());
+		// Shift+Right steps the cursor to the next reading.
+		const double cursorBefore = view->property("cursorUtcMs").toDouble();
+		QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+		settle();
+		CHECK(view->property("cursorUtcMs").toDouble() > cursorBefore);
+		// Without a cursor, Shift+Left starts on the newest reading in view.
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		CHECK(!view->property("cursorShown").toBool());
+		QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+		settle();
+		CHECK(view->property("cursorShown").toBool() &&
+		      std::abs(view->property("cursorUtcMs").toDouble() - view->property("rightUtcMs").toDouble()) < 1);
+		// Enter pins a reference where the keyboard's cursor is.
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(view->property("referenceShown").toBool());
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		// Off the graph, the cursor goes; the chips show the newest reading.
+		QTest::mouseMove(window, QPoint(4, 4));
+		settle(150);
+		CHECK(!view->property("cursorShown").toBool() && !named(content, "plotCursorChip"));
+		CHECK(view->setProperty("following", true));
+		settle(150);
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);
