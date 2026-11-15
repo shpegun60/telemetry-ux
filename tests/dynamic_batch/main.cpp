@@ -1,5 +1,6 @@
 // Deterministic presentation fixture. It does not claim native execution. MIT.
 #include <Telemetry/UX/DynamicBatch.hpp>
+#include <Telemetry/UX/RequestArguments.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
 #include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QSignalSpy>
@@ -378,9 +379,88 @@ void severalRows()
 	CHECK(batch.clear() && batch.canAdd(fresh));
 }
 
+// A Command's or Service's values typed as name=value (BA-2): every argument
+// checked as Details would, its words, and the request's exact bytes. Config
+// stands in for a request with many kinds of value; Inspect's Request has one.
+void requestArguments()
+{
+	namespace ra = ux::request_arguments;
+	using Status = ra::Item::Status;
+	f::Backing backing;
+	const auto& schema = backing.schema;
+	const auto* config = schema.findField("device.Config");
+	const auto* inspect = schema.findService("device.Inspect");
+	CHECK(config && inspect);
+	const auto bytesOf = [](const ra::Result& result) { return result.request.toHex(); };
+	// The inputs, in order, with their types and choices.
+	const auto inputs = ra::arguments(schema, config->typeId);
+	CHECK(inputs.size() == 7 && inputs[0].name == "serial" && inputs[0].typeText == "u64" && inputs[0].scalar);
+	CHECK(inputs[5].name == "mode" && inputs[5].typeText == "enum" && inputs[5].choices == QStringList({"Reverse", "Forward"}) &&
+	      inputs[5].codes == QList<qint64>({-7, 12}));
+	CHECK(inputs[6].name == "samples" && !inputs[6].scalar && inputs[6].typeText == "u16[300]");
+	CHECK(ra::signatureText(schema, inspect->typeId) == "(multiplier: u32)");
+	CHECK(ra::signatureText(schema, config->typeId) == "(serial: u64, offset: i64, gain: f32, precise: f64, …)");
+	// The tail: names and values, spaces around = allowed.
+	const auto given = ra::parse(u"a=1 b = 2  c= 3 d =4 5");
+	CHECK(given.size() == 5 && given[0].name == "a" && given[0].text == "1" && given[1].name == "b" && given[1].text == "2" &&
+	      given[2].name == "c" && given[2].text == "3" && given[3].name == "d" && given[3].text == "4" &&
+	      given[4].name.isEmpty() && given[4].text == "5");
+	// One argument: named, by its name in any case, or bare.
+	for (const auto* tail : {u"multiplier=7", u"MULTIPLIER = 7", u"7", u"0x7"}) {
+		const auto one = ra::check(schema, inspect->typeId, "device.Inspect", tail);
+		CHECK(one.ok() && bytesOf(one) == "07000000" && one.items[0].canonical == "7");
+	}
+	// Nothing given: what it needs; a value that is not one; a name it has not.
+	auto result = ra::check(schema, inspect->typeId, "device.Inspect", u"");
+	CHECK(!result.ok() && result.items[0].status == Status::Missing &&
+	      result.message == "device.Inspect needs multiplier (u32). Enter writes multiplier=; Ctrl+Enter fills it in Details.");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=-1");
+	CHECK(!result.ok() && result.items[0].status == Status::Error &&
+	      result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF), not \"-1\".");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=");
+	CHECK(result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF).");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplir=2");
+	CHECK(!result.ok() && result.message == "device.Inspect has no argument multiplir. Did you mean multiplier?");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"size=2");
+	CHECK(result.message == "device.Inspect has no argument size; it takes multiplier.");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=2 multiplier=3");
+	CHECK(result.message == "multiplier is given twice; keep one.");
+	// Several values with no names: never paired by order behind the user's back.
+	const auto gain = schema.findField("device.Config");
+	CHECK(gain);
+	result = ra::check(schema, config->typeId, "device.Config", u"1 2");
+	CHECK(result.unnamed && !result.ok() && result.named.startsWith("device.Config serial=1 offset=2 gain="));
+	// Many arguments: what is still missing; an enum by name or code; a
+	// struct's array argument goes to Details.
+	result = ra::check(schema, config->typeId, "device.Config", u"serial=1 offset=-2");
+	CHECK(result.message == "device.Config needs gain (f32), precise (f64), limit (u32) and 1 more too. Enter writes gain=." ||
+	      result.aggregate);
+	CHECK(result.items[0].status == Status::Ok && result.items[1].status == Status::Ok && result.items[1].canonical == "-2");
+	result = ra::check(schema, config->typeId, "device.Config", u"mode=forward");
+	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Forward");
+	result = ra::check(schema, config->typeId, "device.Config", u"mode=-7");
+	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Reverse");
+	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fast");
+	CHECK(result.items[5].status == Status::Error &&
+	      result.message == "mode (enum) takes Reverse or Forward, or a code, not \"Fast\".");
+	result = ra::check(schema, config->typeId, "device.Config",
+	                   u"serial=1 offset=-2 gain=1.5 precise=0.25 limit=0x10 mode=Forward");
+	CHECK(result.aggregate && !result.ok() &&
+	      result.message == "device.Config takes samples (u16[300]), which is filled in Details. Enter selects it there "
+	                        "with the values typed here; then Add selected draft.");
+	// A request that takes no input.
+	const auto* ping = schema.findService("device.Ping");
+	CHECK(ping);
+	result = ra::check(schema, ping->typeId, "device.Ping", u"");
+	CHECK(result.ok() && result.request.isEmpty());
+	result = ra::check(schema, ping->typeId, "device.Ping", u"now");
+	CHECK(!result.ok() && result.message == "device.Ping takes no input; remove \"now\".");
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	requestArguments();
 	orderedOwnedResults();
 	boundedAdmissionAndHistory();
 	reentrantDetach();
