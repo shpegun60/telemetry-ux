@@ -1480,11 +1480,27 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 			out[QStringLiteral("path")] = pick.matches.first().path;
 			out[QStringLiteral("operation")] = operationWord(pick.matches.first());
 			out[QStringLiteral("arguments")] = argumentsOf(*typed);
-			for (const auto& item : typed->items)
-				if (item.status == request_arguments::Item::Status::Missing) {
-					out[QStringLiteral("next")] = item.name;
-					break;
-				}
+			// The Batch's own refusals come first once the line names one
+			// endpoint - changes off, a full Batch, items of an earlier
+			// connection - not after every value is typed. A request of
+			// zeros is as long as the typed one, so it is refused alike.
+			const auto& entry = pick.matches.first();
+			const QByteArray zeros(qsizetype(entry.requestBytes), '\0');
+			if (const auto probe = p->batch.supported() ? p->pathRow(entry, &zeros) : std::nullopt) {
+				const auto refusal = p->batch.refusal({&*probe, 1});
+				if (refusal != DynamicBatch::Refusal::None)
+					return say(refusalStatus(refusal), refusalText(refusal, p->batch.count(), p->batch.itemLimit()));
+			}
+			out[QStringLiteral("next")] = typed->next;
+			// What Enter writes while values are missing: the next "name=",
+			// or a name or a value half typed, completed.
+			if (!typed->adding.isEmpty()) {
+				auto base = text;
+				while (!base.isEmpty() && base.back().isSpace())
+					base.chop(1);
+				base.chop(typed->typing.size());
+				out[QStringLiteral("line")] = base + typed->adding;
+			}
 			if (typed->unnamed) {
 				out[QStringLiteral("named")] = typed->named;
 				return say(QStringLiteral("unnamed"), typed->message);
@@ -1571,45 +1587,91 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		const auto inputs = request_arguments::arguments(schema, endpoint->typeId);
 		const auto given = request_arguments::parse(pick.tail);
 		auto line = text;
-		while (line.endsWith(QLatin1Char(' ')))
+		while (!line.isEmpty() && line.back().isSpace())
 			line.chop(1);
-		// "name=" just typed: its values.
-		if (!given.empty() && !given.back().name.isEmpty() && given.back().text.isEmpty() && text.endsWith(QLatin1Char('='))) {
-			for (const auto& input : inputs)
-				if (input.name.compare(given.back().name, Qt::CaseInsensitive) == 0)
-					for (qsizetype i = 0; i < input.choices.size(); ++i)
-						out.append(QVariantMap{{QStringLiteral("path"), line + input.choices[i] + QLatin1Char(' ')},
-						                       {QStringLiteral("completion"), line + input.choices[i] + QLatin1Char(' ')},
-						                       {QStringLiteral("name"), input.choices[i]},
-						                       {QStringLiteral("kind"), batchWords("value")},
-						                       {QStringLiteral("kindCode"), QStringLiteral("value")},
-						                       {QStringLiteral("typeText"), input.value.enumeration ? QString::number(input.codes[i]) : QString{}},
-						                       {QStringLiteral("note"), batchWords("value for %1").arg(input.name)},
-						                       {QStringLiteral("container"), false}});
+		const bool spaced = text.size() > line.size(); // the last word finished
+		const auto argumentAt = [&inputs](const QString& name) {
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && inputs[i].name == name)
+					return int(i);
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && inputs[i].name.compare(name, Qt::CaseInsensitive) == 0)
+					return int(i);
+			return -1;
+		};
+		const auto given_ = [&given, &argumentAt](int at) {
+			return std::any_of(given.begin(), given.end(),
+			                   [&](const request_arguments::Given& g) { return !g.name.isEmpty() && argumentAt(g.name) == at; });
+		};
+		// "enum Idle, Run, Stop": an enum's first names beside its argument.
+		const auto shownType = [](const request_arguments::Argument& input) {
+			if (!input.value.enumeration || input.choices.isEmpty())
+				return input.typeText;
+			auto names = input.choices.mid(0, 3).join(QStringLiteral(", "));
+			if (input.choices.size() > 3)
+				names += QStringLiteral(", …");
+			return input.typeText + QLatin1Char(' ') + names;
+		};
+		const auto argument = [&](std::size_t i, const QString& base) {
+			const auto& input = inputs[i];
+			const auto completion = base + input.name + QLatin1Char('=');
+			return QVariantMap{{QStringLiteral("path"), input.name + QLatin1Char('=')},
+			                   {QStringLiteral("completion"), completion},
+			                   {QStringLiteral("name"), input.name},
+			                   {QStringLiteral("kind"), QString{}},
+			                   {QStringLiteral("kindCode"), QStringLiteral("argument")},
+			                   {QStringLiteral("typeText"), shownType(input)},
+			                   {QStringLiteral("note"), input.scalar ? batchWords("argument %L1 of %L2").arg(int(i) + 1).arg(int(inputs.size()))
+			                                                         : batchWords("in Details")},
+			                   {QStringLiteral("container"), false},
+			                   {QStringLiteral("continues"), true}};
+		};
+		// After "name=", or "name=Ru" last on the line: a bool's or an enum's
+		// values, those it starts first (all when it starts none).
+		if (!spaced && !given.empty() && !given.back().name.isEmpty()) {
+			const auto& last = given.back();
+			const int at = argumentAt(last.name);
+			if (at < 0 || inputs[std::size_t(at)].choices.isEmpty())
+				return out;
+			const auto& input = inputs[std::size_t(at)];
+			const auto base = line.chopped(last.text.size());
+			QList<qsizetype> shown;
+			for (qsizetype i = 0; i < input.choices.size(); ++i)
+				if (input.choices[i].startsWith(last.text, Qt::CaseInsensitive))
+					shown << i;
+			if (shown.isEmpty())
+				for (qsizetype i = 0; i < input.choices.size(); ++i)
+					shown << i;
+			for (const auto i : std::as_const(shown)) {
+				const auto code = input.codes.value(i);
+				const auto codeText = !input.value.enumeration ? QString{}
+				                      : input.value.scalar == WatchScalar::U64 ? QString::number(quint64(code))
+				                                                               : QString::number(code);
+				out.append(QVariantMap{{QStringLiteral("path"), input.choices[i]},
+				                       {QStringLiteral("completion"), base + input.choices[i] + QLatin1Char(' ')},
+				                       {QStringLiteral("name"), input.choices[i]},
+				                       {QStringLiteral("kind"), QString{}},
+				                       {QStringLiteral("kindCode"), QStringLiteral("value")},
+				                       {QStringLiteral("typeText"), codeText},
+				                       {QStringLiteral("note"), batchWords("value for %1").arg(input.name)},
+				                       {QStringLiteral("container"), false},
+				                       {QStringLiteral("continues"), true}});
+			}
 			return out;
 		}
-		if (!text.endsWith(QLatin1Char(' ')) && !pick.tail.isEmpty())
-			return out; // a value being typed: nothing to suggest
-		for (std::size_t i = 0; i < inputs.size(); ++i) {
-			const auto& input = inputs[i];
-			if (input.name.isEmpty())
-				continue;
-			const bool done = std::any_of(given.begin(), given.end(), [&input](const request_arguments::Given& g) {
-				return g.name.compare(input.name, Qt::CaseInsensitive) == 0;
-			});
-			if (done)
-				continue;
-			const auto completion = line + QLatin1Char(' ') + input.name + QLatin1Char('=');
-			out.append(QVariantMap{{QStringLiteral("path"), completion},
-			                       {QStringLiteral("completion"), completion},
-			                       {QStringLiteral("name"), input.name},
-			                       {QStringLiteral("kind"), batchWords("argument")},
-			                       {QStringLiteral("kindCode"), QStringLiteral("argument")},
-			                       {QStringLiteral("typeText"), input.typeText},
-			                       {QStringLiteral("note"), input.scalar ? batchWords("argument %L1 of %L2").arg(int(i) + 1).arg(int(inputs.size()))
-			                                                             : batchWords("in Details")},
-			                       {QStringLiteral("container"), false}});
+		// A word with no "=" last on the line: the arguments it starts.
+		if (!spaced && !given.empty()) {
+			const auto& word = given.back().text;
+			const auto base = line.chopped(word.size());
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && !given_(int(i)) && inputs[i].name.startsWith(word, Qt::CaseInsensitive))
+					out.append(argument(i, base));
+			return out;
 		}
+		// After the path or a value and a space: the arguments not given yet.
+		for (std::size_t i = 0; i < inputs.size(); ++i)
+			if (!inputs[i].name.isEmpty() && !given_(int(i)))
+				out.append(argument(i, line + QLatin1Char(' ')));
 		return out;
 	}
 	auto typed = text.trimmed();
@@ -1670,7 +1732,10 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		    {QStringLiteral("input"), input},
 		    {QStringLiteral("note"), count == 1 ? batchWords("in Batch")
 		                             : count > 1 ? batchWords("%L1 in Batch").arg(count) : QString{}},
-		    {QStringLiteral("container"), false}};
+		    {QStringLiteral("container"), false},
+		    // Chosen, it takes a space and its arguments follow (BA-2).
+		    {QStringLiteral("follow"), input ? QStringLiteral(" ") : QString{}},
+		    {QStringLiteral("continues"), input}};
 	};
 	const auto wanted = [category](const EndpointEntry& entry) { return category == 0 || entry.category == category; };
 	constexpr int limit = 50;
@@ -1802,23 +1867,24 @@ bool DynamicConfiguratorProvider::selectBatchPath(const QString& text)
 	if (!pick.hasTail || (!commandSelected() && !serviceSelected()))
 		return true;
 	const auto typed = typedArguments(p->batch, pick.matches.first(), pick.tail);
-	if (!typed)
+	if (!typed || !typed->error.isEmpty())
 		return true;
-	const auto draftMember = [&values = p->values](const QString& name) {
+	// The draft's rows follow the request's members in declared order, and
+	// a row's name may be a presentation label: an argument is found by its
+	// place. A request that is one value is the root itself.
+	const bool bare = typed->items.size() == 1 && typed->items.front().name.isEmpty();
+	const auto draftMember = [&values = p->values, bare](int place) {
 		const auto root = values.index(0, 0);
-		if (name.isEmpty())
+		if (bare)
 			return root;
-		if (values.canFetchMore(root))
+		while (values.rowCount(root) <= place && values.canFetchMore(root))
 			values.fetchMore(root);
-		for (int row = 0; row < values.rowCount(root); ++row)
-			if (const auto at = values.index(row, 0, root); at.data(ValueModel::NameRole).toString() == name)
-				return at;
-		return QModelIndex{};
+		return place < values.rowCount(root) ? values.index(place, 0, root) : QModelIndex{};
 	};
-	for (const auto& item : typed->items)
-		if (item.status == request_arguments::Item::Status::Ok)
-			if (const auto at = draftMember(item.name); at.isValid())
-				setScalarText(at, item.canonical);
+	for (std::size_t i = 0; i < typed->items.size(); ++i)
+		if (typed->items[i].status == request_arguments::Item::Status::Ok)
+			if (const auto at = draftMember(int(i)); at.isValid())
+				setScalarText(at, typed->items[i].editorText);
 	return true;
 }
 

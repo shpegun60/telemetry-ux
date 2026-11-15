@@ -478,10 +478,22 @@ item pastes back. `batchPathCandidates` shows a Command's or Service's named
 signature - `(reference: f32)` - and, after the path and a space, the arguments
 not given yet (`kindCode` `argument`), then a bool's or an enum's values.
 
+A name half typed (`control.Scale fa`) is taken as a name, and a bool's or an
+enum's value half typed as that value, not as a wrong value; `name=` waits for
+its value quietly. On `needs` the check carries `line`, the line Enter writes:
+the next `name=`, or the half-typed name or value completed. The Batch's own
+refusals (changes off, a full Batch, items of an earlier connection) now come
+as soon as the line names one Command or Service, not once every value is
+valid. A Command or a Service that takes input is suggested with `follow` " "
+and `continues`: choosing it, or Tab on its whole path, writes a space and
+offers its arguments. An argument is suggested as `name=` and a value by its
+name, with `completion` the whole line.
+
 `PathAddRow` gains `setText()`, and Ctrl+Enter calls the adapter's `select(text)`
 when it has one; `BatchAddRow` uses it to select the endpoint for Details, and
 `selectBatchPath` puts each valid value typed into the draft (with changes
-allowed; otherwise it only selects). On `needs` Enter writes the next name; on
-`unnamed` it writes the names in; neither adds. `selectBatchPath` now refuses
-only when the selection holds an edit to lose (BA-1 refused whenever a Command
-or a Service was selected).
+allowed; otherwise it only selects), by the argument's place and as the editor
+takes it (`Item::editorText`: an enum by its code). On `unnamed` Enter writes
+the names in and adds nothing. `selectBatchPath` now refuses only when the
+selection holds an edit to lose (BA-1 refused whenever a Command or a Service
+was selected).

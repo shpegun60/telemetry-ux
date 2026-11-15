@@ -835,7 +835,15 @@ void batchPaths()
 	const auto line = [calibrate](const char* text) { return calibrate->checkBatchPath(QString::fromUtf8(text)); };
 	auto typed = line("control.Calibrate");
 	CHECK(typed.value("status") == "needs" && typed.value("next") == "reference" &&
+	      typed.value("line") == "control.Calibrate reference=" &&
 	      typed.value("message") == "control.Calibrate needs reference (f32). Enter writes reference=; Ctrl+Enter fills it in Details.");
+	// A name half typed is a name: quiet, and Enter completes it.
+	typed = line("control.Calibrate ref");
+	CHECK(typed.value("status") == "needs" && typed.value("line") == "control.Calibrate reference=");
+	// "reference=" waits for its value, quietly.
+	typed = line("control.Calibrate reference=");
+	CHECK(typed.value("status") == "needs" && typed.value("message") == "reference (f32) takes a number." &&
+	      !typed.contains("line"));
 	typed = line("control.Calibrate reference=abc");
 	CHECK(typed.value("status") == "error" && typed.value("message") == "reference (f32) takes a number, not \"abc\".");
 	typed = line("control.Calibrate referenc=1");
@@ -853,11 +861,18 @@ void batchPaths()
 	bool signature = false;
 	for (const auto& candidate : found)
 		signature = signature || (candidate.toMap().value("path") == "control.Calibrate" &&
-		                          candidate.toMap().value("typeText") == "(reference: f32)");
+		                          candidate.toMap().value("typeText") == "(reference: f32)" &&
+		                          candidate.toMap().value("follow") == " " && candidate.toMap().value("continues").toBool());
 	CHECK(signature);
+	// The argument shows as "reference=" with its type; choosing it writes
+	// the whole line.
 	const auto arguments = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate "));
 	CHECK(arguments.size() == 1 && arguments.first().toMap().value("completion") == "control.Calibrate reference=" &&
+	      arguments.first().toMap().value("path") == "reference=" && arguments.first().toMap().value("kind") == "" &&
 	      arguments.first().toMap().value("kindCode") == "argument" && arguments.first().toMap().value("typeText") == "f32");
+	const auto starting = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate re"));
+	CHECK(starting.size() == 1 && starting.first().toMap().value("completion") == "control.Calibrate reference=");
+	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate 1.")).isEmpty());
 	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate reference=1 ")).isEmpty());
 	// Ctrl+Enter takes the typed value into the draft, as Details would; an
 	// edit made that way is then one to finish or cancel before the next.

@@ -42,7 +42,9 @@ struct Given {
 struct Item {
 	enum class Status : quint8 { Missing, Ok, Error, Aggregate };
 	Status status = Status::Missing;
-	QString name, typeText, text, canonical, error;
+	// canonical is said and shown (an enum by its name); editorText is what a
+	// Details editor takes for the same bits (an enum by its code).
+	QString name, typeText, text, canonical, editorText, error;
 };
 struct Result {
 	std::vector<Item> items; // one an argument, declared order
@@ -55,6 +57,10 @@ struct Result {
 	QByteArray request;      // every argument given and valid: the bytes
 	// What the line says, quiet or not: what is missing, or why not.
 	QString message;
+	// While values are missing: the argument Enter goes to, and what Enter
+	// writes - typing comes off the end of the line (a name or a value half
+	// typed) and adding goes on; adding empty, Enter writes nothing.
+	QString next, typing, adding;
 	bool ok() const { return error.isEmpty() && !request.isNull(); }
 };
 // path is the endpoint's path, for the words.

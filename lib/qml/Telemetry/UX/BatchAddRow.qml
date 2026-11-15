@@ -40,21 +40,27 @@ PathAddRow {
     function toDetails(text, byControl) {
         const operation = batchAdd.check.operation
         const path = batchAdd.check.path
-        const valued = batchAdd.provider.allowMutations === true &&
-                       (batchAdd.check.arguments || []).some(argument => argument.status === "ok")
+        const allowed = batchAdd.provider.allowMutations === true
+        const typed = (batchAdd.check.arguments || []).some(argument => argument.status === "ok")
         if (batchAdd.provider.selectBatchPath(text)) {
             batchAdd.selected(operation)
-            batchAdd.say(valued ? qsTr("Selected %1 with the values typed here: finish it in Details, then Add selected draft.").arg(path)
-                                : qsTr("Selected %1: fill it in Details, then Add selected draft.").arg(path), false)
-        } else {
+            batchAdd.say(!allowed ? qsTr("Selected %1. Changes are off: allow them to fill it in Details.").arg(path)
+                         : typed ? qsTr("Selected %1 with the values typed here: finish it in Details, then Add selected draft.").arg(path)
+                                 : qsTr("Selected %1: fill it in Details, then Add selected draft.").arg(path), false)
+        } else if (batchAdd.provider.selectionRequiresDiscard === true) {
             batchAdd.say(byControl ? qsTr("Finish or cancel the edit in Details first, then press Ctrl+Enter again.")
                                    : qsTr("Finish or cancel the edit in Details first, then press Enter again."), true)
+        } else {
+            batchAdd.say(qsTr("Nothing on this line can be selected in Details."), true)
         }
     }
     adapter: QtObject {
+        // Ctrl+Enter: a Command or a Service the line names, whatever it
+        // still lacks or the Batch refuses; a Field the line adds.
         function select(text) {
-            const status = batchAdd.check.status
-            if (["adds", "needs", "error", "input", "unnamed"].indexOf(status) >= 0 && (batchAdd.check.path || "").length > 0)
+            const operation = batchAdd.check.operation || ""
+            if ((batchAdd.check.path || "").length > 0 &&
+                    (operation === "command" || operation === "service" || batchAdd.check.status === "adds"))
                 batchAdd.toDetails(text, true)
         }
         function check(text) {
@@ -74,11 +80,15 @@ PathAddRow {
                 batchAdd.toDetails(text, false)
                 return true
             }
-            // Values missing: Enter writes the next name, or goes to it.
+            // Values missing: Enter writes what the line says - the next
+            // "name=", or a name or a value half typed, completed.
             if (status === "needs") {
+                const line = batchAdd.check.line || ""
                 const next = batchAdd.check.next || ""
                 const trimmed = text.replace(/\s+$/, "")
-                if (next.length > 0 && !trimmed.endsWith("="))
+                if (line.length > 0)
+                    batchAdd.setText(line)
+                else if (next.length > 0 && !trimmed.endsWith("=") && batchAdd.check.line === undefined)
                     batchAdd.setText(trimmed + " " + next + "=")
                 return true
             }

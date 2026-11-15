@@ -419,6 +419,22 @@ void requestArguments()
 	      result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF), not \"-1\".");
 	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=");
 	CHECK(result.message == "multiplier (u32) takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF).");
+	// "name=" waits for its value: quiet, and Enter writes nothing more.
+	CHECK(result.error.isEmpty() && result.items[0].status == Status::Missing && result.next == "multiplier" &&
+	      result.adding.isEmpty());
+	// A name half typed is a name, not a value: Enter completes it.
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multi");
+	CHECK(result.error.isEmpty() && !result.unnamed && result.typing == "multi" && result.adding == "multiplier=" &&
+	      result.next == "multiplier");
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"");
+	CHECK(result.typing.isEmpty() && result.adding == " multiplier=");
+	// A fraction for an integer: whole numbers, said first.
+	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplier=2.5");
+	CHECK(result.message == "multiplier (u32) takes whole numbers, 0 to 4294967295 (0x00000000 to 0xFFFFFFFF), not \"2.5\".");
+	// A name with a value and one without: the names to type, and no
+	// promise that Enter writes them, since it cannot pair them.
+	result = ra::check(schema, schema.findField("device.Config")->typeId, "device.Config", u"serial=1 2");
+	CHECK(result.unnamed && result.named.isEmpty() && !result.message.contains("Enter"));
 	result = ra::check(schema, inspect->typeId, "device.Inspect", u"multiplir=2");
 	CHECK(!result.ok() && result.message == "device.Inspect has no argument multiplir. Did you mean multiplier?");
 	result = ra::check(schema, inspect->typeId, "device.Inspect", u"size=2");
@@ -436,10 +452,18 @@ void requestArguments()
 	CHECK(result.message == "device.Config needs gain (f32), precise (f64), limit (u32) and 1 more too. Enter writes gain=." ||
 	      result.aggregate);
 	CHECK(result.items[0].status == Status::Ok && result.items[1].status == Status::Ok && result.items[1].canonical == "-2");
+	// An enum is said by its name; Details' editor takes its code.
 	result = ra::check(schema, config->typeId, "device.Config", u"mode=forward");
-	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Forward");
+	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Forward" && result.items[5].editorText == "12");
 	result = ra::check(schema, config->typeId, "device.Config", u"mode=-7");
-	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Reverse");
+	CHECK(result.items[5].status == Status::Ok && result.items[5].canonical == "Reverse" && result.items[5].editorText == "-7");
+	result = ra::check(schema, config->typeId, "device.Config", u"mode=0x0C");
+	CHECK(result.items[5].status == Status::Ok && result.items[5].editorText == "12");
+	// An enum's name half typed, last on the line: quiet, and one name
+	// left, Enter writes it.
+	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fo");
+	CHECK(result.error.isEmpty() && result.items[5].status == Status::Missing && result.typing == "Fo" &&
+	      result.adding == "Forward " && result.message == "mode (enum) takes Reverse or Forward, or a code.");
 	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fast");
 	CHECK(result.items[5].status == Status::Error &&
 	      result.message == "mode (enum) takes Reverse or Forward, or a code, not \"Fast\".");
@@ -448,6 +472,11 @@ void requestArguments()
 	CHECK(result.aggregate && !result.ok() &&
 	      result.message == "device.Config takes samples (u16[300]), which is filled in Details. Enter selects it there "
 	                        "with the values typed here; then Add selected draft.");
+	// Nothing typed: no "values typed here".
+	result = ra::check(schema, config->typeId, "device.Config", u"");
+	CHECK(result.aggregate &&
+	      result.message == "device.Config takes samples (u16[300]), which is filled in Details. Enter selects it there; "
+	                        "then Add selected draft.");
 	// A request that takes no input.
 	const auto* ping = schema.findService("device.Ping");
 	CHECK(ping);

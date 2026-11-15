@@ -61,6 +61,11 @@ public:
 			        {"arguments", typed.endsWith('2') ? QVariantList{QVariantMap{{"name", "value"}, {"status", "ok"}},
 			                                                         QVariantMap{{"name", "factor"}, {"status", "missing"}}}
 			                                          : QVariantList{}}};
+		if (typed == QStringLiteral("control.Sc"))
+			return {{"status", "partial"}, {"message", "Enter takes control.Scale."}, {"path", "control.Scale"}};
+		if (typed == QStringLiteral("control.Scale fa"))
+			return {{"status", "needs"}, {"message", "control.Scale needs value (f32) and factor (f32). Enter writes factor=."},
+			        {"next", "factor"}, {"line", "control.Scale factor="}, {"path", "control.Scale"}, {"operation", "service"}};
 		if (typed == QStringLiteral("control.Scale value="))
 			return {{"status", "needs"}, {"message", "value (f32) takes a number."}, {"next", "value"},
 			        {"path", "control.Scale"}, {"operation", "service"}};
@@ -88,6 +93,20 @@ public:
 		const auto typed = text.trimmed();
 		if (typed == QStringLiteral("device.Vo"))
 			return {entry("device.Voltage", "device.Voltage", "Field", "f32 r-")};
+		// A Service that takes input goes on with a space to its arguments.
+		if (typed == QStringLiteral("control.Sc")) {
+			auto scale = entry("control.Scale", "control.Scale", "Service", "(value: f32, factor: f32) -> f32");
+			scale.insert("follow", " ");
+			scale.insert("continues", true);
+			return {scale};
+		}
+		if (typed == QStringLiteral("control.Scale") && text.endsWith(' ')) {
+			auto value = entry("value=", "control.Scale value=", "", "f32");
+			auto factor = entry("factor=", "control.Scale factor=", "", "f32");
+			value.insert("continues", true);
+			factor.insert("continues", true);
+			return {value, factor};
+		}
 		if (typed == QStringLiteral("Volt"))
 			return {entry("measure.Voltage", "measure.Voltage", "Field", "f32 r-")};
 		if (typed.compare(QStringLiteral("Ping"), Qt::CaseInsensitive) == 0 || typed == QStringLiteral("Pi"))
@@ -249,6 +268,21 @@ int main(int argc, char** argv)
 			CHECK(textOf(content, "batchAddNotice").startsWith(QStringLiteral("Selected control.Execute")));
 			// Ready to add it once filled: the operation box says what it is.
 			CHECK(shown(content, "batchOperation")->property("currentText") == QStringLiteral("command"));
+			clearField(window);
+
+			// BA-2: Enter on a half-typed Service takes it with a space, and
+			// its arguments are offered at once.
+			typeText(window, "control.Sc");
+			settle();
+			key(window, Qt::Key_Return);
+			settle();
+			CHECK(field->property("text").toString() == QStringLiteral("control.Scale ") && popup->property("visible").toBool());
+			key(window, Qt::Key_Escape);
+			clearField(window);
+			// A name half typed: Enter completes it.
+			typeText(window, "control.Scale fa");
+			key(window, Qt::Key_Return);
+			CHECK(field->property("text").toString() == QStringLiteral("control.Scale factor=") && calls.added.size() == 1);
 			clearField(window);
 
 			// BA-2: a Service's values typed after it. Enter writes the next

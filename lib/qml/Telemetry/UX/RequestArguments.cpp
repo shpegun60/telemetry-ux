@@ -81,6 +81,41 @@ QString takes(const Argument& argument)
 		range = range.mid(5);
 	return range.isEmpty() ? words("%1 takes a number").arg(who) : words("%1 takes %2").arg(who, range);
 }
+
+bool isInteger(const Argument& argument)
+{
+	const auto scalar = argument.value.scalar;
+	return !argument.value.enumeration && scalar != WatchScalar::Boolean && scalar != WatchScalar::F32 &&
+	       scalar != WatchScalar::F64;
+}
+
+// Why text is not a value of the argument: what it takes, then what it was
+// given; a fraction for an integer says whole numbers first.
+QString refused(const Argument& argument, const QString& text)
+{
+	bool number = false;
+	text.toDouble(&number);
+	const bool fraction = text.contains(QLatin1Char('.')) || text.contains(QLatin1Char('e'), Qt::CaseInsensitive);
+	if (isInteger(argument) && number && fraction && !watch_format::isHex(text)) {
+		auto range = watch_format::range(argument.value);
+		if (range.startsWith(QStringLiteral("from ")))
+			range = range.mid(5);
+		if (!range.isEmpty())
+			return words("%1 (%2) takes whole numbers, %3, not \"%4\".").arg(nameOf(argument), argument.typeText, range, text);
+	}
+	const auto base = takes(argument);
+	const auto down = words("; Down lists them");
+	if (base.endsWith(down))
+		return words("%1, not \"%2\"%3.").arg(base.chopped(down.size()), text, down);
+	return words("%1, not \"%2\".").arg(base, text);
+}
+
+// An enum code as the text encode takes: an unsigned one never negative.
+QString codeText(const Argument& argument, qsizetype index)
+{
+	const auto code = argument.codes[index];
+	return isSigned(argument.value.scalar) ? QString::number(code) : QString::number(quint64(code));
+}
 } // namespace
 
 WatchValueType valueType(const rt::RuntimeSchema& schema, TypeId id)
@@ -190,7 +225,7 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 	const auto inputs = arguments(schema, request);
 	auto given = parse(tail);
 	for (const auto& input : inputs)
-		out.items.push_back({Item::Status::Missing, input.name, input.typeText, {}, {}, {}});
+		out.items.push_back({Item::Status::Missing, input.name, input.typeText, {}, {}, {}, {}});
 	if (inputs.empty()) {
 		if (!given.empty())
 			out.error = words("%1 takes no input; remove \"%2\".").arg(path, tail.trimmed().toString());
@@ -199,12 +234,46 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 		out.message = out.error;
 		return out;
 	}
+	// A request that is one value with no name, typed alone after the path.
+	const bool bare = inputs.size() == 1 && inputs[0].name.isEmpty();
+	// The argument a name means: exactly, then in any case.
+	const auto find = [&inputs](const QString& name) {
+		for (std::size_t i = 0; i < inputs.size(); ++i)
+			if (!inputs[i].name.isEmpty() && inputs[i].name == name)
+				return int(i);
+		for (std::size_t i = 0; i < inputs.size(); ++i)
+			if (!inputs[i].name.isEmpty() && inputs[i].name.compare(name, Qt::CaseInsensitive) == 0)
+				return int(i);
+		return -1;
+	};
+	// The last word, the start of a name not given yet ("fa" for factor):
+	// a name being typed, not a value.
+	int typingName = -1;
+	if (!bare && !given.empty() && given.back().name.isEmpty()) {
+		const auto& word = given.back().text;
+		for (std::size_t i = 0; i < inputs.size() && typingName < 0; ++i) {
+			const bool named = std::any_of(given.begin(), given.end(), [&](const Given& g) {
+				return !g.name.isEmpty() && find(g.name) == int(i);
+			});
+			if (!named && inputs[i].name.startsWith(word, Qt::CaseInsensitive))
+				typingName = int(i);
+		}
+		if (typingName >= 0) {
+			out.typing = word;
+			given.pop_back();
+		}
+	}
 	// Values with no names: one input may take one; otherwise Enter writes
 	// the names in, so a pair of the same type is never swapped unseen.
 	const bool anyNamed = std::any_of(given.begin(), given.end(), [](const Given& g) { return !g.name.isEmpty(); });
 	const bool anyUnnamed = std::any_of(given.begin(), given.end(), [](const Given& g) { return g.name.isEmpty(); });
 	if (anyUnnamed && !anyNamed && inputs.size() == 1 && given.size() == 1) {
-		given[0].name = inputs[0].name.isEmpty() ? QStringLiteral("\x1f") : inputs[0].name;
+		given[0].name = bare ? QStringLiteral("\x1f") : inputs[0].name;
+	} else if (bare && !given.empty()) {
+		out.error = anyNamed ? words("%1 takes its value with no name: type the value alone after the path.").arg(path)
+		                     : words("%1 takes one value; keep one.").arg(path);
+		out.message = out.error;
+		return out;
 	} else if (anyUnnamed) {
 		QStringList example;
 		for (std::size_t i = 0; i < inputs.size(); ++i)
@@ -213,19 +282,21 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 		out.unnamed = true;
 		if (!anyNamed && given.size() <= inputs.size())
 			out.named = path + QLatin1Char(' ') + example.join(QLatin1Char(' ')).replace(QStringLiteral("=…"), QStringLiteral("="));
-		out.error = words("%1 takes named values: %2. Enter writes the names in.").arg(path, example.join(QLatin1Char(' ')));
+		out.error = out.named.isEmpty()
+		                ? words("%1 takes named values: %2.").arg(path, example.join(QLatin1Char(' ')))
+		                : words("%1 takes named values: %2. Enter writes the names in.").arg(path, example.join(QLatin1Char(' ')));
 		out.message = out.error;
 		return out;
 	}
 	QByteArray bytes;
 	if (const auto* type = schema.type(request))
 		bytes = QByteArray(qsizetype(type->wireBytes), '\0');
-	for (const auto& one : given) {
-		int at = -1;
-		for (std::size_t i = 0; i < inputs.size() && at < 0; ++i)
-			if (one.name == QStringLiteral("\x1f") ? inputs[i].name.isEmpty()
-			                                       : inputs[i].name.compare(one.name, Qt::CaseInsensitive) == 0)
-				at = int(i);
+	std::vector<bool> seen(inputs.size(), false);
+	QString waiting; // the quiet words while a value is being typed
+	for (std::size_t g = 0; g < given.size(); ++g) {
+		const auto& one = given[g];
+		const bool last = g + 1 == given.size() && out.typing.isEmpty();
+		const int at = one.name == QStringLiteral("\x1f") ? 0 : find(one.name);
 		if (at < 0) {
 			QStringList names;
 			QString closest;
@@ -246,20 +317,22 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 		}
 		auto& item = out.items[std::size_t(at)];
 		const auto& input = inputs[std::size_t(at)];
-		if (item.status != Item::Status::Missing) {
+		if (seen[std::size_t(at)]) {
 			out.error = words("%1 is given twice; keep one.").arg(nameOf(input));
 			out.message = out.error;
 			return out;
 		}
+		seen[std::size_t(at)] = true;
 		item.text = one.text;
 		if (!input.scalar) {
 			item.status = Item::Status::Aggregate;
 			out.aggregate = true;
 			continue;
 		}
+		// "name=": its value is still to come.
 		if (one.text.isEmpty()) {
-			item.status = Item::Status::Error;
-			item.error = takes(input) + QLatin1Char('.');
+			waiting = takes(input) + QLatin1Char('.');
+			out.next = input.name;
 			continue;
 		}
 		// An enum's name is its code; a name matches exactly, then in any case.
@@ -271,12 +344,28 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 					if (input.choices[i].compare(text, Qt::CaseInsensitive) == 0)
 						found = i;
 			if (found >= 0)
-				text = QString::number(input.codes[found]);
+				text = codeText(input, found);
+		}
+		// A bool's or an enum's value half typed, last on the line: the
+		// values it may become are offered; one alone, Enter writes it.
+		if (last && !input.choices.isEmpty() && !input.choices.contains(one.text, Qt::CaseInsensitive)) {
+			QStringList starting;
+			for (const auto& choice : input.choices)
+				if (choice.startsWith(one.text, Qt::CaseInsensitive))
+					starting << choice;
+			if (!starting.isEmpty()) {
+				waiting = takes(input) + QLatin1Char('.');
+				out.next = input.name;
+				out.typing = one.text;
+				if (starting.size() == 1)
+					out.adding = starting.first() + QLatin1Char(' ');
+				continue;
+			}
 		}
 		const auto encoded = watch_format::encode(text, input.value);
 		if (!encoded.error.isEmpty() || encoded.value.size != input.value.width) {
 			item.status = Item::Status::Error;
-			item.error = words("%1, not \"%2\".").arg(takes(input), one.text);
+			item.error = refused(input, one.text);
 			continue;
 		}
 		item.status = Item::Status::Ok;
@@ -288,6 +377,9 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 		// A code no name has is said as the code.
 		if (input.value.enumeration && !input.choices.contains(item.canonical))
 			item.canonical = text;
+		// What Details' editor takes for the same bits: an enum by its code.
+		item.editorText = watch_format::text(encoded.value,
+		                                     input.value.enumeration ? WatchNumberFormat::Dec : WatchNumberFormat::Original);
 		if (qsizetype(input.offset) + encoded.value.size <= bytes.size())
 			std::memcpy(bytes.data() + input.offset, encoded.value.bytes.data(), encoded.value.size);
 	}
@@ -305,26 +397,42 @@ Result check(const rt::RuntimeSchema& schema, TypeId request, const QString& pat
 			out.message = out.items[i].error;
 			return out;
 		}
+	// A value being typed speaks before anything else still to give.
+	if (!waiting.isEmpty()) {
+		out.message = waiting;
+		return out;
+	}
+	const bool someGiven = std::any_of(out.items.begin(), out.items.end(),
+	                                   [](const Item& item) { return item.status == Item::Status::Ok; });
 	if (out.aggregate || std::any_of(inputs.begin(), inputs.end(), [](const Argument& a) { return !a.scalar; })) {
 		for (const auto& input : inputs)
 			if (!input.scalar) {
 				out.aggregate = true;
-				out.message = words("%1 takes %2 (%3), which is filled in Details. Enter selects it there with the "
-				                    "values typed here; then Add selected draft.")
-				                  .arg(path, nameOf(input), input.typeText);
+				// "struct (3)" is said "struct", not in brackets twice.
+				const auto kind = input.typeText.section(QLatin1Char(' '), 0, 0);
+				out.message = someGiven
+				                  ? words("%1 takes %2 (%3), which is filled in Details. Enter selects it there with the "
+				                          "values typed here; then Add selected draft.")
+				                        .arg(path, nameOf(input), kind)
+				                  : words("%1 takes %2 (%3), which is filled in Details. Enter selects it there; then Add "
+				                          "selected draft.")
+				                        .arg(path, nameOf(input), kind);
 				break;
 			}
 		return out;
 	}
 	if (!missing.isEmpty()) {
-		const bool none = std::none_of(out.items.begin(), out.items.end(),
-		                               [](const Item& item) { return item.status == Item::Status::Ok; });
 		const auto needs = missing.size() > 3
 		                       ? words("%1 and %L2 more").arg(missing.mid(0, 3).join(QStringLiteral(", "))).arg(missing.size() - 3)
 		                       : listed(missing, words(" and "));
-		const auto next = inputs[std::size_t(firstMissing)].name;
-		out.message = none ? words("%1 needs %2. Enter writes %3=; Ctrl+Enter fills it in Details.").arg(path, needs, next)
-		                   : words("%1 needs %2 too. Enter writes %3=.").arg(path, needs, next);
+		if (bare) {
+			out.message = words("%1 needs %2. Type it after the path; Ctrl+Enter fills it in Details.").arg(path, needs);
+			return out;
+		}
+		out.next = inputs[std::size_t(typingName >= 0 ? typingName : firstMissing)].name;
+		out.adding = (out.typing.isEmpty() ? QStringLiteral(" ") : QString{}) + out.next + QLatin1Char('=');
+		out.message = !someGiven ? words("%1 needs %2. Enter writes %3=; Ctrl+Enter fills it in Details.").arg(path, needs, out.next)
+		                         : words("%1 needs %2 too. Enter writes %3=.").arg(path, needs, out.next);
 		return out;
 	}
 	if (!schema.view(request, rt::Input{reinterpret_cast<const std::byte*>(bytes.constData()), std::size_t(bytes.size())})) {
