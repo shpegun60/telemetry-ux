@@ -1030,5 +1030,5 @@ labels, and a box act on the lane under the pointer (the keys: else the
 focused curve's, else every lane); A fits every lane and a double-click on a
 lane's labels fits that lane; a click on a lane's name focuses its curve; Back
 remembers the lanes' values; `valueAuto` is false while any lane is zoomed by
-hand. `TracePlot` moves Auto (A) to the right of the numbers while stacked,
+hand. `TracePlot` puts Auto (A) after the first lane's name while stacked,
 and has no "Fitted to" chip then.
