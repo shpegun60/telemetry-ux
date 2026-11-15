@@ -3,6 +3,99 @@
 #include <algorithm>
 
 namespace telemetry::ux::read_portions {
+namespace {
+// Several struct and array Fields' member reads in one Batch of FieldReads,
+// in the order of their first rows, while the Batch's item, request and reply
+// budgets allow (each item 8 bytes asked, 12 plus the value answered). A Field
+// too large for any Batch, one whose size is unknown, and a Batch that would
+// hold one Field stay member reads of their own: one Field's Batch costs the
+// same exchange and 14 bytes more. The plan never asks the budget for fewer
+// than two candidates.
+void batchMembers(Plan& out, const Source& source)
+{
+	auto& portions = out.portions;
+	if (source.individual || !source.readBatch || !source.batchBudget || !source.valueBytes)
+		return;
+	const auto candidates = std::count_if(portions.begin(), portions.end(), [](const Portion& step) {
+		return step.kind == Portion::Kind::Members;
+	});
+	if (candidates < 2)
+		return;
+	const auto budget = source.batchBudget();
+	if (!budget)
+		return;
+	const unsigned items = (std::min)(32u, budget->items);
+	const unsigned request = (std::min)(batchRequestScratch, budget->requestBytes);
+	const unsigned reply = budget->replyBytes;
+	if (items < 2 || 2u + 16u > request)
+		return;
+	std::vector<int> group(portions.size(), -1);
+	std::vector<std::vector<std::size_t>> batches;
+	int open = -1;
+	unsigned answered = 0;
+	for (std::size_t at = 0; at < portions.size(); ++at) {
+		if (portions[at].kind != Portion::Kind::Members)
+			continue;
+		const auto bytes = source.valueBytes(portions[at].field);
+		if (!bytes || *bytes == 0 || 2u + 12u + *bytes > reply)
+			continue;
+		const auto n = open >= 0 ? unsigned(batches[std::size_t(open)].size()) : 0u;
+		if (open < 0 || n + 1 > items || 2u + 8u * (n + 1) > request || answered + 12u + *bytes > reply) {
+			open = int(batches.size());
+			batches.emplace_back();
+			answered = 2;
+		}
+		batches[std::size_t(open)].push_back(at);
+		answered += 12u + *bytes;
+		group[at] = open;
+	}
+	for (const auto& batch : batches)
+		if (batch.size() < 2)
+			for (const auto at : batch)
+				group[at] = -1;
+	if (std::all_of(group.begin(), group.end(), [](int g) { return g < 0; }))
+		return;
+	std::vector<Portion> joined;
+	std::vector<bool> placed(batches.size(), false);
+	for (std::size_t at = 0; at < portions.size(); ++at) {
+		const auto g = group[at];
+		if (g < 0) {
+			joined.push_back(std::move(portions[at]));
+			continue;
+		}
+		if (placed[std::size_t(g)])
+			continue;
+		placed[std::size_t(g)] = true;
+		Portion batch;
+		batch.kind = Portion::Kind::Batch;
+		for (const auto member : batches[std::size_t(g)])
+			batch.fields.push_back({portions[member].field, std::move(portions[member].leaves)});
+		joined.push_back(std::move(batch));
+	}
+	portions = std::move(joined);
+	out.of.clear();
+	for (int at = 0; at < int(portions.size()); ++at) {
+		const auto& step = portions[std::size_t(at)];
+		switch (step.kind) {
+			case Portion::Kind::Many:
+				for (const auto id : step.ids)
+					out.of.insert(id, at);
+				break;
+			case Portion::Kind::Field:
+			case Portion::Kind::Members:
+				out.of.insert(step.field, at);
+				break;
+			case Portion::Kind::Batch:
+				for (const auto& member : step.fields)
+					out.of.insert(member.field, at);
+				break;
+			case Portion::Kind::Fail:
+				break;
+		}
+	}
+}
+} // namespace
+
 // The budgets and failures whole Fields always had: a list of whole Fields
 // sends exactly the reads it did before the plan was shared.
 Plan plan(std::span<const WatchKey> keys, const Source& source)
@@ -88,6 +181,7 @@ Plan plan(std::span<const WatchKey> keys, const Source& source)
 	}
 	for (auto& step : portions)
 		std::sort(step.leaves.begin(), step.leaves.end());
+	batchMembers(out, source);
 	if (failure != Failure::None) {
 		Portion failed;
 		failed.kind = Portion::Kind::Fail;

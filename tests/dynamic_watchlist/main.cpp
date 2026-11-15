@@ -64,6 +64,47 @@ struct Schema {
 };
 } // namespace members
 
+// Two large structs and a small one, for a Batch of struct Fields: Counter is
+// Field 0, Left 1, Right 2 (605 bytes on the wire each), Small 3 (4 bytes).
+namespace twin {
+struct Small {
+	std::uint16_t a = 1, b = 2;
+};
+struct Device {
+	std::uint32_t counter() const noexcept { return 7; }
+	members::Config left() const noexcept { return {}; }
+	members::Config right() const noexcept { return {}; }
+	Small small() const noexcept { return {}; }
+};
+inline Device device;
+inline constexpr telemetry::FieldTable fields{
+    telemetry::field<&Device::counter>("Counter", device), telemetry::field<&Device::left>("Left", device),
+    telemetry::field<&Device::right>("Right", device), telemetry::field<&Device::small>("Small", device)};
+inline constexpr telemetry::FieldCatalogTable catalogs{telemetry::group("device", fields)};
+inline constexpr telemetry::ServiceCatalogTable<> services{};
+inline constexpr telemetry::Model model{catalogs, telemetry::emptyCommands, services};
+inline constexpr telemetry::descriptor::Descriptor descriptor{model};
+inline constexpr auto descriptorBytes = telemetry::descriptor::packDescriptor<descriptor>();
+constexpr quint32 left = 1, right = 2, small = 3;
+
+struct Schema {
+	std::array<std::byte, descriptorBytes.size()> bytes = descriptorBytes;
+	std::array<rt::RuntimeType, 32> types{};
+	std::array<rt::RuntimeMember, 32> members{};
+	std::array<rt::RuntimeEnumEntry, 4> enums{};
+	std::array<rt::RuntimeCatalog, 4> catalogs{};
+	std::array<rt::RuntimeEndpoint, 8> endpoints{};
+	rt::RuntimeSchemaWorkspace workspace{types, members, enums, catalogs, endpoints};
+	rt::RuntimeSchema schema;
+	Schema()
+	{
+		const auto parsed = rt::RuntimeSchema::parse(bytes, workspace);
+		if (!parsed) std::abort();
+		schema = parsed.schema;
+	}
+};
+} // namespace twin
+
 namespace {
 unsigned checks = 0;
 #define CHECK(...)                                                                                 \
@@ -298,6 +339,13 @@ struct Peer {
 	std::shared_ptr<members::Schema> schema;
 	std::vector<std::pair<quint32, std::vector<std::uint32_t>>> memberCalls;
 	quint32 memberField = 0;
+	// Set for the twin schema; batchLimits set: the device has Batch.
+	std::shared_ptr<twin::Schema> twin;
+	std::optional<ux::WatchlistSource::Limits> batchLimits;
+	QHash<quint32, unsigned> valueSizes{{twin::left, 605}, {twin::right, 605}, {twin::small, 4}};
+	using Fields = std::vector<std::pair<quint32, std::vector<std::uint32_t>>>;
+	std::vector<Fields> batchCalls;
+	Fields batchPending;
 
 	ux::WatchlistSource source()
 	{
@@ -322,8 +370,28 @@ struct Peer {
 		source.readField = [this](quint32 id, ux::WatchlistSource::Completion done) {
 			return submit(std::span<const std::uint32_t>{&id, 1}, std::move(done));
 		};
-		if (schema) {
-			source.schema = [this] { return schema->schema; };
+		if (batchLimits) {
+			source.batchCapability = [this] { return batchLimits; };
+			source.valueBytes = [this](quint32 id) -> std::optional<unsigned> {
+				const auto at = valueSizes.constFind(id);
+				return at == valueSizes.cend() ? std::nullopt : std::optional<unsigned>{*at};
+			};
+			source.readBatch = [this](std::span<const ux::WatchlistSource::BatchField> fields,
+			                          ux::WatchlistSource::Completion done) -> cl::Submission {
+				CHECK(current && !busy && !completion && fields.size() >= 2 && fields.size() <= 32);
+				batchPending.clear();
+				for (const auto& field : fields) {
+					CHECK(!field.leaves.empty() && std::is_sorted(field.leaves.begin(), field.leaves.end()));
+					batchPending.push_back({field.field, {field.leaves.begin(), field.leaves.end()}});
+				}
+				batchCalls.push_back(batchPending);
+				completion = std::move(done);
+				busy = true;
+				return {cl::Status::Ok, {}};
+			};
+		}
+		if (schema || twin) {
+			source.schema = [this] { return schema ? schema->schema : twin->schema; };
 			source.readMembers = [this](quint32 field, std::span<const std::uint32_t> leaves,
 			                            ux::WatchlistSource::Completion done) -> cl::Submission {
 				CHECK(current && !busy && !completion && !leaves.empty() && leaves.size() <= 1024);
@@ -367,6 +435,54 @@ struct Peer {
 		auto done = std::exchange(completion, {});
 		busy = false;
 		memberField = 0;
+		*done = std::move(result);
+	}
+
+	// Answers a Batch: each value is its own ordinal as a u16. The Field at
+	// refuse is refused by the device (endpoint 3); skew answers its first
+	// value as another leaf.
+	void finishBatch(cl::Status status = cl::Status::Ok, int refuse = -1, bool skew = false)
+	{
+		CHECK(busy && bool(completion) && !batchPending.empty());
+		ux::WatchlistCompletion result;
+		result.status = status;
+		result.native.client = qint32(status);
+		result.completed = ux::WatchTimestamp::now();
+		for (std::size_t i = 0; i < batchPending.size(); ++i) {
+			const auto& [field, leaves] = batchPending[i];
+			ux::WatchlistCompletion::Part part;
+			part.field = field;
+			part.first = int(result.members.size());
+			part.count = int(leaves.size());
+			const bool refused = int(i) == refuse;
+			part.native.endpoint = refused ? 3 : 0;
+			part.native.value = refused ? -1 : 0;
+			result.parts.push_back(part);
+			for (const auto leaf : leaves) {
+				ux::WatchlistCompletion::Row row;
+				row.id = field;
+				row.leaf = leaf + 1;
+				row.value.type = {7, ux::WatchScalar::U16, 2, false};
+				row.itemStatus = refused ? 3 : 0;
+				row.valueStatus = refused ? -1 : 0;
+				if (refused) {
+					row.status = QStringLiteral("Field refused (dispatch 0, endpoint 3)");
+				} else {
+					const std::array<std::byte, 2> bytes{std::byte(leaf & 0xff), std::byte(leaf >> 8)};
+					CHECK(row.value.assign(bytes.data(), 2));
+					row.status = QStringLiteral("Ok");
+					row.text = QString::number(leaf);
+					row.sample = ux::WatchSample::ofUnsigned(leaf);
+				}
+				result.members.push_back(std::move(row));
+			}
+		}
+		result.count = int(result.members.size());
+		if (skew)
+			result.members[0].leaf += 1;
+		auto done = std::exchange(completion, {});
+		busy = false;
+		batchPending.clear();
 		*done = std::move(result);
 	}
 
@@ -1736,12 +1852,216 @@ void readPortions()
 	// The request budget: 2 + 4n <= 14 holds three.
 	can.budget = [] { return std::optional<rp::Budget>{rp::Budget{32, 14, 514}}; };
 	CHECK(rp::plan(keys, can).portions.front().ids.size() == 3);
+	can.budget = budget;
+
+	// Struct and array Fields in one Batch where the device has it (WL-6),
+	// placed where the first of them is read; the budget asked once.
+	int batchAsked = 0;
+	rp::Budget batch{32, 4096, 4096};
+	can.readBatch = true;
+	can.batchBudget = [&] {
+		++batchAsked;
+		return std::optional<rp::Budget>{batch};
+	};
+	QHash<quint32, unsigned> structs{{7, 605}, {8, 4}, {9, 605}};
+	can.valueBytes = [&structs](quint32 field) -> std::optional<unsigned> {
+		const auto at = structs.constFind(field);
+		return at == structs.cend() ? std::nullopt : std::optional<unsigned>{*at};
+	};
+	keys = {key::member(7, 3), key::whole(1), key::member(8, 0), key::member(7, 1), key::member(9, 2)};
+	const auto fieldsOf = [](const rp::Portion& step) {
+		std::vector<quint32> out;
+		for (const auto& member : step.fields)
+			out.push_back(member.field);
+		return out;
+	};
+	auto batched = rp::plan(keys, can);
+	CHECK(batchAsked == 1 && batched.portions.size() == 2 && batched.portions[0].kind == Kind::Batch &&
+	      batched.portions[1].kind == Kind::Many);
+	CHECK(fieldsOf(batched.portions[0]) == std::vector<quint32>({7, 8, 9}) &&
+	      batched.portions[0].fields[0].leaves == std::vector<std::uint32_t>({1, 3}) && batched.portions[0].rows() == 4);
+	CHECK(batched.of.value(7) == 0 && batched.of.value(9) == 0 && batched.of.value(1) == 1);
+	// One struct: its own member read, the budget not asked.
+	batchAsked = 0;
+	auto single = rp::plan(std::span{keys}.first(2), can);
+	CHECK(batchAsked == 0 && single.portions[0].kind == Kind::Members);
+	// The reply budget: 2 + (12 + 605) + (12 + 4) fits 1000, the second large
+	// struct starts a Batch of its own, which as one Field is a member read.
+	batch = {32, 4096, 1000};
+	auto byReply = rp::plan(keys, can);
+	CHECK(byReply.portions.size() == 3 && fieldsOf(byReply.portions[0]) == std::vector<quint32>({7, 8}) &&
+	      byReply.portions[2].kind == Kind::Members && byReply.portions[2].field == 9 && byReply.of.value(9) == 2);
+	// Too large for any Batch: a member read of its own, and the small one alone too.
+	batch = {32, 4096, 600};
+	for (const auto& step : rp::plan(keys, can).portions)
+		CHECK(step.kind != Kind::Batch);
+	// The item and request budgets: two a Batch.
+	batch = {2, 4096, 4096};
+	auto byItems = rp::plan(keys, can);
+	CHECK(fieldsOf(byItems.portions[0]) == std::vector<quint32>({7, 8}) && byItems.portions.back().kind == Kind::Members);
+	batch = {32, 18, 4096};
+	CHECK(fieldsOf(rp::plan(keys, can).portions[0]) == std::vector<quint32>({7, 8}));
+	batch = {32, 4096, 4096};
+	// A size the source does not know: that Field alone, the others together.
+	structs.remove(8);
+	auto unknown = rp::plan(keys, can);
+	CHECK(fieldsOf(unknown.portions[0]) == std::vector<quint32>({7, 9}) && unknown.portions[2].kind == Kind::Members &&
+	      unknown.portions[2].field == 8);
+	structs.insert(8, 4);
+	// Individual mode, or no Batch: member reads, as before.
+	can.individual = true;
+	for (const auto& step : rp::plan(keys, can).portions)
+		CHECK(step.kind != Kind::Batch);
+	can.individual = false;
+	can.readBatch = false;
+	for (const auto& step : rp::plan(keys, can).portions)
+		CHECK(step.kind != Kind::Batch);
+	can.readBatch = true;
+	can.batchBudget = [] { return std::optional<rp::Budget>{}; };
+	for (const auto& step : rp::plan(keys, can).portions)
+		CHECK(step.kind != Kind::Batch);
+}
+
+QVector<ux::WatchEntry> twinEntries(quint32 field, std::initializer_list<quint32> ordinals)
+{
+	QVector<ux::WatchEntry> entries;
+	for (const auto ordinal : ordinals) {
+		ux::WatchEntry entry;
+		entry.key = ux::watch_key::member(field, ordinal);
+		entry.name = QStringLiteral("device.F%1 #%2").arg(field).arg(ordinal);
+		entries.push_back(entry);
+	}
+	return entries;
+}
+
+// Several struct Fields in one Batch of FieldReads (WL-6): one exchange, a
+// frame of its own for each Field with that item's outcome, a refused Field
+// shown in its rows, a failed Batch stopping the cycle, Stop draining it, a
+// written struct read again on its own, and the budgets and modes that keep
+// member reads.
+void batchMembers()
+{
+	const auto setUp = [](Peer& peer) {
+		peer.twin = std::make_shared<twin::Schema>();
+		peer.batchLimits = ux::WatchlistSource::Limits{32, 4096, 4096};
+	};
+	const auto rowsOf = [] {
+		auto rows = twinEntries(twin::left, {0});
+		rows += twinEntries(twin::small, {1});
+		rows += twinEntries(twin::right, {0});
+		rows += twinEntries(twin::left, {5});
+		return rows;
+	};
+	using Fields = Peer::Fields;
+	{
+		QObject owner;
+		Peer peer;
+		setUp(peer);
+		ux::DynamicWatchlist watch(&owner);
+		watch.setSource(peer.source());
+		CHECK(watch.addEntries(rowsOf()).value("added").toInt() == 4);
+		std::vector<ux::WatchFrame> frames;
+		watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
+		CHECK(watch.begin(false));
+		CHECK(peer.batchCalls.size() == 1 && peer.memberCalls.empty() && peer.calls.empty());
+		CHECK(peer.batchCalls[0] == Fields({{twin::left, {0, 5}}, {twin::small, {1}}, {twin::right, {0}}}));
+		CHECK(watch.status() == "Reading values 1-4 of 4");
+		peer.finishBatch(); watch.poll(); events();
+		CHECK(!watch.active() && watch.status() == "ReadMany complete - 4 values");
+		CHECK(frames.size() == 3);
+		for (std::size_t k = 0; k != frames.size(); ++k)
+			CHECK(frames[k].operation == ux::WatchOperation::Batch && frames[k].phase == ux::WatchCompletionPhase::Current &&
+			      frames[k].correlated && frames[k].exact && frames[k].portion == 0 &&
+			      frames[k].cycle == frames[0].cycle && frames[k].sequence == frames[0].sequence + qint64(k));
+		CHECK(frames[0].count == 2 && frames[0].rows[0].id == twin::left && frames[0].rows[0].leaf == 1 &&
+		      frames[0].rows[1].leaf == 6 && frames[1].count == 1 && frames[1].rows[0].id == twin::small &&
+		      frames[1].rows[0].leaf == 2 && frames[2].rows[0].id == twin::right);
+		CHECK(text(watch, 0) == "0" && text(watch, 1) == "1" && text(watch, 2) == "0" && text(watch, 3) == "5");
+
+		// The device refuses one Field: its rows say so, the others are read,
+		// its frame carries its own outcome, and the cycle goes on.
+		frames.clear();
+		CHECK(watch.begin(false));
+		peer.finishBatch(cl::Status::Ok, 1); watch.poll(); events();
+		auto* model = watch.model();
+		CHECK(!watch.active() && watch.status() == "ReadMany complete - 4 values");
+		CHECK(model->data(model->index(1, 0), ux::WatchlistModel::StatusRole).toString() ==
+		      "Field refused (dispatch 0, endpoint 3)");
+		CHECK(frames.size() == 3 && frames[1].native.endpoint == 3 && frames[0].native.endpoint == 0 &&
+		      frames[1].phase == ux::WatchCompletionPhase::Current);
+
+		// A Batch that failed as a whole, or answered other values, stops it.
+		frames.clear();
+		CHECK(watch.begin(false));
+		peer.finishBatch(cl::Status::Timeout); watch.poll(); events();
+		CHECK(!watch.active() && watch.status().startsWith("Watch read failed") && frames.size() == 3 &&
+		      frames[0].phase == ux::WatchCompletionPhase::Failed);
+		frames.clear();
+		CHECK(watch.begin(false));
+		peer.finishBatch(cl::Status::Ok, -1, true); watch.poll(); events();
+		CHECK(!watch.active() && watch.status().startsWith("Watch read failed") && !frames[0].correlated &&
+		      frames[0].phase == ux::WatchCompletionPhase::Failed);
+
+		// Stopped while it is out: drained, every Field's frames, no row touched.
+		frames.clear();
+		CHECK(watch.begin(true));
+		CHECK(peer.batchCalls.size() == 5);
+		watch.stop();
+		peer.finishBatch(); watch.poll(); events();
+		CHECK(!watch.active() && frames.size() == 3 && frames[2].phase == ux::WatchCompletionPhase::Drained);
+
+		// Written while the Batch is out: that struct alone is read again, as
+		// one member read, before the cycle goes on.
+		frames.clear();
+		CHECK(watch.begin(true));
+		watch.wake(twin::right);
+		peer.finishBatch(); watch.poll(); events();
+		CHECK(peer.memberCalls.size() == 1 && peer.memberCalls[0] == std::pair<quint32, std::vector<std::uint32_t>>{
+		                                                                 twin::right, {0}});
+		CHECK(watch.status() == "Reading a written Field again");
+		peer.finishMembers(); watch.poll(); events();
+		CHECK(frames.size() == 4 && frames[3].urgent && frames[3].operation == ux::WatchOperation::FieldRead);
+		watch.stop();
+		events();
+	}
+	// The reply budget splits them; Individual mode and a device without Batch
+	// read each struct on its own.
+	for (int mode = 0; mode < 3; ++mode) {
+		QObject owner;
+		Peer peer;
+		setUp(peer);
+		if (mode == 0)
+			peer.batchLimits = ux::WatchlistSource::Limits{32, 4096, 1000};
+		if (mode == 2)
+			peer.batchLimits.reset();
+		ux::DynamicWatchlist watch(&owner);
+		watch.setSource(peer.source());
+		watch.setIndividual(mode == 1);
+		CHECK(watch.addEntries(rowsOf()).value("added").toInt() == 4);
+		CHECK(watch.begin(false));
+		if (mode == 0) {
+			CHECK(peer.batchCalls.size() == 1 &&
+			      peer.batchCalls[0] == Fields({{twin::left, {0, 5}}, {twin::small, {1}}}));
+			peer.finishBatch(); watch.poll(); events();
+			CHECK(peer.memberCalls.size() == 1 && peer.memberCalls[0].first == twin::right);
+			peer.finishMembers(); watch.poll(); events();
+		} else {
+			for (const quint32 field : {twin::left, twin::small, twin::right}) {
+				CHECK(peer.memberCalls.size() >= 1 && peer.memberCalls.back().first == field);
+				peer.finishMembers(); watch.poll(); events();
+			}
+			CHECK(peer.batchCalls.empty() && peer.memberCalls.size() == 3);
+		}
+		CHECK(!watch.active() && watch.status().endsWith("complete - 4 values"));
+	}
 }
 
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	readPortions();
+	batchMembers();
+
 	numberFormats();
 	typedEditors();
 	exactCompletionFrames();

@@ -389,3 +389,20 @@ struct or array Field, one FieldRead each in Individual mode) with a failure
 code where it stops; the Watchlist puts the code in the words it always used.
 Nothing it sends changed. The Device tree's previews (PV-2) are to plan with
 it next.
+
+## Struct Fields read in one Batch (WL-6, November 2026)
+
+Where the device has Batch, the Watchlist reads the values it watches in two
+or more struct or array Fields with one Batch of FieldReads instead of one
+read each, within the Batch's item, request (and the host's 4096-byte buffer)
+and reply budgets; a Field too large for any Batch, of unknown size, or left
+alone stays a read of its own, and Individual mode reads each on its own as
+before. `WatchlistSource` gains `batchCapability`, `valueBytes` and
+`readBatch` (all optional; the Qt connection binding supplies them), and
+`WatchlistCompletion` gains `parts`. Each Field of a Batch is published as
+frames of its own with `WatchOperation::Batch` (new, 3) and that item's own
+outcome, so **a frame observer that tells FieldRead from ReadMany must accept
+Batch** - a recorder storing the operation in particular. A refused Field
+shows why in its rows and the cycle goes on; a Batch that failed as a whole
+stops the Watchlist as any failed read does. A written struct of a Batch is
+read again on its own.

@@ -29,6 +29,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		quint64 membership = 0; // the rows the plan was built from
 		std::array<std::uint32_t, 32> ids{};
 		std::vector<std::uint32_t> leaves;
+		std::vector<Portion::Member> fields; // Batch only
 		std::optional<WatchlistCompletion> completion;
 	};
 
@@ -158,6 +159,15 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		can.readMany = bool(source.readMany);
 		can.readField = bool(source.readField);
 		can.readMembers = bool(source.readMembers);
+		can.readBatch = bool(source.readMembers) && bool(source.readBatch);
+		if (source.batchCapability)
+			can.batchBudget = [this]() -> std::optional<read_portions::Budget> {
+				const auto limits = source.batchCapability();
+				if (!limits)
+					return std::nullopt;
+				return read_portions::Budget{limits->items, limits->requestBytes, limits->replyBytes};
+			};
+		can.valueBytes = source.valueBytes;
 		if (source.capability)
 			can.budget = [this]() -> std::optional<read_portions::Budget> {
 				const auto limits = source.capability();
@@ -246,6 +256,14 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				return source.readField(pending.field, std::move(complete));
 			case Portion::Kind::Members:
 				return source.readMembers(pending.field, pending.leaves, std::move(complete));
+			case Portion::Kind::Batch: {
+				if (!source.readBatch || pending.fields.size() > 32)
+					break;
+				std::array<WatchlistSource::BatchField, 32> fields{};
+				for (std::size_t i = 0; i < pending.fields.size(); ++i)
+					fields[i] = {pending.fields[i].field, pending.fields[i].leaves};
+				return source.readBatch(std::span{fields}.first(pending.fields.size()), std::move(complete));
+			}
 			case Portion::Kind::Fail:
 				break;
 		}
@@ -517,8 +535,18 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		while (!urgent.empty()) {
 			const auto id = urgent.front();
 			const auto at = planOf.value(id, -1);
-			const bool members = at >= 0 && at < int(plan.size()) &&
-			                     plan[std::size_t(at)].kind == Portion::Kind::Members;
+			// A struct read as one of a Batch is read again on its own.
+			const std::vector<std::uint32_t>* watched = nullptr;
+			if (at >= 0 && at < int(plan.size())) {
+				const auto& step = plan[std::size_t(at)];
+				if (step.kind == Portion::Kind::Members)
+					watched = &step.leaves;
+				else if (step.kind == Portion::Kind::Batch)
+					for (const auto& member : step.fields)
+						if (member.field == id)
+							watched = &member.leaves;
+			}
+			const bool members = watched != nullptr;
 			if (!members && rowOf(id) < 0) {
 				urgent.erase(urgent.begin());
 				continue;
@@ -536,7 +564,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			pending->field = id;
 			if (members) {
 				pending->kind = Portion::Kind::Members;
-				pending->leaves = plan[std::size_t(at)].leaves;
+				pending->leaves = *watched;
 				pending->count = int(pending->leaves.size());
 			} else {
 				pending->kind = individual ? Portion::Kind::Field : Portion::Kind::Many;
@@ -640,6 +668,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			std::copy(step.ids.begin(), step.ids.end(), pending->ids.begin());
 		else if (step.kind == Portion::Kind::Field)
 			pending->ids[0] = step.field;
+		else if (step.kind == Portion::Kind::Batch)
+			pending->fields = step.fields;
 		else
 			pending->leaves = step.leaves;
 		if (!prepare(*pending)) return;
@@ -680,8 +710,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		frame.source = result.source;
 		frame.native = result.native;
 		frame.presentationStatus = qint32(result.status);
-		frame.operation = completed.kind == Portion::Kind::Many ? WatchOperation::ReadMany
-		                                                        : WatchOperation::FieldRead;
+		frame.operation = completed.kind == Portion::Kind::Many    ? WatchOperation::ReadMany
+		                  : completed.kind == Portion::Kind::Batch ? WatchOperation::Batch
+		                                                           : WatchOperation::FieldRead;
 		frame.urgent = completed.urgent;
 		frame.membership = completed.membership;
 		return frame;
@@ -791,6 +822,89 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		return true;
 	}
 
+	// A Batch of struct and array Fields: each Field's values published as the
+	// member read's are, in frames of at most 32 rows carrying that item's own
+	// outcome, the Fields in the order asked, every frame of the same cycle and
+	// portion with the next sequence. A Field the device refused shows why in
+	// its rows and the cycle goes on; a Batch that failed as a whole stops it,
+	// as any failed read does.
+	bool completeBatch(Request& completed, WatchlistCompletion& result)
+	{
+		const auto& fields = completed.fields;
+		std::size_t total = 0;
+		bool correlated = !fields.empty() && result.parts.size() == fields.size();
+		for (std::size_t i = 0; correlated && i < fields.size(); ++i) {
+			const auto& part = result.parts[i];
+			correlated = part.field == fields[i].field && part.first == int(total) &&
+			             part.count == int(fields[i].leaves.size());
+			total += fields[i].leaves.size();
+		}
+		correlated = correlated && result.members.size() == total && result.count == int(total);
+		for (std::size_t i = 0, k = 0; correlated && i < fields.size(); ++i)
+			for (std::size_t j = 0; correlated && j < fields[i].leaves.size(); ++j, ++k)
+				correlated = result.members[k].id == fields[i].field &&
+				             result.members[k].leaf == fields[i].leaves[j] + 1;
+		const bool applicable = result.status == client::Status::Ok && correlated && completed.step == cursor;
+		const auto phase = completed.revision != revision || !current() ? WatchCompletionPhase::Drained
+		                   : applicable ? WatchCompletionPhase::Current : WatchCompletionPhase::Failed;
+		bool firstFrame = true;
+		for (std::size_t i = 0, k = 0; i < fields.size(); ++i) {
+			const auto n = fields[i].leaves.size();
+			for (std::size_t first = 0; first < n; first += 32) {
+				auto frame = frameOf(completed, result);
+				if (!firstFrame) {
+					if (sequence == (std::numeric_limits<qint64>::max)()) {
+						fail(QStringLiteral("Watch completion identities exhausted"));
+						return false;
+					}
+					frame.sequence = ++sequence;
+				}
+				firstFrame = false;
+				if (correlated) {
+					frame.native = result.parts[i].native;
+					frame.presentationStatus = qint32(result.parts[i].status);
+				}
+				frame.phase = phase;
+				frame.count = int((std::min)(std::size_t{32}, n - first));
+				frame.correlated = correlated;
+				frame.exact = true;
+				for (int r = 0; r < frame.count; ++r) {
+					auto& row = frame.rows[std::size_t(r)];
+					row.id = fields[i].field;
+					row.leaf = fields[i].leaves[first + std::size_t(r)] + 1;
+					if (correlated)
+						copyRow(row, result.members[k + first + std::size_t(r)]);
+					if (!exactRow(row))
+						frame.exact = false;
+				}
+				if (!report(frame))
+					return false;
+			}
+			k += n;
+		}
+		if (completed.revision != revision || !current()) {
+			status = QStringLiteral("Stopped - accepted read drained");
+			return true;
+		}
+		if (applicable) {
+			publishing = true;
+			for (std::size_t i = 0, k = 0; context && i < fields.size(); ++i)
+				for (std::size_t j = 0; context && j < fields[i].leaves.size(); ++j, ++k) {
+					const auto row = model.rowOf(watch_key::member(fields[i].field, fields[i].leaves[j]));
+					if (row < 0)
+						continue;
+					auto& value = result.members[k];
+					model.setResult(row, std::move(value.status), std::move(value.text), value.sample, value.value);
+				}
+			publishing = false;
+			++cursor;
+			done += int(total);
+		} else {
+			stopFailed(result.status == client::Status::Ok ? client::Status::CodecError : result.status);
+		}
+		return true;
+	}
+
 	void poll()
 	{
 		if (guarded() || reportingCompletion)
@@ -803,6 +917,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			auto result = std::move(*completed->completion);
 			if (completed->kind == Portion::Kind::Members) {
 				if (!completeMembers(*completed, result))
+					return;
+			} else if (completed->kind == Portion::Kind::Batch) {
+				if (!completeBatch(*completed, result))
 					return;
 			} else {
 				// The accepted Request, not a possibly empty failure body, owns the IDs.

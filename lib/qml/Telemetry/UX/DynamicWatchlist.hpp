@@ -26,7 +26,16 @@ struct WatchlistCompletion {
 	int count = 0;
 	std::array<Row, 32> rows{};
 	// readMembers only: one row per leaf asked, in its order; count is its size.
+	// readBatch: every Field's rows, the Fields in the order asked.
 	std::vector<Row> members;
+	// readBatch only: each Field's rows in members, and that item's outcome.
+	struct Part {
+		quint32 field = 0;
+		int first = 0, count = 0;
+		client::Status status = client::Status::Ok;
+		WatchNativeStatus native;
+	};
+	std::vector<Part> parts;
 	WatchNativeStatus native;
 	WatchSourceSnapshot source;
 	WatchTimestamp completed;
@@ -54,6 +63,18 @@ struct WatchlistSource {
 	// completion.members. Without it the Watchlist holds whole Fields only.
 	std::function<client::Submission(quint32 field, std::span<const std::uint32_t> leaves, Completion)>
 	    readMembers;
+	// Optional, with readMembers: several struct or array Fields in one Batch
+	// of FieldReads, answered as readMembers answers one, Field after Field,
+	// with completion.parts. batchCapability gives the device's Batch budgets,
+	// valueBytes a struct or array Field's size on the wire. Without them each
+	// such Field is a read of its own.
+	struct BatchField {
+		quint32 field = 0;
+		std::span<const std::uint32_t> leaves;
+	};
+	std::function<std::optional<Limits>()> batchCapability;
+	std::function<std::optional<unsigned>(quint32)> valueBytes;
+	std::function<client::Submission(std::span<const BatchField>, Completion)> readBatch;
 	// Optional admitted metadata, copied once on attachment. No read is sent.
 	std::function<runtime::RuntimeSchema()> schema;
 };

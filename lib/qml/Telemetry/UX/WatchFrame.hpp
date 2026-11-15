@@ -11,7 +11,9 @@
 
 namespace telemetry::ux {
 enum class WatchScalar : quint8 { Unknown = 0, Boolean = 1, U8, S8, U16, S16, U32, S32, U64, S64, F32, F64 };
-enum class WatchOperation : quint8 { FieldRead = 1, ReadMany };
+// Batch: one Field of a Batch of FieldReads; its frames carry that item's own
+// outcome, and the Batch's other Fields come as frames of their own.
+enum class WatchOperation : quint8 { FieldRead = 1, ReadMany, Batch };
 enum class WatchCompletionPhase : quint8 { Current = 1, Failed, Drained };
 struct WatchValueType {
     quint32 typeId = 0;
