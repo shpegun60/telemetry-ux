@@ -143,22 +143,12 @@ FocusScope {
                     values.push(path)
             }
         }
-        // Text is passed over and counted; only the Plot's sixteen curves
-        // end a drop.
-        let added = 0, texts = 0, refusal = ""
-        for (const path of values) {
-            if (traces.isPlotted(path))
-                continue
-            const why = traces.plot(path)
-            if (why.length === 0) {
-                ++added
-            } else if (traces.refusal(path).length > 0) {
-                ++texts
-            } else {
-                refusal = why
-                break
-            }
-        }
+        // Text is passed over and counted; the rest go on as one step of the
+        // history, and only the Plot's sixteen curves end them.
+        const fresh = values.filter(path => !traces.isPlotted(path))
+        const texts = fresh.filter(path => traces.refusal(path).length > 0).length
+        const result = traces.plotMany(fresh.filter(path => traces.refusal(path).length === 0))
+        const added = result.added, refusal = result.refusal
         const textWords = texts === 0 ? ""
                         : values.length === 1 ? traces.refusal(values[0])
                         : texts === 1 ? qsTr("1 of %L1 values is text and was not plotted.").arg(values.length)

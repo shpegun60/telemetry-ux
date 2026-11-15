@@ -959,8 +959,9 @@ run, or a recording's start), no longer from the end of the last stop before
 the right edge, and the CSV's and Copy values' "Seconds from start" count
 from the same moment, so a row matches the axis and the cursor's chip; a time
 label the edge would cut is left out (its grid line stays); a dropped
-selection passes text values over and plots the rest, stopping only at the
-sixteen-curve limit. `TraceView` gains `endValue(path)` (the reading at the
+selection passes text values over and plots the rest as one step of the
+history (`plotMany`), stopping only at the sixteen-curve limit. `TraceView`
+gains `endValue(path)` (the reading at the
 end pin), `chipColor` and `chipHeight` (the box's size is drawn on a chip),
 `changeFound()` (emitted when `stepChange` finds its change), and, for checks,
 `timeLabelRects` and `boxCaptionRect`; `WatchTraces.refusal(path)` is

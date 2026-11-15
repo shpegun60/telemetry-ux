@@ -1203,6 +1203,8 @@ int main(int argc, char** argv)
 			CHECK(drop({ready, name, gainPath}) && traces.plotted() == order &&
 			      plotRoot->property("notice").toString() == QStringLiteral("1 of 3 values is text and was not plotted.") &&
 			      plotRoot->property("noticeKind").toString() == QStringLiteral("refusal"));
+			// What was plotted is one step of the history.
+			CHECK(history.undoText() == QStringLiteral("Plot 2 values"));
 			traces.unplot(ready);
 			traces.unplot(gainPath);
 			CHECK(drop({ready, name, label, gainPath}) && traces.plotted() == order &&
