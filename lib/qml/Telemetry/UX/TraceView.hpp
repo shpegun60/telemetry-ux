@@ -252,6 +252,10 @@ public:
 	Q_INVOKABLE QVariantMap statistics(const QString& path) const;
 	// Puts the cursor at utcMs, bringing it into view (Go to minimum).
 	Q_INVOKABLE void putCursorAt(qreal utcMs);
+	// The cursor to the next (direction 1) or previous (-1) change of a state:
+	// the focused one's if it is a state, else any lane's (Ctrl+Right,
+	// Ctrl+Left). False, and findFailed says why, when there is none.
+	Q_INVOKABLE bool stepChange(int direction);
 	// The readings of every plotted value in the time in view, one row per
 	// reading time: "Time of day", "Seconds from start" and a column per
 	// path; a missing or failed read is an empty cell, a state is its word,
@@ -283,6 +287,8 @@ protected:
 
 Q_SIGNALS:
 	void tracesChanged();
+	// A find that found nothing, in words for the host to say.
+	void findFailed(const QString& words);
 	void viewChanged();
 	void cursorChanged();
 	void styleChanged();

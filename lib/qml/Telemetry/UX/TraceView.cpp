@@ -542,6 +542,59 @@ void TraceView::putCursorAt(qreal utcMs)
 	update();
 }
 
+bool TraceView::stepChange(int direction)
+{
+	if (!traces_ || direction == 0)
+		return false;
+	QStringList lanes;
+	if (!focusedPath_.isEmpty() && traces_->categorical(focusedPath_))
+		lanes << focusedPath_;
+	else
+		for (const auto& path : traces_->plotted())
+			if (traces_->categorical(path))
+				lanes << path;
+	const auto right = rightNs(), left = right - spanNs();
+	const qint64 from = cursorShown_ ? cursorNs_ : direction > 0 ? left : right;
+	std::optional<qint64> found;
+	for (const auto& path : std::as_const(lanes)) {
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->size() < 2)
+			continue;
+		// A change is a reading whose value differs from the reading before it.
+		std::optional<double> previous;
+		std::optional<qint64> best;
+		for (const auto& reading : *readings) {
+			if (std::isnan(reading.value)) {
+				previous.reset();
+				continue;
+			}
+			if (previous && *previous != reading.value) {
+				if (direction > 0 && reading.ns > from) {
+					best = reading.ns;
+					break;
+				}
+				if (direction < 0 && reading.ns < from)
+					best = reading.ns;
+			}
+			previous = reading.value;
+		}
+		if (best && (!found || (direction > 0 ? *best < *found : *best > *found)))
+			found = best;
+	}
+	const auto anchor = traces_->anchor();
+	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
+	if (!found) {
+		const auto at = QDateTime::fromMSecsSinceEpoch(qint64(utc(from))).toString(QStringLiteral("HH:mm:ss.zzz"));
+		const auto what = lanes.size() == 1 ? lanes.first() : tr("any state");
+		Q_EMIT findFailed(lanes.isEmpty() ? tr("No booleans or enums are plotted to step through.")
+		                  : direction > 0 ? tr("No change of %1 after %2 in the readings kept.").arg(what, at)
+		                                  : tr("No change of %1 before %2 in the readings kept.").arg(what, at));
+		return false;
+	}
+	putCursorAt(utc(*found));
+	return true;
+}
+
 QVariant TraceView::valueAt(const QString& path) const
 {
 	if (!cursorShown_ || !traces_)
@@ -1052,13 +1105,17 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 		case Qt::Key_Left:
 			if (event->modifiers() & Qt::AltModifier)
 				goBack();
+			else if (control)
+				stepChange(-1);
 			else if (shift)
 				stepCursor(-1);
 			else
 				pan(-0.1);
 			break;
 		case Qt::Key_Right:
-			if (shift)
+			if (control)
+				stepChange(1);
+			else if (shift)
 				stepCursor(1);
 			else
 				pan(0.1);

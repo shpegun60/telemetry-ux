@@ -49,8 +49,12 @@ FocusScope {
         }
         return stats.shares.slice(0, 4).map(s => s.name + " " + percentText(s.share)).join(" · ") + " · " + changes
     }
-    // What the last drop, copy or save did, until the next one or ×.
+    // What the last drop, copy, save or find did, until the next one or ×.
     property string notice: ""
+    Connections {
+        target: view
+        function onFindFailed(words) { plot.notice = words }
+    }
     // The Plot as shown, onto the clipboard.
     function copyPicture() {
         plot.grabToImage(result => {
@@ -1186,6 +1190,17 @@ FocusScope {
         }
         MenuSeparator {}
         MenuItem {
+            objectName: "plotMenuNextChange"
+            text: qsTr("Next change") + "\t" + qsTr("Ctrl+Right")
+            onTriggered: view.stepChange(1)
+        }
+        MenuItem {
+            objectName: "plotMenuPreviousChange"
+            text: qsTr("Previous change") + "\t" + qsTr("Ctrl+Left")
+            onTriggered: view.stepChange(-1)
+        }
+        MenuSeparator {}
+        MenuItem {
             objectName: "plotMenuCopyPicture"
             text: qsTr("Copy picture") + "\t" + qsTr("Ctrl+C")
             enabled: plot.plotted.length > 0
@@ -1262,6 +1277,27 @@ FocusScope {
             checked: chipMenu.points === 2
             ButtonGroup.group: pointModes
             onTriggered: plot.traces.setPoints(chipMenu.path, 2)
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotChipMinimum"
+            text: qsTr("Go to minimum")
+            enabled: plot.traces !== null && !plot.traces.categorical(chipMenu.path)
+            onTriggered: {
+                const stats = view.statistics(chipMenu.path)
+                if (stats.minUtcMs !== undefined)
+                    view.putCursorAt(stats.minUtcMs)
+            }
+        }
+        MenuItem {
+            objectName: "plotChipMaximum"
+            text: qsTr("Go to maximum")
+            enabled: plot.traces !== null && !plot.traces.categorical(chipMenu.path)
+            onTriggered: {
+                const stats = view.statistics(chipMenu.path)
+                if (stats.maxUtcMs !== undefined)
+                    view.putCursorAt(stats.maxUtcMs)
+            }
         }
         MenuSeparator {}
         MenuItem {

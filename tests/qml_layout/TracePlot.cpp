@@ -902,6 +902,39 @@ int main(int argc, char** argv)
 			settle(150);
 		}
 
+		// Analysis: Ctrl+Right and Ctrl+Left step the cursor from change to
+		// change of the states (device.Ready flips every five seconds); past
+		// the last, the notice says so.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(view->setProperty("following", false));
+			QMetaObject::invokeMethod(view, "hideCursor");
+			settle(150);
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+			settle(100);
+			CHECK(view->property("cursorShown").toBool());
+			const double first = view->property("cursorUtcMs").toDouble();
+			QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+			settle(100);
+			const double second = view->property("cursorUtcMs").toDouble();
+			CHECK(second > first);
+			QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+			settle(100);
+			CHECK(std::abs(view->property("cursorUtcMs").toDouble() - first) < 1);
+			// Focused on the state, past its last change: said in words.
+			view->setProperty("focusedPath", QStringLiteral("device.Ready"));
+			bool stepped = true;
+			for (int i = 0; i < 40 && stepped; ++i)
+				CHECK(QMetaObject::invokeMethod(view, "stepChange", Q_RETURN_ARG(bool, stepped), Q_ARG(int, 1)));
+			settle(100);
+			CHECK(!stepped && plotRoot->property("notice").toString().startsWith(QStringLiteral("No change of device.Ready after ")));
+			view->setProperty("focusedPath", QString());
+			QMetaObject::invokeMethod(view, "hideCursor");
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);
