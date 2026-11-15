@@ -813,6 +813,41 @@ int main(int argc, char** argv)
 			shot(window, argc, argv, QStringLiteral("trace-plot-not-read-760"));
 		}
 
+		// TR-2. A recording shown with the same view: two hours of one run,
+		// set by the host - past the live ten minutes and 65,536 readings -
+		// with a time of day from its anchor, drawn per pixel, its chip never
+		// "not read since".
+		{
+			ux::WatchTraces recorded;
+			const qint64 start = 1'000'000'000'000;
+			recorded.setAnchor({start, 1'763'200'000'000});
+			std::vector<ux::TraceReading> readings;
+			for (int i = 0; i < 72'000; ++i)
+				readings.push_back({start + qint64(i) * 100'000'000, std::sin(i / 600.0) * 10});
+			readings[36'000].value = std::numeric_limits<double>::quiet_NaN();
+			recorded.setRecorded(QStringLiteral("run.Speed"), std::move(readings), false);
+			recorded.setRecorded(QStringLiteral("run.Running"), {{start, 1}, {start + 3'600'000'000'000, 0}}, true);
+			CHECK(recorded.count(QStringLiteral("run.Speed")) == 72'000 && recorded.watched(QStringLiteral("run.Speed")) &&
+			      recorded.categorical(QStringLiteral("run.Running")) && recorded.anchor().utcMs == 1'763'200'000'000);
+			CHECK(recorded.plot(QStringLiteral("run.Speed")).isEmpty() && recorded.plot(QStringLiteral("run.Running")).isEmpty());
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &recorded);
+			settle(300);
+			CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+			settle(300);
+			// 72,000 readings drawn as each pixel's extremes, over the run's two hours.
+			const auto hours = view->property("timeLabels").toStringList();
+			CHECK(view->property("showAll").toBool() && view->property("drawnPoints").toInt() > 0 &&
+			      view->property("drawnPoints").toInt() < 10'000 && view->property("laneLabels").toStringList().size() == 1 &&
+			      !hours.isEmpty() && hours.first() != hours.last());
+			bool gone = false;
+			for (auto* value : all(content, "plotChipValue"))
+				gone = gone || value->property("text").toString().startsWith(QStringLiteral("not read"));
+			CHECK(!gone);
+			shot(window, argc, argv, QStringLiteral("trace-plot-recorded-760"));
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
+			settle(300);
+		}
+
 		// At most 65,536 readings, and ten minutes, a value.
 		traces.setPaths(3, {{5, QStringLiteral("device.Fast")}, {6, QStringLiteral("device.Slow")}});
 		const qint64 start = ux::WatchTraces::nowNs();

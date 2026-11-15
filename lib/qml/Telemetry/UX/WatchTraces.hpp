@@ -13,6 +13,7 @@
 #include <QtQml/qqmlregistration.h>
 #include <deque>
 #include <optional>
+#include <vector>
 
 namespace telemetry::ux {
 
@@ -117,6 +118,16 @@ public:
 	Q_INVOKABLE int count(const QString& path) const;
 	// Every ring emptied; what is plotted stays.
 	Q_INVOKABLE void clear();
+
+	// A recording shown with the same view (TR-2): the host gives a path's
+	// readings - one run's, in time order, NaN for a gap - in place of the
+	// frames, and the anchor that gives them this PC's time of day. The live
+	// rules do not apply to them: no ten minutes, no cap per path, and the
+	// path counts as watched, so its chip never says "not read since". A
+	// state value (a bool or an enum) is drawn in a lane, its names from
+	// setStates.
+	void setRecorded(const QString& path, std::vector<TraceReading> readings, bool states);
+	void setAnchor(const WatchTimestamp& anchor);
 
 	// A curve's look (LP-1f), kept for its path whether it is plotted or not:
 	// its own colour ("#rrggbb", or "" for its palette place), and the
