@@ -15,7 +15,9 @@
 // Auto (A) fits them again. A chip's colour mark opens its settings - its
 // colour, and the multiplier and offset it is drawn with (Trend's words) - and
 // its menu (right-click) focuses it, shows its points or removes it; the
-// graph's menu shows every curve's points. Presentation only:
+// graph's menu shows every curve's points. In a narrow dock the header gives
+// way step by step (narrowStep), down to Follow's icon and "1 min ▾"; Back
+// and Measure stay. Presentation only:
 // WatchTraces keeps the readings and TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
@@ -210,6 +212,63 @@ FocusScope {
         const whole = Math.abs(minutes)
         return "UTC" + sign + String(Math.floor(whole / 60)).padStart(2, "0") + ":" + String(whole % 60).padStart(2, "0")
     }
+    // The spans the header offers; keys 1 to 4 choose them on the graph.
+    readonly property var spans: [
+        { seconds: 10, text: qsTr("10 s"), name: qsTr("Last 10 seconds") },
+        { seconds: 60, text: qsTr("1 min"), name: qsTr("Last minute") },
+        { seconds: 600, text: qsTr("10 min"), name: qsTr("Last 10 minutes") },
+        { seconds: 0, text: qsTr("All"), name: qsTr("Everything kept") }
+    ]
+    // "10 s", or a span zoomed to by hand: "0.5 s", "48 s", "12 min", "1.5 h".
+    function spanWords() {
+        const chosen = spans.find(span => span.seconds === view.preset)
+        if (chosen)
+            return chosen.text
+        const seconds = view.spanSeconds
+        if (seconds < 10)
+            return qsTr("%1 s").arg(Number(seconds.toPrecision(2)))
+        if (seconds < 120)
+            return qsTr("%1 s").arg(Math.round(seconds))
+        if (seconds < 3600)
+            return qsTr("%1 min").arg(Math.round(seconds / 60))
+        return qsTr("%1 h").arg(Number((seconds / 3600).toPrecision(2)))
+    }
+    // What gives way as the Plot narrows, in this order: the zoom buttons (the
+    // wheel, + and - still zoom); then the spans, folded into one button that
+    // shows the span, "10 s ▾", the four in its menu (1 to 4 still choose);
+    // then Follow, as its icon (End still follows); and last the time axis'
+    // words, "Clock ▾" or "Start ▾". Back and Measure always stay. Measured
+    // from the controls, as the Watchlist's toolbar is, so it holds at any
+    // zoom and in any style: 0 is the whole header, 4 everything given way.
+    readonly property real headerRoom: width - 2 * Type.padding
+    function headerNeeds(followWidth, spanWidth, zoom) {
+        const gap = Type.groupSpacing
+        return followWidth + gap + spanWidth + gap
+               + (zoom ? zoomOut.implicitWidth + gap + zoomIn.implicitWidth + gap : 0)
+               + back.implicitWidth + gap + (measureToggle.visible ? gap + measureToggle.implicitWidth : 0)
+    }
+    // The header with everything given way: narrower than this, it is cut.
+    readonly property real headerMinimum: headerNeeds(followIcon.implicitWidth, spanButton.implicitWidth, false)
+    readonly property int narrowStep: {
+        if (headerRoom >= headerNeeds(follow.implicitWidth, presets.implicitWidth, true))
+            return 0
+        if (headerRoom >= headerNeeds(follow.implicitWidth, presets.implicitWidth, false))
+            return 1
+        const folded = headerNeeds(follow.implicitWidth, spanButton.implicitWidth, false)
+        if (headerRoom >= folded)
+            return 2
+        // The axis gives back its words last: once Follow is an icon, as the
+        // header comes within what the shorter words save of its narrowest.
+        return headerRoom >= Math.min(folded - 1, headerMinimum + axisSaving) ? 3 : 4
+    }
+    readonly property real axisSaving: {
+        void axisMetrics.font
+        const width = words => Math.max(...words.map(word => axisMetrics.advanceWidth(word + " ▾")))
+        return Math.max(0, width([qsTr("Time of day"), qsTr("From start")]) - width([qsTr("Clock"), qsTr("Start")]))
+    }
+    // The graph's least height: the legend and the table scroll before it
+    // shrinks below this.
+    readonly property real graphMinimumHeight: 6 * Type.rowHeight
     implicitWidth: 480
     implicitHeight: 280
 
@@ -233,10 +292,14 @@ FocusScope {
         return sec === 0 ? qsTr("%Ln minutes", "", m)
                          : qsTr("%1 %2").arg(qsTr("%Ln minutes", "", m)).arg(qsTr("%Ln seconds", "", sec))
     }
+    // A line drawn at x is on the plot area: lines sit on whole pixels, so
+    // one on the newest reading may be half a pixel past its right edge.
+    function onPlot(x) {
+        return x >= view.plotArea.left - 1 && x <= view.plotArea.right + 1
+    }
     // The cursor is in the picture: the chips show their values there. Once
     // its reading scrolls out they go back to the newest.
-    readonly property bool cursorInView: view.cursorShown && view.cursorX >= view.plotArea.left
-                                         && view.cursorX <= view.plotArea.right
+    readonly property bool cursorInView: view.cursorShown && plot.onPlot(view.cursorX)
     // "×100 +0.5": how a curve is drawn when not as read; empty when it is.
     function transformText(k, b) {
         if (k === 1 && b === 0)
@@ -341,6 +404,7 @@ FocusScope {
             CheckBox {
                 id: follow
                 objectName: "plotFollow"
+                visible: plot.narrowStep < 3
                 text: qsTr("Follow")
                 checked: view.following
                 focusPolicy: Qt.TabFocus
@@ -351,11 +415,27 @@ FocusScope {
                 Accessible.name: qsTr("Follow the newest readings")
                 Accessible.description: qsTr("Keep the newest readings in view. Unticked, the picture holds still; reading goes on.")
             }
+            // Narrow: Follow as its icon, filled while following.
+            IconToolButton {
+                id: followIcon
+                objectName: "plotFollowIcon"
+                visible: plot.narrowStep >= 3
+                iconName: "follow"
+                text: qsTr("Follow the newest reading")
+                shortcutText: qsTr("End")
+                checkable: true
+                checked: view.following
+                switchedOn: checked
+                toggles: true
+                onToggled: view.following = checked
+                Accessible.description: qsTr("Keep the newest readings in view. Off, the picture holds still; reading goes on.")
+            }
             // 10 s | 1 min | 10 min | All, as the Watchlist's List | Tree:
             // the chosen one filled, Left and Right move between them.
             Row {
                 id: presets
                 objectName: "plotPresets"
+                visible: plot.narrowStep < 2
                 Accessible.role: Accessible.Grouping
                 Accessible.name: qsTr("Time span")
                 Layout.preferredHeight: Type.controlHeight
@@ -363,12 +443,7 @@ FocusScope {
                 ButtonGroup { id: presetGroup }
                 Repeater {
                     id: presetButtons
-                    model: [
-                        { seconds: 10, text: qsTr("10 s"), name: qsTr("Last 10 seconds") },
-                        { seconds: 60, text: qsTr("1 min"), name: qsTr("Last minute") },
-                        { seconds: 600, text: qsTr("10 min"), name: qsTr("Last 10 minutes") },
-                        { seconds: 0, text: qsTr("All"), name: qsTr("Everything kept") }
-                    ]
+                    model: plot.spans
                     delegate: Button {
                         required property var modelData
                         required property int index
@@ -403,15 +478,66 @@ FocusScope {
                     }
                 }
             }
+            // Too narrow for four: one button showing the span, "10 s ▾", as
+            // the Watchlist's "Hex ▾"; as wide as its widest word, the four in
+            // its menu.
+            Button {
+                id: spanButton
+                objectName: "plotSpanButton"
+                visible: plot.narrowStep >= 2
+                FontMetrics { id: spanMetrics; font: spanButton.font }
+                implicitWidth: {
+                    void spanMetrics.font
+                    const words = plot.spans.map(span => span.text).concat([plot.spanWords()])
+                    return Math.ceil(Math.max(...words.map(word => spanMetrics.advanceWidth(word + " ▾"))))
+                           + leftPadding + rightPadding
+                }
+                Layout.preferredHeight: Type.controlHeight
+                verticalPadding: 0
+                flat: true
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                text: plot.spanWords() + " ▾"
+                onClicked: spanMenu.popup(spanButton, 0, spanButton.height)
+                Accessible.role: Accessible.ButtonMenu
+                Accessible.name: qsTr("Time span: %1").arg(plot.spanWords())
+                ToolTip.visible: (hovered || visualFocus) && !spanMenu.visible
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("The time in view; keys 1 to 4 choose it")
+                Menu {
+                    id: spanMenu
+                    objectName: "plotSpanMenu"
+                    ButtonGroup { id: spanItems; exclusive: true }
+                    Repeater {
+                        model: plot.spans
+                        MenuItem {
+                            required property var modelData
+                            required property int index
+                            objectName: "plotSpanItem_" + modelData.seconds
+                            text: modelData.text + "\t" + (index + 1)
+                            checkable: true
+                            checked: view.preset === modelData.seconds
+                            ButtonGroup.group: spanItems
+                            Accessible.name: modelData.name
+                            onTriggered: view.choosePreset(modelData.seconds)
+                        }
+                    }
+                }
+            }
+            // The wheel, + and - zoom as well: the first to give way.
             IconToolButton {
+                id: zoomOut
                 objectName: "plotZoomOut"
+                visible: plot.narrowStep < 1
                 iconName: "zoomOut"
                 text: qsTr("Zoom out")
                 shortcutText: qsTr("Minus")
                 onClicked: view.zoom(1.25)
             }
             IconToolButton {
+                id: zoomIn
                 objectName: "plotZoomIn"
+                visible: plot.narrowStep < 1
                 iconName: "zoomIn"
                 text: qsTr("Zoom in")
                 shortcutText: qsTr("Plus")
@@ -420,6 +546,7 @@ FocusScope {
             // Back to the view before the last move by hand: a zoom, a box, a
             // pan, a preset.
             IconToolButton {
+                id: back
                 objectName: "plotBack"
                 iconName: "undo"
                 text: qsTr("Go back to the previous view")
@@ -764,6 +891,8 @@ FocusScope {
                                 objectName: "plotMeasureShares"
                                 visible: measureRow.states
                                 Layout.preferredWidth: measureTable.cell * measureTable.sharesCells
+                                // Apart from the state's word when no Δ is between.
+                                leftPadding: Type.spacing
                                 horizontalAlignment: Text.AlignRight
                                 elide: Text.ElideRight
                                 text: plot.sharesText(measureRow.stats)
@@ -1030,8 +1159,10 @@ FocusScope {
             }
 
             Item {
+                objectName: "plotGraph"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: plot.graphMinimumHeight
                 TraceView {
                     id: view
                     objectName: "plotView"
@@ -1162,11 +1293,11 @@ FocusScope {
                 Rectangle {
                     id: referenceChip
                     objectName: "plotReferenceChip"
-                    visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
-                             && view.referenceX <= view.plotArea.right
+                    visible: view.visible && view.referenceShown && plot.onPlot(view.referenceX)
                     width: referenceText.implicitWidth + 2 * Type.padding
                     height: Type.chipHeight
-                    x: Math.max(0, Math.min(parent.width - width, view.referenceX - width / 2))
+                    // Under its line, beside the axis switch if it would cover it.
+                    x: plot.chipX(view.referenceX, width, parent.width, [timeAxis])
                     y: view.height - height
                     radius: Type.radius
                     color: Theme.infoContainer
@@ -1189,11 +1320,10 @@ FocusScope {
                 Rectangle {
                     id: endChip
                     objectName: "plotEndChip"
-                    visible: view.visible && view.endShown && view.endX >= view.plotArea.left
-                             && view.endX <= view.plotArea.right
+                    visible: view.visible && view.endShown && plot.onPlot(view.endX)
                     width: endText.implicitWidth + 2 * Type.padding
                     height: Type.chipHeight
-                    x: plot.chipX(view.endX, width, parent.width, [referenceChip])
+                    x: plot.chipX(view.endX, width, parent.width, [referenceChip, timeAxis])
                     y: view.height - height
                     radius: Type.radius
                     color: Theme.infoContainer
@@ -1222,14 +1352,13 @@ FocusScope {
                 Rectangle {
                     objectName: "plotCursorChip"
                     // On the end, the end's chip says it all.
-                    visible: view.visible && view.cursorShown && view.cursorX >= view.plotArea.left
-                             && view.cursorX <= view.plotArea.right
+                    visible: view.visible && view.cursorShown && plot.onPlot(view.cursorX)
                              && !(endChip.visible && view.cursorUtcMs === view.endUtcMs)
                     width: cursorText.implicitWidth + 2 * Type.padding
                     height: Type.chipHeight
                     // Centred on its line, but never over the reference's or
-                    // the end's chip: beside them, 4 px apart.
-                    x: plot.chipX(view.cursorX, width, parent.width, [referenceChip, endChip])
+                    // the end's chip or the axis switch: beside them, 4 px apart.
+                    x: plot.chipX(view.cursorX, width, parent.width, [referenceChip, endChip, timeAxis])
                     y: view.height - height
                     radius: Type.radius
                     color: Theme.surface
@@ -1322,7 +1451,12 @@ FocusScope {
                     leftPadding: Type.padding
                     rightPadding: Type.padding
                     font.pointSize: Type.caption
-                    text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                    // The last to give way: "Clock \u25BE" and "Start \u25BE" when the
+                    // Plot is at its narrowest; its accessible name stays.
+                    readonly property bool brief: plot.narrowStep >= 4
+                    text: (view.fromStart ? (brief ? qsTr("Start") : qsTr("From start"))
+                                          : (brief ? qsTr("Clock") : qsTr("Time of day"))) + " \u25BE"
+                    FontMetrics { id: axisMetrics; font: timeAxis.font }
                     contentItem: Text {
                         text: timeAxis.text
                         font: timeAxis.font
