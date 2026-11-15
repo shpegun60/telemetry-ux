@@ -415,8 +415,9 @@ Windows offscreen qualification supplies the OS font directory explicitly; the
 normal native window uses platform fonts. Offscreen CI does not qualify every display
 server or physical hardware.
 
-`--edit-smoke --screenshot FILE.png` exercises the actual QML Edit button,
-TextField handler and Apply button against the writable native demo. Success
+`--edit-smoke --screenshot FILE.png` opens the actual QML value cell of Gain,
+types through its TextField handler (the first change opens the draft) and
+presses Apply against the writable native demo. Success
 requires one Write and a published readback with the normalized Gain value 10.
 
 The [TCP suite](../../tests/inspector_tcp/README.md) additionally runs real

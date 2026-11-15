@@ -75,8 +75,8 @@ display-server or physical transport behavior.
 Workbench scenarios exercise exact text input for U64/S64 and enums, nested
 leaves, invalid-input atomicity and Apply gating, device-side normalization,
 read-only profile refusal and unchanged default Inspector behavior. A separate
-`--edit-smoke` process invokes the actual QML Edit button, TextField handler and
-Apply button. Its success requires one Write and normalized Gain=10 readback.
+`--edit-smoke` process opens the actual QML value cell, types through its
+TextField handler (the first change opens the draft) and presses Apply. Its success requires one Write and normalized Gain=10 readback.
 
 Explicit Disconnect tests choose queued, offered, prepared, executed and
 confirmed-Write phases directly, with exactly one terminal signal and the

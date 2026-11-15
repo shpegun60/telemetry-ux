@@ -12,6 +12,7 @@
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
+#include <cmath>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -168,19 +169,25 @@ int main(int argc, char** argv)
 	CHECK(read.first().first().toBool());
 	CHECK(member(values, QStringLiteral("Gain")).isValid());
 	CHECK(control(*window, QStringLiteral("valueTree")));
-	click(*window, *control(*window, QStringLiteral("editButton")));
-	CHECK(provider.editing());
+	// No Edit button: the cell is the editor and the first change opens the
+	// draft (BA-4).
+	CHECK(!provider.editing());
+	CHECK(!visual(window->contentItem(), QStringLiteral("editButton")) &&
+	      !visual(window->contentItem(), QStringLiteral("applyButton")));
+	auto* gainText = control(*window, QStringLiteral("valueText"), QStringLiteral("Gain"));
+	click(*window, *gainText);
 	auto* editor = control(*window, QStringLiteral("scalarEditor"), QStringLiteral("Gain"));
-	click(*window, *editor);
 	CHECK(await([&] {
 		return editor->hasActiveFocus();
 	}));
+	// The editor takes the value's place, one row tall.
+	CHECK(std::abs(editor->height() - gainText->height()) < 1);
 	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 	QTest::keyClick(window, Qt::Key_Backspace);
 	QTest::keyClick(window, Qt::Key_1);
 	QTest::keyClick(window, Qt::Key_2);
 	CHECK(editor->property("text").toString() == QStringLiteral("12"));
-	CHECK(editor->hasActiveFocus());
+	CHECK(editor->hasActiveFocus() && provider.editing());
 	QSignalSpy applied{&provider, &ui::InspectorController::applyFinished};
 	click(*window, *control(*window, QStringLiteral("applyButton")));
 	CHECK(await([&] {

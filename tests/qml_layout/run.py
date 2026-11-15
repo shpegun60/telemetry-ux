@@ -132,7 +132,8 @@ def main():
         for name, binary_name, pattern, least in (
                 ('watch-tree', 'telemetry_qml_watch_tree', r'Watch tree checks=(\d+) warnings=0', 240),
                 ('batch-add', 'telemetry_qml_batch_add', r'Batch add checks=(\d+) warnings=0', 45),
-                ('trace-plot', 'telemetry_qml_trace_plot', r'Trace plot checks=(\d+) warnings=0', 40)):
+                ('trace-plot', 'telemetry_qml_trace_plot', r'Trace plot checks=(\d+) warnings=0', 40),
+                ('value-cell', 'telemetry_qml_value_cell', r'Value cell checks=(\d+) warnings=0', 60)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))
             if not found or int(found[1]) < least:

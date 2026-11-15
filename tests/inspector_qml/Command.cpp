@@ -105,8 +105,9 @@ void click(QQuickWindow& window, QQuickItem& item)
 
 void type(QQuickWindow& window, const QString& name, const QByteArray& text)
 {
+	// The cell is a value until it is opened; a click opens its editor (BA-4).
+	click(window, *control(window, QStringLiteral("valueText"), name));
 	auto* editor = control(window, QStringLiteral("scalarEditor"), name);
-	click(window, *editor);
 	CHECK(await([&] {
 		return editor->hasActiveFocus();
 	}));
@@ -210,11 +211,12 @@ int main(int argc, char** argv)
 	type(*window, QStringLiteral("Gain"), QByteArrayLiteral("4.25"));
 	type(*window, QStringLiteral("Counter"), QByteArrayLiteral("18446744073709551616"));
 	CHECK(!controller.canExecute());
-	click(*window, *control(*window, QStringLiteral("scalarEditor"), QStringLiteral("Gain")));
-	CHECK(!controller.canExecute());
-	CHECK(control(*window, QStringLiteral("scalarEditor"), QStringLiteral("Counter"))
+	// Leaving text that is no value puts back the cell's last value (BA-4).
+	click(*window, *control(*window, QStringLiteral("valueText"), QStringLiteral("Gain")));
+	CHECK(await([&] { return controller.canExecute(); }));
+	CHECK(control(*window, QStringLiteral("valueText"), QStringLiteral("Counter"))
 	          ->property("text")
-	          .toString() == QStringLiteral("18446744073709551616"));
+	          .toString() != QStringLiteral("18446744073709551616"));
 	type(*window, QStringLiteral("Counter"), QByteArrayLiteral("18446744073709551614"));
 	CHECK(controller.canExecute());
 	CHECK(controller.commandOutcome() == previousCommand);

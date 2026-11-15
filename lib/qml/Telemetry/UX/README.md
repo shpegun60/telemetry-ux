@@ -68,8 +68,33 @@ Actions retain the existing provider signatures:
 
 - `selectEndpoint(QModelIndex)`, `refresh()`, `beginEdit()`, `cancelEdit()`,
   `apply()`, `executeCommand()` and `callService()`.
-- `setScalarText(QModelIndex, QString) -> bool` validates raw editor text. The
-  view preserves invalid/intermediate text and uses the result to gate its input.
+- `setScalarText(QModelIndex, QString) -> bool` takes a cell's text as it is
+  typed. For a Field the draft is implicit (BA-4): the first valid change opens
+  it, and a change that leaves it equal to the value read, with no invalid text
+  left, closes it again. `beginEdit()` stays for hosts that open a draft
+  themselves. Text that is no value leaves the row as it was and returns false.
+- **The value cells (`ValueCell.qml`, BA-4).** Details shows every value in
+  one cell component, a value until it is clicked or opened with F2 or Enter
+  on its row, then an editor in place, one row tall: a text field, or a choice
+  for a bool or an enum (with "Enter code…"). Edits are live. Enter keeps the
+  value, Tab and Shift+Tab keep it and open the next or previous cell, Escape
+  puts back the value the cell had when it was opened, and leaving with text
+  that is no value puts back the last value. Ctrl+Enter applies the draft, or
+  executes or calls. A cell opens only on a row whose `editable` role is true
+  and never while changes are off or the provider is busy. While its text is
+  no value the cell says what it takes, from the row's `takes` role ("Enter a
+  number from 0 to 255.", "Enter a number.", "Enter true or false.", "Enter
+  Idle, Run or Stop, or a code."); a float says what it encodes. Integers also
+  take hex, the value's bits at its width (0xFF, 0x3F800000).
+- **No Edit button.** A Field's values are editable while it has been read,
+  is writable and changes are allowed (`ValueModel::setEditOffer`, which the
+  Dynamic provider and the Inspector example keep up to date; the Static
+  provider's `editable` role does the same). Cancel and the accent Apply show
+  only while a draft exists; Read hides meanwhile. Execute and Call are the
+  accent action of a Command and a Service.
+- **A Field picked with changes allowed is read once** by Details, so its cells
+  can be edited at once: one read per selection, none while another is
+  pending, none for a Field already read. With changes off nothing is read.
 - `addWatch() -> bool`, `removeWatch(int)`, `clearWatch()`, `refreshWatch()`,
   `startWatch()` and `stopWatch()`.
 - **The Watchlist's two views (WL-2).** `watchRows` (a `WatchRows`, both
