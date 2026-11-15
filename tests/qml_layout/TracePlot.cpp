@@ -10,6 +10,7 @@
 #include "Telemetry/UX/WatchTraces.hpp"
 #include <QtCore/QDir>
 #include <QtCore/QRegularExpression>
+#include <QtGui/QWheelEvent>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -67,6 +68,11 @@ void shot(QQuickWindow* window, int argc, char** argv, const QString& name)
 		return;
 	QDir().mkpath(QString::fromLocal8Bit(argv[1]));
 	CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(name + QStringLiteral(".png"))));
+}
+void click(QQuickWindow* window, QQuickItem* item)
+{
+	QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+	                  item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
 }
 void settle(int ms = 60)
 {
@@ -252,6 +258,87 @@ int main(int argc, char** argv)
 		const auto area = view->property("plotArea").toRectF();
 		CHECK(area.width() > 400 && view->property("drawnPoints").toInt() < 400 + int(area.width() * window->effectiveDevicePixelRatio()) * 4 + 8);
 		shot(window, argc, argv, QStringLiteral("trace-plot-dense-760"));
+
+		// LP-1b. A preset sets the span and follows the newest again.
+		const auto span = [view] { return view->property("spanSeconds").toDouble(); };
+		const auto following = [view] { return view->property("following").toBool(); };
+		click(window, shown(content, "plotPreset_10"));
+		settle();
+		CHECK(span() == 10 && following() && view->property("preset").toInt() == 10 &&
+		      shown(content, "plotPreset_10")->property("checked").toBool() && !named(content, "plotBehind"));
+		click(window, shown(content, "plotPreset_0"));
+		settle(150);
+		CHECK(view->property("showAll").toBool() && view->property("preset").toInt() == 0 && following());
+		click(window, shown(content, "plotPreset_60"));
+		settle(150);
+		CHECK(span() == 60 && !view->property("showAll").toBool() && view->property("preset").toInt() == 60);
+		// A drag pans back in time and stops following; the chip in the
+		// corner says how far behind and follows again.
+		const auto middle = view->mapToScene(QPointF(view->width() / 2, view->height() / 2)).toPoint();
+		QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, middle);
+		QTest::mouseMove(window, middle + QPoint(100, 0));
+		QTest::mouseMove(window, middle + QPoint(200, 0));
+		QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, middle + QPoint(200, 0));
+		settle(200);
+		CHECK(!following() && view->property("preset").toInt() == 60 && view->property("behindSeconds").toDouble() > 10);
+		auto* behind = shown(content, "plotBehind");
+		CHECK(behind->property("text").toString().endsWith(QStringLiteral(" behind · Follow (End)")) &&
+		      !shown(content, "plotFollow")->property("checked").toBool());
+		shot(window, argc, argv, QStringLiteral("trace-plot-behind-760"));
+		click(window, behind);
+		settle(150);
+		CHECK(following() && !named(content, "plotBehind"));
+		// Keys on the graph: + zooms in about the middle and leaves every
+		// preset; End follows; Left pans a tenth back; Space holds and
+		// follows; Home goes to the oldest reading kept; 4 and 2 choose.
+		view->forceActiveFocus(Qt::TabFocusReason);
+		QTest::keyClick(window, Qt::Key_Plus);
+		settle();
+		CHECK(std::abs(span() - 48) < 1e-6 && view->property("preset").toInt() == -1 && !following() &&
+		      !shown(content, "plotPreset_60")->property("checked").toBool());
+		QTest::keyClick(window, Qt::Key_End);
+		settle(150);
+		CHECK(following());
+		QTest::keyClick(window, Qt::Key_Left);
+		settle(150);
+		CHECK(!following() && std::abs(view->property("behindSeconds").toDouble() - 4.8) < 0.2);
+		QTest::keyClick(window, Qt::Key_Space);
+		settle();
+		CHECK(following());
+		QTest::keyClick(window, Qt::Key_Space);
+		settle();
+		CHECK(!following());
+		const double newestUtc = view->property("rightUtcMs").toDouble();
+		QTest::keyClick(window, Qt::Key_Home);
+		settle(150);
+		CHECK(!following() && view->property("rightUtcMs").toDouble() < newestUtc);
+		QTest::keyClick(window, Qt::Key_4);
+		settle(150);
+		CHECK(view->property("showAll").toBool() && following());
+		QTest::keyClick(window, Qt::Key_2);
+		settle(150);
+		CHECK(span() == 60 && following());
+		// The wheel zooms about the pointer: the time under it stays.
+		{
+			const auto area = view->property("plotArea").toRectF();
+			const QPointF at(area.left() + area.width() * 0.25, area.center().y());
+			QWheelEvent wheel(at, view->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+			                  Qt::NoScrollPhase, false);
+			QCoreApplication::sendEvent(view, &wheel);
+			settle(150);
+			CHECK(std::abs(span() - 48) < 1e-6 && !following() &&
+			      std::abs(view->property("behindSeconds").toDouble() - 0.75 * 12) < 0.3);
+		}
+		// The zoom buttons, out and in.
+		click(window, shown(content, "plotZoomOut"));
+		settle();
+		CHECK(std::abs(span() - 60) < 1e-6);
+		click(window, shown(content, "plotZoomIn"));
+		settle();
+		CHECK(std::abs(span() - 48) < 1e-6);
+		click(window, shown(content, "plotPreset_60"));
+		settle(150);
+		CHECK(following() && span() == 60);
 
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");

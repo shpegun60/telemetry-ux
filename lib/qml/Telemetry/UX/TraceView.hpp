@@ -11,6 +11,7 @@
 #include <QtGui/QFont>
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickPaintedItem>
+#include <utility>
 
 namespace telemetry::ux {
 class WatchTraces;
@@ -23,12 +24,24 @@ class WatchTraces;
 // line. Following, the right edge is now and moves with it; otherwise it
 // stays where it was. Painted by QPainter, so it draws alike on every Qt Quick
 // backend, the software one included.
+//
+// Moving it (LP-1b): a drag pans, the wheel zooms about the pointer, Left and
+// Right pan a tenth, + and - zoom about the middle, Home goes to the oldest
+// reading kept, End follows again, Space and H hold or follow, 1 to 4 choose
+// 10 s, 1 min, 10 min or All. Panning, zooming and Home stop following;
+// reading goes on.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
 	Q_PROPERTY(QObject* traces READ traces WRITE setTraces NOTIFY tracesChanged)
 	Q_PROPERTY(qreal spanSeconds READ spanSeconds WRITE setSpanSeconds NOTIFY viewChanged)
 	Q_PROPERTY(bool following READ following WRITE setFollowing NOTIFY viewChanged)
+	// Everything kept, oldest to newest, growing while following.
+	Q_PROPERTY(bool showAll READ showAll WRITE setShowAll NOTIFY viewChanged)
+	// The chosen span: 10, 60 or 600 seconds, 0 for All, -1 after a zoom.
+	Q_PROPERTY(int preset READ preset NOTIFY viewChanged)
+	// Held, how far the right edge is behind the newest reading.
+	Q_PROPERTY(qreal behindSeconds READ behindSeconds NOTIFY drawn)
 	// A colour per palette place (WatchTraces::colorIndex).
 	Q_PROPERTY(QVariantList colors READ colors WRITE setColors NOTIFY styleChanged)
 	Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY styleChanged)
@@ -52,6 +65,21 @@ public:
 	void setSpanSeconds(qreal seconds);
 	bool following() const { return following_; }
 	void setFollowing(bool following);
+	bool showAll() const { return showAll_; }
+	void setShowAll(bool all);
+	int preset() const;
+	qreal behindSeconds() const { return behindSeconds_; }
+
+	// 10, 60 or 600 seconds, or 0 for All; following the newest reading.
+	Q_INVOKABLE void choosePreset(int seconds);
+	// The span times factor (below 1 zooms in), about a point of the width
+	// (0 left, 1 right); stops following.
+	Q_INVOKABLE void zoom(qreal factor, qreal at = 0.5);
+	// By a part of the span (negative: back in time); stops following.
+	Q_INVOKABLE void pan(qreal part);
+	// The oldest reading kept at the left edge; stops following.
+	Q_INVOKABLE void toOldest();
+	Q_INVOKABLE void follow() { setFollowing(true); }
 	QVariantList colors() const { return colors_; }
 	void setColors(const QVariantList& colors);
 	QColor gridColor() const { return gridColor_; }
@@ -71,6 +99,13 @@ public:
 
 	void paint(QPainter* painter) override;
 
+protected:
+	void mousePressEvent(QMouseEvent* event) override;
+	void mouseMoveEvent(QMouseEvent* event) override;
+	void mouseReleaseEvent(QMouseEvent* event) override;
+	void wheelEvent(QWheelEvent* event) override;
+	void keyPressEvent(QKeyEvent* event) override;
+
 Q_SIGNALS:
 	void tracesChanged();
 	void viewChanged();
@@ -83,13 +118,23 @@ private:
 		bool valid() const { return high > low; }
 	};
 	qint64 rightNs() const;
+	qint64 spanNs() const;
+	// The oldest and newest reading of the plotted values; 0 when none.
+	std::pair<qint64, qint64> kept() const;
+	// Stops following with the right edge at right, inside what is kept.
+	void hold(qint64 right);
 	void tick();
 	void schedule();
 
 	QPointer<WatchTraces> traces_;
 	QTimer frames_;
 	qreal spanSeconds_ = 60;
-	bool following_ = true;
+	bool following_ = true, showAll_ = false;
+	qreal behindSeconds_ = 0;
+	// A drag: where it started and the right edge then.
+	qreal pressX_ = 0;
+	qint64 pressRightNs_ = 0;
+	bool dragging_ = false;
 	qint64 frozenNs_ = 0;
 	QVariantList colors_;
 	QColor gridColor_{0x3a, 0x3f, 0x47}, labelColor_{0x9a, 0xa4, 0xb0};
