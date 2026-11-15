@@ -8,7 +8,8 @@
 //
 // The adapter: check(text) -> {status, message, ...}; candidates(text) ->
 // [{path, completion?, kind?, typeText, note?, watched?, container, next?,
-// values?}]; add(lines) -> {notice, undoable, clear}; enter(text) -> true
+// values?}]; add(lines) -> {notice, undoable, serial, clear} (serial: the
+// step the addition recorded, 0 when none); enter(text) -> true
 // when it handled Enter itself (before the row adds).
 import QtQuick
 import QtQuick.Controls
@@ -34,8 +35,9 @@ FocusScope {
     property bool hideWhileTyping: true
     // The suggestions' widest; a full-width field need not make them so.
     property real popupMaxWidth: Number.POSITIVE_INFINITY
-    // Says what an addition did, on the panel's notice line.
-    signal added(string notice, bool undoable)
+    // Says what an addition did, on the panel's notice line, and the step it
+    // recorded (UR-1), 0 when none.
+    signal added(string notice, bool undoable, int serial)
     // Up from the field: back to the rows.
     signal leaveUp()
     property bool editing: false
@@ -178,7 +180,8 @@ FocusScope {
         if (!result)
             return
         if (result.notice && result.notice.length > 0)
-            addRow.added(result.notice, result.undoable === true)
+            addRow.added(result.notice, result.undoable === true,
+                         typeof result.serial === "number" ? result.serial : 0)
         if (result.clear === true) {
             field.text = ""
             refresh()

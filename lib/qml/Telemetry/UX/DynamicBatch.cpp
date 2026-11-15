@@ -1,5 +1,7 @@
 // One explicit ordered request; Qt owns presentation, the Session owns execution. MIT.
 #include "DynamicBatch.hpp"
+#include <QtCore/QCoreApplication>
+#include <QtCore/QPointer>
 #include <algorithm>
 #include <initializer_list>
 #include <utility>
@@ -145,6 +147,12 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 	std::shared_ptr<Request> request;
 	std::function<void()> notify, finished;
 	std::function<bool()> blocked, allowed;
+	// The history the Batch's steps go to, the target they put rows back
+	// through, the next row's uid, and the last step's serial.
+	QPointer<UndoHistory> history;
+	std::unique_ptr<UndoFunctions> target;
+	quint64 nextUid = 1;
+	int lastSerial = 0;
 	int selected = -1;
 	bool publishing = false, invalidationPending = false, pendingHistorical = false,
 	     invalidationQueued = false, retired = true;
@@ -183,6 +191,123 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 	{
 		if (notify)
 			notify();
+		// Whether a step can be taken may have changed with the request.
+		if (history)
+			history->refresh();
+	}
+
+	// A row as a "batch.items" fragment: its place and the row itself.
+	static QVariantMap fragment(int at, const BatchRow& row)
+	{
+		return {{QStringLiteral("at"), at}, {QStringLiteral("row"), QVariant::fromValue(row)}};
+	}
+
+	static QString key(const BatchRow& row)
+	{
+		return QString::number(row.uid);
+	}
+
+	int record(const QString& text, QVariantMap before, QVariantMap after, const QString& mergeKey = {})
+	{
+		lastSerial = 0;
+		if (!history || !target)
+			return 0;
+		QVector<UndoPart> parts;
+		parts.push_back(UndoPart{target.get(), QStringLiteral("batch.items"), std::move(before), std::move(after)});
+		lastSerial = history->record(text, std::move(parts), mergeKey);
+		return lastSerial;
+	}
+
+	// Rows added at the end, from first on, as one step.
+	void recordAdded(std::size_t first)
+	{
+		const auto& rows = model.rows();
+		QVariantMap after;
+		for (auto at = first; at < rows.size(); ++at)
+			after.insert(key(rows[at]), fragment(int(at), rows[at]));
+		const auto count = rows.size() - first;
+		record(count == 1 ? QCoreApplication::translate("DynamicBatch", "Add %1 to the Batch").arg(rows[first].name)
+		                  : QCoreApplication::translate("DynamicBatch", "Add %L1 items to the Batch").arg(count),
+		       {}, std::move(after));
+	}
+
+	// Why a step on the Batch waits now: a Batch request is in flight.
+	QString undoBlocked() const
+	{
+		if (request)
+			return QCoreApplication::translate("DynamicBatch", "Wait for the Batch to finish.");
+		if (publishing || model.changing() || responses.changing())
+			return QCoreApplication::translate("DynamicBatch", "The Batch is changing; try again in a moment.");
+		return {};
+	}
+
+	// A step's rows back by uid: those it says are gone, taken out; those it
+	// says are there, moved to their places when held, put back when not -
+	// whatever the connection: a row of another session, or with no session,
+	// comes back historical, never to be sent again.
+	UndoOutcome apply(const QVariantMap& state, const QStringList& keys)
+	{
+		if (!undoBlocked().isEmpty())
+			return {UndoOutcome::Kind::Blocked, {}};
+		auto rows = model.rows();
+		const auto find = [&rows](const QString& uid) {
+			return std::find_if(rows.begin(), rows.end(), [&uid](const BatchRow& row) { return key(row) == uid; });
+		};
+		int applied = 0;
+		QStringList gone;
+		QVector<QPair<int, BatchRow>> in;
+		for (const auto& uid : keys) {
+			const auto held = find(uid);
+			if (!state.contains(uid)) {
+				if (held != rows.end()) {
+					rows.erase(held);
+					++applied;
+				} else {
+					gone << uid;
+				}
+				continue;
+			}
+			const auto fragment = state.value(uid).toMap();
+			auto row = fragment.value(QStringLiteral("row")).value<BatchRow>();
+			if (held != rows.end()) {
+				// Held: moved, with what it holds now.
+				row = *held;
+				rows.erase(held);
+			} else {
+				const bool session = current() && source.session && row.session == source.session();
+				row.historical = row.historical || !session;
+				if (row.historical) {
+					row.hasValue = false;
+					row.response.clear();
+				}
+			}
+			in.push_back({fragment.value(QStringLiteral("at")).toInt(), std::move(row)});
+		}
+		if (rows.size() + std::size_t(in.size()) > 32)
+			return {UndoOutcome::Kind::Skipped,
+			        QCoreApplication::translate("DynamicBatch", "the Batch holds 32 items at most")};
+		std::sort(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		for (auto& [at, row] : in) {
+			rows.insert(rows.begin() + std::clamp(at, 0, int(rows.size())), std::move(row));
+			++applied;
+		}
+		if (applied > 0) {
+			publishing = true;
+			selected = -1;
+			responses.clear();
+			snapshot.invalidate();
+			model.replace(std::move(rows));
+			finishPublication();
+			signal();
+		}
+		const auto note = gone.isEmpty() ? QString{}
+		                  : gone.size() == 1
+		                      ? QCoreApplication::translate("DynamicBatch", "1 item is no longer in the Batch")
+		                      : QCoreApplication::translate("DynamicBatch", "%L1 items are no longer in the Batch")
+		                            .arg(gone.size());
+		if (applied == 0)
+			return {UndoOutcome::Kind::Skipped, note};
+		return {note.isEmpty() ? UndoOutcome::Kind::Done : UndoOutcome::Kind::Partial, note};
 	}
 
 	bool budgets(const BatchRow* candidate = nullptr) const
@@ -298,7 +423,33 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 };
 
 DynamicBatch::DynamicBatch() : d(std::make_shared<Impl>())
-{}
+{
+	const std::weak_ptr<Impl> weak = d;
+	d->target = std::make_unique<UndoFunctions>(
+	    [weak](const QString&, const QVariantMap& state, const QStringList& keys) {
+		    const auto p = weak.lock();
+		    return p ? p->apply(state, keys) : UndoOutcome{UndoOutcome::Kind::Skipped, {}};
+	    },
+	    [weak] {
+		    const auto p = weak.lock();
+		    return p ? p->undoBlocked() : QString{};
+	    });
+}
+
+void DynamicBatch::setHistory(UndoHistory* history)
+{
+	d->history = history;
+}
+
+UndoHistory* DynamicBatch::history() const
+{
+	return d->history;
+}
+
+int DynamicBatch::lastSerial() const
+{
+	return d->lastSerial;
+}
 
 DynamicBatch::~DynamicBatch() = default;
 
@@ -367,8 +518,11 @@ bool DynamicBatch::add(BatchRow row)
 		return false;
 	const bool fieldDraft = row.operation == client::Operation::FieldWrite;
 	row.request = QByteArray(row.request.constData(), row.request.size());
+	row.uid = p->nextUid++;
+	p->lastSerial = 0;
 	p->publishing = true;
 	auto rows = p->model.rows();
+	const auto first = rows.size();
 	rows.push_back(std::move(row));
 	p->selected = int(rows.size()) - 1;
 	p->responses.clear();
@@ -380,6 +534,7 @@ bool DynamicBatch::add(BatchRow row)
 	              "Field draft captured. Cancel closes the current editor; the Batch keeps its copy. Execute sends one ordered request.")
 	        : QStringLiteral("Draft - Execute sends one ordered Batch");
 	p->finishPublication();
+	p->recordAdded(first);
 	p->signal();
 	return true;
 }
@@ -416,10 +571,13 @@ bool DynamicBatch::add(std::vector<BatchRow> rows)
 	auto p = d;
 	if (rows.empty() || refusal(rows) != Refusal::None)
 		return false;
+	p->lastSerial = 0;
 	p->publishing = true;
 	auto all = p->model.rows();
+	const auto first = all.size();
 	for (auto& row : rows) {
 		row.request = QByteArray(row.request.constData(), row.request.size());
+		row.uid = p->nextUid++;
 		all.push_back(std::move(row));
 	}
 	p->selected = int(all.size()) - 1;
@@ -428,6 +586,7 @@ bool DynamicBatch::add(std::vector<BatchRow> rows)
 	p->model.replace(std::move(all));
 	p->status = QStringLiteral("Draft - Execute sends one ordered Batch");
 	p->finishPublication();
+	p->recordAdded(first);
 	p->signal();
 	return true;
 }
@@ -437,14 +596,18 @@ bool DynamicBatch::remove(int row)
 	auto p = d;
 	if (!p->editable() || row < 0 || row >= count())
 		return false;
+	p->lastSerial = 0;
 	p->publishing = true;
 	auto rows = p->model.rows();
+	const auto taken = rows[std::size_t(row)];
 	rows.erase(rows.begin() + row);
 	p->selected = -1;
 	p->responses.clear();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
 	p->finishPublication();
+	p->record(QCoreApplication::translate("DynamicBatch", "Remove %1 from the Batch").arg(taken.name),
+	          {{Impl::key(taken), Impl::fragment(row, taken)}}, {});
 	p->signal();
 	return true;
 }
@@ -455,8 +618,10 @@ bool DynamicBatch::move(int row, int delta)
 	if (!p->editable() || (delta != -1 && delta != 1) || row < 0 || row >= count() ||
 	    row + delta < 0 || row + delta >= count())
 		return false;
+	p->lastSerial = 0;
 	p->publishing = true;
 	auto rows = p->model.rows();
+	const auto moved = rows[std::size_t(row)];
 	std::swap(rows[std::size_t(row)], rows[std::size_t(row + delta)]);
 	if (p->selected == row)
 		p->selected += delta;
@@ -464,6 +629,11 @@ bool DynamicBatch::move(int row, int delta)
 		p->selected = row;
 	p->model.replace(std::move(rows));
 	p->finishPublication();
+	// One item moved again within two seconds is one step; back where it
+	// started, none.
+	p->record(QCoreApplication::translate("DynamicBatch", "Move %1 to item %L2 in the Batch").arg(moved.name).arg(row + delta + 1),
+	          {{Impl::key(moved), Impl::fragment(row, moved)}}, {{Impl::key(moved), Impl::fragment(row + delta, moved)}},
+	          QStringLiteral("batch.move:") + Impl::key(moved));
 	p->signal();
 	return true;
 }
@@ -474,6 +644,11 @@ bool DynamicBatch::clear()
 	if (p->request || p->publishing || p->model.changing() || p->responses.changing() ||
 	    (p->blocked && p->blocked()))
 		return false;
+	p->lastSerial = 0;
+	QVariantMap before;
+	const auto& held = p->model.rows();
+	for (std::size_t at = 0; at < held.size(); ++at)
+		before.insert(Impl::key(held[at]), Impl::fragment(int(at), held[at]));
 	p->publishing = true;
 	p->selected = -1;
 	p->responses.clear();
@@ -481,6 +656,8 @@ bool DynamicBatch::clear()
 	p->model.replace({});
 	p->status = QStringLiteral("Add ordered operations; Execute sends one Batch");
 	p->finishPublication();
+	if (!before.isEmpty())
+		p->record(QCoreApplication::translate("DynamicBatch", "Clear the Batch"), std::move(before), {});
 	p->signal();
 	return true;
 }

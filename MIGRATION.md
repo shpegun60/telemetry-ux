@@ -819,3 +819,29 @@ and Redo").
   "Remove all curves" ("Remove all curves from the Plot") use them, so one
   press is one step. `plotMany` answers `{added, refusal, last}`.
 - **`restore(state)` records nothing**: a project's Plot put back is no step.
+
+## The Batch's changes as steps (UR-1, UX-C, November 2026)
+
+The Batch records into the same history as the Watchlist and the Plot (README,
+"Undo and Redo").
+
+- **`DynamicBatch::setHistory(history)`**; a Dynamic provider gives its Batch
+  its own history when it is given one. Null records nothing.
+- **Steps, kind `batch.items`.** Add ("Add device.Voltage to the Batch", "Add 3
+  items to the Batch"), remove ("Remove device.Voltage from the Batch"), move
+  ("Move device.Voltage to item 2 in the Batch"; moves of one item within two
+  seconds merge, and one back where it started leaves none) and Clear ("Clear
+  the Batch"). Execute Batch is never a step; a step waits while a Batch is in
+  flight: "Wait for the Batch to finish."
+- **`BatchRow.uid`** is new: a row's identity to the history, given when the
+  Batch takes the row and kept through Execute. `BatchRow` gains `operator==`
+  and is a Qt metatype.
+- **Rows go back whatever the connection.** Undo puts rows back by uid in
+  their places, skipping the session refusal: a row of an earlier connection,
+  or put back with none, comes back historical, as a reconnect leaves rows -
+  shown, never sent again until cleared.
+- **The serial reaches the panels.** `addBatchPaths` answers `serial`, and
+  `DynamicBatch::lastSerial()` gives the last change's. `PathAddRow`'s adapter
+  answers `add(lines) -> {notice, undoable, serial, clear}` and the row emits
+  `added(notice, undoable, serial)`; `BatchAddRow` and `WatchAddRow` give the
+  step's serial, and the Batch's additions are undoable.

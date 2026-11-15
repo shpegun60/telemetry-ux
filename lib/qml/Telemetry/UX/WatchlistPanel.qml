@@ -2598,9 +2598,8 @@ Pane {
             Layout.minimumHeight: implicitHeight
             Layout.preferredHeight: implicitHeight
             provider: panel.provider
-            onAdded: (notice, undoable) => {
-                // The add recorded its step as it was made.
-                panel.say(notice, undoable ? panel.recorded : 0)
+            onAdded: (notice, undoable, serial) => {
+                panel.say(notice, serial)
                 // The last value added, its parents opened, in view.
                 const last = panel.count - 1
                 const row = panel.rows ? panel.rows.reveal(last) : last

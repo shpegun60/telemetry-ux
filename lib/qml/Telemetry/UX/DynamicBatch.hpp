@@ -1,6 +1,7 @@
 // Ordered, bounded presentation over one borrowed Session execution source. MIT.
 #pragma once
 #include "DynamicModels.hpp"
+#include "UndoHistory.hpp"
 #include <QtCore/QAbstractListModel>
 #include <array>
 #include <functional>
@@ -17,6 +18,10 @@ struct BatchRow {
 	QByteArray request, response;
 	QVariantMap result;
 	bool hasValue = false, historical = false;
+	// Who the row is to the history (UR-1): given when the Batch takes it,
+	// kept through Execute, the same when Undo puts the row back.
+	quint64 uid = 0;
+	bool operator==(const BatchRow&) const = default;
 };
 
 class BatchListModel final : public QAbstractListModel {
@@ -113,6 +118,17 @@ public:
 	bool remove(int row);
 	bool move(int row, int delta);
 	bool clear();
+	// Where the Batch's changes go as steps (UR-1): add, remove, move and
+	// Clear, as "batch.items" by uid with each row's place and the row itself
+	// ("Add device.Voltage to the Batch", "Move device.Voltage to item 2 in
+	// the Batch", "Clear the Batch"). Moves of one item within two seconds
+	// merge. Execute is never a step. Null records nothing. A step puts its
+	// rows back whatever the connection: rows of an earlier one come back as
+	// historical rows, as a reconnect leaves them.
+	void setHistory(UndoHistory* history);
+	[[nodiscard]] UndoHistory* history() const;
+	// The serial of the step the last change recorded; 0 when it recorded none.
+	[[nodiscard]] int lastSerial() const;
 	bool select(int row);
 	bool canExecute() const;
 	bool execute();
@@ -128,3 +144,5 @@ private:
 	std::shared_ptr<Impl> d;
 };
 } // namespace telemetry::ux
+
+Q_DECLARE_METATYPE(telemetry::ux::BatchRow)

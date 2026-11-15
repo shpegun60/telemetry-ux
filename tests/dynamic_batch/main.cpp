@@ -2,6 +2,7 @@
 #include <Telemetry/UX/DynamicBatch.hpp>
 #include <Telemetry/UX/RequestArguments.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
+#include "../helpers/UndoKinds.hpp"
 #include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QSignalSpy>
 #include <utility>
@@ -490,6 +491,109 @@ void requestArguments()
 	CHECK(!result.ok() && result.message == "device.Ping takes no input; remove \"now\".");
 }
 
+// The Batch's steps (UR-1): add, remove, move and Clear held to UndoKinds'
+// property - done, undone and redone the same, across a disconnect and a
+// device with another session - rows by uid with their places; rows put
+// back with no device, or after a reconnect, come back historical; moves of
+// one item within two seconds are one step; Execute is never a step, and a
+// step waits while a Batch is in flight.
+void batchUndoKinds()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	ux::UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	batch.setHistory(&history);
+	CHECK(batch.history() == &history);
+	const auto rows = [&batch] {
+		QStringList all;
+		for (const auto& row : batch.model()->rows())
+			all << QStringLiteral("%1:%2:%3").arg(row.uid).arg(row.name).arg(int(row.operation));
+		return QVariant(all);
+	};
+	const auto named = [&peer](const char* name) {
+		auto row = readRow(peer);
+		row.name = QString::fromLatin1(name);
+		return row;
+	};
+	const auto away = [&] {
+		peer.current = false;
+		batch.retire();
+	};
+	// A reconnect is a new session, as an admission makes one.
+	const auto back = [&] {
+		peer.current = true;
+		++peer.session;
+		batch.setSource(peer.source());
+	};
+	const auto start = [&] {
+		if (!peer.current)
+			back();
+		CHECK(batch.clear());
+		CHECK(batch.add(std::vector<ux::BatchRow>{named("device.A"), named("device.B"), named("device.C")}));
+		history.clear();
+		now += 10000;
+	};
+	const auto otherSession = [&] {
+		++peer.session;
+		batch.setSource(peer.source());
+	};
+	const auto done = [](const QString& outcome, const QString&) { return outcome == QStringLiteral("done"); };
+	std::vector<undo_kinds::Case> cases;
+	const auto add = [&](const char* name, std::function<void()> act) {
+		cases.push_back({QStringLiteral("batch.items"), QString::fromLatin1(name), &history, start, std::move(act), rows,
+		                 away, back, otherSession, done});
+	};
+	add("add an item", [&] { CHECK(batch.add(named("device.D"))); });
+	add("add items", [&] { CHECK(batch.add(std::vector<ux::BatchRow>{named("device.D"), named("device.E")})); });
+	add("remove an item", [&] { CHECK(batch.remove(1)); });
+	add("move an item twice", [&] {
+		CHECK(batch.move(0, 1));
+		now += 500;
+		CHECK(batch.move(1, 1));
+	});
+	add("clear", [&] { CHECK(batch.clear()); });
+	const auto report = undo_kinds::run(QStringLiteral("dynamic_batch"), cases);
+	CHECK(report.cases == 5 && report.disconnects == 5 && report.descriptors == 5);
+
+	// The words, each with its serial.
+	start();
+	CHECK(batch.add(named("device.D")) && batch.lastSerial() == history.undoSerial() &&
+	      history.undoText() == QStringLiteral("Add device.D to the Batch"));
+	CHECK(batch.add(std::vector<ux::BatchRow>{named("device.E"), named("device.F")}) &&
+	      history.undoText() == QStringLiteral("Add 2 items to the Batch"));
+	CHECK(batch.remove(0) && history.undoText() == QStringLiteral("Remove device.A from the Batch"));
+	CHECK(batch.move(0, 1) && history.undoText() == QStringLiteral("Move device.B to item 2 in the Batch"));
+	now += 500;
+	// Moved back where it started within two seconds: no step is left.
+	const auto steps = history.count();
+	CHECK(batch.move(1, -1) && history.count() == steps - 1);
+	CHECK(batch.clear() && history.undoText() == QStringLiteral("Clear the Batch") && batch.count() == 0);
+	CHECK(history.undo() && batch.count() == 5);
+	// Rows put back after a reconnect come back historical: never sent again.
+	CHECK(batch.clear());
+	away();
+	back();
+	CHECK(history.undo() && batch.count() == 5 &&
+	      role(batch, 0, ux::BatchListModel::HistoricalRole).toBool() && !batch.canExecute());
+	// Execute is never a step; a step waits while the Batch is in flight.
+	CHECK(batch.clear());
+	CHECK(batch.add(named("device.G")));
+	const auto serial = history.undoSerial();
+	CHECK(batch.canExecute() && batch.execute());
+	CHECK(history.undoSerial() == serial && !history.canUndo() &&
+	      history.blockedReason() == QStringLiteral("Wait for the Batch to finish.") && !history.undo());
+	peer.finish();
+	batch.poll();
+	f::events();
+	CHECK(history.canUndo() && history.blockedReason().isEmpty() && history.undo() && batch.count() == 0);
+	// Without a history nothing is recorded.
+	batch.setHistory(nullptr);
+	CHECK(batch.add(named("device.H")) && batch.lastSerial() == 0);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
@@ -501,6 +605,7 @@ int main(int argc, char** argv)
 	externalModelInvalidation();
 	busySessionKeepsBatch();
 	severalRows();
+	batchUndoKinds();
 	std::printf("Dynamic Batch checks=%u no_native_callback_signals=1 bounded_items=32\n",
 	            f::checks);
 }

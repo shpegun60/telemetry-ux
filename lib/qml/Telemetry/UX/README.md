@@ -431,13 +431,22 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
   the Watchlist's Plot (Ctrl+P) and the Plot's "Remove all curves" use them.
   A curve comes back in its place with its colour. `restore()` records
   nothing.
+- **The Batch.** A Dynamic provider gives its Batch its history: add (one
+  item, or `addBatchPaths`' lines as one step), remove, move (one item's moves
+  within two seconds merging) and Clear, by `BatchRow.uid` with each row's
+  place (`batch.items`). Rows go back whatever the connection: one of an
+  earlier session comes back historical, never sent again. Execute is never a
+  step, and a step waits while a Batch is in flight ("Wait for the Batch to
+  finish."). `addBatchPaths` answers the step's `serial`.
 - **Words.** A step names its panel: "Add device.Voltage to the Watchlist",
   "Add 4 values of device.Config to the Watchlist", "Remove 3 values from the
   Watchlist", "Clear the Watchlist", "Show device.Voltage in hex", "Show the
   Watchlist in decimal", "Show 3 values like the Watchlist", "Reset number
   formats to Original", "Plot device.Voltage", "Remove all curves from the
   Plot", "Change the curve of device.Voltage", "Change the points of
-  device.Voltage", "Show measurement points"; a file's names the file: "Overwrite 4 bytes in
+  device.Voltage", "Show measurement points", "Add device.Voltage to the
+  Batch", "Move device.Voltage to item 2 in the Batch", "Clear the Batch"; a
+  file's names the file: "Overwrite 4 bytes in
   values.bin", "Replace 3 places in values.bin", "Restore the device's version
   in values.bin".
 - **By stable identity.** A step (`UndoStep`) holds parts, `UndoPart{target,
@@ -446,8 +455,8 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
   (`watch.rows`), formats by path, `""` for the Watchlist's own
   (`watch.format`), bytes by offset, `"*"` for the whole copy (`file.bytes`),
   curves by path with their place and colour (`plot.curves`), a curve's look
-  by path (`plot.look`) and the Plot's points (`plot.points`), never by row
-  index or key. Undo puts every part's state before back through
+  by path (`plot.look`), the Plot's points (`plot.points`) and Batch items by
+  uid with their place and the row (`batch.items`), never by row index or key. Undo puts every part's state before back through
   its target (`UndoTarget::applyUndoState`), redo its state after; both are
   idempotent. `UndoHistory::kinds()` lists every kind; a host declares one of
   its own with `declareKind` and implements `UndoTarget` (or `UndoFunctions`).
@@ -463,9 +472,9 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
 - **Merging.** Steps of one merge key within two seconds of each other merge:
   the earliest state before, the latest after, the newest words and serial.
   Back where they started, the step goes. The Watchlist's format choices merge,
-  formats given to the same rows merge, a curve's points merge, and so does
-  typing in a file where it stopped (never across a save). Ticks and removals
-  never merge.
+  formats given to the same rows merge, a curve's points merge, one Batch
+  item's moves merge, and so does typing in a file where it stopped (never
+  across a save). Ticks and removals never merge.
 - **Blocked.** A step whose target cannot change now keeps its words, greyed:
   `canUndo` is false, `undoText` stays and `blockedReason` says why ("Stop
   polling to change the Watchlist.").
