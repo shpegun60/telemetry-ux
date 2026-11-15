@@ -639,7 +639,13 @@ Pane {
                                 // on the next turn: showing them loads the tree's rows,
                                 // which must not happen inside a host's selection.
                                 readonly property var definitionRoot: panel.provider.definitionRootIndex
-                                onDefinitionRootChanged: fieldRoot.restart()
+                                function showDefinition() {
+                                    rootIndex = definitionRoot
+                                    fieldRoot.restart()
+                                }
+                                onDefinitionRootChanged: showDefinition()
+                                // Two Fields of one group share their root.
+                                Connections { target: panel; function onSelectedPathChanged() { metadataTree.showDefinition() } }
                                 Component.onCompleted: fieldRoot.restart()
                                 Timer {
                                     id: fieldRoot
