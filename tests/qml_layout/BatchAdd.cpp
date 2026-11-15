@@ -199,6 +199,15 @@ void key(QQuickWindow* window, Qt::Key k, Qt::KeyboardModifiers modifiers = Qt::
 	QTest::keyClick(window, k, modifiers);
 	settle();
 }
+QList<QQuickItem*> rowsOf(QQuickItem* list)
+{
+	QList<QQuickItem*> rows;
+	for (auto* child : list->property("contentItem").value<QQuickItem*>()->childItems())
+		if (child->objectName() == QLatin1String("batchRow") && child->isVisible())
+			rows.append(child);
+	std::sort(rows.begin(), rows.end(), [](QQuickItem* a, QQuickItem* b) { return a->y() < b->y(); });
+	return rows;
+}
 void clearField(QQuickWindow* window)
 {
 	key(window, Qt::Key_A, Qt::ControlModifier);
@@ -540,6 +549,49 @@ int main(int argc, char** argv)
 			CHECK(fixture->setProperty("batchPending", false));
 			settle();
 			CHECK(row->isEnabled() && field->hasActiveFocus());
+
+			// One commit rule for the "+" field: a click away adds what the
+			// line names, as Enter does; a line that names nothing stays, its
+			// line saying why in Enter's words; Escape empties the field.
+			const int before = int(calls.added.size());
+			const auto clickAway = [&]() {
+				auto* first = rowsOf(list).value(0);
+				CHECK(first);
+				QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+				                  first->mapToScene(QPointF(first->width() * 0.6, first->height() / 2)).toPoint());
+				settle();
+			};
+			typeText(window, "device.Voltage");
+			clickAway();
+			CHECK(!field->hasActiveFocus());
+			CHECK(calls.added.size() == before + 1 && calls.added.last() == QStringList({QStringLiteral("device.Voltage")}));
+			CHECK(field->property("text").toString().isEmpty());
+			CHECK(QMetaObject::invokeMethod(row, "begin"));
+			settle();
+			typeText(window, "Nope");
+			key(window, Qt::Key_Return);
+			const QString refused = shown(content, "batchAddCheck")->property("text").toString();
+			CHECK(refused == QStringLiteral("Nothing on this device is named Nope.") && calls.added.size() == before + 1);
+			clickAway();
+			CHECK(!field->hasActiveFocus() && calls.added.size() == before + 1);
+			CHECK(field->property("text").toString() == QStringLiteral("Nope"));
+			CHECK(shown(content, "batchAddCheck")->property("text").toString() == refused);
+			shot(window, argc, argv, QStringLiteral("batch-add-left-refused-760"));
+			// Unchanged (empty) text: a click away adds nothing.
+			CHECK(QMetaObject::invokeMethod(row, "begin"));
+			settle();
+			clearField(window);
+			clickAway();
+			CHECK(calls.added.size() == before + 1);
+			// Escape cancels: the typed text goes, nothing is added.
+			CHECK(QMetaObject::invokeMethod(row, "begin"));
+			settle();
+			typeText(window, "device.Voltage");
+			key(window, Qt::Key_Escape);
+			if (field->hasActiveFocus())
+				key(window, Qt::Key_Escape);
+			CHECK(!field->hasActiveFocus() && field->property("text").toString().isEmpty());
+			CHECK(calls.added.size() == before + 1);
 			window->close();
 		}
 		settle();
