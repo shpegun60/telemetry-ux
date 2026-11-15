@@ -13,7 +13,7 @@ struct EndpointPreviews::Impl {
     struct Entry {
         QByteArray bytes;
         QString state = QStringLiteral("Not read"), reason;
-        qint64 received = -1, attempted = -refreshMs;
+        qint64 received = -1;
         quint64 demand = 0;
         bool ready = false;
     };
@@ -22,12 +22,24 @@ struct EndpointPreviews::Impl {
         QList<quint32> ids;
         QMetaObject::Connection destroyed;
     };
+    // One request of a cycle: its Fields and its completion slot.
     struct Pending {
-        quint32 id = 0;
-        quint64 epoch = 0, demand = 0;
-        EndpointPreviewSource::Completion done;
+        quint64 epoch = 0;
+        std::vector<quint32> ids;
+        EndpointPreviewSource::Completion one;
+        EndpointPreviewSource::ManyCompletion many;
         // Retained even if admission changes before the callback drains.
         std::shared_ptr<void> backing;
+        bool ready() const { return (one && *one) || (many && *many); }
+    };
+    // The Fields in view read together; their values land when the last
+    // portion is in.
+    struct Cycle {
+        std::vector<read_portions::Portion> portions;
+        int cursor = 0;
+        quint64 epoch = 0;
+        std::vector<quint32> ids;
+        QHash<quint32, EndpointPreviewResult> results;
     };
     QPointer<EndpointPreviews> q;
     EndpointPreviewSource source;
@@ -38,10 +50,21 @@ struct EndpointPreviews::Impl {
     QHash<quint32, Entry> entries;
     QHash<quint32, runtime::RuntimeEndpoint> fields;
     std::optional<Pending> pending;
+    std::optional<Cycle> cycle;
     quint64 epoch = 0, serial = 0;
-    qint64 nextRead = 0, ageTick = -1, invalidatedNs = 0;
-    int turn = 0;
+    qint64 landed = 0, ageTick = -1, invalidatedNs = 0;
+    bool landedOnce = false, readSoon = true;
+    int intervalMs = intervalDefaultMs;
     bool polling = false;
+
+    int staleMs() const { return std::max(staleFloorMs, 3 * intervalMs); }
+    static EndpointPreviewResult failed(client::Status status, QString reason)
+    {
+        EndpointPreviewResult out;
+        out.status = status;
+        out.reason = std::move(reason);
+        return out;
+    }
 
     bool current() const {
         return source.current && source.current() && source.schema && source.schema().valid();
@@ -70,14 +93,13 @@ struct EndpointPreviews::Impl {
         }
         for (auto id : ids) {
             if (demanded.contains(id)) continue;
-            if (auto it = entries.find(id); it != entries.end()) {
+            if (auto it = entries.find(id); it != entries.end())
                 it->demand = ++serial;
-                if (it->state == QStringLiteral("Reading")) {
-                    it->state = it->ready ? QStringLiteral("Stale") : QStringLiteral("Queued");
-                    it->attempted = now() - refreshMs;
-                }
-            }
         }
+        // A Field in view with no value yet is read soon, not an interval later.
+        for (auto id : ids)
+            if (const auto it = entries.constFind(id); it == entries.cend() || !it->ready)
+                readSoon = true;
         demanded = std::move(ids);
     }
     Entry* ensure(quint32 id, int reserve = 0) {
@@ -100,15 +122,148 @@ struct EndpointPreviews::Impl {
         }
         return &found.value();
     }
+    // Values changed under the cache (a write, a new session): the cycle in
+    // hand is dropped, and the next comes at its interval, so a run of writes
+    // does not turn into a run of reads.
     void invalidate() {
         ++epoch;
+        cycle.reset();
+        landed = now();
         invalidatedNs = WatchTimestamp::now().monotonicNs;
         for (auto& entry : entries) {
             entry.bytes.clear(); entry.ready = false; entry.received = -1;
             entry.state = QStringLiteral("Not read"); entry.reason.clear();
-            entry.attempted = now() - refreshMs;
         }
-        nextRead = std::max(nextRead, now());
+    }
+    // The Fields in view to read this cycle: readable, not in the Watchlist
+    // (it supplies them), small enough for a preview, at most fieldLimit.
+    std::vector<quint32> cycleIds() {
+        std::vector<quint32> ids;
+        const auto schema = this->schema();
+        for (auto id : demanded) {
+            if (int(ids.size()) >= fieldLimit) break;
+            if (source.watched && source.watched(id)) continue;
+            const auto* field = fieldById(id);
+            const auto* type = field ? schema.type(field->typeId) : nullptr;
+            if (!type || type->wireBytes > fieldBytesLimit) continue;
+            ids.push_back(id);
+        }
+        return ids;
+    }
+    void startCycle() {
+        auto ids = cycleIds();
+        readSoon = false;
+        if (ids.empty()) {
+            landed = now(); landedOnce = true;
+            return;
+        }
+        const auto schema = this->schema();
+        const auto bytesOf = [this, schema](quint32 id) -> std::optional<unsigned> {
+            const auto* field = fieldById(id);
+            const auto* type = field ? schema.type(field->typeId) : nullptr;
+            if (!type) return std::nullopt;
+            return type->wireBytes;
+        };
+        read_portions::Source can;
+        can.wholeReads = true;
+        can.readMany = bool(source.readMany);
+        can.readField = bool(source.read);
+        can.readBatch = bool(source.readBatch);
+        can.budget = source.readManyBudget;
+        can.batchBudget = source.batchBudget;
+        can.fieldBytes = [schema, this](quint32 id) -> std::optional<unsigned> {
+            const auto* field = fieldById(id);
+            const auto* type = field ? schema.type(field->typeId) : nullptr;
+            if (!type || (type->kind != TypeKind::Scalar && type->kind != TypeKind::Enum) || type->wireBytes > 8)
+                return std::nullopt;
+            return type->wireBytes;
+        };
+        can.valueBytes = bytesOf;
+        std::vector<WatchKey> keys;
+        for (auto id : ids) keys.push_back(watch_key::whole(id));
+        Cycle next;
+        next.portions = read_portions::plan(keys, can).portions;
+        next.epoch = epoch;
+        next.ids = std::move(ids);
+        for (auto id : next.ids)
+            if (auto* entry = ensure(id))
+                if (!entry->ready) entry->state = QStringLiteral("Reading");
+        cycle = std::move(next);
+    }
+    // The next portion, while the session is idle; false when nothing went out.
+    bool submitNext() {
+        while (cycle && cycle->cursor < int(cycle->portions.size())) {
+            if (source.busy && source.busy()) return false;
+            const auto& step = cycle->portions[std::size_t(cycle->cursor)];
+            Pending next;
+            next.epoch = epoch;
+            next.backing = source.backing;
+            client::Submission submitted{client::Status::InvalidArgument, {}};
+            const auto before = epoch;
+            switch (step.kind) {
+            case read_portions::Portion::Kind::Many:
+                next.ids = step.ids;
+                next.many = std::make_shared<std::optional<EndpointPreviewManyResult>>();
+                pending = next;
+                submitted = source.readMany(next.ids, next.many);
+                break;
+            case read_portions::Portion::Kind::Batch:
+                for (const auto& member : step.fields) next.ids.push_back(member.field);
+                next.many = std::make_shared<std::optional<EndpointPreviewManyResult>>();
+                pending = next;
+                submitted = source.readBatch(next.ids, next.many);
+                break;
+            case read_portions::Portion::Kind::Members:
+            case read_portions::Portion::Kind::Field:
+                next.ids = {step.field};
+                next.one = std::make_shared<std::optional<EndpointPreviewResult>>();
+                pending = next;
+                submitted = source.read(step.field, next.one);
+                break;
+            case read_portions::Portion::Kind::Fail:
+                ++cycle->cursor;
+                continue;
+            }
+            // read() may synchronously stage completion, retire, or delete q.
+            if (epoch != before || !q) return true;
+            if (submitted) return true;
+            pending.reset();
+            if (submitted.status == client::Status::Busy || submitted.status == client::Status::QueueFull)
+                return false; // the same portion on the next progress
+            for (auto id : next.ids)
+                cycle->results.insert(id, failed(submitted.status, tr("Not read: the request was refused.")));
+            ++cycle->cursor;
+        }
+        return false;
+    }
+    static QString tr(const char* text) { return EndpointPreviews::tr(text); }
+    // The cycle's values, all at once.
+    void land() {
+        const auto schema = this->schema();
+        for (auto id : cycle->ids) {
+            if (!demanded.contains(id)) continue;
+            auto result = cycle->results.value(id, failed(client::Status::NotAdmitted, tr("Not read this cycle.")));
+            auto* entry = ensure(id, int(result.bytes.size()));
+            if (!entry) {
+                if (auto found = entries.find(id); found != entries.end()) found->state = QStringLiteral("Preview limit");
+                continue;
+            }
+            entry->reason = result.reason;
+            const auto* field = fieldById(id);
+            const runtime::Input bytes{reinterpret_cast<const std::byte*>(result.bytes.constData()), std::size_t(result.bytes.size())};
+            if (result.status == client::Status::Ok && result.hasValue && field && result.bytes.size() <= fieldBytesLimit &&
+                runtime::DynamicValueView::create(schema, field->typeId, bytes)) {
+                entry->bytes = std::move(result.bytes); entry->ready = true;
+                entry->state = QStringLiteral("Current"); entry->received = now();
+            } else {
+                // The last value stays shown, stale; the reason says why.
+                entry->state = entry->ready ? QStringLiteral("Stale") : QStringLiteral("Unavailable");
+                if (result.status == client::Status::Ok && result.hasValue)
+                    entry->reason = tr("Invalid preview payload.");
+            }
+        }
+        cycle.reset();
+        landed = now(); landedOnce = true;
     }
 };
 
@@ -130,7 +285,7 @@ void EndpointPreviews::setSource(EndpointPreviewSource source) {
     p->invalidate();
     for (auto& lease : p->leases) QObject::disconnect(lease.destroyed);
     p->leases.clear(); p->demanded.clear(); p->entries.clear(); p->fields.clear();
-    p->source = std::move(source); p->turn = 0;
+    p->source = std::move(source); p->cycle.reset(); p->landedOnce = false; p->readSoon = true;
     // The schema outlives the loop: endpoints() refers into it.
     if (p->current()) {
         const auto schema = p->schema();
@@ -199,7 +354,7 @@ QVariantMap EndpointPreviews::info(quint32 id) const {
     }
     auto state = it->state;
     const qint64 age = it->received < 0 ? -1 : std::max(qint64{0}, p->now() - it->received);
-    if (state == QStringLiteral("Current") && age >= refreshMs) state = QStringLiteral("Stale");
+    if (state == QStringLiteral("Current") && age >= p->staleMs()) state = QStringLiteral("Stale");
     out[QStringLiteral("state")] = state;
     out[QStringLiteral("reason")] = it->reason;
     out[QStringLiteral("ageMs")] = age;
@@ -229,75 +384,61 @@ int EndpointPreviews::cachedFields() const { return int(d->entries.size()); }
 int EndpointPreviews::cachedBytes() const { return d->bytes(); }
 bool EndpointPreviews::pending() const { return d->pending.has_value(); }
 
+int EndpointPreviews::interval() const { return d->intervalMs; }
+void EndpointPreviews::setInterval(int ms) {
+    d->intervalMs = std::clamp(ms, int(intervalMinimumMs), int(intervalMaximumMs));
+}
+void EndpointPreviews::readNow() {
+    d->readSoon = true;
+    poll();
+}
 void EndpointPreviews::poll() {
     auto p = d;
     if (p->polling) return;
     p->polling = true;
     bool tell = false;
-    if (p->pending && *p->pending->done) {
+    // A reply in: its Fields' results join the cycle's.
+    if (p->pending && p->pending->ready()) {
         auto pending = std::move(*p->pending); p->pending.reset();
-        auto found = p->entries.find(pending.id);
-        if (pending.epoch == p->epoch && p->current() && p->demanded.contains(pending.id) &&
-            found != p->entries.end() && found->demand == pending.demand) {
-            auto result = std::move(**pending.done);
-            found->ready = false; found->bytes.clear(); found->reason = result.reason;
-            found->state = QStringLiteral("Unavailable");
-            if (result.status == client::Status::Ok && result.hasValue) {
-                const auto schema = p->schema();
-                const auto* field = p->fieldById(pending.id);
-                const runtime::Input bytes{reinterpret_cast<const std::byte*>(result.bytes.constData()), std::size_t(result.bytes.size())};
-                if (field && result.bytes.size() <= fieldBytesLimit &&
-                    runtime::DynamicValueView::create(schema, field->typeId, bytes)) {
-                    if (auto* entry = p->ensure(pending.id, int(result.bytes.size()))) {
-                        entry->bytes = std::move(result.bytes); entry->ready = true;
-                        entry->state = QStringLiteral("Current"); entry->received = p->now();
-                    } else {
-                        // ensure() may have erased entries: QHash moves those
-                        // after an erased one, so the entry is found again.
-                        found = p->entries.find(pending.id);
-                        if (found != p->entries.end()) found->state = QStringLiteral("Preview limit");
+        if (p->cycle && pending.epoch == p->epoch && p->cycle->epoch == p->epoch) {
+            if (pending.one) {
+                p->cycle->results.insert(pending.ids.front(), std::move(**pending.one));
+            } else {
+                auto result = std::move(**pending.many);
+                if (result.status == client::Status::Ok && result.items.size() == pending.ids.size()) {
+                    for (std::size_t i = 0; i < result.items.size(); ++i) {
+                        auto& [id, item] = result.items[i];
+                        p->cycle->results.insert(id == pending.ids[i] ? id : pending.ids[i],
+                                                 id == pending.ids[i] ? std::move(item)
+                                                                      : Impl::failed(client::Status::MalformedReply, tr("The reply named another Field.")));
                     }
-                } else found->reason = tr("Invalid preview payload.");
+                } else {
+                    for (auto id : pending.ids)
+                        p->cycle->results.insert(id, Impl::failed(result.status == client::Status::Ok ? client::Status::MalformedReply : result.status,
+                                                                 tr("Not read: the request failed.")));
+                }
             }
-            tell = true;
-        } else if (found != p->entries.end() && found->state == QStringLiteral("Reading")) {
-            found->state = found->ready ? QStringLiteral("Stale") : QStringLiteral("Not read");
-            found->attempted = p->now() - refreshMs;
-            tell = true;
+            ++p->cycle->cursor;
         }
     }
     const auto now = p->now();
-    if (p->current() && !p->pending && now >= p->nextRead && !p->demanded.isEmpty() &&
-        p->source.read && (!p->source.busy || !p->source.busy())) {
-        // Even an all-watched/limited demand set is scanned at most twice/s.
-        p->nextRead = now + spacingMs;
-        const auto ids = p->demanded;
-        for (int n = 0; n < ids.size(); ++n) {
-            const auto id = ids[(p->turn + n) % ids.size()];
-            if (p->source.watched && p->source.watched(id)) continue;
-            const auto schema = p->schema();
-            const auto* field = p->fieldById(id);
-            const auto* type = field ? schema.type(field->typeId) : nullptr;
-            if (!type || type->wireBytes > fieldBytesLimit) continue;
-            auto* entry = p->ensure(id, int(type->wireBytes));
-            if (!entry || now - entry->attempted < refreshMs) continue;
-            entry->attempted = now; entry->state = QStringLiteral("Reading");
-            auto done = std::make_shared<std::optional<EndpointPreviewResult>>();
-            p->pending = Impl::Pending{id, p->epoch, entry->demand, done, p->source.backing};
-            const auto epoch = p->epoch;
-            const auto submitted = p->source.read(id, done);
-            // read() may synchronously stage completion, retire, or delete q.
-            if (p->epoch != epoch || !p->q) break;
-            if (!submitted) {
-                p->pending.reset();
-                entry = p->ensure(id);
-                if (entry) {
-                    entry->state = entry->ready ? QStringLiteral("Stale") : QStringLiteral("Queued");
-                    entry->reason = tr("Waiting for the session queue.");
-                    entry->attempted = now - refreshMs;
-                }
-            }
-            p->turn = (p->turn + n + 1) % ids.size(); tell = true; break;
+    if (p->current() && !p->pending) {
+        if (p->cycle && p->cycle->epoch != p->epoch) p->cycle.reset();
+        if (p->cycle && p->cycle->cursor >= int(p->cycle->portions.size())) {
+            p->land();
+            tell = true;
+        }
+        const auto since = now - p->landed;
+        const bool due = !p->landedOnce || since >= p->intervalMs || (p->readSoon && since >= soonMs);
+        if (!p->cycle && !p->demanded.isEmpty() && due && (!p->source.busy || !p->source.busy()) && p->source.read) {
+            p->startCycle();
+            tell = true;
+        }
+        if (p->cycle && p->submitNext()) tell = true;
+        // A cycle whose portions all failed at submission lands at once.
+        if (p->cycle && !p->pending && p->cycle->cursor >= int(p->cycle->portions.size())) {
+            p->land();
+            tell = true;
         }
     }
     if (p->current() && !p->demanded.isEmpty() && now / 1000 != p->ageTick) {
@@ -326,7 +467,7 @@ void EndpointPreviews::ingest(const WatchFrame& frame) {
         if (!field || field->typeId != row.value.type.typeId) continue;
         if (auto* entry = p->ensure(row.id, row.value.size)) {
             entry->bytes.clear(); entry->ready = false; entry->reason.clear();
-            entry->state = QStringLiteral("Unavailable"); entry->attempted = p->now();
+            entry->state = QStringLiteral("Unavailable");
             const runtime::Input bytes{row.value.bytes.data(), row.value.size};
             if (row.itemStatus == 0 && row.valueStatus == 0 && row.value.size &&
                 row.value.type.valid() && row.value.size == row.value.type.width &&

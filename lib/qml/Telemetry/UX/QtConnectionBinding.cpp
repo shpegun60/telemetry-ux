@@ -677,6 +677,73 @@ public:
 				*done = std::move(out);
 			});
 		};
+		// Several Fields in one request (PV-2): scalars by ReadMany, whole
+		// Fields by a Batch of FieldReads, each with the device's budget.
+		const auto copied = [](const runtime::DynamicValueView& value, EndpointPreviewResult& out) {
+			const auto bytes = value.bytes();
+			out.hasValue = bytes && bytes.value.size() <= EndpointPreviews::fieldBytesLimit;
+			if (out.hasValue)
+				out.bytes = QByteArray(reinterpret_cast<const char*>(bytes.value.data()), qsizetype(bytes.value.size()));
+		};
+		source.readManyBudget = [target, valid]() -> std::optional<read_portions::Budget> {
+			const auto capability = target && valid() ? target->readManyCapability() : std::nullopt;
+			if (!capability) return std::nullopt;
+			return read_portions::Budget{capability->itemLimit, capability->requestLimit, capability->replyLimit};
+		};
+		source.batchBudget = [target, valid]() -> std::optional<read_portions::Budget> {
+			const auto capability = target && valid() ? target->batchCapability() : std::nullopt;
+			if (!capability) return std::nullopt;
+			return read_portions::Budget{capability->itemLimit, capability->requestLimit, capability->replyLimit};
+		};
+		source.readMany = [target, valid, copied](std::span<const std::uint32_t> ids,
+		                                          EndpointPreviewSource::ManyCompletion done) -> client::Submission {
+			if (!target || !valid()) return {client::Status::NotAdmitted, {}};
+			return target->readMany(ids, [done = std::move(done), copied](const integration::read_many::ReadManyResult& result) noexcept {
+				EndpointPreviewManyResult out;
+				out.status = result.operation.status;
+				if (out.status == client::Status::Ok && !result.operation.succeeded())
+					out.status = client::Status::CodecError;
+				for (int i = 0; out.status == client::Status::Ok && i < result.count; ++i) {
+					const auto& item = result.items[std::size_t(i)];
+					EndpointPreviewResult one;
+					one.status = client::Status::Ok;
+					if (item.status == integration::read_many::wire::ItemStatus::Ok && item.hasValue())
+						copied(item.value, one);
+					if (!one.hasValue)
+						one.reason = QStringLiteral("Field unavailable (item %1, value %2).")
+						                 .arg(int(item.status)).arg(int(item.valueStatus));
+					out.items.emplace_back(item.id, std::move(one));
+				}
+				*done = std::move(out);
+			});
+		};
+		source.readBatch = [target, valid, copied](std::span<const std::uint32_t> ids,
+		                                           EndpointPreviewSource::ManyCompletion done) -> client::Submission {
+			if (!target || !valid()) return {client::Status::NotAdmitted, {}};
+			if (ids.empty() || ids.size() > 32) return {client::Status::InvalidArgument, {}};
+			std::array<integration::qt::ConnectionSession::BatchRequest, 32> requests{};
+			for (std::size_t i = 0; i < ids.size(); ++i)
+				requests[i] = {client::Operation::FieldRead, ids[i], {}};
+			return target->batch(std::span{requests}.first(ids.size()),
+			                     [done = std::move(done), copied](const integration::batch::BatchResult& result) noexcept {
+				EndpointPreviewManyResult out;
+				out.status = result.operation.status;
+				if (out.status == client::Status::Ok && !result.operation.succeeded())
+					out.status = client::Status::CodecError;
+				for (std::size_t i = 0; out.status == client::Status::Ok && i < result.count; ++i) {
+					const auto& item = result.items[i];
+					EndpointPreviewResult one;
+					one.status = item.operation.status;
+					if (item.hasValue())
+						copied(item.value, one);
+					if (!one.hasValue)
+						one.reason = QStringLiteral("Field unavailable (dispatch %1, endpoint %2).")
+						                 .arg(item.operation.dispatch).arg(item.operation.endpointStatus);
+					out.items.emplace_back(item.id, std::move(one));
+				}
+				*done = std::move(out);
+			});
+		};
 		const QPointer<ConnectionViews> sourceGuard(this);
 		previews.setSource(std::move(source));
 		if (!sourceGuard || !current) return;

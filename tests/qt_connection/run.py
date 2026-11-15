@@ -178,12 +178,13 @@ def main():
         preview_executable = build / ('telemetry_endpoint_previews_check.exe' if os.name == 'nt' else 'telemetry_endpoint_previews_check')
         preview_log = run('endpoint-preview-runtime', [preview_executable], env=headless_environment)
         preview_checks = re.search(r'Endpoint preview checks=(\d+) warnings=0', preview_log)
-        if not preview_checks or int(preview_checks[1]) < 1020:
+        # The snapshot cycle's checks (PV-2); the old per-Field schedule's loops counted more.
+        if not preview_checks or int(preview_checks[1]) < 590:
             raise RuntimeError('Bounded endpoint previews did not reach their warning-free assertion floor')
         report['endpoint_previews'] = dict(checks=int(preview_checks[1]), warnings=0,
             executable_sha256=digest(preview_executable), execution_source='controlled',
             cache_fields=64, cache_bytes=256 * 1024, field_bytes=8192,
-            refresh_ms=5000, minimum_spacing_ms=500)
+            interval_ms=2000, stale_floor_ms=5000, soon_ms=500)
         preview_model_executable = build / ('telemetry_endpoint_preview_models_check.exe' if os.name == 'nt' else 'telemetry_endpoint_preview_models_check')
         preview_model_log = run('endpoint-preview-model-runtime', [preview_model_executable], env=headless_environment)
         preview_model_checks = re.search(r'Endpoint preview model checks=(\d+) warnings=0', preview_model_log)

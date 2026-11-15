@@ -537,7 +537,7 @@ void leasesWithoutQmlObservers()
 		return telemetry::client::Submission{telemetry::client::Status::Ok, {}};
 	};
 	// Replace only the test seam, retaining actual parsed Session storage.
-	// Invalidation refreshes TTL but preserves the global spacing budget.
+	// Invalidation drops the cycle in hand; the next comes at its interval.
 	cache->setSource(std::move(source));
 	const auto issue = [&](int count) {
 		CHECK(await([&] { cache->poll(); return reads.size() == count && cache->pending(); }));
@@ -549,7 +549,7 @@ void leasesWithoutQmlObservers()
 		completion.reset(); cache->poll(); CHECK(!cache->pending());
 	};
 	const auto quiet = [&](int count) {
-		settle(ux::EndpointPreviews::spacingMs + 30); cache->poll();
+		settle(ux::EndpointPreviews::soonMs + 30); cache->poll();
 		CHECK(reads.size() == count && !cache->pending());
 	};
 	QObject firstView, secondView;

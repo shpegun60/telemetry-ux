@@ -148,6 +148,23 @@ Plan plan(std::span<const WatchKey> keys, const Source& source)
 			limits = source.budget ? source.budget() : std::nullopt;
 			asked = true;
 		}
+		if (source.wholeReads) {
+			const auto scalar = source.fieldBytes ? source.fieldBytes(field) : std::nullopt;
+			const bool many = limits && source.readMany && scalar && *scalar > 0 && *scalar <= 8 && room(0) &&
+			                  2u + 8u + *scalar <= limits->replyBytes;
+			if (!many) {
+				if (!source.readField && !source.readBatch) {
+					failure = Failure::NoFieldRead;
+					break;
+				}
+				Portion whole;
+				whole.kind = Portion::Kind::Members;
+				whole.field = field;
+				out.of.insert(field, int(portions.size()));
+				portions.push_back(std::move(whole));
+				continue;
+			}
+		}
 		if (!limits || !source.readMany) {
 			failure = Failure::NoReadMany;
 			break;
