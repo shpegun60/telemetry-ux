@@ -43,6 +43,10 @@ TreeViewDelegate {
     required property string accessMark
     required property string accessWords
     required property string statError
+    // The project's copy saved differently from the device's bytes as read:
+    // how many bytes, and when those were read (FL-1e).
+    required property real copyDiffers
+    required property var copyReadAt
 
     // The panel's column widths, so every row and the header line up.
     property real sizeWidth: 72
@@ -65,6 +69,19 @@ TreeViewDelegate {
                                      : programFile ? Theme.fileProgram
                                      : strong ? Theme.selectedForeground : Theme.textSecondary
     readonly property string unreadableText: qsTr("Can't be read from the device, so it can't be downloaded")
+    readonly property bool copyDiffersShown: !isFolder && copyDiffers > 0
+    // "12:04", with the date when not today.
+    function timeText(when) {
+        if (!when || !(when instanceof Date) || isNaN(when.getTime()))
+            return ""
+        return when.toDateString() === new Date().toDateString()
+               ? when.toLocaleTimeString(Qt.locale(), Locale.ShortFormat)
+               : when.toLocaleString(Qt.locale(), Locale.ShortFormat)
+    }
+    readonly property string copyTip: !copyDiffersShown ? ""
+        : copyDiffers === 1
+          ? qsTr("The project's copy differs from this file as read at %1: 1 byte. Open it to write or restore.").arg(timeText(copyReadAt))
+          : qsTr("The project's copy differs from this file as read at %1: %L2 bytes. Open it to write or restore.").arg(timeText(copyReadAt)).arg(copyDiffers)
     readonly property int unreadableInside: fileCount - readableInside
     // "3 of 6 files selected", and why a folder's click left some out.
     readonly property string insideText: (unreadableInside > 0
@@ -130,10 +147,12 @@ TreeViewDelegate {
 
     // The device's name goes in last, under the highest number, so nothing in
     // it is ever read as a placeholder.
-    Accessible.name: isFolder ? qsTr("%2, folder, %1").arg(spokenSize).arg(name)
+    Accessible.name: (isFolder ? qsTr("%2, folder, %1").arg(spokenSize).arg(name)
                      : programFile ? qsTr("%4, %1, used by the program, %2, %3").arg(kindText).arg(spokenSize).arg(accessWords).arg(name)
-                     : qsTr("%4, %1, %2, %3").arg(kindText).arg(spokenSize).arg(accessWords).arg(name)
-    Accessible.description: unreadable ? unreadableText : isFolder && selectedInside > 0 ? insideText : ""
+                     : qsTr("%4, %1, %2, %3").arg(kindText).arg(spokenSize).arg(accessWords).arg(name))
+                     + (copyDiffersShown ? qsTr(", the project's copy differs") : "")
+    Accessible.description: unreadable ? unreadableText : isFolder && selectedInside > 0 ? insideText
+                          : copyDiffersShown ? copyTip : ""
     Accessible.selectable: !isFolder
     Accessible.selected: highlighted
 
@@ -159,11 +178,31 @@ TreeViewDelegate {
                 Accessible.ignored: true
             }
             Label {
+                id: nameLabel
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
                 elide: Text.ElideMiddle
                 text: fileRow.name
                 color: fileRow.textColor
+                // Room for the mark, which stands right after the name.
+                rightPadding: copyMark.visible ? copyMark.implicitWidth + Type.tight : 0
+                // The project's copy is saved differently from this file as read.
+                Label {
+                    id: copyMark
+                    objectName: "deviceFileCopyDiffers"
+                    visible: fileRow.copyDiffersShown
+                    x: nameLabel.leftPadding + Type.tight
+                       + Math.min(nameLabel.implicitWidth - nameLabel.leftPadding - nameLabel.rightPadding,
+                                  nameLabel.width - nameLabel.leftPadding - nameLabel.rightPadding)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "≠"
+                    color: fileRow.strong ? Theme.selectedForeground : Theme.info
+                    HoverHandler { id: copyHover }
+                    ToolTip.visible: copyHover.hovered
+                    ToolTip.delay: 300
+                    ToolTip.text: fileRow.copyTip
+                    Accessible.ignored: true
+                }
             }
         }
         // A folder holding selected files: how many, in a pill in the

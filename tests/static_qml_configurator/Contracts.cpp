@@ -258,6 +258,8 @@ static void actions()
 	}
 	Api api;
 	StaticConfiguratorProvider p(binding(api, 2));
+	UndoHistory history;
+	p.setHistory(&history);
 	p.setAllowMutations(true);
 	p.selectEndpoint(endpoint(p));
 	CHECK(!p.editing());
@@ -265,6 +267,9 @@ static void actions()
 	p.cancelEdit();
 	CHECK(p.canExecute());
 	p.executeCommand();
+	// Never a step (UR-1): its words wait for the first Ctrl+Z.
+	CHECK(history.count() == 0 && history.irreversibleNote() ==
+	      QStringLiteral("The Command %1 was sent; Undo does not take it back.").arg(p.selection()));
 	api.finish(false, "OutcomeUnknown");
 	CHECK(p.commandOutcome().contains("OutcomeUnknown"));
 	CHECK(!p.canExecute());
@@ -320,8 +325,13 @@ static void draftAndReadback()
 	CHECK(model->data(old, role(model, "editorText")).toString() == "bad");
 	CHECK(p.setScalarText(old, "18"));
 	CHECK(p.canApply());
+	UndoHistory history;
+	p.setHistory(&history);
 	p.apply();
 	CHECK(p.busy());
+	// Never a step (UR-1): its words wait for the first Ctrl+Z.
+	CHECK(history.count() == 0 && history.irreversibleNote() ==
+	      QStringLiteral("The write to %1 is not undone; apply the old value to go back.").arg(p.selection()));
 	CHECK(api.argument.toUInt() == 18);
 	CHECK(api.original == "seed17");
 	api.finish(false, "QueueFull");

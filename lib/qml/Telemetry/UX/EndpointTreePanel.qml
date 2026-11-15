@@ -50,16 +50,21 @@ Pane {
     // Never retain them across structural changes to the source model.
     property var watchMarks: []
     property int watchMarkGeneration: 0
-    property string watchMarkStatus: ""
+    // What the status line says: its UndoNotice's message.
+    readonly property alias watchMarkStatus: watchNotice.message
     property bool enterPending: false
     readonly property int groupWalkLimit: 4096
-    readonly property bool bulkWatchAvailable: provider &&
+    // Whether the tree offers watching at all: its boxes, the Add bar and the
+    // menu's Watch. False for a second device's tree beside the first (a
+    // Compare dock), whose Watchlist is not the one on screen.
+    property bool watchBoxes: true
+    readonly property bool bulkWatchAvailable: watchBoxes && provider &&
         typeof provider.addWatchMany === "function" &&
         typeof provider.watchCandidate === "function"
     // A provider with watch boxes (watchState, setWatchMany): a box means
     // watched, at once, on Fields and on groups alike. Without them the boxes
     // mark Fields for "Add N", as before.
-    readonly property bool watchApi: provider &&
+    readonly property bool watchApi: watchBoxes && provider &&
         typeof provider.watchState === "function" &&
         typeof provider.setWatchMany === "function"
     // Moves whenever a box may show something else; the rows ask again then.
@@ -68,16 +73,9 @@ Pane {
     // the Dynamic one takes them between two reads.
     readonly property bool watchLocked: provider && provider.watchActive === true &&
                                         provider.watchChangesWhilePolling !== true
-    // The revision the status line spoke at: another change clears it.
-    property int statusRevision: -1
-    // The provider's history (UR-1), and the step the status line spoke of:
-    // its Undo shows while that step is the one Undo would take. Until UX-B
-    // gives the window one router, this link calls the history itself.
+    // The provider's history (UR-1): the status line offers the Undo of the
+    // step it speaks of while that step is the one Undo would take.
     readonly property var history: provider && provider.history ? provider.history : null
-    property int statusSerial: 0
-    // The status line is short; this is the whole sentence, for its tooltip
-    // and for a screen reader.
-    property string watchStatusFull: ""
     readonly property string pollingShort: qsTr("Stop polling to change the Watchlist.")
     readonly property string pollingFull: qsTr("Stop polling to change the Watchlist.")
     // Off until the user turns it on: a preview reads the device in the
@@ -363,50 +361,19 @@ Pane {
                     .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), serial)
         return result.changed > 0
     }
-    // The step the status line spoke of can be taken back from here.
-    readonly property bool canUndoStatus: statusSerial > 0 && history !== null && history.canUndo
-                                          && history.undoSerial === statusSerial
-    function undoStatusStep() {
-        if (!canUndoStatus)
-            return false
-        const text = history.undoText
-        let said = ""
-        const heard = (serial, step, undone, note, outcome) => { said = history.sentence(step, undone, note, outcome) }
-        history.done.connect(heard)
-        const done = history.undo()
-        history.done.disconnect(heard)
-        if (said.length === 0)
-            said = qsTr("Undone: %1").arg(text)
-        say(said, said, 0)
-        return done
-    }
     // Says what the last action did, at the revision it left: a short line,
-    // and the whole sentence for its tooltip; serial is the step it recorded
-    // (0: none), which the line offers to undo.
+    // and the whole sentence for its tooltip and a screen reader (a status
+    // line is not read out by itself; the sentence is); serial is the step it
+    // recorded (0: none), which the line offers to undo. Another change of the
+    // Watchlist or the tree clears it.
     function say(text, full, serial) {
-        watchMarkStatus = text
-        watchStatusFull = full
-        statusSerial = typeof serial === "number" ? serial : 0
-        statusRevision = watchRevision
-        // A status line is not read out by itself; the sentence is.
-        if (full.length > 0)
-            Accessible.announce(full)
-    }
-    onWatchRevisionChanged: {
-        if (statusRevision >= 0 && watchRevision !== statusRevision) {
-            watchMarkStatus = ""
-            watchStatusFull = ""
-            statusSerial = 0
-            statusRevision = -1
-        }
+        watchNotice.say(text, serial, full)
     }
 
     function clearWatchMarks() {
         ++watchMarkGeneration
         watchMarks = []
-        watchMarkStatus = ""
-        watchStatusFull = ""
-        statusSerial = 0
+        watchNotice.clear()
         // The open menu holds a plain index too: it never outlives a change.
         if (endpointMenu.visible)
             endpointMenu.close()
@@ -434,7 +401,7 @@ Pane {
         else marks.splice(position, 1)
         ++watchMarkGeneration
         watchMarks = marks
-        watchMarkStatus = ""
+        watchNotice.clear()
     }
     function addMarkedWatches() {
         if (!bulkWatchAvailable || watchMarks.length === 0 || watchLocked) return
@@ -445,13 +412,13 @@ Pane {
         if (generation !== watchMarkGeneration || provider !== originalProvider || searchSource !== originalSource)
             return
         if (!result || result.status !== "ok") {
-            watchMarkStatus = "Could not add fields: " + (result && result.status ? result.status : "invalid")
+            say("Could not add fields: " + (result && result.status ? result.status : "invalid"), "", 0)
             return
         }
         const summary = "Added " + result.added + "; already watched " + result.duplicate +
                         "; unsupported " + result.unsupported + "; capacity " + result.capacity
         clearWatchMarks()
-        watchMarkStatus = summary
+        say(summary, "", 0)
     }
 
     // The name of one source index, read through its named role like search.
@@ -503,11 +470,11 @@ Pane {
         if (!bulkWatchAvailable)
             return false
         if (watchLocked) {
-            watchMarkStatus = "Stop polling to change the Watchlist."
+            say("Stop polling to change the Watchlist.", "", 0)
             return false
         }
         if (indexes.length === 0) {
-            watchMarkStatus = "Nothing in " + label + " can be watched."
+            say("Nothing in " + label + " can be watched.", "", 0)
             return false
         }
         const originalProvider = provider
@@ -515,18 +482,18 @@ Pane {
         if (provider !== originalProvider)
             return false
         if (!result || result.status !== "ok") {
-            watchMarkStatus = "Could not watch " + label + ": " + (result && result.status ? result.status : "invalid")
+            say("Could not watch " + label + ": " + (result && result.status ? result.status : "invalid"), "", 0)
             return false
         }
         if (!group)
-            watchMarkStatus = result.added === 1 ? "Watching " + label + "." :
-                              result.duplicate === 1 ? label + " is already watched." :
-                              result.capacity === 1 ? "The Watchlist is full; " + label + " was not added." :
-                              label + " cannot be watched."
+            say(result.added === 1 ? "Watching " + label + "." :
+                result.duplicate === 1 ? label + " is already watched." :
+                result.capacity === 1 ? "The Watchlist is full; " + label + " was not added." :
+                label + " cannot be watched.", "", 0)
         else
-            watchMarkStatus = "Watching " + result.added + " from " + label + "; already watched " + result.duplicate +
-                              "; unsupported " + result.unsupported + "; capacity " + result.capacity +
-                              (limited ? "; stopped after " + groupWalkLimit + " rows" : "")
+            say("Watching " + result.added + " from " + label + "; already watched " + result.duplicate +
+                "; unsupported " + result.unsupported + "; capacity " + result.capacity +
+                (limited ? "; stopped after " + groupWalkLimit + " rows" : ""), "", 0)
         return result.added > 0
     }
     function watchIndex(index) {
@@ -562,7 +529,7 @@ Pane {
         clipboardHelper.selectAll()
         clipboardHelper.copy()
         clipboardHelper.text = ""
-        watchMarkStatus = "Copied " + path + "."
+        say("Copied " + path + ".", "", 0)
         return true
     }
     function isGroup(index) {
@@ -1320,62 +1287,29 @@ Pane {
         }
         // What the last watch action did, on one line kept at the bottom: always
         // reserved, so nothing moves when it speaks; blank when idle. The whole
-        // of a cut line on hover.
+        // of a cut line on hover. Undo follows the words it undoes: "Added 4 ·
+        // Undo". While the Watchlist polls, why the boxes are off stands in
+        // over the last message; that comes back when polling stops.
         // A fixed height: the tree above takes every other pixel.
-        // Undo follows the words it undoes: "Added 4 · Undo".
-        RowLayout {
+        Item {
             id: statusRow
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: Math.max(statusMetrics.height + 4, 24)
             Layout.maximumHeight: Layout.preferredHeight
-            spacing: Type.spacing
-            Label {
-                id: watchStatus
+            FontMetrics { id: statusMetrics; font.pointSize: Type.caption }
+            UndoNotice {
+                id: watchNotice
                 objectName: "endpointWatchSelectionStatus"
-                // As wide as its words, and cut only when the line is too narrow.
-                Layout.maximumWidth: Math.max(0, statusRow.width - (undoLink.visible
-                    ? undoLink.implicitWidth + statusDot.implicitWidth + 2 * statusRow.spacing : 0))
-                Layout.alignment: Qt.AlignVCenter
-                verticalAlignment: Text.AlignVCenter
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                font.pointSize: Type.caption
+                anchors.fill: parent
+                // Reserved, blank when idle.
+                visible: true
+                history: panel.history
+                revision: panel.watchApi ? panel.watchRevision : -1
                 color: panel.palette.text
-                // While the Watchlist polls, why the boxes are off, over the
-                // last message; that comes back when polling stops.
-                readonly property bool polling: panel.watchApi && panel.watchLocked
-                readonly property string full: polling ? panel.pollingFull
-                                             : panel.watchStatusFull.length > 0 ? panel.watchStatusFull
-                                             : panel.watchMarkStatus
-                text: polling ? panel.pollingShort : panel.watchMarkStatus
-                Accessible.description: full
-                HoverHandler { id: watchStatusHover }
-                PlainToolTip {
-                    visible: watchStatusHover.hovered && watchStatus.full.length > 0 &&
-                             (watchStatus.truncated || watchStatus.full !== watchStatus.text)
-                    text: watchStatus.full
-                }
-                FontMetrics { id: statusMetrics; font: watchStatus.font }
+                standIn: panel.watchApi && panel.watchLocked ? panel.pollingShort : ""
+                standInDetail: panel.pollingFull
             }
-            Label {
-                id: statusDot
-                visible: undoLink.visible
-                text: "·"
-                color: Theme.textMuted
-                font.pointSize: Type.caption
-                Accessible.ignored: true
-            }
-            LinkButton {
-                id: undoLink
-                objectName: "endpointWatchUndo"
-                visible: panel.watchApi && panel.canUndoStatus
-                text: qsTr("Undo")
-                Accessible.name: panel.history ? qsTr("Undo: %1").arg(panel.history.undoText) : text
-                font.pointSize: Type.caption
-                onClicked: panel.undoStatusStep()
-            }
-            Item { Layout.fillWidth: true }
         }
     }
     // The groups opened after a reset, on the next turn of the event loop. A

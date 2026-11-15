@@ -111,6 +111,21 @@ over localhost TCP to the SDK's native server. No board.
     (`DeviceFileTransfers::copyState`), for the question before a read replaces
     it: the same, a byte saved differently, a length changed, a record of
     another path, no record, no copy.
+  - A copy's state-line facts (FL-1e, `DeviceBytes::compare`): the same
+    answer asked again, compared anew once the copy or a record changes, the
+    device's path its record names (`devicePathOf`); on `FileContent` when the
+    device's bytes were read, when the copy was saved, how many saved bytes
+    differ (an edit not saved left out), `OpenFiles::fileSaved`, a device's
+    file known changed until it is read again, the descriptor fingerprints
+    of the header, the device's bytes and the connected device, told on
+    `contextChanged`.
+  - The device's firmware changed (FL-1f), over the session: the device's
+    folder found without being made; the project's copy of the descriptor of
+    another fingerprint kept as a device version with its record, once for
+    each fingerprint, the copy left as it is, nothing for the connected
+    device's own or a file that is not a descriptor; a downloaded descriptor
+    checked against the one read at connect; the Device tree's `copyDiffers`
+    for a copy saved differently, told on `refreshCopies()`.
   - A file the host keeps read-only (`OpenFiles::setReadOnlyLookup`,
     `FileContent::readOnlyReason`): its reason, editing and overwriting
     refused; a broken copy put back to the device's bytes by Restore and saved,
@@ -141,7 +156,10 @@ over localhost TCP to the SDK's native server. No board.
     a disconnect and a device with another descriptor; the steps' words with
     the file's name ("Overwrite 2 bytes in values.bin"); typing merged where
     it stopped within two seconds, apart after a pause, elsewhere and after a
-    save; no step left after Discard or Reload.
+    save; no step left after Discard or Reload. The hex grid answers no Ctrl+Z
+    or Ctrl+Y of its own - the window's `UndoRouter` does (UX-B) - and while
+    the host writes the copy to the device (`writing`) the steps wait, in
+    words.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
@@ -197,6 +215,20 @@ over localhost TCP to the SDK's native server. No board.
     and starts editing, pressed again it stops; Save waits for an edit;
   - Ctrl+S on the tree is Download even beside a window's own Ctrl+S (a host's
     Save), typed through the window as a key is;
+  - the viewer's state line (FL-1e): the same as the device's and when it was
+    read, "· not connected", saved in the project with a byte that differs (the
+    info colour; an edit not saved leaves it), the device's file changed (the
+    warning colour), written and read back the same or different, not known,
+    read-only with the host's words, none for a file from disk; the path and
+    the times on hover; a change announced to a screen reader, caught through
+    `QAccessible`'s update handler; the `⋯` menu's Read again from the device
+    and Save a copy as…;
+  - a descriptor that is not the connected device's (FL-1f): the banner with
+    both fingerprints' first digits and Read again from the device, gone once
+    the connected device's fingerprint is the file's;
+  - the Device tree's `≠` after a file whose copy in `copyFolder` is saved
+    differently from the device's bytes as read, its words on hover and in the
+    row's spoken name, gone once the copy is the device's again;
   - not one QML warning (only the offscreen platform's font notice is set aside).
 
 ```sh
