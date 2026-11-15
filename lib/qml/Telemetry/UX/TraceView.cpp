@@ -6,6 +6,9 @@
 #include <QtCore/QTime>
 #include <QtCore/QVector>
 #include <QtGui/QFontMetricsF>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
+#include <QtGui/QWheelEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtQuick/QQuickWindow>
@@ -71,6 +74,9 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 {
 	setAntialiasing(true);
 	setOpaquePainting(false);
+	setAcceptedMouseButtons(Qt::LeftButton);
+	setActiveFocusOnTab(true);
+	setCursor(Qt::CrossCursor);
 	// New readings mark the picture; it is drawn again at most every 50 ms,
 	// however fast they come.
 	frames_.setInterval(50);
@@ -115,11 +121,223 @@ void TraceView::setFollowing(bool following)
 	if (following == following_)
 		return;
 	// Unfollowing keeps the picture where it is now.
-	if (!following)
+	if (!following) {
+		heldAllNs_ = showAll_ ? spanNs() : 0;
 		frozenNs_ = rightNs();
+	} else {
+		heldAllNs_ = 0;
+	}
 	following_ = following;
 	Q_EMIT viewChanged();
 	update();
+}
+
+void TraceView::setShowAll(bool all)
+{
+	if (all == showAll_)
+		return;
+	showAll_ = all;
+	Q_EMIT viewChanged();
+	update();
+}
+
+int TraceView::preset() const
+{
+	if (showAll_)
+		return 0;
+	for (const int seconds : {10, 60, 600})
+		if (qFuzzyCompare(spanSeconds_, qreal(seconds)))
+			return seconds;
+	return -1;
+}
+
+void TraceView::choosePreset(int seconds)
+{
+	heldAllNs_ = 0;
+	if (seconds <= 0) {
+		showAll_ = true;
+	} else {
+		showAll_ = false;
+		spanSeconds_ = seconds;
+	}
+	following_ = true;
+	Q_EMIT viewChanged();
+	update();
+}
+
+std::pair<qint64, qint64> TraceView::kept() const
+{
+	qint64 oldest = 0, newest = 0;
+	if (!traces_)
+		return {0, 0};
+	for (const auto& path : traces_->plotted()) {
+		const auto* readings = traces_->readings(path);
+		if (!readings || readings->empty())
+			continue;
+		oldest = oldest ? std::min(oldest, readings->front().ns) : readings->front().ns;
+		newest = std::max(newest, readings->back().ns);
+	}
+	return {oldest, newest};
+}
+
+qint64 TraceView::spanNs() const
+{
+	if (showAll_ && !following_ && heldAllNs_)
+		return heldAllNs_;
+	if (showAll_) {
+		const auto [oldest, newest] = kept();
+		// All: everything kept, and a second at the least.
+		return std::max<qint64>(1'000'000'000, newest - oldest);
+	}
+	return qint64(spanSeconds_ * 1e9);
+}
+
+void TraceView::hold(qint64 right)
+{
+	if (following_ && showAll_)
+		heldAllNs_ = spanNs();
+	// The right edge never past the newest reading, and the left edge never
+	// before the oldest while more is kept than the span: there is nothing
+	// to see out there.
+	const auto [oldest, newest] = kept();
+	if (newest)
+		right = std::clamp(right, std::min(newest, oldest + spanNs()), newest);
+	frozenNs_ = right;
+	following_ = false;
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::zoom(qreal factor, qreal at)
+{
+	if (!(factor > 0))
+		return;
+	const auto span = spanNs();
+	const auto right = rightNs();
+	at = std::clamp<qreal>(at, 0, 1);
+	const auto pinned = right - span + qint64(double(span) * at);
+	const double next = std::clamp(double(span) * factor, 1e7, 86400e9);
+	// Out as far as what is kept, and no further: that is All.
+	const auto [oldest, newest] = kept();
+	if (newest && factor > 1 && next >= double(newest - oldest)) {
+		showAll_ = true;
+		heldAllNs_ = std::max<qint64>(1'000'000'000, newest - oldest);
+		frozenNs_ = newest;
+		following_ = false;
+		Q_EMIT viewChanged();
+		update();
+		return;
+	}
+	showAll_ = false;
+	heldAllNs_ = 0;
+	spanSeconds_ = next / 1e9;
+	// The time under the pointer stays under it.
+	hold(pinned + qint64((double(right - pinned)) * next / double(span)));
+}
+
+void TraceView::pan(qreal part)
+{
+	hold(rightNs() + qint64(double(spanNs()) * part));
+}
+
+void TraceView::toOldest()
+{
+	const auto [oldest, newest] = kept();
+	if (!newest)
+		return;
+	hold(oldest + spanNs());
+}
+
+void TraceView::mousePressEvent(QMouseEvent* event)
+{
+	forceActiveFocus(Qt::MouseFocusReason);
+	pressX_ = event->position().x();
+	pressRightNs_ = rightNs();
+	dragging_ = false;
+	event->accept();
+}
+
+void TraceView::mouseMoveEvent(QMouseEvent* event)
+{
+	const qreal moved = event->position().x() - pressX_;
+	// A drag of more than a few pixels pans; less is a click.
+	if (!dragging_ && std::abs(moved) < 4)
+		return;
+	if (!dragging_)
+		setCursor(Qt::ClosedHandCursor);
+	dragging_ = true;
+	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
+	hold(pressRightNs_ - qint64(double(spanNs()) * moved / widthPx));
+	event->accept();
+}
+
+void TraceView::mouseReleaseEvent(QMouseEvent* event)
+{
+	if (dragging_)
+		setCursor(Qt::CrossCursor);
+	dragging_ = false;
+	event->accept();
+}
+
+void TraceView::wheelEvent(QWheelEvent* event)
+{
+	const qreal steps = event->angleDelta().y() / 120.0;
+	if (steps == 0) {
+		event->ignore();
+		return;
+	}
+	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
+	zoom(std::pow(0.8, steps), (event->position().x() - plotArea_.left()) / widthPx);
+	event->accept();
+}
+
+void TraceView::keyPressEvent(QKeyEvent* event)
+{
+	switch (event->key()) {
+		case Qt::Key_Left:
+			pan(-0.1);
+			break;
+		case Qt::Key_Right:
+			pan(0.1);
+			break;
+		case Qt::Key_Plus:
+		case Qt::Key_Equal:
+			zoom(0.8);
+			break;
+		case Qt::Key_Minus:
+		case Qt::Key_Underscore:
+			zoom(1.25);
+			break;
+		case Qt::Key_Home:
+			toOldest();
+			break;
+		case Qt::Key_End:
+			follow();
+			break;
+		case Qt::Key_Space:
+		case Qt::Key_H:
+			if (following_)
+				hold(rightNs());
+			else
+				follow();
+			break;
+		case Qt::Key_1:
+			choosePreset(10);
+			break;
+		case Qt::Key_2:
+			choosePreset(60);
+			break;
+		case Qt::Key_3:
+			choosePreset(600);
+			break;
+		case Qt::Key_4:
+			choosePreset(0);
+			break;
+		default:
+			event->ignore();
+			return;
+	}
+	event->accept();
 }
 
 void TraceView::setColors(const QVariantList& colors)
@@ -168,7 +386,8 @@ qint64 TraceView::rightNs() const
 
 void TraceView::schedule()
 {
-	if (!frames_.isActive() && following_ && isVisible() && traces_ && !traces_->plotted().isEmpty())
+	// Held, the picture stays but how far behind it is still changes.
+	if (!frames_.isActive() && isVisible() && traces_ && !traces_->plotted().isEmpty())
 		frames_.start();
 }
 
@@ -183,7 +402,7 @@ void TraceView::paint(QPainter* painter)
 	const qreal pad = std::max<qreal>(4, std::round(metrics.height() * 0.3));
 	const qreal ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
 	const qint64 right = rightNs();
-	const auto span = qint64(spanSeconds_ * 1e9);
+	const auto span = spanNs();
 	const qint64 left = right - span;
 	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
 	// This PC's clock: the anchor's UTC plus the steady clock's difference,
@@ -428,10 +647,14 @@ void TraceView::paint(QPainter* painter)
 	drawnCurves_ = curves;
 	plotArea_ = area;
 	rightUtcMs_ = qreal(utcOf(right));
+	const auto newest = traces_ ? traces_->newestNs() : 0;
+	const qreal behind = !following_ && newest > right ? qreal(newest - right) / 1e9 : 0;
+	const bool behindChanged = !qFuzzyCompare(behind + 1, behindSeconds_ + 1);
+	behindSeconds_ = behind;
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
-	if (changed || following_)
+	if (changed || following_ || behindChanged)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
 }
 } // namespace telemetry::ux

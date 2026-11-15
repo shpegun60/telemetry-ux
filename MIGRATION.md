@@ -528,3 +528,16 @@ break every line (`WatchTraces::breakAll`). A text value is refused in words.
 The Watchlist row's menu gains a checkable **Plot**. `TrendPanel` and
 `TrendHistory` stay for now; the plan retires them when Trend draws with the
 same component.
+
+## Moving through the live Plot (LP-1b, November 2026)
+
+`TracePlot` gains the presets `10 s | 1 min | 10 min | All` (All spans every
+reading kept and grows while following), Zoom out and Zoom in, and a chip over
+the plot's corner while it is held: "17 s behind · Follow (End)". `TraceView`
+takes a drag (pan), the wheel (zoom about the pointer), Left/Right (pan a
+tenth), +/- (zoom), Home (the oldest reading kept), End (follow), Space/H (hold
+or follow) and 1-4 (the presets); panning, zooming and Home stop following,
+and the view stays between the oldest and the newest reading kept. New on
+`TraceView`: `showAll`, `preset` (10, 60, 600, 0 for All, -1 after a zoom),
+`behindSeconds`, `choosePreset()`, `zoom(factor, at)`, `pan(part)`,
+`toOldest()`, `follow()`.

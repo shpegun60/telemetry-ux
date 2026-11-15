@@ -3,10 +3,14 @@
 // Watchlist row's menu (Plot) and taken off by its chip's ×; its readings
 // stay in memory either way - the last ten minutes of every watched value.
 // Follow keeps the newest readings at the right edge; unticked, the picture
-// holds still while reading goes on. Presentation only: WatchTraces keeps the
-// readings and TraceView draws them. MIT.
+// holds still while reading goes on. 10 s, 1 min, 10 min or All choose the
+// span and follow again; a drag, the wheel, the arrows, + and - move it and
+// stop following, and the chip in the corner says how far behind it is and
+// follows again (End). Presentation only: WatchTraces keeps the readings and
+// TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Layouts
 
 FocusScope {
@@ -51,6 +55,24 @@ FocusScope {
 
     // A reading as the chip shows it: a whole number whole, else up to six
     // significant digits; nothing read yet, a dash.
+    // "12 s", "1:12", "1:02:03": how far behind the newest reading.
+    function behindText(seconds) {
+        const whole = Math.round(seconds)
+        if (whole < 60)
+            return qsTr("%1 s").arg(whole)
+        const h = Math.floor(whole / 3600), m = Math.floor(whole % 3600 / 60), sec = whole % 60
+        const two = n => String(n).padStart(2, "0")
+        return h > 0 ? "%1:%2:%3".arg(h).arg(two(m)).arg(two(sec)) : "%1:%2".arg(m).arg(two(sec))
+    }
+    // The same, in words for a screen reader.
+    function behindWords(seconds) {
+        const whole = Math.round(seconds)
+        const m = Math.floor(whole / 60), sec = whole % 60
+        if (m === 0)
+            return qsTr("%Ln seconds", "", sec)
+        return sec === 0 ? qsTr("%Ln minutes", "", m)
+                         : qsTr("%1 %2").arg(qsTr("%Ln minutes", "", m)).arg(qsTr("%Ln seconds", "", sec))
+    }
     function valueText(value) {
         if (value === undefined || value === null || isNaN(value))
             return "–"
@@ -82,11 +104,71 @@ FocusScope {
                 Accessible.name: qsTr("Follow the newest readings")
                 Accessible.description: qsTr("Keep the newest readings in view. Unticked, the picture holds still; reading goes on.")
             }
-            Label {
-                objectName: "plotSpan"
-                color: Theme.textSecondary
-                font.pointSize: Type.caption
-                text: qsTr("Last minute")
+            // 10 s | 1 min | 10 min | All, as the Watchlist's List | Tree:
+            // the chosen one filled, Left and Right move between them.
+            Row {
+                id: presets
+                objectName: "plotPresets"
+                Accessible.role: Accessible.Grouping
+                Accessible.name: qsTr("Time span")
+                Layout.preferredHeight: Type.controlHeight
+                spacing: 0
+                ButtonGroup { id: presetGroup }
+                Repeater {
+                    id: presetButtons
+                    model: [
+                        { seconds: 10, text: qsTr("10 s"), name: qsTr("Last 10 seconds") },
+                        { seconds: 60, text: qsTr("1 min"), name: qsTr("Last minute") },
+                        { seconds: 600, text: qsTr("10 min"), name: qsTr("Last 10 minutes") },
+                        { seconds: 0, text: qsTr("All"), name: qsTr("Everything kept") }
+                    ]
+                    delegate: Button {
+                        required property var modelData
+                        required property int index
+                        objectName: "plotPreset_" + modelData.seconds
+                        width: implicitContentWidth + leftPadding + rightPadding
+                        height: Type.controlHeight
+                        verticalPadding: 0
+                        font.pointSize: Type.caption
+                        text: modelData.text
+                        checkable: true
+                        checked: view.preset === modelData.seconds
+                        flat: !checked
+                        ButtonGroup.group: presetGroup
+                        focusPolicy: checked || activeFocus ? Qt.StrongFocus : Qt.ClickFocus
+                        Accessible.role: Accessible.RadioButton
+                        Accessible.name: modelData.name
+                        Accessible.description: qsTr("Key %1").arg(index + 1)
+                        onClicked: view.choosePreset(modelData.seconds)
+                        Keys.onLeftPressed: {
+                            const at = Math.max(0, index - 1)
+                            view.choosePreset(presetButtons.model[at].seconds)
+                            presetButtons.itemAt(at).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        Keys.onRightPressed: {
+                            const at = Math.min(presetButtons.count - 1, index + 1)
+                            view.choosePreset(presetButtons.model[at].seconds)
+                            presetButtons.itemAt(at).forceActiveFocus(Qt.TabFocusReason)
+                        }
+                        ToolTip.visible: hovered || visualFocus
+                        ToolTip.delay: 700
+                        ToolTip.text: qsTr("%1 (%2)").arg(modelData.name).arg(index + 1)
+                    }
+                }
+            }
+            IconToolButton {
+                objectName: "plotZoomOut"
+                iconName: "zoomOut"
+                text: qsTr("Zoom out")
+                shortcutText: qsTr("Minus")
+                onClicked: view.zoom(1.25)
+            }
+            IconToolButton {
+                objectName: "plotZoomIn"
+                iconName: "zoomIn"
+                text: qsTr("Zoom in")
+                shortcutText: qsTr("Plus")
+                onClicked: view.zoom(0.8)
             }
             Item { Layout.fillWidth: true }
         }
@@ -198,9 +280,72 @@ FocusScope {
                 font.pointSize: Type.caption
                 visible: plot.plotted.length > 0 && !plot.waiting
                 Accessible.role: Accessible.Graphic
-                Accessible.name: plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(view.following ? qsTr("following") : qsTr("held"))
-                                                           : qsTr("Plot of %1 values, %2").arg(plot.plotted.length)
-                                                                 .arg(view.following ? qsTr("following") : qsTr("held"))
+                Accessible.name: {
+                    const state = view.following ? qsTr("following")
+                                                  : qsTr("%1 behind").arg(plot.behindWords(view.behindSeconds))
+                    return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
+                                                     : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
+                }
+                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
+            }
+            // The keys are on the graph: the lists' focus frame round it.
+            Rectangle {
+                objectName: "plotFocus"
+                visible: view.visible && view.activeFocus
+                x: view.plotArea.x - 1
+                y: view.plotArea.y - 1
+                width: view.plotArea.width + 2
+                height: view.plotArea.height + 2
+                color: "transparent"
+                border.width: 2
+                border.color: Theme.focusRing
+                Accessible.ignored: true
+            }
+            // Held: how far behind the newest reading, and a way back to it.
+            Basic.Button {
+                id: behind
+                objectName: "plotBehind"
+                visible: view.visible && !view.following
+                x: view.plotArea.right - width - Type.padding
+                y: view.plotArea.top + Type.padding
+                height: Type.chipHeight
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                readonly property bool atNewest: view.behindSeconds < 0.5 || view.plotArea.width < 240
+                text: atNewest ? qsTr("Follow (End)")
+                               : qsTr("%1 behind · Follow (End)").arg(plot.behindText(view.behindSeconds))
+                Accessible.name: atNewest ? qsTr("Follow the newest readings")
+                                          : qsTr("%1 behind. Follow the newest readings").arg(plot.behindWords(view.behindSeconds))
+                Accessible.description: qsTr("End")
+                onClicked: view.follow()
+                // A chip over the plot, not a toolbar button: the time in the
+                // fixed face, the way back in the primary text colour.
+                contentItem: Row {
+                    spacing: 0
+                    Text {
+                        visible: !behind.atNewest
+                        text: plot.behindText(view.behindSeconds) + " " + qsTr("behind") + " · "
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: Theme.textSecondary
+                        Accessible.ignored: true
+                    }
+                    Text {
+                        text: qsTr("Follow (End)")
+                        font.pointSize: Type.caption
+                        color: Theme.textPrimary
+                        Accessible.ignored: true
+                    }
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: behind.down ? Theme.statePressed : behind.hovered ? Theme.stateHover : Theme.surface
+                    border.width: behind.visualFocus ? 2 : 1
+                    border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
+                }
             }
             Label {
                 objectName: "plotTimeTitle"
