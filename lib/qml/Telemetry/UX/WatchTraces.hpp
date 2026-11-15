@@ -47,10 +47,11 @@ class WatchTraces final : public QObject {
 public:
 	static constexpr qint64 keptNs = 600'000'000'000; // ten minutes
 	static constexpr std::size_t keptReadings = 65'536;
-	// Every ring together: 4,194,304 readings, 64 MB. Past it the oldest go
-	// first - of values no longer watched, then of values not plotted, the
-	// plotted last.
-	static constexpr std::size_t keptTotal = 4'194'304;
+	// Every ring together: 16,777,216 readings, 256 MB (64 MB until WL-7:
+	// this runs on a PC, and 8192 values read once a second fill ten
+	// minutes with 4.9 million). Past it the oldest go first - of values no
+	// longer watched, then of values not plotted, the plotted last.
+	static constexpr std::size_t keptTotal = 16'777'216;
 	static constexpr int limit = 16;
 
 	explicit WatchTraces(QObject* parent = nullptr);
