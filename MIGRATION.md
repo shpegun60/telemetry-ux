@@ -568,3 +568,17 @@ false, an enum a band per state (`laneFillColor`) with its name where it fits
 only. `WatchTraces` gains `stateText(path, value)` ("true", "Idle", "Code 7")
 and `setStates(path, names)`; the provider fills the names from each enum row's
 editor choices. The chips say a state in words, with no difference.
+
+## Zooming the values on the live Plot (LP-1e, November 2026)
+
+The values axis is no longer fixed to the curves in view. `TraceView` has two
+modes for it, reported by `valueAuto`: Auto fits every number in view (only the
+focused curve while one is focused), and Manual starts as soon as the values are
+zoomed or panned by hand - Ctrl and the wheel, or the wheel over the value
+labels (`valuesArea`), a drag over the labels, Up/Down and Ctrl+Up/Down - and
+keeps its range through Follow, the presets and time zoom. A, a double-click on
+the labels or `autoValues()` returns to Auto. `focusedPath` (read-write) fits
+the values to one curve and draws it heavier; setting it returns to Auto. New
+invokables: `zoomValues(factor, at)` and `panValues(part)`. `TracePlot` shows
+an "Auto (A)" chip in Manual, a "Fitted to ..." chip while focused, and focuses
+a curve on a click on its chip's name.
