@@ -894,8 +894,9 @@ static void plotUndoKinds()
 		traces->setPoints(gain, 2);
 	});
 	add("plot.points", "show the points", [&] { traces->setShowPoints(true); });
+	add("plot.stack", "stack the numbers", [&] { traces->setStacked(true); });
 	const auto report = undo_kinds::run(QStringLiteral("dynamic_qml_configurator"), cases);
-	CHECK(report.cases == 7 && report.disconnects == 7 && report.descriptors == 7);
+	CHECK(report.cases == 8 && report.disconnects == 8 && report.descriptors == 8);
 
 	// The words, and a curve back in its place with its colour.
 	start();
@@ -923,10 +924,15 @@ static void plotUndoKinds()
 	CHECK(history.undoText() == QStringLiteral("Show measurement points"));
 	traces->setShowPoints(false);
 	CHECK(history.undoText() == QStringLiteral("Hide measurement points"));
-	// A project's Plot put back records nothing.
+	traces->setStacked(true);
+	CHECK(history.undoText() == QStringLiteral("Stack the numbers in lanes"));
+	traces->setStacked(false);
+	CHECK(history.undoText() == QStringLiteral("Put the numbers on one axis"));
+	// A project's Plot put back records nothing, its stacking included.
 	const auto steps = history.count();
-	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}, {QStringLiteral("showPoints"), true}}) &&
-	      history.count() == steps);
+	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}, {QStringLiteral("showPoints"), true},
+	                       {QStringLiteral("stacked"), true}}) &&
+	      history.count() == steps && traces->stacked() && traces->capture().value(QStringLiteral("stacked")).toBool());
 	// A curve taken off since: its plot's undo finds nothing and goes.
 	history.clear();
 	CHECK(traces->plot(gain).isEmpty());

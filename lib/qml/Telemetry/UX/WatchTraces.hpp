@@ -45,11 +45,14 @@ class WatchTraces final : public QObject {
 	Q_PROPERTY(quint64 revision READ revision NOTIFY appended)
 	// Measurement points on every curve whose own setting is "as the Plot".
 	Q_PROPERTY(bool showPoints READ showPoints WRITE setShowPoints NOTIFY appearanceChanged)
+	// Each number in a lane of its own, with its own values (analysis, L).
+	Q_PROPERTY(bool stacked READ stacked WRITE setStacked NOTIFY appearanceChanged)
 	// Bumped whenever a curve's colour, multiplier, offset or points change.
 	Q_PROPERTY(quint64 appearanceRevision READ appearanceRevision NOTIFY appearanceChanged)
 	// Where the Plot's changes go as steps (UR-1): curves plotted and taken
 	// off ("plot.curves", by path, with their place and colour), a curve's look
-	// ("plot.look", by path) and the Plot's points ("plot.points"). A
+	// ("plot.look", by path), the Plot's points ("plot.points") and its
+	// numbers stacked in lanes or not ("plot.stack"). A
 	// provider gives its traces its own history; null records nothing.
 	// restore() is never a step.
 	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
@@ -149,11 +152,15 @@ public:
 	bool showPoints() const noexcept { return showPoints_; }
 	// One step: "Show measurement points", "Hide measurement points".
 	void setShowPoints(bool show);
+	bool stacked() const noexcept { return stacked_; }
+	// One step: "Stack the numbers in lanes", "Put the numbers on one axis".
+	void setStacked(bool stacked);
 	quint64 appearanceRevision() const noexcept { return appearanceRevision_; }
 	UndoHistory* history() const { return history_; }
 	void setHistory(UndoHistory* history);
 	// What a project keeps of the Plot: the curves plotted, in order, and
-	// every curve's look, and the Plot's points; restore() plots them again,
+	// every curve's look, the Plot's points and its stacking; restore() plots
+	// them again,
 	// recording no step.
 	Q_INVOKABLE QVariantMap capture() const;
 	Q_INVOKABLE bool restore(const QVariantMap& state);
@@ -219,7 +226,7 @@ private:
 		bool plain() const { return color.isEmpty() && multiplier == 1 && offset == 0 && points == 0; }
 	};
 	QHash<QString, Appearance> appearance_;
-	bool showPoints_ = false;
+	bool showPoints_ = false, stacked_ = false;
 	quint64 appearanceRevision_ = 0;
 	QPointer<UndoHistory> history_;
 	UndoFunctions target_;
