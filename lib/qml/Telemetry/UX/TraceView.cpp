@@ -19,11 +19,12 @@ namespace {
 constexpr qint64 msNs = 1'000'000;
 constexpr qint64 dayMs = 86'400'000;
 // A pause in reading longer than this, and ten times the step before it,
-// breaks the line: time not read is not drawn as if it were.
+// breaks the line: time not read is not drawn as if it were. A stop and a
+// disconnect break it for certain (WatchTraces::breakAll); this catches what
+// they do not say.
 constexpr qint64 pauseNs = 2'000'000'000;
-// While a frame came this recently, the right edge is now; after it, the
-// right edge rests on the newest reading instead of sliding over empty time.
-constexpr qint64 liveNs = 10'000'000'000;
+// The value axis only spans this much, so far-apart doubles never overflow.
+constexpr double valueLimit = 1e300;
 
 // Time-of-day tick steps, ms: the smallest whose labels stand far enough
 // apart is used.
@@ -70,10 +71,12 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 {
 	setAntialiasing(true);
 	setOpaquePainting(false);
+	// New readings mark the picture; it is drawn again at most every 50 ms,
+	// however fast they come.
 	frames_.setInterval(50);
+	frames_.setSingleShot(true);
 	connect(&frames_, &QTimer::timeout, this, &TraceView::tick);
-	connect(this, &QQuickItem::visibleChanged, this, &TraceView::schedule);
-	connect(this, &TraceView::viewChanged, this, &TraceView::schedule);
+	connect(this, &QQuickItem::visibleChanged, this, [this] { update(); });
 }
 
 QObject* TraceView::traces() const
@@ -90,17 +93,10 @@ void TraceView::setTraces(QObject* traces)
 		disconnect(traces_, nullptr, this, nullptr);
 	traces_ = typed;
 	if (traces_) {
-		connect(traces_, &WatchTraces::appended, this, [this] {
-			schedule();
-			update();
-		});
-		connect(traces_, &WatchTraces::plottedChanged, this, [this] {
-			schedule();
-			update();
-		});
+		connect(traces_, &WatchTraces::appended, this, &TraceView::schedule);
+		connect(traces_, &WatchTraces::plottedChanged, this, [this] { update(); });
 	}
 	Q_EMIT tracesChanged();
-	schedule();
 	update();
 }
 
@@ -164,26 +160,21 @@ qint64 TraceView::rightNs() const
 {
 	if (!following_)
 		return frozenNs_;
+	// Following, the right edge is the newest reading: it moves when one
+	// comes and rests when reading stops, never sliding over empty time.
 	const auto newest = traces_ ? traces_->newestNs() : 0;
-	const auto now = WatchTraces::nowNs();
-	return newest && now - newest > liveNs ? newest : now;
+	return newest ? newest : WatchTraces::nowNs();
 }
 
-// Moving with now: a frame every 50 ms while following, visible and fed.
 void TraceView::schedule()
 {
-	const bool live = following_ && isVisible() && traces_ && !traces_->plotted().isEmpty() &&
-	                  traces_->newestNs() && WatchTraces::nowNs() - traces_->newestNs() <= liveNs;
-	if (live && !frames_.isActive())
+	if (!frames_.isActive() && following_ && isVisible() && traces_ && !traces_->plotted().isEmpty())
 		frames_.start();
-	else if (!live && frames_.isActive())
-		frames_.stop();
 }
 
 void TraceView::tick()
 {
 	update();
-	schedule();
 }
 
 void TraceView::paint(QPainter* painter)
@@ -195,8 +186,12 @@ void TraceView::paint(QPainter* painter)
 	const auto span = qint64(spanSeconds_ * 1e9);
 	const qint64 left = right - span;
 	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
-	const qint64 offsetMs = qint64(QDateTime::currentDateTime().offsetFromUtc()) * 1000;
-	const auto utcOf = [&anchor](qint64 ns) { return anchor.utcMs + (ns - anchor.monotonicNs) / msNs; };
+	// This PC's clock: the anchor's UTC plus the steady clock's difference,
+	// kept in fractions of a millisecond so short spans place ticks exactly.
+	const auto utcOf = [&anchor](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / double(msNs); };
+	// The local time of the time in view, not of now.
+	const qint64 offsetMs =
+	    qint64(QDateTime::fromMSecsSinceEpoch(qint64(utcOf(right))).offsetFromUtc()) * 1000;
 	const QStringList plotted = traces_ ? traces_->plotted() : QStringList{};
 
 	// The value range of what is in view.
@@ -213,8 +208,9 @@ void TraceView::paint(QPainter* painter)
 		for (auto it = from; it != readings->end() && it->ns <= right; ++it) {
 			if (std::isnan(it->value))
 				continue;
-			wanted.low = any ? std::min(wanted.low, it->value) : it->value;
-			wanted.high = any ? std::max(wanted.high, it->value) : it->value;
+			const double v = std::clamp(it->value, -valueLimit, valueLimit);
+			wanted.low = any ? std::min(wanted.low, v) : v;
+			wanted.high = any ? std::max(wanted.high, v) : v;
 			any = true;
 		}
 	}
@@ -262,7 +258,9 @@ void TraceView::paint(QPainter* painter)
 		if (valueTicks.size() > 200)
 			break;
 	}
-	qreal labelWidth = 0;
+	// At least a usual label's width, so the plot does not move sideways
+	// whenever the range gains a digit.
+	qreal labelWidth = metrics.horizontalAdvance(QStringLiteral("-000.00"));
 	for (const auto& text : std::as_const(valueLabels))
 		labelWidth = std::max(labelWidth, metrics.horizontalAdvance(text));
 	const QRectF area(QPointF(std::ceil(labelWidth + pad * 2), top), QPointF(std::max<qreal>(labelWidth + pad * 3, width() - pad), bottom));
@@ -295,10 +293,10 @@ void TraceView::paint(QPainter* painter)
 		}
 	QStringList timeLabels;
 	if (anchor.monotonicNs) {
-		const qint64 leftLocal = utcOf(left) + offsetMs, rightLocal = utcOf(right) + offsetMs;
+		const double leftLocal = utcOf(left) + double(offsetMs), rightLocal = utcOf(right) + double(offsetMs);
 		qint64 previousDay = std::numeric_limits<qint64>::min();
-		for (qint64 local = (leftLocal / timeStep + (leftLocal % timeStep > 0)) * timeStep; local <= rightLocal; local += timeStep) {
-			const qreal x = std::round(xOf(left + (local - leftLocal) * msNs)) + 0.5;
+		for (qint64 local = qint64(std::ceil(leftLocal / double(timeStep))) * timeStep; double(local) <= rightLocal; local += timeStep) {
+			const qreal x = std::round(area.left() + (double(local) - leftLocal) * pxPerMs) + 0.5;
 			painter->setPen(grid);
 			painter->drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
 			auto text = clockText(local, timeStep);
@@ -321,7 +319,7 @@ void TraceView::paint(QPainter* painter)
 	// The lines: raw while two readings or fewer fall on each device pixel,
 	// else each pixel's first, lowest, highest and last.
 	int points = 0, raw = 0, curves = 0;
-	const double rawLimit = 2.0 * area.width() * ratio;
+	const double pixels = area.width() * ratio;
 	painter->save();
 	painter->setClipRect(area);
 	for (const auto& path : plotted) {
@@ -340,7 +338,7 @@ void TraceView::paint(QPainter* painter)
 			continue;
 		const int colorAt = traces_->colorIndex(path);
 		const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
-		QPen pen(color, 1.6);
+		QPen pen(color, 1.8);
 		pen.setCapStyle(Qt::RoundCap);
 		pen.setJoinStyle(Qt::RoundJoin);
 		painter->setPen(pen);
@@ -357,7 +355,11 @@ void TraceView::paint(QPainter* painter)
 			points += int(line.size());
 			line.clear();
 		};
-		if (double(count) <= rawLimit) {
+		// Per pixel above twice the width, raw again below one and a half
+		// times it, so a following line does not flicker at the boundary.
+		bool& perPixel = aggregated_[path];
+		perPixel = perPixel ? double(count) > 1.5 * pixels : double(count) > 2.0 * pixels;
+		if (!perPixel) {
 			++raw;
 			qint64 previous = 0, gapAt = 0;
 			for (auto it = from; it != to; ++it) {
@@ -397,6 +399,9 @@ void TraceView::paint(QPainter* painter)
 					flush();
 					continue;
 				}
+				// Readings beyond either edge belong to no pixel in view.
+				if (it->ns < left || it->ns > right)
+					continue;
 				const int at = std::clamp(int((xOf(it->ns) - area.left()) * ratio), 0, columns - 1);
 				if (at != column) {
 					emitColumn();
@@ -423,6 +428,9 @@ void TraceView::paint(QPainter* painter)
 	drawnCurves_ = curves;
 	plotArea_ = area;
 	rightUtcMs_ = qreal(utcOf(right));
+	// A path no longer plotted forgets how it was drawn.
+	for (auto it = aggregated_.begin(); it != aggregated_.end();)
+		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
 	if (changed || following_)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
 }

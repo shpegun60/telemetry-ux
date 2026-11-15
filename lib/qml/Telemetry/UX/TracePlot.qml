@@ -20,6 +20,32 @@ FocusScope {
     property alias spanSeconds: view.spanSeconds
     readonly property var plotted: traces ? traces.plotted : []
     readonly property alias view: view
+    // The chips read their values four times a second, however fast the
+    // readings come.
+    property int shownTick: 0
+    Timer {
+        interval: 250
+        repeat: true
+        running: plot.visible && plot.plotted.length > 0
+        onTriggered: plot.shownTick++
+    }
+    // Plotted, but nothing read yet for any of them.
+    readonly property bool waiting: {
+        plot.shownTick
+        if (!traces || plotted.length === 0)
+            return false
+        for (const path of plotted)
+            if (traces.count(path) > 0)
+                return false
+        return true
+    }
+    // "UTC+01:00": this PC's offset, for the time axis' tooltip.
+    function utcOffset() {
+        const minutes = -new Date().getTimezoneOffset()
+        const sign = minutes < 0 ? "−" : "+"
+        const whole = Math.abs(minutes)
+        return "UTC" + sign + String(Math.floor(whole / 60)).padStart(2, "0") + ":" + String(whole % 60).padStart(2, "0")
+    }
     implicitWidth: 480
     implicitHeight: 280
 
@@ -50,6 +76,9 @@ FocusScope {
                 checked: view.following
                 focusPolicy: Qt.TabFocus
                 onToggled: view.following = checked
+                ToolTip.visible: hovered
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Keep the newest readings in view; unticked, the picture holds still")
                 Accessible.name: qsTr("Follow the newest readings")
                 Accessible.description: qsTr("Keep the newest readings in view. Unticked, the picture holds still; reading goes on.")
             }
@@ -85,7 +114,7 @@ FocusScope {
                         return at >= 0 && at < plot.curveColors.length ? plot.curveColors[at] : Theme.textSecondary
                     }
                     readonly property string shown: {
-                        plot.traces ? plot.traces.revision : 0
+                        plot.shownTick
                         return plot.valueText(plot.traces ? plot.traces.latest(path) : undefined)
                     }
                     implicitWidth: chipRow.implicitWidth + 2 * Type.padding
@@ -167,7 +196,7 @@ FocusScope {
                 labelColor: Theme.textSecondary
                 font.family: Type.fixedFamily
                 font.pointSize: Type.caption
-                visible: plot.plotted.length > 0
+                visible: plot.plotted.length > 0 && !plot.waiting
                 Accessible.role: Accessible.Graphic
                 Accessible.name: plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(view.following ? qsTr("following") : qsTr("held"))
                                                            : qsTr("Plot of %1 values, %2").arg(plot.plotted.length)
@@ -179,11 +208,27 @@ FocusScope {
                 anchors.right: parent.right
                 anchors.rightMargin: Type.padding
                 anchors.bottom: parent.bottom
-                color: Theme.textMuted
+                color: Theme.textSecondary
                 font.pointSize: Type.caption
                 text: qsTr("Time of day")
                 HoverHandler { id: titleHover }
-                PlainToolTip { visible: titleHover.hovered; text: qsTr("Time this PC received each reading (local time)"); delay: 700 }
+                PlainToolTip {
+                    visible: titleHover.hovered
+                    text: qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                    delay: 700
+                }
+            }
+            // Plotted, nothing read yet.
+            Label {
+                objectName: "plotWaiting"
+                visible: plot.waiting
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 2 * Type.padding, 360)
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                color: Theme.textSecondary
+                text: plot.plotted.length === 1 ? qsTr("Waiting for the first reading of %1…").arg(plot.plotted[0])
+                                                : qsTr("Waiting for the first readings…")
             }
             // Nothing plotted: how to plot something.
             ColumnLayout {

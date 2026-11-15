@@ -72,7 +72,7 @@ qint64 WatchTraces::nowNs() noexcept
 	return WatchTimestamp::now().monotonicNs;
 }
 
-void WatchTraces::setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical)
+void WatchTraces::setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical, qint64 at)
 {
 	// A value that leaves the Watchlist, or comes back to it, breaks its
 	// line there: the time it was not read is not drawn as if it were.
@@ -81,12 +81,14 @@ void WatchTraces::setPaths(quint64 membership, QHash<quint64, QString> paths, QH
 		before.insert(path);
 	for (const auto& path : std::as_const(paths))
 		after.insert(path);
-	const auto now = nowNs();
+	// Just before the frame that brought the change, so its reading comes
+	// after the break, never before it.
+	const auto when = at ? at - 1 : nowNs();
 	bool broke = false;
 	for (auto it = traces_.begin(); it != traces_.end(); ++it)
 		if (before.contains(it.key()) != after.contains(it.key()) && !it->readings.empty() &&
 		    !std::isnan(it->readings.back().value)) {
-			push(*it, {std::max(now, it->readings.back().ns), noValue});
+			push(*it, {std::max(when, it->readings.back().ns), noValue});
 			broke = true;
 		}
 	membership_ = membership;
@@ -126,6 +128,8 @@ void WatchTraces::append(const WatchFrame& frame)
 	}
 	if (!any)
 		return;
+	if (total_ > keptTotal)
+		enforceCap();
 	newestNs_ = std::max(newestNs_, ns);
 	++revision_;
 	announce();
@@ -141,8 +145,41 @@ void WatchTraces::push(Trace& trace, const TraceReading& reading)
 		readings.insert(std::upper_bound(readings.begin(), readings.end(), reading.ns,
 		                                 [](qint64 at, const TraceReading& r) { return at < r.ns; }),
 		                reading);
-	while (readings.size() > keptReadings || (readings.size() > 1 && readings.back().ns - readings.front().ns > keptNs))
+	++total_;
+	while (readings.size() > keptReadings || (readings.size() > 1 && readings.back().ns - readings.front().ns > keptNs)) {
 		readings.pop_front();
+		--total_;
+	}
+}
+
+// Over the cap: the oldest readings go, of values no longer watched first,
+// then of values not plotted, the plotted last - 512 at a time, so a reading
+// past the cap costs one scan of the rings now and then, not one each.
+void WatchTraces::enforceCap()
+{
+	QSet<QString> watched;
+	for (const auto& path : std::as_const(paths_))
+		watched.insert(path);
+	while (total_ > keptTotal) {
+		Trace* victim = nullptr;
+		int rank = 3;
+		qint64 oldest = std::numeric_limits<qint64>::max();
+		for (auto it = traces_.begin(); it != traces_.end(); ++it) {
+			if (it->readings.empty())
+				continue;
+			const int r = !watched.contains(it.key()) ? 0 : !plotted_.contains(it.key()) ? 1 : 2;
+			if (r < rank || (r == rank && it->readings.front().ns < oldest)) {
+				victim = &*it;
+				rank = r;
+				oldest = it->readings.front().ns;
+			}
+		}
+		if (!victim)
+			break;
+		const auto drop = std::min<std::size_t>(victim->readings.size(), std::max<std::size_t>(512, total_ - keptTotal));
+		victim->readings.erase(victim->readings.begin(), victim->readings.begin() + qsizetype(drop));
+		total_ -= drop;
+	}
 }
 
 void WatchTraces::announce()
@@ -175,12 +212,15 @@ QString WatchTraces::plot(const QString& path)
 {
 	if (path.isEmpty() || plotted_.contains(path))
 		return {};
+	if (const auto why = refusal(path); !why.isEmpty())
+		return why;
 	if (plotted_.size() >= limit)
 		return tr("The Plot holds %1 curves. Remove one to plot %2.").arg(limit).arg(path);
-	if (!colors_.contains(path)) {
-		QSet<int> used;
-		for (const auto& shown : std::as_const(plotted_))
-			used.insert(colors_.value(shown, -1));
+	// Its own colour while no curve shown has it; else the first free one.
+	QSet<int> used;
+	for (const auto& shown : std::as_const(plotted_))
+		used.insert(colors_.value(shown, -1));
+	if (!colors_.contains(path) || used.contains(colors_.value(path))) {
 		int color = 0;
 		while (used.contains(color) && color < limit)
 			++color;
@@ -211,9 +251,33 @@ int WatchTraces::count(const QString& path) const
 	return found ? int(found->size()) : 0;
 }
 
+void WatchTraces::breakAll()
+{
+	const auto now = nowNs();
+	bool broke = false;
+	for (auto it = traces_.begin(); it != traces_.end(); ++it)
+		if (!it->readings.empty() && !std::isnan(it->readings.back().value)) {
+			push(*it, {std::max(now, it->readings.back().ns), noValue});
+			broke = true;
+		}
+	if (broke) {
+		++revision_;
+		announce();
+	}
+}
+
+QString WatchTraces::refusal(const QString& path) const
+{
+	const auto it = traces_.constFind(path);
+	if (it == traces_.cend() || it->readings.empty() || it->type.valid())
+		return {};
+	return tr("%1 is text; only numbers, booleans and enums are plotted.").arg(path);
+}
+
 void WatchTraces::clear()
 {
 	traces_.clear();
+	total_ = 0;
 	newestNs_ = 0;
 	++revision_;
 	announce();

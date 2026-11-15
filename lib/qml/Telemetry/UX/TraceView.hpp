@@ -2,6 +2,7 @@
 #ifndef TELEMETRY_UX_TRACE_VIEW_HPP
 #define TELEMETRY_UX_TRACE_VIEW_HPP
 #pragma once
+#include <QtCore/QHash>
 #include <QtCore/QPointer>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
@@ -97,6 +98,8 @@ private:
 	// following plot does not jump with every reading.
 	Range range_;
 	qint64 narrowSinceNs_ = 0;
+	// Per path: drawn per pixel rather than raw, for the hysteresis.
+	QHash<QString, bool> aggregated_;
 	QStringList timeLabels_, valueLabels_;
 	int drawnPoints_ = 0, rawCurves_ = 0, drawnCurves_ = 0;
 	QRectF plotArea_;

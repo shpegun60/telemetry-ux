@@ -343,7 +343,7 @@ struct DynamicConfiguratorProvider::Impl {
 				paths.insert(quint64(key), path);
 				categorical.insert(path, index.data(WatchlistModel::CategoricalRole).toBool());
 			}
-			traces.setPaths(model->membership(), std::move(paths), std::move(categorical));
+			traces.setPaths(model->membership(), std::move(paths), std::move(categorical), frame.completed.monotonicNs);
 		}
 		traces.append(frame);
 	}
@@ -778,6 +778,8 @@ struct DynamicConfiguratorProvider::Impl {
 				}
 				watch.retire();
 				batch.retire();
+				// A disconnect breaks every line on the Plot.
+				traces.breakAll();
 				allowed = false;
 				category = 0;
 				selectedIndex = QModelIndex{};
@@ -3087,6 +3089,8 @@ void DynamicConfiguratorProvider::stopWatch()
 {
 	auto p = d;
 	p->watch.stop();
+	// The Plot's lines end here; the time not read is not drawn.
+	p->traces.breakAll();
 }
 
 QString DynamicConfiguratorProvider::selection() const

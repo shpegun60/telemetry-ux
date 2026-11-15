@@ -42,15 +42,23 @@ class WatchTraces final : public QObject {
 public:
 	static constexpr qint64 keptNs = 600'000'000'000; // ten minutes
 	static constexpr std::size_t keptReadings = 65'536;
+	// Every ring together: 4,194,304 readings, 64 MB. Past it the oldest go
+	// first - of values no longer watched, then of values not plotted, the
+	// plotted last.
+	static constexpr std::size_t keptTotal = 4'194'304;
 	static constexpr int limit = 16;
 
 	explicit WatchTraces(QObject* parent = nullptr);
 
 	// The paths the next frames' rows are: a row's series (its Field id and
 	// its leaf, WatchFrameRow) to the value's path, for one membership of the
-	// Watchlist. The provider gives them again when the membership changes.
+	// Watchlist. The provider gives them again when the membership changes,
+	// at the time of the frame that brought the change (0: now): a value
+	// that left or came back breaks its line just before it.
 	[[nodiscard]] quint64 membership() const noexcept { return membership_; }
-	void setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical = {});
+	void setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical = {}, qint64 at = 0);
+	// Every reading kept, over every ring.
+	[[nodiscard]] std::size_t total() const noexcept { return total_; }
 	// A completed read: each of its rows appended to its value's ring.
 	void append(const WatchFrame& frame);
 
@@ -80,6 +88,12 @@ public:
 	Q_INVOKABLE int count(const QString& path) const;
 	// Every ring emptied; what is plotted stays.
 	Q_INVOKABLE void clear();
+	// Every line ends here - the Watchlist stopped, the device went - so
+	// the time not read is never drawn as if it were.
+	void breakAll();
+	// Why path cannot be plotted, or empty: a value whose readings are not a
+	// number, a bool or an enum (text).
+	[[nodiscard]] QString refusal(const QString& path) const;
 
 Q_SIGNALS:
 	void appended();
@@ -92,6 +106,7 @@ private:
 		bool categorical = false;
 	};
 	void push(Trace& trace, const TraceReading& reading);
+	void enforceCap();
 	void announce();
 
 	QHash<QString, Trace> traces_;
@@ -102,6 +117,7 @@ private:
 	WatchTimestamp anchor_;
 	quint64 membership_ = ~quint64{0};
 	qint64 newestNs_ = 0;
+	std::size_t total_ = 0;
 	quint64 revision_ = 0;
 	bool announcing_ = false;
 };

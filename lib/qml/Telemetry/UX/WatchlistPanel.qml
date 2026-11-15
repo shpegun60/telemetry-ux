@@ -2642,7 +2642,7 @@ Pane {
             checked: shown
             text: qsTr("Plot")
             Accessible.description: path.length > 0 ? qsTr("Shows the readings of %1 on the Plot.").arg(path)
-                                                    : qsTr("Only a value can be plotted, not a group or a Field.")
+                                                    : qsTr("Only a value can be plotted, not a group or a struct.")
             onTriggered: {
                 if (traces.isPlotted(path)) {
                     traces.unplot(path)

@@ -519,6 +519,12 @@ last. It paints with QPainter, so it draws on every backend, the software one
 included; the library takes no QtGraphs dependency. A host that links the
 module statically calls `registerQmlTypes()` so `TraceView` is a QML type.
 
+Following, the Plot's right edge is the newest reading; new readings only
+mark the picture, drawn again at most every 50 ms. All rings together keep at
+most 4,194,304 readings (64 MB): past it the oldest go, of values no longer
+watched, then not plotted, the plotted last. `stopWatch()` and a disconnect
+break every line (`WatchTraces::breakAll`). A text value is refused in words.
+
 The Watchlist row's menu gains a checkable **Plot**. `TrendPanel` and
 `TrendHistory` stay for now; the plan retires them when Trend draws with the
 same component.

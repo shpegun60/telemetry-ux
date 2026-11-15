@@ -175,13 +175,24 @@ int main(int argc, char** argv)
 		CHECK(shown(content, "plotEmpty") && !named(content, "plotView") && !named(content, "plotLegend"));
 		shot(window, argc, argv, QStringLiteral("trace-plot-empty-760"));
 
+		// Plotted before anything is read: it says it is waiting.
+		traces.setPaths(4, {{1, QStringLiteral("device.Voltage")}, {2, QStringLiteral("device.Ready")},
+		                    {gain, QStringLiteral("device.Config.Gain")}, {8, QStringLiteral("device.Later")}},
+		                {{QStringLiteral("device.Ready"), true}}, now - 450'000'000);
+		CHECK(traces.plot(QStringLiteral("device.Later")).isEmpty());
+		settle(400);
+		CHECK(shown(content, "plotWaiting")->property("text").toString() ==
+		      QStringLiteral("Waiting for the first reading of device.Later…") && !named(content, "plotView"));
+		traces.unplot(QStringLiteral("device.Later"));
+		settle();
+
 		// Plotted: a chip with its path and newest reading, the grid, the
 		// time of day under it.
 		CHECK(traces.plot(QStringLiteral("device.Voltage")).isEmpty() && traces.plot(QStringLiteral("device.Ready")).isEmpty());
 		CHECK(traces.colorIndex(QStringLiteral("device.Voltage")) == 0 && traces.colorIndex(QStringLiteral("device.Ready")) == 1);
 		CHECK(traces.plot(QStringLiteral("device.Voltage")).isEmpty() && traces.plotted().size() == 2);
 		traces.append(frame(now - 200'000'000, {{1, 0, bits(S::F32, 4, floatBits(7.25f))}, {2, 0, bits(S::Boolean, 1, 1)}}));
-		settle(200);
+		settle(400);
 		CHECK(!named(content, "plotEmpty"));
 		const auto chips = all(content, "plotChipName");
 		CHECK(chips.size() == 2 && chips[0]->property("text").toString() == QStringLiteral("device.Voltage"));
@@ -199,9 +210,13 @@ int main(int argc, char** argv)
 		CHECK(!view->property("valueLabels").toStringList().isEmpty());
 		shot(window, argc, argv, QStringLiteral("trace-plot-760"));
 
-		// Following, the right edge moves with now; unticked, it holds.
+		// Following, the right edge is the newest reading: it rests while
+		// nothing comes and moves with the next one; unticked, it holds.
 		const double before = view->property("rightUtcMs").toDouble();
 		settle(300);
+		CHECK(view->property("rightUtcMs").toDouble() == before);
+		traces.append(frame(ux::WatchTraces::nowNs(), {{2, 0, bits(S::Boolean, 1, 1)}}));
+		settle(150);
 		CHECK(view->property("rightUtcMs").toDouble() > before + 150);
 		auto* follow = shown(content, "plotFollow");
 		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
@@ -246,8 +261,12 @@ int main(int argc, char** argv)
 		settle();
 		CHECK(traces.plotted() == QStringList({QStringLiteral("device.Ready"), QStringLiteral("device.Config.Gain")}) &&
 		      traces.count(QStringLiteral("device.Voltage")) == 63);
-		// Plotted again, it keeps its colour.
+		// Plotted again, it keeps its colour; a colour another curve took
+		// meanwhile is never shared.
 		CHECK(traces.plot(QStringLiteral("device.Voltage")).isEmpty() && traces.colorIndex(QStringLiteral("device.Voltage")) == 0);
+		traces.unplot(QStringLiteral("device.Config.Gain"));
+		CHECK(traces.plot(QStringLiteral("device.Other")).isEmpty() && traces.colorIndex(QStringLiteral("device.Other")) == 2);
+		CHECK(traces.plot(QStringLiteral("device.Config.Gain")).isEmpty() && traces.colorIndex(QStringLiteral("device.Config.Gain")) == 3);
 
 		// Sixteen curves at most, the seventeenth refused in words.
 		for (int i = 0; traces.plotted().size() < ux::WatchTraces::limit; ++i)
@@ -267,6 +286,10 @@ int main(int argc, char** argv)
 		for (int i = 0; i < 70000; ++i)
 			traces.append(frame(start + qint64(i) * 1000, {{5, 0, bits(S::U8, 1, quint64(i & 0xff))}}));
 		CHECK(traces.count(QStringLiteral("device.Fast")) == int(ux::WatchTraces::keptReadings));
+		std::size_t sum = 0;
+		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Fast"})
+			sum += std::size_t(traces.count(QString::fromLatin1(path)));
+		CHECK(traces.total() == sum);
 		for (int i = 0; i < 700; ++i)
 			traces.append(frame(start + qint64(i) * 1'000'000'000, {{6, 0, bits(S::U8, 1, 1)}}));
 		const auto* slow = traces.readings(QStringLiteral("device.Slow"));
