@@ -1,5 +1,6 @@
 // One pending read, bounded wire chunks, Qt-owned scalar rows. MIT.
 #include "DynamicWatchlist.hpp"
+#include "ReadPortions.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
@@ -14,26 +15,8 @@
 
 namespace telemetry::ux {
 struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
-	// One read of a cycle, planned when the cycle starts. Portions keep the
-	// order of their first row: whole Fields go together in ReadMany portions
-	// (or one FieldRead each in individual mode), and all the values watched in
-	// one struct or array Field are one FieldRead, wherever their rows are. A
-	// Fail portion stops the cycle where the read it replaces would have gone.
-	struct Portion {
-		enum class Kind : quint8 { Many, Field, Members, Fail } kind = Kind::Many;
-		quint32 field = 0;
-		std::vector<std::uint32_t> ids;    // Many: the Fields, at most 32
-		std::vector<std::uint32_t> leaves; // Members: ascending ordinals
-		QString failure;
-
-		int rows() const
-		{
-			return kind == Kind::Many      ? int(ids.size())
-			       : kind == Kind::Members ? int(leaves.size())
-			       : kind == Kind::Field   ? 1
-			                               : 0;
-		}
-	};
+	// One read of a cycle, planned when the cycle starts (ReadPortions.hpp).
+	using Portion = read_portions::Portion;
 
 	struct Request {
 		std::shared_ptr<void> storage;
@@ -160,106 +143,54 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		return true;
 	}
 
-	// The rows of a cycle in portions, with the budgets and failures whole
-	// Fields always had: a list of whole Fields sends exactly the reads it did.
+	// The rows of a cycle in portions (ReadPortions.hpp), planned from the
+	// keys in row order.
 	void buildPlan()
 	{
-		plan.clear();
-		planOf.clear();
-		hasMembers = false;
 		replan = false;
 		planMembership = model.membership();
-		QString failure;
-		std::optional<WatchlistSource::Limits> limits;
-		bool asked = false;
-		int open = -1;
-		unsigned reply = 0;
-		const auto room = [&limits](unsigned n) {
-			return n < 32u && n < limits->items && 2u + 4u * (n + 1u) <= limits->requestBytes;
-		};
-		const auto exceeds = [] {
-			return QStringLiteral("Next Field exceeds ReadMany byte budget - select Individual FieldRead");
-		};
-		for (int row = 0; row < model.count() && failure.isEmpty(); ++row) {
-			const auto key = model.key(row);
-			if (watch_key::isUnresolved(key))
-				continue;
-			const auto field = watch_key::field(key);
-			if (!watch_key::isWhole(key)) {
-				hasMembers = true;
-				if (!source.readMembers) {
-					failure = QStringLiteral("This connection can't read struct members.");
-					break;
-				}
-				auto at = planOf.value(field, -1);
-				if (at < 0 || plan[std::size_t(at)].kind != Portion::Kind::Members) {
-					at = int(plan.size());
-					Portion members;
-					members.kind = Portion::Kind::Members;
-					members.field = field;
-					plan.push_back(std::move(members));
-					planOf.insert(field, at);
-				}
-				plan[std::size_t(at)].leaves.push_back(watch_key::ordinal(key));
-				continue;
-			}
-			if (individual) {
-				if (!source.readField) {
-					failure = QStringLiteral("Individual FieldRead unavailable");
-					break;
-				}
-				Portion one;
-				one.kind = Portion::Kind::Field;
-				one.field = field;
-				planOf.insert(field, int(plan.size()));
-				plan.push_back(std::move(one));
-				continue;
-			}
-			if (!asked) {
-				limits = source.capability ? source.capability() : std::nullopt;
-				asked = true;
-			}
-			if (!limits || !source.readMany) {
-				failure = QStringLiteral(
+		std::vector<WatchKey> keys;
+		keys.reserve(std::size_t(model.count()));
+		for (int row = 0; row < model.count(); ++row)
+			keys.push_back(model.key(row));
+		read_portions::Source can;
+		can.individual = individual;
+		can.readMany = bool(source.readMany);
+		can.readField = bool(source.readField);
+		can.readMembers = bool(source.readMembers);
+		if (source.capability)
+			can.budget = [this]() -> std::optional<read_portions::Budget> {
+				const auto limits = source.capability();
+				if (!limits)
+					return std::nullopt;
+				return read_portions::Budget{limits->items, limits->requestBytes, limits->replyBytes};
+			};
+		can.fieldBytes = source.fieldBytes;
+		auto planned = read_portions::plan(keys, can);
+		plan = std::move(planned.portions);
+		planOf = std::move(planned.of);
+		hasMembers = planned.members;
+	}
+
+	// A plan's stop in words.
+	static QString failureText(read_portions::Failure failure)
+	{
+		switch (failure) {
+			case read_portions::Failure::NoMembers:
+				return QStringLiteral("This connection can't read struct members.");
+			case read_portions::Failure::NoFieldRead:
+				return QStringLiteral("Individual FieldRead unavailable");
+			case read_portions::Failure::NoReadMany:
+				return QStringLiteral(
 				    "This device can't read several Fields at once: choose Read each Field with FieldRead in the Watchlist's menu.");
+			case read_portions::Failure::NotScalar:
+				return QStringLiteral("Watch Field is stale or not a readable scalar");
+			case read_portions::Failure::ExceedsReadMany:
+				return QStringLiteral("Next Field exceeds ReadMany byte budget - select Individual FieldRead");
+			case read_portions::Failure::None:
 				break;
-			}
-			// A ReadMany portion takes Fields while its item, request and reply
-			// budgets allow; a Field it can't take starts the next one.
-			const bool fits = open >= 0 && room(unsigned(plan[std::size_t(open)].ids.size()));
-			const auto bytes = source.fieldBytes ? source.fieldBytes(field) : std::nullopt;
-			if (!bytes || *bytes == 0 || *bytes > 8) {
-				if (fits) {
-					// The read it would have joined is not sent either.
-					plan.resize(std::size_t(open));
-					for (auto it = planOf.begin(); it != planOf.end();)
-						it = it.value() >= open ? planOf.erase(it) : std::next(it);
-				}
-				failure = fits || room(0) ? QStringLiteral("Watch Field is stale or not a readable scalar")
-				                          : exceeds();
-				break;
-			}
-			if (!fits || reply + 8u + *bytes > limits->replyBytes) {
-				if (!room(0) || 2u + 8u + *bytes > limits->replyBytes) {
-					failure = exceeds();
-					break;
-				}
-				open = int(plan.size());
-				plan.push_back({});
-				reply = 2;
-			}
-			plan[std::size_t(open)].ids.push_back(field);
-			reply += 8u + *bytes;
-			planOf.insert(field, open);
 		}
-		for (auto& step : plan)
-			std::sort(step.leaves.begin(), step.leaves.end());
-		if (!failure.isEmpty()) {
-			Portion failed;
-			failed.kind = Portion::Kind::Fail;
-			failed.failure = std::move(failure);
-			plan.push_back(std::move(failed));
-		}
+		return {};
 	}
 
 	// The rows changed (added, removed, put back, cleared). Mid-cycle the plan
@@ -695,7 +626,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		}
 		const auto& step = plan[std::size_t(cursor)];
 		if (step.kind == Portion::Kind::Fail) {
-			fail(step.failure);
+			fail(failureText(step.failure));
 			return;
 		}
 		auto pending = std::make_shared<Request>();

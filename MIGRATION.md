@@ -378,3 +378,14 @@ reach while it counts nothing, so its coming and going moves nothing. Past
 oldest first (by when each was set), no longer in hash order; formats put back
 together (`setPathFormats`, an Undo) keep when each held path was set, and the
 paths new to the map count as set in path order.
+
+## The read plan on its own (WL-6, November 2026)
+
+`ReadPortions.hpp` (installed with the dynamic configurator) holds the plan
+the Watchlist builds at the start of each cycle: `read_portions::plan` takes the
+watched keys in row order and what the source can do, and returns the portions
+(ReadMany of whole scalars within the advertised budgets, one member read per
+struct or array Field, one FieldRead each in Individual mode) with a failure
+code where it stops; the Watchlist puts the code in the words it always used.
+Nothing it sends changed. The Device tree's previews (PV-2) are to plan with
+it next.

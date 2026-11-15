@@ -1,5 +1,6 @@
 // Controlled completions and ticks: no event-loop timing assumptions. MIT.
 #include <Telemetry/UX/DynamicWatchlist.hpp>
+#include <Telemetry/UX/ReadPortions.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/WatchKey.hpp>
 #include <Telemetry/UX/WatchFormat.hpp>
@@ -1642,9 +1643,105 @@ void changeInsideCompletion()
 	CHECK(refused && watch.count() == 2);
 }
 
+// The plan on its own (ReadPortions.hpp): the portions, their order, the
+// budgets, when the budget is asked, and where each failure stops it.
+void readPortions()
+{
+	namespace rp = ux::read_portions;
+	using Kind = rp::Portion::Kind;
+	int asked = 0;
+	rp::Source can;
+	can.readMany = can.readField = can.readMembers = true;
+	can.budget = [&asked] {
+		++asked;
+		return std::optional<rp::Budget>{rp::Budget{32, 130, 514}};
+	};
+	QHash<quint32, unsigned> sizes;
+	can.fieldBytes = [&sizes](quint32 field) -> std::optional<unsigned> {
+		const auto at = sizes.constFind(field);
+		return at == sizes.cend() ? std::optional<unsigned>{4u} : std::optional<unsigned>{*at};
+	};
+	namespace key = ux::watch_key;
+	// Nothing watched: no portion, the budget never asked.
+	auto none = rp::plan({}, can);
+	CHECK(none.portions.empty() && none.of.isEmpty() && !none.members && asked == 0);
+	// 65 scalars: 32, 32 and 1, the budget asked once; an unresolved row is skipped.
+	std::vector<ux::WatchKey> keys;
+	for (quint32 field = 1; field <= 65; ++field)
+		keys.push_back(key::whole(field));
+	keys.insert(keys.begin() + 10, key::unresolved(3));
+	auto many = rp::plan(keys, can);
+	CHECK(asked == 1 && many.portions.size() == 3 && !many.members);
+	CHECK(many.portions[0].kind == Kind::Many && many.portions[0].ids.size() == 32 && many.portions[1].ids.size() == 32 &&
+	      many.portions[2].ids.size() == 1 && many.portions[2].ids[0] == 65);
+	CHECK(many.of.value(1) == 0 && many.of.value(33) == 1 && many.of.value(65) == 2 && many.portions[0].rows() == 32);
+	// Two 8-byte values among 4-byte ones: the reply stays inside 514 bytes,
+	// so the items, not the bytes, close each portion.
+	sizes = {{1, 8}, {2, 8}};
+	CHECK(rp::plan(std::span{keys}.first(5), can).portions.size() == 1);
+	CHECK(rp::plan(keys, can).portions.size() == 3);
+	// Struct values: one member read a Field, wherever its rows are, leaves in order.
+	keys = {key::member(7, 3), key::whole(1), key::member(7, 1), key::member(8, 0), key::whole(2)};
+	sizes.clear();
+	auto mixed = rp::plan(keys, can);
+	CHECK(mixed.members && mixed.portions.size() == 3);
+	CHECK(mixed.portions[0].kind == Kind::Members && mixed.portions[0].field == 7 &&
+	      mixed.portions[0].leaves == std::vector<std::uint32_t>({1, 3}) && mixed.portions[0].rows() == 2);
+	CHECK(mixed.portions[1].kind == Kind::Many && mixed.portions[1].ids == std::vector<std::uint32_t>({1, 2}));
+	CHECK(mixed.portions[2].kind == Kind::Members && mixed.portions[2].field == 8 && mixed.of.value(8) == 2);
+	// Individual: one FieldRead a whole Field, the budget not asked.
+	asked = 0;
+	can.individual = true;
+	auto each = rp::plan(std::span{keys}.first(2), can);
+	CHECK(asked == 0 && each.portions.size() == 2 && each.portions[1].kind == Kind::Field &&
+	      each.portions[1].field == 1 && each.portions[1].rows() == 1);
+	can.readField = false;
+	auto noField = rp::plan(std::span{keys}.first(2), can);
+	CHECK(noField.portions.size() == 2 && noField.portions[1].kind == Kind::Fail &&
+	      noField.portions[1].failure == rp::Failure::NoFieldRead && noField.portions[1].rows() == 0);
+	can.individual = false;
+	can.readField = true;
+	// No member read: the plan stops at the first value inside a Field.
+	can.readMembers = false;
+	auto noMembers = rp::plan(keys, can);
+	CHECK(noMembers.members && noMembers.portions.size() == 1 && noMembers.portions[0].failure == rp::Failure::NoMembers);
+	can.readMembers = true;
+	// No ReadMany, or no budget: whole Fields can't be read together.
+	can.readMany = false;
+	CHECK(rp::plan(std::span{keys}.subspan(1, 1), can).portions.back().failure == rp::Failure::NoReadMany);
+	can.readMany = true;
+	const auto budget = can.budget;
+	can.budget = [] { return std::optional<rp::Budget>{}; };
+	CHECK(rp::plan(std::span{keys}.subspan(1, 1), can).portions.back().failure == rp::Failure::NoReadMany);
+	can.budget = budget;
+	// A stale or wide Field: what it would have joined is not sent either.
+	keys = {key::whole(1), key::whole(2), key::whole(3)};
+	sizes = {{3, 0}};
+	auto stale = rp::plan(keys, can);
+	CHECK(stale.portions.size() == 1 && stale.portions[0].failure == rp::Failure::NotScalar && stale.of.isEmpty());
+	sizes = {{1, 16}};
+	CHECK(rp::plan(keys, can).portions.front().failure == rp::Failure::NotScalar);
+	// A scalar no portion can carry: a reply budget smaller than one item.
+	can.budget = [] { return std::optional<rp::Budget>{rp::Budget{32, 130, 12}}; };
+	sizes = {{1, 4}};
+	CHECK(rp::plan(keys, can).portions.front().failure == rp::Failure::ExceedsReadMany);
+	// The item budget: four a portion.
+	can.budget = [] { return std::optional<rp::Budget>{rp::Budget{4, 130, 514}}; };
+	sizes.clear();
+	keys.clear();
+	for (quint32 field = 1; field <= 9; ++field)
+		keys.push_back(key::whole(field));
+	auto four = rp::plan(keys, can);
+	CHECK(four.portions.size() == 3 && four.portions[0].ids.size() == 4 && four.portions[2].ids.size() == 1);
+	// The request budget: 2 + 4n <= 14 holds three.
+	can.budget = [] { return std::optional<rp::Budget>{rp::Budget{32, 14, 514}}; };
+	CHECK(rp::plan(keys, can).portions.front().ids.size() == 3);
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	readPortions();
 	numberFormats();
 	typedEditors();
 	exactCompletionFrames();
