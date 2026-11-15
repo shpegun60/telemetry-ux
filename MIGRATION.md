@@ -1323,3 +1323,17 @@ connect (0x…): connect again" and keeps it (`descriptorNote`).
   saved binding.
 - Undo of rows removed while offline was already done by UR-1 (One history
   for Undo and Redo); nothing changed for it.
+
+## The Plot's header holds its step while a host's words change (November 2026)
+
+`TracePlot`'s header folded and unfolded on every change of a host's words
+near a threshold: the Trend's tag in `trailing` ("Recording", "5 reads not
+saved", "6 reads not saved"...) or Follow coming and going moved the spans
+between "10 s | 1 min | 10 min | All" and "All ▾", and the header row and the
+chip row under it jumped on each update. The give-way step now has
+hysteresis: it folds at once when the controls no longer fit, and unfolds
+only when the Plot's own width changes (and once at completion and 300 ms
+after it, as the start-up settles). `narrowNeed` is the new read-only step
+the controls need now; `narrowStep` is the step shown and is no longer a
+binding, so a host must not assign it. `trailingGivesWay` holds with it, and
+`trailingNeedsToGo` is what the controls need now.
