@@ -40,10 +40,16 @@ struct Pick {
 	// The line named a value inside matches.first(), a Field read whole.
 	bool member = false;
 	QString path;  // the line's path, without a leading kind word
+	// What follows a Command's or a Service's path or name: its values
+	// (BA-2), "value=2 factor=3"; empty without any.
+	QString tail;
+	bool hasTail = false;
 };
 
 // category 0 when the line does not say; "read", "command" or "service" first
-// chooses one. A "path = value" line is refused: writing from here is later.
+// chooses one. A Command or a Service may be followed by its values after a
+// space (Pick::tail); a "path = value" line naming a Field is refused: writing
+// from here is later.
 [[nodiscard]] Pick resolve(const QString& line, const QVector<EndpointEntry>& list);
 
 // The kind word for a category: "Field", "Command", "Service".

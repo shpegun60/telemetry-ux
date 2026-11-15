@@ -16,7 +16,9 @@ ApplicationWindow {
         property bool connected: true
         property bool watchActive: false
         readonly property bool watchPending: false
-        readonly property bool canWriteWatch: true
+        property bool canWriteWatch: true
+        property bool allowMutations: true
+        property bool watchWriting: false
         readonly property bool canAddWatch: false
         readonly property bool watchReadManySupported: true
         readonly property bool watchRequiresExplicitIndividual: false
@@ -25,7 +27,8 @@ ApplicationWindow {
         readonly property int watchIntervalMinimumMs: 1
         property string watchStatus: ""
         property var watchPace: ({})
-        readonly property string watchWriteOutcome: ""
+        property string watchWriteOutcome: ""
+        property string watchWriteKind: ""
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         property bool canUndoWatch: false
         property string watchFormat: "original"

@@ -18,6 +18,7 @@ ApplicationWindow {
         readonly property bool batchSupported: true
         readonly property string batchResponseEndpoint: ""
         readonly property bool busy: false
+        readonly property bool allowMutations: true
         readonly property var batchItems: batchAddItems
         readonly property var batchResponses: batchAddResponses
         function canAddBatch(operation) { return false }

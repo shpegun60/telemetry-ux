@@ -1,5 +1,7 @@
 // Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
 #include "DynamicConfiguratorProvider.hpp"
+#include "RequestArguments.hpp"
+#include "SchemaText.hpp"
 #include "EndpointPreviews.hpp"
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
@@ -296,7 +298,7 @@ struct DynamicConfiguratorProvider::Impl {
 	// moves the Details selection or touches its draft.
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
-	QString writeText, writeName, watchWrite;
+	QString writeText, writeName, watchWrite, watchWriteKind;
 	// The written row's type, to say why a text is not a value of it.
 	WatchValueType writeType;
 	// A value inside a struct or array Field: where it is, so the write walks
@@ -561,7 +563,8 @@ struct DynamicConfiguratorProvider::Impl {
 
 	// No draft and no selection is used, so a stale Details view does not
 	// stop it (a write from the Watchlist marks that view stale).
-	std::optional<BatchRow> pathRow(const EndpointEntry& entry) const
+	// request: a Command's or a Service's values typed in the row (BA-2).
+	std::optional<BatchRow> pathRow(const EndpointEntry& entry, const QByteArray* request = nullptr) const
 	{
 		if (!selectable() || !state)
 			return {};
@@ -578,15 +581,21 @@ struct DynamicConfiguratorProvider::Impl {
 			row.responseBytes = bound.endpoint.responseBytes();
 		} else if (entry.category == 2) {
 			const auto bound = state->view.bindCommand(row.id);
-			if (!bound || bound.endpoint.requestBytes() != 0)
+			const auto bytes = bound ? bound.endpoint.requestBytes() : 0;
+			if (!bound || (bytes != 0 && (!request || std::size_t(request->size()) != bytes)))
 				return {};
 			row.operation = cl::Operation::Command;
 			row.requestType = bound.endpoint.requestType();
+			if (bytes)
+				row.request = *request;
 		} else if (entry.category == 3) {
 			const auto bound = state->view.bindService(row.id);
-			if (!bound || bound.endpoint.requestBytes() != 0)
+			const auto bytes = bound ? bound.endpoint.requestBytes() : 0;
+			if (!bound || (bytes != 0 && (!request || std::size_t(request->size()) != bytes)))
 				return {};
 			row.operation = cl::Operation::Service;
+			if (bytes)
+				row.request = *request;
 			row.requestType = bound.endpoint.requestType();
 			row.responseType = bound.endpoint.responseType();
 			row.responseBytes = bound.endpoint.responseBytes();
@@ -660,21 +669,27 @@ struct DynamicConfiguratorProvider::Impl {
 			const auto words = [](const char* text) {
 				return QCoreApplication::translate("DynamicConfiguratorProvider", text);
 			};
-			if (written && !back.isEmpty())
+			if (written && !back.isEmpty()) {
 				watchWrite = (back == writeIntended ? words("Wrote %1 = %2 · read back %3.")
 				                                    : words("Wrote %1 = %2; the device reads back %3."))
 				                 .arg(writeName, writeIntended, back);
-			else if (written)
+				watchWriteKind = back == writeIntended ? QStringLiteral("confirmed") : QStringLiteral("differs");
+			} else if (written) {
 				watchWrite = words("Wrote %1 = %2; it could not be read back.").arg(writeName, writeIntended);
-			else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
-			                       result.write.status == cl::Status::BufferTooSmall))
+				watchWriteKind = QStringLiteral("unconfirmed");
+			} else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
+			                         result.write.status == cl::Status::BufferTooSmall)) {
 				watchWrite = words("%1 is larger than one write, so a value in it can't be written on its own.")
 				                 .arg(endpoints.fieldPath(writeId));
-			else
+				watchWriteKind = QStringLiteral("refused");
+			} else {
 				watchWrite = writeName + (result.write.status == cl::Status::OutcomeUnknown
 				                              ? QStringLiteral(": ")
 				                              : QStringLiteral(" not written: ")) +
 				             operationText(result.write);
+				watchWriteKind = result.write.status == cl::Status::OutcomeUnknown ? QStringLiteral("unconfirmed")
+				                                                                   : QStringLiteral("refused");
+			}
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
 		if (state) {
@@ -861,6 +876,7 @@ struct DynamicConfiguratorProvider::Impl {
 		if (writer && writer->view.editing())
 			writer->view.cancelEdit();
 		watchWrite = std::move(text);
+		watchWriteKind = QStringLiteral("refused");
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive)
@@ -915,6 +931,7 @@ struct DynamicConfiguratorProvider::Impl {
 		writer->sequence = submitted.handle.sequence;
 		writer->eventReported = false;
 		watchWrite = QStringLiteral("Writing ") + writeName;
+		watchWriteKind = QStringLiteral("writing");
 		watchWroteLast = true;
 		if (binding)
 			binding->mutationAccepted(writer);
@@ -1319,11 +1336,62 @@ cl::Operation operationOf(const EndpointEntry& entry)
 }
 
 // What adding an endpoint does, in words: "a read of x", "Command x", "a call of Service x".
-QString addedWhat(const EndpointEntry& entry)
+QString addedWhat(const EndpointEntry& entry, const QString& values = {})
 {
-	return entry.category == 1   ? batchWords("a read of %1").arg(entry.path)
-	       : entry.category == 2 ? batchWords("Command %1").arg(entry.path)
-	                             : batchWords("a call of Service %1").arg(entry.path);
+	const auto what = entry.category == 1   ? batchWords("a read of %1").arg(entry.path)
+	                  : entry.category == 2 ? batchWords("Command %1").arg(entry.path)
+	                                        : batchWords("a call of Service %1").arg(entry.path);
+	return values.isEmpty() ? what : QStringLiteral("%1 (%2)").arg(what, values);
+}
+
+// A Command's or Service's values typed after its path (BA-2), checked as
+// Details would: nullopt when the endpoint is not in the schema.
+std::optional<request_arguments::Result> typedArguments(const DynamicBatch& batch, const EndpointEntry& entry,
+                                                        const QString& tail)
+{
+	const auto schema = batch.schema();
+	const auto utf8 = entry.path.toUtf8();
+	const std::string_view path{utf8.constData(), std::size_t(utf8.size())};
+	const auto* endpoint = entry.category == 2 ? schema.findCommand(path) : schema.findService(path);
+	if (!endpoint)
+		return std::nullopt;
+	return request_arguments::check(schema, endpoint->typeId, entry.path, tail);
+}
+
+// "value 2, factor 3": the values as they will be sent.
+QString valuesSaid(const request_arguments::Result& result)
+{
+	QStringList parts;
+	for (const auto& item : result.items)
+		if (item.status == request_arguments::Item::Status::Ok)
+			parts << (item.name.isEmpty() ? item.canonical : QStringLiteral("%1 %2").arg(item.name, item.canonical));
+	return parts.join(QStringLiteral(", "));
+}
+
+// "value=2 factor=3": the values in the line's own form, as an item shows
+// them, so a copied item pastes back into the row.
+QString valuesLine(const request_arguments::Result& result)
+{
+	QStringList parts;
+	for (const auto& item : result.items)
+		if (item.status == request_arguments::Item::Status::Ok)
+			parts << (item.name.isEmpty() ? item.canonical : QStringLiteral("%1=%2").arg(item.name, item.canonical));
+	return parts.join(QLatin1Char(' '));
+}
+
+QVariantList argumentsOf(const request_arguments::Result& result)
+{
+	QVariantList out;
+	for (const auto& item : result.items) {
+		const auto status = item.status == request_arguments::Item::Status::Ok        ? QStringLiteral("ok")
+		                    : item.status == request_arguments::Item::Status::Error     ? QStringLiteral("error")
+		                    : item.status == request_arguments::Item::Status::Aggregate ? QStringLiteral("aggregate")
+		                                                                                 : QStringLiteral("missing");
+		out.append(QVariantMap{{QStringLiteral("name"), item.name}, {QStringLiteral("typeText"), item.typeText},
+		                       {QStringLiteral("status"), status}, {QStringLiteral("text"), item.text},
+		                       {QStringLiteral("canonical"), item.canonical}, {QStringLiteral("error"), item.error}});
+	}
+	return out;
 }
 
 // The status a refusal is said with, and the words.
@@ -1403,6 +1471,52 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 			                                          : batchWords("Enter takes %1.").arg(name));
 		}
 	}
+	// A Command or a Service that takes input, with its values typed after
+	// it (BA-2): what is missing or wrong, or the request it makes.
+	std::optional<request_arguments::Result> typed;
+	if (pick.status == QStringLiteral("input") && pick.matches.size() == 1) {
+		typed = typedArguments(p->batch, pick.matches.first(), pick.tail);
+		if (typed) {
+			out[QStringLiteral("path")] = pick.matches.first().path;
+			out[QStringLiteral("operation")] = operationWord(pick.matches.first());
+			out[QStringLiteral("arguments")] = argumentsOf(*typed);
+			// The Batch's own refusals come first once the line names one
+			// endpoint - changes off, a full Batch, items of an earlier
+			// connection - not after every value is typed. A request of
+			// zeros is as long as the typed one, so it is refused alike.
+			const auto& entry = pick.matches.first();
+			const QByteArray zeros(qsizetype(entry.requestBytes), '\0');
+			if (const auto probe = p->batch.supported() ? p->pathRow(entry, &zeros) : std::nullopt) {
+				const auto refusal = p->batch.refusal({&*probe, 1});
+				if (refusal != DynamicBatch::Refusal::None)
+					return say(refusalStatus(refusal), refusalText(refusal, p->batch.count(), p->batch.itemLimit()));
+			}
+			out[QStringLiteral("next")] = typed->next;
+			// What Enter writes while values are missing: the next "name=",
+			// or a name or a value half typed, completed; empty, nothing -
+			// a value still to type, or several it could become.
+			out[QStringLiteral("line")] = QString{};
+			if (!typed->adding.isEmpty()) {
+				auto base = text;
+				while (!base.isEmpty() && base.back().isSpace())
+					base.chop(1);
+				base.chop(typed->typing.size());
+				out[QStringLiteral("line")] = base + typed->adding;
+			}
+			if (typed->unnamed) {
+				out[QStringLiteral("named")] = typed->named;
+				return say(QStringLiteral("unnamed"), typed->message);
+			}
+			if (typed->aggregate)
+				return say(QStringLiteral("input"), typed->message);
+			if (!typed->ok())
+				return say(typed->error.isEmpty() && std::none_of(typed->items.begin(), typed->items.end(), [](const auto& item) {
+					           return item.status == request_arguments::Item::Status::Error;
+				           }) ? QStringLiteral("needs") : QStringLiteral("error"),
+				           typed->message);
+			pick.status = QStringLiteral("adds");
+		}
+	}
 	if (pick.status == QStringLiteral("adds") && pick.member) {
 		// A value inside the Field must be one.
 		const auto values = p->watch.resolvePath(pick.path, false);
@@ -1416,12 +1530,14 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 	const auto& entry = pick.matches.first();
 	out[QStringLiteral("path")] = entry.path;
 	out[QStringLiteral("operation")] = operationWord(entry);
-	if (p->takesInput(entry))
+	if (p->takesInput(entry) && !typed)
 		return say(QStringLiteral("input"),
 		           batchWords("%1 takes input. Enter selects it: fill it in Details, then Add selected draft.").arg(entry.path));
 	if (!p->batch.supported())
 		return say(QStringLiteral("unsupported"), batchWords("This device has no Batch."));
-	const auto row = p->pathRow(entry);
+	auto row = p->pathRow(entry, typed ? &typed->request : nullptr);
+	if (row && typed && !valuesLine(*typed).isEmpty())
+		row->name = entry.path + QLatin1Char(' ') + valuesLine(*typed);
 	if (!row)
 		return say(QStringLiteral("busy"), batchWords("Wait for the current read or write to finish, then add."));
 	const auto refusal = p->batch.refusal({&*row, 1});
@@ -1432,13 +1548,14 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 	if (const auto* items = p->batch.model())
 		for (std::size_t at = 0; at < items->rows().size() && !also; ++at) {
 			const auto& held = items->rows()[at];
-			if (held.id == row->id && held.operation == row->operation && held.session == row->session)
+			if (held.id == row->id && held.operation == row->operation && held.session == row->session &&
+			    held.request == row->request)
 				also = int(at) + 1;
 		}
 	out[QStringLiteral("item")] = item;
 	out[QStringLiteral("also")] = also;
 	QString message = pick.member ? batchWords("A Batch reads whole Fields: adds a read of %1 as item %L2").arg(entry.path).arg(item)
-	                              : batchWords("Adds %1 as item %L2").arg(addedWhat(entry)).arg(item);
+	                              : batchWords("Adds %1 as item %L2").arg(addedWhat(entry, typed ? valuesSaid(*typed) : QString{})).arg(item);
 	if (entry.category != 1)
 		message += entry.category == 2 ? batchWords("; it runs when the Batch is executed")
 		                               : batchWords("; it is called when the Batch is executed");
@@ -1454,6 +1571,111 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 	const auto list = p->endpoints.endpointList();
 	if (list.isEmpty())
 		return out;
+	// After a Command's or a Service's path and a space (BA-2): its arguments
+	// not given yet, in declared order; after "name=", a bool's or an enum's
+	// values. Choosing one writes it into the line.
+	auto pick = endpoint_paths::resolve(text, list);
+	// "control.Scale " - its name and a space: no values yet, all to give.
+	if (!pick.hasTail && text.endsWith(QLatin1Char(' ')) && pick.matches.size() == 1 && pick.matches.first().category != 1)
+		pick.hasTail = true;
+	if (pick.hasTail && pick.matches.size() == 1 && p->takesInput(pick.matches.first())) {
+		const auto& entry = pick.matches.first();
+		const auto schema = p->batch.schema();
+		const auto utf8 = entry.path.toUtf8();
+		const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
+		const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where);
+		if (!endpoint)
+			return out;
+		const auto inputs = request_arguments::arguments(schema, endpoint->typeId);
+		const auto given = request_arguments::parse(pick.tail);
+		auto line = text;
+		while (!line.isEmpty() && line.back().isSpace())
+			line.chop(1);
+		const bool spaced = text.size() > line.size(); // the last word finished
+		const auto argumentAt = [&inputs](const QString& name) {
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && inputs[i].name == name)
+					return int(i);
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && inputs[i].name.compare(name, Qt::CaseInsensitive) == 0)
+					return int(i);
+			return -1;
+		};
+		const auto given_ = [&given, &argumentAt](int at) {
+			return std::any_of(given.begin(), given.end(),
+			                   [&](const request_arguments::Given& g) { return !g.name.isEmpty() && argumentAt(g.name) == at; });
+		};
+		// "enum Idle, Run, Stop": an enum's first names beside its argument.
+		const auto shownType = [](const request_arguments::Argument& input) {
+			if (!input.value.enumeration || input.choices.isEmpty())
+				return input.typeText;
+			auto names = input.choices.mid(0, 3).join(QStringLiteral(", "));
+			if (input.choices.size() > 3)
+				names += QStringLiteral(", …");
+			return input.typeText + QLatin1Char(' ') + names;
+		};
+		const auto argument = [&](std::size_t i, const QString& base) {
+			const auto& input = inputs[i];
+			const auto completion = base + input.name + QLatin1Char('=');
+			return QVariantMap{{QStringLiteral("path"), input.name + QLatin1Char('=')},
+			                   {QStringLiteral("completion"), completion},
+			                   {QStringLiteral("name"), input.name},
+			                   {QStringLiteral("kind"), QString{}},
+			                   {QStringLiteral("kindCode"), QStringLiteral("argument")},
+			                   {QStringLiteral("typeText"), shownType(input)},
+			                   {QStringLiteral("note"), input.scalar ? batchWords("argument %L1 of %L2").arg(int(i) + 1).arg(int(inputs.size()))
+			                                                         : batchWords("in Details")},
+			                   {QStringLiteral("container"), false},
+			                   {QStringLiteral("continues"), true}};
+		};
+		// After "name=", or "name=Ru" last on the line: a bool's or an enum's
+		// values, those it starts first (all when it starts none).
+		if (!spaced && !given.empty() && !given.back().name.isEmpty()) {
+			const auto& last = given.back();
+			const int at = argumentAt(last.name);
+			if (at < 0 || inputs[std::size_t(at)].choices.isEmpty())
+				return out;
+			const auto& input = inputs[std::size_t(at)];
+			const auto base = line.chopped(last.text.size());
+			QList<qsizetype> shown;
+			for (qsizetype i = 0; i < input.choices.size(); ++i)
+				if (input.choices[i].startsWith(last.text, Qt::CaseInsensitive))
+					shown << i;
+			if (shown.isEmpty())
+				for (qsizetype i = 0; i < input.choices.size(); ++i)
+					shown << i;
+			for (const auto i : std::as_const(shown)) {
+				const auto code = input.codes.value(i);
+				const auto codeText = !input.value.enumeration ? QString{}
+				                      : input.value.scalar == WatchScalar::U64 ? QString::number(quint64(code))
+				                                                               : QString::number(code);
+				out.append(QVariantMap{{QStringLiteral("path"), input.choices[i]},
+				                       {QStringLiteral("completion"), base + input.choices[i] + QLatin1Char(' ')},
+				                       {QStringLiteral("name"), input.choices[i]},
+				                       {QStringLiteral("kind"), QString{}},
+				                       {QStringLiteral("kindCode"), QStringLiteral("value")},
+				                       {QStringLiteral("typeText"), codeText},
+				                       {QStringLiteral("note"), batchWords("value for %1").arg(input.name)},
+				                       {QStringLiteral("container"), false},
+				                       {QStringLiteral("continues"), true}});
+			}
+			return out;
+		}
+		// A word with no "=" last on the line: the arguments it starts.
+		if (!spaced && !given.empty()) {
+			const auto& word = given.back().text;
+			const auto base = line.chopped(word.size());
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+				if (!inputs[i].name.isEmpty() && !given_(int(i)) && inputs[i].name.startsWith(word, Qt::CaseInsensitive))
+					out.append(argument(i, base));
+			return out;
+		}
+		// After the path or a value and a space: the arguments not given yet.
+		for (std::size_t i = 0; i < inputs.size(); ++i)
+			if (!inputs[i].name.isEmpty() && !given_(int(i)))
+				out.append(argument(i, line + QLatin1Char(' ')));
+		return out;
+	}
 	auto typed = text.trimmed();
 	// A leading kind word narrows the suggestions as it narrows the line.
 	int category = 0;
@@ -1488,8 +1710,19 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		                    : entry.writable                  ? QStringLiteral("rw") : QStringLiteral("r-");
 		const bool input = entry.category != 1 && p->takesInput(entry);
 		const int count = inBatch(entry);
-		const auto typeText = entry.category == 1 ? entry.typeText + QLatin1Char(' ') + access
-		                      : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
+		auto typeText = entry.category == 1 ? entry.typeText + QLatin1Char(' ') + access
+		                : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
+		if (input) {
+			// "(value: f32, factor: f32) -> f32": the names to type (BA-2).
+			const auto schema = p->batch.schema();
+			const auto utf8 = entry.path.toUtf8();
+			const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
+			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where)) {
+				typeText = request_arguments::signatureText(schema, endpoint->typeId);
+				if (entry.category == 3 && endpoint->responseTypeId)
+					typeText += QStringLiteral(" -> ") + schema_text::typeText(schema, endpoint->responseTypeId);
+			}
+		}
 		const auto completion = shared ? operationWord(entry) + QLatin1Char(' ') + entry.path : keyword + entry.path;
 		return QVariantMap{
 		    {QStringLiteral("path"), completion},
@@ -1500,9 +1733,11 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		    {QStringLiteral("operation"), operationWord(entry)},
 		    {QStringLiteral("input"), input},
 		    {QStringLiteral("note"), count == 1 ? batchWords("in Batch")
-		                             : count > 1 ? batchWords("%L1 in Batch").arg(count)
-		                             : input ? batchWords("takes input") : QString{}},
-		    {QStringLiteral("container"), false}};
+		                             : count > 1 ? batchWords("%L1 in Batch").arg(count) : QString{}},
+		    {QStringLiteral("container"), false},
+		    // Chosen, it takes a space and its arguments follow (BA-2).
+		    {QStringLiteral("follow"), input ? QStringLiteral(" ") : QString{}},
+		    {QStringLiteral("continues"), input}};
 	};
 	const auto wanted = [category](const EndpointEntry& entry) { return category == 0 || entry.category == category; };
 	constexpr int limit = 50;
@@ -1554,8 +1789,14 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 		const auto check = checkBatchPath(text);
 		const auto status = check.value(QStringLiteral("status")).toString();
 		const auto pick = endpoint_paths::resolve(text, p->endpoints.endpointList());
-		const auto row = status == QStringLiteral("adds") && pick.matches.size() == 1 ? p->pathRow(pick.matches.first())
-		                                                                             : std::nullopt;
+		const auto typed = status == QStringLiteral("adds") && pick.matches.size() == 1 && pick.status == QStringLiteral("input")
+		                       ? typedArguments(p->batch, pick.matches.first(), pick.tail)
+		                       : std::nullopt;
+		auto row = status == QStringLiteral("adds") && pick.matches.size() == 1
+		               ? p->pathRow(pick.matches.first(), typed && typed->ok() ? &typed->request : nullptr)
+		               : std::nullopt;
+		if (row && typed && !valuesLine(*typed).isEmpty())
+			row->name = pick.matches.first().path + QLatin1Char(' ') + valuesLine(*typed);
 		if (!row) {
 			const auto path = check.value(QStringLiteral("path")).toString();
 			const auto reason = status == QStringLiteral("partial")
@@ -1572,7 +1813,7 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 		}
 		items.append(QVariantMap{{QStringLiteral("path"), pick.matches.first().path},
 		                         {QStringLiteral("operation"), operationWord(pick.matches.first())},
-		                         {QStringLiteral("what"), addedWhat(pick.matches.first())}});
+		                         {QStringLiteral("what"), addedWhat(pick.matches.first(), typed ? valuesSaid(*typed) : QString{})}});
 		rows.push_back(*row);
 	}
 	result[QStringLiteral("refused")] = refused;
@@ -1612,13 +1853,48 @@ bool DynamicConfiguratorProvider::selectBatchPath(const QString& text)
 {
 	auto p = d;
 	// An edit in Details is never replaced unseen: finish or cancel it first.
-	if (editing())
+	// A Command or a Service merely selected counts as editing its draft, so
+	// the test is whether there is anything to lose, not whether it is open.
+	if (selectionRequiresDiscard())
 		return false;
 	const auto pick = endpoint_paths::resolve(text, p->endpoints.endpointList());
 	if (pick.matches.size() != 1)
 		return false;
 	const auto index = p->endpoints.endpointIndex(pick.matches.first().category, pick.matches.first().id);
-	return index.isValid() && selectEndpoint(index);
+	if (!index.isValid() || !selectEndpoint(index))
+		return false;
+	// The values typed after the path go into the draft (BA-2), each valid one
+	// as Details takes it; the rest are left for Details. With changes off the
+	// draft takes none, and the endpoint is only selected.
+	if (!pick.hasTail || (!commandSelected() && !serviceSelected()))
+		return true;
+	const auto typed = typedArguments(p->batch, pick.matches.first(), pick.tail);
+	if (!typed || !typed->error.isEmpty())
+		return true;
+	// The draft's rows follow the request's members in declared order, and
+	// a row's name may be a presentation label: an argument is found by its
+	// place. A request that is one value is the root itself.
+	const bool bare = typed->items.size() == 1 && typed->items.front().name.isEmpty();
+	const auto draftMember = [&values = p->values, bare](int place) {
+		const auto root = values.index(0, 0);
+		if (bare)
+			return root;
+		// fetchMore may add nothing (the model changing, a row it cannot
+		// read) while canFetchMore stays true: stop when no row came.
+		for (int rows = values.rowCount(root); rows <= place && values.canFetchMore(root);) {
+			values.fetchMore(root);
+			const int now = values.rowCount(root);
+			if (now <= rows)
+				break;
+			rows = now;
+		}
+		return place < values.rowCount(root) ? values.index(place, 0, root) : QModelIndex{};
+	};
+	for (std::size_t i = 0; i < typed->items.size(); ++i)
+		if (typed->items[i].status == request_arguments::Item::Status::Ok)
+			if (const auto at = draftMember(int(i)); at.isValid())
+				setScalarText(at, typed->items[i].editorText);
+	return true;
 }
 
 bool DynamicConfiguratorProvider::removeBatch(int row)
@@ -2689,6 +2965,12 @@ bool DynamicConfiguratorProvider::watchWriting() const
 	return d->writer && d->writer->action != DynamicViewState::Action::None;
 }
 
+QString DynamicConfiguratorProvider::watchWriteKind() const
+{
+	// Said only while its words are: an outcome of an earlier session is gone.
+	return watchWriteOutcome().isEmpty() ? QString{} : d->watchWriteKind;
+}
+
 QString DynamicConfiguratorProvider::watchWriteOutcome() const
 {
 	return d->history(d->watchWrite, d->watchWriteSession);
@@ -2712,6 +2994,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		if (!parsed.error.isEmpty()) {
 			p->watchWrite = model->data(index, WatchlistModel::NameRole).toString() + QStringLiteral(" not written: ") +
 			                parsed.error;
+			p->watchWriteKind = QStringLiteral("refused");
 			p->notify();
 			return false;
 		}
@@ -2722,6 +3005,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	std::optional<WatchLeaves::Leaf> leaf;
 	if (!watch_key::isWhole(key) && !(leaf = p->watch.leaf(key))) {
 		p->watchWrite = QStringLiteral("Write refused: the Field is not available");
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2731,6 +3015,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto field = view.bindField(id);
 	if (!field || view.selectField(field.endpoint) != cl::Status::Ok) {
 		p->watchWrite = QStringLiteral("Write refused: the Field is not available");
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2742,6 +3027,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	if (!submitted) {
 		p->watchWrite =
 		    QStringLiteral("Write refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2758,6 +3044,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
 	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
+	p->watchWriteKind = QStringLiteral("writing");
 	p->notify();
 	return true;
 }

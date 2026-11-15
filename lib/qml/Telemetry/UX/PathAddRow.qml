@@ -120,7 +120,9 @@ FocusScope {
         return path.endsWith(".") || path.endsWith("[") ? path : path + (c.next || ".")
     }
     // A candidate chosen: a container gets "." or "[" and the next step's
-    // candidates; a value fills the field, waiting for Enter.
+    // candidates; one that continues (a Command's arguments, BA-2) takes its
+    // follow text and shows what comes next; a value fills the field,
+    // waiting for Enter.
     function choose(index) {
         const c = candidates[index]
         if (!c)
@@ -131,11 +133,13 @@ FocusScope {
             text = text.substring(0, text.lastIndexOf("[") + 1)
         else if (c.container)
             text = into(c)
+        else if (c.follow)
+            text = text + c.follow
         field.text = text
         field.cursorPosition = text.length
         refresh()
         recheck()
-        if (!c.container)
+        if (!c.container && !c.continues)
             popup.close()
     }
     // The candidates' common prefix, for Tab.
@@ -146,6 +150,10 @@ FocusScope {
         if (candidates.length === 1 && candidates[0].container && completionOf(candidates[0]).indexOf(" … ") < 0)
             return into(candidates[0])
         const typed = field.text.trim()
+        // One left, typed whole, that goes on: its follow text (a space
+        // before a Command's arguments).
+        if (candidates.length === 1 && candidates[0].follow && completionOf(candidates[0]) === typed)
+            return typed + candidates[0].follow
         const starting = candidates.map(c => completionOf(c))
                                    .filter(path => path.startsWith(typed) && path.indexOf(" … ") < 0)
         if (starting.length === 0)
@@ -155,6 +163,14 @@ FocusScope {
             while (!path.startsWith(prefix))
                 prefix = prefix.substring(0, prefix.length - 1)
         return prefix.length > field.text.length ? prefix : field.text
+    }
+    // The line as an adapter writes it (BA-2): the next "name=", or values
+    // with their names written in; the suggestions follow it.
+    function setText(value) {
+        field.text = value
+        field.cursorPosition = value.length
+        refresh()
+        recheck()
     }
     // Adds what the field names, or every pasted line.
     function add(lines) {
@@ -259,7 +275,7 @@ FocusScope {
                         // Leaving backwards: the suggestions go with the field.
                         popup.close()
                         event.accepted = false
-                    } else if (event.key === Qt.Key_Tab && popup.visible) {
+                    } else if (event.key === Qt.Key_Tab && (popup.visible || addRow.common() !== text)) {
                         text = addRow.common()
                         cursorPosition = text.length
                         addRow.refresh()
@@ -273,7 +289,11 @@ FocusScope {
                             addRow.highlighted = -1
                         }
                         addRow.recheck()
-                        if (popup.visible && addRow.highlighted >= 0) {
+                        // Ctrl+Enter: an adapter's other way (the Batch: to Details).
+                        if ((event.modifiers & Qt.ControlModifier) && typeof addRow.adapter.select === "function") {
+                            popup.close()
+                            addRow.adapter.select(text)
+                        } else if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
                         } else if (addRow.adapter.enter(text)) {
                             // the adapter did what Enter means for it

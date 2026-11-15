@@ -444,3 +444,56 @@ Read now. `EndpointTreePanel.previewValues` still turns previews on and off;
 `previewIntervalMs` (2000 by default) is new, and a host saves both with its
 project. The provider gains `previewIntervalMs` (one value for every tree on a
 connection) and `readPreviewsNow()`.
+
+## The Watchlist's row editor says more (WL-5, November 2026)
+
+While a row is edited and the Watchlist polls, the live reading stands beside
+the name ("Now 1.48"; a failing read its status word, in the warning colour).
+`DynamicConfiguratorProvider::watchWriteKind` says what the last write's
+outcome is - `writing`, `confirmed`, `differs`, `unconfirmed`, `refused` - and
+the panel shows a confirmed write quietly and the others in the primary text
+colour. F2, or a double-click, on a value that can't be written says why: read
+only, not connected, changes off (with Allow changes beside it), a write in
+progress, or the provider's own reason.
+
+## A Command's or Service's values in the Batch row (BA-2, November 2026)
+
+The Batch's "+" row takes a Command's or Service's values after its path, named:
+`control.Scale value=2 factor=3`. `request_arguments` (new,
+`RequestArguments.hpp`) reads that text against the request type, checks each
+value as Details would and, when every one is valid, encodes the request.
+`EndpointPaths::Pick` gains `tail` and `hasTail`: a line whose first word names a
+Command or a Service is split into the path and its values; a Field still takes
+none, and input to an endpoint that takes none is refused in words.
+`DynamicBatch::schema()` is new.
+
+`checkBatchPath` has three new statuses: `needs` (values missing; `next` names
+the one Enter writes as `name=`), `error` (a value that is not one, a misspelt
+name, an argument given twice) and `unnamed` (values typed without names;
+`named` is the line with them written in). `input` now means only a struct or
+an array argument, which Details fills. `adds` carries `arguments`, and its
+message lists the values as they will be sent. `addBatchPaths` adds the typed
+request, and names the item with its values in the line's own form, so a copied
+item pastes back. `batchPathCandidates` shows a Command's or Service's named
+signature - `(reference: f32)` - and, after the path and a space, the arguments
+not given yet (`kindCode` `argument`), then a bool's or an enum's values.
+
+A name half typed (`control.Scale fa`) is taken as a name, and a bool's or an
+enum's value half typed as that value, not as a wrong value; `name=` waits for
+its value quietly. On `needs` the check carries `line`, the line Enter writes:
+the next `name=`, or the half-typed name or value completed. The Batch's own
+refusals (changes off, a full Batch, items of an earlier connection) now come
+as soon as the line names one Command or Service, not once every value is
+valid. A Command or a Service that takes input is suggested with `follow` " "
+and `continues`: choosing it, or Tab on its whole path, writes a space and
+offers its arguments. An argument is suggested as `name=` and a value by its
+name, with `completion` the whole line.
+
+`PathAddRow` gains `setText()`, and Ctrl+Enter calls the adapter's `select(text)`
+when it has one; `BatchAddRow` uses it to select the endpoint for Details, and
+`selectBatchPath` puts each valid value typed into the draft (with changes
+allowed; otherwise it only selects), by the argument's place and as the editor
+takes it (`Item::editorText`: an enum by its code). On `unnamed` Enter writes
+the names in and adds nothing. `selectBatchPath` now refuses only when the
+selection holds an edit to lose (BA-1 refused whenever a Command or a Service
+was selected).

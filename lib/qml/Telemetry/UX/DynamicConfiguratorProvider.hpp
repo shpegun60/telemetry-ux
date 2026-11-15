@@ -60,6 +60,10 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchOwnFormatCount READ watchOwnFormatCount NOTIFY stateChanged)
 	Q_PROPERTY(bool watchWriting READ watchWriting NOTIFY stateChanged)
 	Q_PROPERTY(QString watchWriteOutcome READ watchWriteOutcome NOTIFY stateChanged)
+	// What the outcome is (WL-5): "writing", "confirmed" (read back as
+	// written), "differs" (the device reads back another value),
+	// "unconfirmed" (written, not read back), "refused", or "" before any.
+	Q_PROPERTY(QString watchWriteKind READ watchWriteKind NOTIFY stateChanged)
 	Q_PROPERTY(
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -283,6 +287,7 @@ public:
 	bool canWriteWatch() const;
 	bool watchWriting() const;
 	QString watchWriteOutcome() const;
+	QString watchWriteKind() const;
 	QString selection() const;
 	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;

@@ -33,6 +33,28 @@ Pane {
     // Why the row asked to write can't be (a value in a Field larger than one
     // write); shown in the outcome line until another row is chosen.
     property string writeRefusalText: ""
+    // The refusal is that changes are off: Allow changes stands beside it.
+    property bool writeRefusalChanges: false
+    // Why a row's value can't be written now (WL-5), in words: F2 or a
+    // double-click on such a row says it.
+    function whyNotWritable(item) {
+        const name = item.name
+        if (item.model.writeRefusal && item.model.writeRefusal.length > 0)
+            return item.model.writeRefusal
+        if (item.model.writable !== true)
+            return qsTr("%1 is read only.").arg(name)
+        if (provider.connected !== true)
+            return qsTr("Connect to the device to write %1.").arg(name)
+        if (provider.allowMutations === false)
+            return qsTr("Changes are off. Allow changes to write %1.").arg(name)
+        if (provider.watchWriting === true)
+            return qsTr("A write is in progress; write %1 when it is done.").arg(name)
+        return ""
+    }
+    function sayNotWritable(item) {
+        writeRefusalText = whyNotWritable(item)
+        writeRefusalChanges = item.model.writable === true && provider.connected === true && provider.allowMutations === false
+    }
     function requestStart(polling) {
         if (typeof startHandler === "function") startHandler(polling)
         else if (polling) provider.startWatch()
@@ -1282,17 +1304,39 @@ Pane {
         }
         // The outcome of the last write from a row, in words; or why the row
         // asked to write can't be.
-        Label {
-            objectName: "watchWriteOutcome"
-            visible: panel.open && text.length > 0
+        // A write the device confirmed reads quietly; one it reads back
+        // otherwise, or that could not be read back or was refused, stands
+        // out (WL-5).
+        RowLayout {
+            visible: panel.open && writeOutcome.text.length > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.ceil(contentHeight)
-            textFormat: Text.PlainText
-            text: panel.writeRefusalText.length > 0 ? panel.writeRefusalText
-                : panel.provider.watchWriteOutcome === undefined ? "" : panel.provider.watchWriteOutcome
-            color: Theme.textSecondary
-            font.pointSize: Type.caption
-            wrapMode: Text.Wrap
+            spacing: Type.tight
+            Label {
+                id: writeOutcome
+                objectName: "watchWriteOutcome"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.ceil(contentHeight)
+                textFormat: Text.PlainText
+                text: panel.writeRefusalText.length > 0 ? panel.writeRefusalText
+                    : panel.provider.watchWriteOutcome === undefined ? "" : panel.provider.watchWriteOutcome
+                readonly property string kind: panel.writeRefusalText.length > 0 ? "refused"
+                    : typeof panel.provider.watchWriteKind === "string" ? panel.provider.watchWriteKind : ""
+                color: kind === "differs" || kind === "unconfirmed" || kind === "refused" ? Theme.textPrimary
+                                                                                           : Theme.textSecondary
+                font.pointSize: Type.caption
+                wrapMode: Text.Wrap
+            }
+            LinkButton {
+                objectName: "watchAllowChanges"
+                visible: panel.writeRefusalText.length > 0 && panel.writeRefusalChanges &&
+                         panel.provider.allowMutations === false
+                text: qsTr("Allow changes")
+                onClicked: {
+                    panel.provider.allowMutations = true
+                    panel.writeRefusalText = ""
+                    panel.writeRefusalChanges = false
+                }
+            }
         }
         // Qt Quick has no clipboard API; a hidden editor copies its text.
         TextEdit { id: clipboardHelper; visible: false; textFormat: TextEdit.PlainText }
@@ -1406,7 +1450,10 @@ Pane {
         ListView {
             id: watchList
             Accessible.role: panel.treeView ? Accessible.Tree : Accessible.List
-            onCurrentIndexChanged: panel.writeRefusalText = ""
+            onCurrentIndexChanged: {
+                panel.writeRefusalText = ""
+                panel.writeRefusalChanges = false
+            }
             objectName: "watchlistView"
             Layout.fillWidth: true
             // With the "+" row the list is as tall as its rows, the row right
@@ -1552,8 +1599,8 @@ Pane {
                            && currentItem && currentItem.writable) {
                     currentItem.startEdit()
                     event.accepted = true
-                } else if (event.key === Qt.Key_F2 && currentItem && currentItem.writeRefusal.length > 0) {
-                    panel.writeRefusalText = currentItem.writeRefusal
+                } else if (event.key === Qt.Key_F2 && currentItem && currentItem.isValue) {
+                    panel.sayNotWritable(currentItem)
                     event.accepted = true
                 }
             }
@@ -1650,8 +1697,8 @@ Pane {
                 }
                 readonly property int choiceIndex: choiceOptions.findIndex(item => !item.manual && item.text === draftText)
                 function startEdit() {
-                    if (!writable && writeRefusal.length > 0) {
-                        panel.writeRefusalText = writeRefusal
+                    if (!writable && isValue) {
+                        panel.sayNotWritable(watchRow)
                         return
                     }
                     if (!writable || editing)
@@ -1660,6 +1707,7 @@ Pane {
                     if (panel.selectable)
                         panel.rows.select(index)
                     panel.writeRefusalText = ""
+                    panel.writeRefusalChanges = false
                     manualCode = false
                     // New providers own the exact typed text, including enum codes.
                     // Keep the legacy fallback only when the role is absent.
@@ -1950,6 +1998,23 @@ Pane {
                             font.weight: watchRow.isGroup ? Type.headingWeight : Font.Normal
                             color: watchRow.foreground
                             elide: Text.ElideRight
+                        }
+                        // Edited while polling (WL-5): the live reading beside the
+                        // name, "Now 1.48"; a failing read says its status.
+                        Text {
+                            objectName: "watchRowNow"
+                            anchors.left: leafText.right
+                            anchors.leftMargin: Type.padding
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, parent.width - leafText.x - leafText.width - Type.padding)
+                            visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > 0
+                            textFormat: Text.PlainText
+                            text: watchRow.ok ? qsTr("Now %1").arg(watchRow.shownText) : watchRow.status
+                            font.family: Type.fixedFamily
+                            font.pointSize: Type.caption
+                            color: watchRow.ok ? (watchRow.active ? Theme.selectedForeground : watchRow.muted) : Theme.warning
+                            elide: Text.ElideRight
+                            Accessible.name: text
                         }
                         HoverHandler { id: nameHover }
                         PlainToolTip {

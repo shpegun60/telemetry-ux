@@ -777,12 +777,19 @@ void batchPaths()
 	const auto member = check("device.Config.Gain");
 	CHECK(member.value("path") == "device.Config" && member.value("operation") == "read");
 	CHECK(check("Setpoint").value("path") == "device.Setpoint");
-	// One that takes input is selected for Details instead.
+	// One whose input has a struct or an array goes to Details (BA-2).
 	const auto input = check("control.Execute");
-	CHECK(input.value("status") == "input" && input.value("message").toString().contains("takes input"));
+	CHECK(input.value("status") == "input" && input.value("message").toString().contains("which is filled in Details"));
+	// Input to one that takes none is refused in words; a Field's "= value" still is.
+	const auto none = check("command control.Ping now");
+	CHECK(none.value("status") == "error" && none.value("message") == "control.Ping takes no input; remove \"now\".");
 	CHECK(provider->selectBatchPath(QStringLiteral("control.Execute")) &&
 	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Execute");
 	CHECK(!provider->selectBatchPath(QStringLiteral("Ping")) && !provider->selectBatchPath(QStringLiteral("Nope")));
+	// Selected and untouched, a Command is not an edit to lose: the row
+	// selects another (BA-1 refused the second).
+	CHECK(provider->selectBatchPath(QStringLiteral("control.Accept")) &&
+	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Accept");
 	CHECK(check("Nope").value("status") == "missing" && check("Nope").value("message") == "Nothing on this device is named Nope.");
 	CHECK(check("device.Nope").value("message") == "device.Nope is not on this device.");
 	CHECK(check("device.Setpoint = 3").value("status") == "error");
@@ -816,6 +823,70 @@ void batchPaths()
 	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
 	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
 	connection.disconnect();
+
+	// A Command's values typed after its path (BA-2), checked as Details would,
+	// on the demo whose control.Calibrate takes reference (f32).
+	inspector_qml::TcpDemoServer plain;
+	CHECK(plain.listen());
+	host::ConnectionSession second;
+	ux::QtConnectionBinding secondPresentation{&second};
+	auto* calibrate = secondPresentation.createProvider();
+	connect(second, plain);
+	const auto line = [calibrate](const char* text) { return calibrate->checkBatchPath(QString::fromUtf8(text)); };
+	auto typed = line("control.Calibrate");
+	CHECK(typed.value("status") == "needs" && typed.value("next") == "reference" &&
+	      typed.value("line") == "control.Calibrate reference=" &&
+	      typed.value("message") == "control.Calibrate needs reference (f32). Enter writes reference=; Ctrl+Enter fills it in Details.");
+	// A name half typed is a name: quiet, and Enter completes it.
+	typed = line("control.Calibrate ref");
+	CHECK(typed.value("status") == "needs" && typed.value("line") == "control.Calibrate reference=");
+	// "reference=" waits for its value, quietly.
+	typed = line("control.Calibrate reference=");
+	CHECK(typed.value("status") == "needs" && typed.value("message") == "reference (f32) takes a number." &&
+	      typed.contains("line") && typed.value("line").toString().isEmpty());
+	typed = line("control.Calibrate reference=abc");
+	CHECK(typed.value("status") == "error" && typed.value("message") == "reference (f32) takes a number, not \"abc\".");
+	typed = line("control.Calibrate referenc=1");
+	CHECK(typed.value("status") == "error" && typed.value("message") == "control.Calibrate has no argument referenc. Did you mean reference?");
+	// Valid, it would be added - here the device has no Batch - with its value as sent.
+	for (const auto* text : {"control.Calibrate reference=1.5", "control.Calibrate reference = 1.5", "control.Calibrate 1.5",
+	                         "Calibrate reference=0x3fc00000"}) {
+		typed = line(text);
+		const auto arguments = typed.value("arguments").toList();
+		CHECK(typed.value("status") == "unsupported" && arguments.size() == 1 &&
+		      arguments.first().toMap().value("status") == "ok" && arguments.first().toMap().value("canonical") == "1.5");
+	}
+	// Suggestions: the named signature, then the arguments to give.
+	const auto found = calibrate->batchPathCandidates(QStringLiteral("Calib"));
+	bool signature = false;
+	for (const auto& candidate : found)
+		signature = signature || (candidate.toMap().value("path") == "control.Calibrate" &&
+		                          candidate.toMap().value("typeText") == "(reference: f32)" &&
+		                          candidate.toMap().value("follow") == " " && candidate.toMap().value("continues").toBool());
+	CHECK(signature);
+	// The argument shows as "reference=" with its type; choosing it writes
+	// the whole line.
+	const auto arguments = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate "));
+	CHECK(arguments.size() == 1 && arguments.first().toMap().value("completion") == "control.Calibrate reference=" &&
+	      arguments.first().toMap().value("path") == "reference=" && arguments.first().toMap().value("kind") == "" &&
+	      arguments.first().toMap().value("kindCode") == "argument" && arguments.first().toMap().value("typeText") == "f32");
+	const auto starting = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate re"));
+	CHECK(starting.size() == 1 && starting.first().toMap().value("completion") == "control.Calibrate reference=");
+	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate 1.")).isEmpty());
+	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate reference=1 ")).isEmpty());
+	// Ctrl+Enter takes the typed value into the draft, as Details would; an
+	// edit made that way is then one to finish or cancel before the next.
+	secondPresentation.setMutationsAllowed(true);
+	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate")) && !calibrate->selectionRequiresDiscard());
+	calibrate->setAllowMutations(true);
+	CHECK(calibrate->allowMutations() && calibrate->selectBatchPath(QStringLiteral("Calibrate reference=0x3fc00000")));
+	CHECK(::member(calibrate->values(), QStringLiteral("reference")).data(ux::ValueModel::EditorTextRole) == "1.5" &&
+	      calibrate->selectionRequiresDiscard());
+	CHECK(!calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=2")));
+	calibrate->cancelEdit();
+	CHECK(calibrate->selectBatchPath(QStringLiteral("control.Calibrate reference=nope")) &&
+	      !calibrate->selectionRequiresDiscard());
+	second.disconnect();
 }
 
 // The Watchlist outlives its device (WL-4c): a disconnect keeps every row by
@@ -929,7 +1000,8 @@ void memberRowWrite()
 	CHECK(provider->writeWatch(0, QStringLiteral("2.0")));
 	CHECK(await([&] { return finished.count() == 1; }));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2."));
+	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2.") &&
+	      provider->watchWriteKind() == QStringLiteral("confirmed"));
 	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));
 	CHECK(text(1) == "18446744073709551615" && text(2) == "3");
 	// The element of a nested array, the same way.
@@ -944,7 +1016,8 @@ void memberRowWrite()
 	CHECK(await([&] { return finished.count() == 3; }));
 	// Said in words: what the text is not, for the row's type (WL-3b).
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
-	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32."));
+	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32.") &&
+	      provider->watchWriteKind() == QStringLiteral("refused"));
 	connection.disconnect();
 }
 
@@ -1355,7 +1428,8 @@ void watchRowWriteUnknown()
 	CHECK(await([&] { return finished.count() == 1 && !provider->watchWriting(); }));
 	CHECK(!finished.last().at(0).toBool());
 	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")));
-	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")));
+	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")) &&
+	      provider->watchWriteKind() == QStringLiteral("unconfirmed"));
 	CHECK(!provider->watchWriting() && connection.recoveryRequired());
 	const auto writes = peer.nativeWrites();
 	connect(connection, peer);

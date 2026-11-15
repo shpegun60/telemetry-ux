@@ -2,6 +2,7 @@
 #include "EndpointPaths.hpp"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QRegularExpression>
 
 namespace telemetry::ux::endpoint_paths {
 namespace {
@@ -97,6 +98,27 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 		if (category)
 			text = text.mid(space + 1).trimmed();
 	}
+	// A Command's or a Service's values after its path or name (BA-2): the
+	// first word names it when it names a Command or a Service and nothing
+	// else; the rest are its values.
+	if (const auto gap = text.indexOf(QRegularExpression(QStringLiteral("\\s"))); gap > 0) {
+		const auto target = text.left(gap);
+		bool callable = false, other = false;
+		const bool targetIsPath = target.contains(QLatin1Char('.')) || target.contains(QLatin1Char('['));
+		for (const auto& entry : list) {
+			if (category != 0 && entry.category != category)
+				continue;
+			const bool named = targetIsPath ? entry.path.compare(target, Qt::CaseInsensitive) == 0
+			                                : entry.name.compare(target, Qt::CaseInsensitive) == 0;
+			if (named)
+				(entry.category == 1 ? other : callable) = true;
+		}
+		if (callable && !other) {
+			pick.tail = text.mid(gap + 1).trimmed();
+			pick.hasTail = true;
+			text = target;
+		}
+	}
 	pick.path = text;
 	if (text.contains(QLatin1Char('='))) {
 		pick.status = QStringLiteral("error");
@@ -148,6 +170,11 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	if (entry.category == 1 && !entry.readable) {
 		pick.status = QStringLiteral("error");
 		pick.message = tr("%1 can only be written: select it, write its value in Details, then Add selected draft.").arg(entry.path);
+		return pick;
+	}
+	if (entry.category != 1 && entry.requestBytes == 0 && pick.hasTail && !pick.tail.isEmpty()) {
+		pick.status = QStringLiteral("error");
+		pick.message = tr("%1 takes no input; remove \"%2\".").arg(entry.path, pick.tail);
 		return pick;
 	}
 	if (entry.category != 1 && entry.requestBytes > 0) {
