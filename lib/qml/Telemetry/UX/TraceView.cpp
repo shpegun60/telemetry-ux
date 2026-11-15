@@ -121,9 +121,17 @@ void TraceView::setTraces(QObject* traces)
 	if (traces_)
 		disconnect(traces_, nullptr, this, nullptr);
 	traces_ = typed;
+	// Other readings: the values fit them afresh, and nothing pinned on the
+	// old ones stays.
+	range_ = {};
+	aggregated_.clear();
 	if (traces_) {
 		connect(traces_, &WatchTraces::appended, this, &TraceView::schedule);
-		connect(traces_, &WatchTraces::plottedChanged, this, [this] { update(); });
+		connect(traces_, &WatchTraces::plottedChanged, this, [this] {
+			// A curve on or off: the values fit what is plotted now.
+			range_ = {};
+			update();
+		});
 		connect(traces_, &WatchTraces::appearanceChanged, this, [this] {
 			// A new multiplier or offset is a new fit.
 			range_ = {};

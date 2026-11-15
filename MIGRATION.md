@@ -765,3 +765,12 @@ day is `originUtcMs`. Labels read "12 s", "1:30", "1:02:00" or "−0:12".
 `TracePlot`'s axis caption is now a flat button, "Time of day ▾" or "From
 start ▾", with a two-item menu; with the axis from the start, the cursor chip
 reads "17.911 s · 22:27:02.379".
+
+## A recorded run on the Plot's view (TR-2, November 2026)
+
+`WatchTraces::setRecorded(path, readings, states)` and `setAnchor(anchor)`
+let a host show a recording with the same TracePlot: a path's readings, one
+run's, in time order and NaN for a gap, with the anchor that gives them a
+time of day. The live rules do not apply to them (no ten minutes, no cap per
+path) and the path counts as watched. `TraceView` fits its values afresh when
+its `traces` change or a curve is plotted or removed.

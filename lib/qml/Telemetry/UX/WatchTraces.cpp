@@ -408,6 +408,32 @@ bool WatchTraces::restore(const QVariantMap& state)
 	return whole;
 }
 
+void WatchTraces::setRecorded(const QString& path, std::vector<TraceReading> readings, bool states)
+{
+	if (path.isEmpty())
+		return;
+	auto& trace = traces_[path];
+	total_ -= trace.readings.size();
+	trace.readings.assign(readings.begin(), readings.end());
+	total_ += trace.readings.size();
+	// A type the decoder already turned into these numbers: one that plots.
+	trace.type = {1, states ? WatchScalar::S64 : WatchScalar::F64, 8, states};
+	trace.categorical = states;
+	categorical_.insert(path, states);
+	watched_.insert(path);
+	if (!trace.readings.empty())
+		newestNs_ = std::max(newestNs_, trace.readings.back().ns);
+	++revision_;
+	announce();
+}
+
+void WatchTraces::setAnchor(const WatchTimestamp& anchor)
+{
+	anchor_ = anchor;
+	++revision_;
+	announce();
+}
+
 void WatchTraces::clear()
 {
 	pauses_.clear();
