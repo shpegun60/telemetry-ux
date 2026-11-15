@@ -64,20 +64,27 @@ RowLayout {
         onClicked: tools.writeRequested()
     }
     ToolSeparator {}
+    // The file's own history (content.history). UX-B replaces this pair with
+    // UndoButtons over the window's router.
+    readonly property var history: content ? content.history : null
     IconToolButton {
         objectName: "hexUndo"
         iconName: "undo"
-        enabled: !!tools.content && tools.content.canUndo && !tools.writing
-        text: tools.content ? qsTr("Undo in %1").arg(tools.fileName) : qsTr("Undo")
+        enabled: !!tools.history && tools.history.canUndo && !tools.writing
+        text: !tools.history ? qsTr("Undo")
+            : tools.history.undoText.length > 0 ? qsTr("Undo: %1").arg(tools.history.undoText)
+            : qsTr("Undo in %1").arg(tools.fileName)
         shortcutText: qsTr("Ctrl+Z in the bytes")
-        onClicked: tools.content.undo()
+        onClicked: tools.history.undo()
     }
     IconToolButton {
         objectName: "hexRedo"
         iconName: "redo"
-        enabled: !!tools.content && tools.content.canRedo && !tools.writing
-        text: tools.content ? qsTr("Redo in %1").arg(tools.fileName) : qsTr("Redo")
+        enabled: !!tools.history && tools.history.canRedo && !tools.writing
+        text: !tools.history ? qsTr("Redo")
+            : tools.history.redoText.length > 0 ? qsTr("Redo: %1").arg(tools.history.redoText)
+            : qsTr("Redo in %1").arg(tools.fileName)
         shortcutText: qsTr("Ctrl+Y in the bytes")
-        onClicked: tools.content.redo()
+        onClicked: tools.history.redo()
     }
 }

@@ -14,16 +14,26 @@ import QtQuick.Templates as T
 Pane {
     id: panel
     required property var provider
-    // Ctrl+Z takes back the Watchlist's last change wherever in the panel the
+    // The provider's history (UR-1): where its changes go as steps.
+    readonly property var history: provider && provider.history ? provider.history : null
+    // Ctrl+Z takes back the history's last step wherever in the panel the
     // keys are - the list, a toolbar button, the ⋯ button after its menu - but
-    // in a text field, which takes back its own typing first.
+    // in a text field, which takes back its own typing first. Until UX-B
+    // gives the window one router, the panel calls the history itself.
     Keys.onShortcutOverride: event => {
-        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && provider.canUndoWatch === true)
+        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && history !== null && history.canUndo)
             event.accepted = true
     }
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier)
             event.accepted = panel.undo()
+    }
+    // The serial of the step the history last recorded: an action of this
+    // panel's that recorded one offers its Undo with its notice.
+    property int recorded: 0
+    Connections {
+        target: panel.history
+        function onRecorded(serial) { panel.recorded = serial }
     }
     // Optional host workflow (for example, prepare a project recording before
     // starting). Without handlers the existing provider is called directly.
@@ -291,7 +301,7 @@ Pane {
         forgetMeasured()
         say(result.rows === 1 ? qsTr("Number formats reset to Original; 1 value had its own")
             : result.rows > 1 ? qsTr("Number formats reset to Original; %Ln values had their own", "", result.rows)
-            : qsTr("Number formats reset to Original"), true)
+            : qsTr("Number formats reset to Original"), typeof result.serial === "number" ? result.serial : 0)
         return true
     }
     // The Value column grows only, until a form is chosen: hex is wider.
@@ -303,13 +313,14 @@ Pane {
             return
         const many = onSelection(row)
         const sources = sourcesAt(row)
+        recorded = 0
         if (sources.length === 0 || !provider.setWatchRowFormat(sources, name))
             return
         forgetMeasured()
         if (many)
             say(name.length === 0 ? qsTr("%Ln values shown like the Watchlist (%1)", "", sources.length).arg(formatWord(format))
                                   : qsTr("%Ln values shown in %1", "", sources.length).arg(formatWord(name)),
-                provider.canUndoWatch === true)
+                recorded)
     }
     // The selection (WL-2c), kept by the rows by path; the current row is
     // the keyboard's cursor. An action takes the selection when the current
@@ -407,22 +418,22 @@ Pane {
         if (row >= 0)
             watchList.positionViewAtIndex(row, ListView.Contain)
     }
-    // Removing many with no Undo to bring them back (no device to put them
-    // back against) asks first; the rows asked about wait here.
+    // Removing many with no Undo to bring them back (a host that gave the
+    // provider no history) asks first; the rows asked about wait here.
     property var removalAsked: []
     // The last thing done, in a line under the toolbar: "Removed
-    // device.Config.Gain · Undo". Like the Device tree's, it goes, Undo with
-    // it, once anything changes the Watchlist, the tree or a format - here, in
-    // the Device tree, or by a project loaded - so Undo never takes back
-    // something other than what the line says.
+    // device.Config.Gain · Undo". Like the Device tree's, it goes once
+    // anything changes the Watchlist, the tree or a format - here, in the
+    // Device tree, or by a project loaded. Its Undo shows while the step it
+    // speaks of is the one Undo would take.
     property string noticeText: ""
-    // Whether the notice is a change Undo can take back.
-    property bool noticeUndo: false
+    // The step the notice speaks of, or 0.
+    property int noticeSerial: 0
     readonly property int revision: typeof provider.watchRevision === "number" ? provider.watchRevision : -1
     property int noticeRevision: -1
-    function say(text, undoable) {
+    function say(text, serial) {
         noticeText = text
-        noticeUndo = undoable === true
+        noticeSerial = typeof serial === "number" ? serial : 0
         noticeRevision = revision
         // The notice is what is said, not the selection it left.
         selectionAnnounce.stop()
@@ -432,14 +443,15 @@ Pane {
     }
     onRevisionChanged: {
         if (noticeText.length > 0 && revision !== noticeRevision)
-            say("", false)
+            say("", 0)
         if (removeDialog.visible) {
             removalAsked = []
             removeDialog.close()
             panel.Accessible.announce(qsTr("The Watchlist changed; nothing was removed"))
         }
     }
-    readonly property bool canUndo: noticeUndo && provider.canUndoWatch === true
+    readonly property bool canUndo: noticeSerial > 0 && history !== null && history.canUndo
+                                    && history.undoSerial === noticeSerial
     // Stops watching what row shows: a value, or every value under a node, as
     // one change where the provider takes several, said with Undo.
     function removeAt(row, confirmed, own) {
@@ -451,7 +463,7 @@ Pane {
         const item = many ? null : watchList.itemAtIndex(row)
         const label = item ? item.name : ""
         const oneByOne = typeof provider.removeWatchRows !== "function"
-        if (sources.length > 1 && confirmed !== true && (oneByOne || provider.connected !== true)) {
+        if (sources.length > 1 && confirmed !== true && (oneByOne || history === null)) {
             removalAsked = sources
             removeDialog.open()
             return
@@ -468,7 +480,8 @@ Pane {
         say(many ? qsTr("Removed %Ln values", "", result.changed)
             : sources.length === 1 || label.length === 0
             ? (label.length > 0 ? qsTr("Removed %1").arg(label) : qsTr("Removed %L1").arg(result.changed))
-            : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label), provider.canUndoWatch === true)
+            : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label),
+            typeof result.serial === "number" ? result.serial : 0)
     }
     function removeAsked() {
         const sources = removalAsked
@@ -477,13 +490,13 @@ Pane {
             return
         if (typeof provider.removeWatchRows !== "function") {
             sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
-            say(qsTr("Removed %Ln values", "", sources.length), false)
+            say(qsTr("Removed %Ln values", "", sources.length), 0)
             selectCurrent()
             return
         }
         const result = provider.removeWatchRows(sources)
         if (result && result.status === "ok" && result.changed > 0) {
-            say(qsTr("Removed %Ln values", "", result.changed), provider.canUndoWatch === true)
+            say(qsTr("Removed %Ln values", "", result.changed), typeof result.serial === "number" ? result.serial : 0)
             selectCurrent()
         }
     }
@@ -493,16 +506,21 @@ Pane {
             rows.select(watchList.currentIndex)
         announcedCount = selectedCount
     }
-    // Takes back the provider's last change: a removal, an add, a reset of
-    // the formats.
+    // Takes back the history's last step and says what it did: "Undone:
+    // Remove device.Config.Gain from the Watchlist", with what could not be
+    // put back.
     function undo() {
-        if (typeof provider.undoWatch !== "function" || provider.canUndoWatch !== true)
+        if (history === null || !history.canUndo)
             return false
-        const result = provider.undoWatch()
-        const done = result && result.status === "ok"
+        const text = history.undoText
+        let said = ""
+        const heard = (serial, step, undone, note, outcome) => { said = history.sentence(step, undone, note, outcome) }
+        history.done.connect(heard)
+        const done = history.undo()
+        history.done.disconnect(heard)
         if (done)
             forgetMeasured()
-        say(done ? qsTr("Undone") : "", false)
+        say(said.length > 0 ? said : done ? qsTr("Undone: %1").arg(text) : "", 0)
         return done
     }
     // Copies what row shows: "path = value" lines (Ctrl+C), the paths
@@ -530,7 +548,7 @@ Pane {
         say(what === "value" ? qsTr("Copied the value of %1").arg(item.name)
             : lines === 1 ? qsTr("Copied %1").arg(what === "paths" ? text : item ? item.name : text)
             : what === "paths" ? qsTr("Copied %L1 paths").arg(lines)
-            : qsTr("Copied %L1 values").arg(lines), false)
+            : qsTr("Copied %L1 values").arg(lines), 0)
         return true
     }
 
@@ -1371,6 +1389,7 @@ Pane {
                 objectName: "watchUndo"
                 visible: panel.canUndo
                 text: qsTr("Undo")
+                Accessible.name: panel.history ? qsTr("Undo: %1").arg(panel.history.undoText) : text
                 font.pointSize: Type.caption
                 onClicked: panel.undo()
             }
@@ -2527,7 +2546,8 @@ Pane {
             Layout.preferredHeight: implicitHeight
             provider: panel.provider
             onAdded: (notice, undoable) => {
-                panel.say(notice, undoable)
+                // The add recorded its step as it was made.
+                panel.say(notice, undoable ? panel.recorded : 0)
                 // The last value added, its parents opened, in view.
                 const last = panel.count - 1
                 const row = panel.rows ? panel.rows.reveal(last) : last
@@ -2538,7 +2558,7 @@ Pane {
                 const shown = panel.rows ? panel.rows.reveal(row) : row
                 if (shown >= 0)
                     panel.moveTo(shown, "select")
-                panel.say(notice, false)
+                panel.say(notice, 0)
             }
             onLeaveUp: {
                 watchList.forceActiveFocus()
@@ -2649,7 +2669,7 @@ Pane {
                 } else {
                     const why = traces.plot(path)
                     if (why.length > 0)
-                        panel.say(why, false)
+                        panel.say(why, 0)
                 }
                 checked = Qt.binding(() => plotItem.shown)
             }
@@ -2675,7 +2695,7 @@ Pane {
         MenuItem {
             objectName: "watchRowRemove"
             text: (rowMenu.many === 0 ? qsTr("Remove")
-                   : panel.provider.connected !== true || typeof panel.provider.removeWatchRows !== "function"
+                   : panel.history === null || typeof panel.provider.removeWatchRows !== "function"
                      ? qsTr("Remove %Ln values…", "", rowMenu.many) : qsTr("Remove %Ln values", "", rowMenu.many))
                   + "\t" + qsTr("Delete")
             enabled: !panel.changeLocked
@@ -2727,8 +2747,8 @@ Pane {
         }
         onOpened: clearCancel.forceActiveFocus(Qt.TabFocusReason)
     }
-    // Many values removed with no device to put them back against: no Undo,
-    // so the panel asks first, as Clear does.
+    // Many values removed with no history to put them back: no Undo, so the
+    // panel asks first, as Clear does. UX-B removes both questions.
     Dialog {
         id: removeDialog
         objectName: "removeWatchDialog"
@@ -2753,8 +2773,7 @@ Pane {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: panel.provider.connected !== true ? qsTr("No device is connected, so Undo cannot bring them back.")
-                                                        : qsTr("Undo cannot bring them back.")
+                text: qsTr("Undo cannot bring them back.")
                 color: Theme.textSecondary
             }
         }

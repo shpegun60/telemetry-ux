@@ -208,86 +208,57 @@ bool FileTableModel::numeric(int column) const
 	return column >= 0 && column < static_cast<int>(numeric_.size()) && numeric_[static_cast<std::size_t>(column)];
 }
 
-// One overwrite, undone and redone. Typing joins the step before it when it
-// goes on where that one stopped, or writes again a byte it wrote (a byte's
-// second hex digit): one undo takes back what was typed in one go.
-class OverwriteStep final : public QUndoCommand {
-public:
-	OverwriteStep(FileContent& content, qint64 offset, QByteArray before, QByteArray after, bool typing)
-	    : content_(content), offset_(offset), before_(std::move(before)), after_(std::move(after)), typing_(typing)
-	{
-		setText(FileContent::tr("Overwrite %n bytes", nullptr, static_cast<int>(after_.size())));
-	}
-
-	int id() const override { return typing_ ? 1 : -1; }
-
-	bool mergeWith(const QUndoCommand* other) override
-	{
-		const auto* next = static_cast<const OverwriteStep*>(other);
-		const auto end = offset_ + after_.size();
-		if (!next->typing_ || next->offset_ < offset_ || next->offset_ > end)
-			return false;
-		for (qsizetype i = 0; i < next->after_.size(); ++i) {
-			const auto at = next->offset_ - offset_ + i;
-			if (at < after_.size()) {
-				after_[at] = next->after_[i];
-			} else {
-				after_.append(next->after_[i]);
-				before_.append(next->before_[i]);
-			}
-		}
-		return true;
-	}
-
-	void redo() override { content_.put(offset_, after_); }
-	void undo() override { content_.put(offset_, before_); }
-
-private:
-	FileContent& content_;
-	qint64 offset_;
-	QByteArray before_, after_;
-	bool typing_;
-};
-
-// Several places at once - Replace all: one step, one announcement.
-class RunsStep final : public QUndoCommand {
-public:
-	RunsStep(FileContent& content, std::vector<FileContent::Run> before, std::vector<FileContent::Run> after,
-	         const QString& text)
-	    : content_(content), before_(std::move(before)), after_(std::move(after))
-	{
-		setText(text);
-	}
-
-	void redo() override { content_.putRuns(after_); }
-	void undo() override { content_.putRuns(before_); }
-
-private:
-	FileContent& content_;
-	std::vector<FileContent::Run> before_, after_;
-};
-
-// The whole working copy at once - Restore: before and after kept shared.
-class WholeStep final : public QUndoCommand {
-public:
-	WholeStep(FileContent& content, QByteArray before, QByteArray after, const QString& text)
-	    : content_(content), before_(std::move(before)), after_(std::move(after))
-	{
-		setText(text);
-	}
-
-	void redo() override { content_.putWhole(after_); }
-	void undo() override { content_.putWhole(before_); }
-
-private:
-	FileContent& content_;
-	QByteArray before_, after_;
-};
-
-FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(this), lines_(this), rows_(&table_, this)
+FileContent::FileContent(QObject* parent)
+    : QObject(parent),
+      target_([this](const QString&, const QVariantMap& state, const QStringList& keys) { return applyBytes(state, keys); },
+              [] { return QString{}; }),
+      hex_(this), table_(this), lines_(this), rows_(&table_, this)
 {
-	connect(&undo_, &QUndoStack::canUndoChanged, this, &FileContent::editChanged);
-	connect(&undo_, &QUndoStack::canRedoChanged, this, &FileContent::editChanged);
+	history_.setLimit(1000);
+}
+
+QString FileContent::stepName() const
+{
+	return QFileInfo(devicePath_.isEmpty() ? localFile_ : devicePath_).fileName();
+}
+
+int FileContent::recordBytes(const QString& text, QVariantMap before, QVariantMap after, const QString& mergeKey)
+{
+	return history_.record(text, {UndoPart{&target_, QStringLiteral("file.bytes"), std::move(before), std::move(after)}},
+	                       mergeKey);
+}
+
+// A step's bytes back: the whole copy first ("*"), then each place by its
+// offset. A place outside the copy - it was read again meanwhile - is skipped.
+UndoOutcome FileContent::applyBytes(const QVariantMap& state, const QStringList& keys)
+{
+	if (!loaded_)
+		return {UndoOutcome::Kind::Skipped, tr("%1 is not open").arg(stepName())};
+	if (keys.contains(QStringLiteral("*"))) {
+		const auto whole = state.value(QStringLiteral("*")).toByteArray();
+		if (whole.size() != bytes_.size())
+			return {UndoOutcome::Kind::Skipped, tr("%1 has another size now").arg(stepName())};
+		putWhole(whole);
+		return {};
+	}
+	std::vector<Run> runs;
+	int outside = 0;
+	for (const auto& key : keys) {
+		bool number = false;
+		const auto offset = key.toLongLong(&number);
+		const auto bytes = state.value(key).toByteArray();
+		if (!number || offset < 0 || bytes.isEmpty() || offset + bytes.size() > bytes_.size()) {
+			++outside;
+			continue;
+		}
+		runs.emplace_back(offset, bytes);
+	}
+	std::sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) { return a.first < b.first; });
+	putRuns(runs);
+	if (runs.empty())
+		return {UndoOutcome::Kind::Skipped, tr("%1 has another size now").arg(stepName())};
+	return outside ? UndoOutcome{UndoOutcome::Kind::Partial, tr("%1 has another size now").arg(stepName())}
+	               : UndoOutcome{};
 }
 
 void FileContent::setEditing(bool editing)
@@ -307,7 +278,32 @@ bool FileContent::overwrite(qint64 offset, const QByteArray& bytes, bool typing)
 	const auto before = bytes_.mid(offset, after.size());
 	if (before == after)
 		return true;
-	undo_.push(new OverwriteStep(*this, offset, before, after, typing));
+	const auto key = QString::number(offset);
+	if (!typing) {
+		put(offset, after);
+		recordBytes(after.size() == 1 ? tr("Overwrite 1 byte in %1").arg(stepName())
+		                               : tr("Overwrite %L1 bytes in %2").arg(after.size()).arg(stepName()),
+		            {{key, before}}, {{key, after}});
+		return true;
+	}
+	// Typing goes on in the step on top while it writes where that one
+	// stopped or inside it, within the merge window, and nothing was saved
+	// since: the history merges steps of one key, so the key says whether.
+	const auto now = history_.now();
+	const bool goesOn = typing_.serial != 0 && history_.undoSerial() == typing_.serial && !history_.clean() &&
+	                    offset >= typing_.start && offset <= typing_.end && now - typing_.at <= UndoStep::mergeWindowMs;
+	if (goesOn) {
+		typing_.end = std::max(typing_.end, offset + static_cast<qint64>(after.size()));
+	} else {
+		typing_ = {0, offset, offset + static_cast<qint64>(after.size()), now,
+		           QStringLiteral("file.typing.%1").arg(++typingRuns_)};
+	}
+	typing_.at = now;
+	put(offset, after);
+	const auto typed = typing_.end - typing_.start;
+	typing_.serial = recordBytes(typed == 1 ? tr("Overwrite 1 byte in %1").arg(stepName())
+	                                        : tr("Overwrite %L1 bytes in %2").arg(typed).arg(stepName()),
+	                             {{key, before}}, {{key, after}}, typing_.key);
 	return true;
 }
 
@@ -328,7 +324,14 @@ bool FileContent::overwriteRuns(const std::vector<Run>& runs, const QString& tex
 	}
 	if (after.empty())
 		return !runs.empty();
-	undo_.push(new RunsStep(*this, std::move(before), std::move(after), text));
+	QVariantMap was, is;
+	for (std::size_t i = 0; i < after.size(); ++i) {
+		const auto key = QString::number(after[i].first);
+		was.insert(key, before[i].second);
+		is.insert(key, after[i].second);
+	}
+	putRuns(after);
+	recordBytes(tr("%1 in %2").arg(text, stepName()), std::move(was), std::move(is));
 	return true;
 }
 
@@ -398,7 +401,10 @@ QString FileContent::restoreReference()
 		    .arg(bytes_.size());
 	if (referenceDiffers_ == 0)
 		return tr("This copy already holds the device's bytes.");
-	undo_.push(new WholeStep(*this, bytes_, reference_, tr("Restore the device's version")));
+	const auto before = bytes_;
+	putWhole(reference_);
+	recordBytes(tr("Restore the device's version in %1").arg(stepName()), {{QStringLiteral("*"), before}},
+	            {{QStringLiteral("*"), reference_}});
 	return {};
 }
 
@@ -433,16 +439,6 @@ void FileContent::refreshReference()
 	Q_EMIT editChanged();
 }
 
-void FileContent::undo()
-{
-	undo_.undo();
-}
-
-void FileContent::redo()
-{
-	undo_.redo();
-}
-
 QString FileContent::save()
 {
 	if (!loaded_ || localFile_.isEmpty())
@@ -453,7 +449,7 @@ QString FileContent::save()
 	saved_ = bytes_;
 	edited_ = 0;
 	readAt_ = QDateTime::currentDateTime();
-	undo_.setClean();
+	history_.setClean();
 	interpret();
 	Q_EMIT editChanged();
 	Q_EMIT changed();
@@ -475,24 +471,26 @@ QString FileContent::saveCopyAs(const QUrl& target)
 
 void FileContent::discard()
 {
-	if (edited_ == 0 && !undo_.canUndo() && !undo_.canRedo())
+	if (edited_ == 0 && history_.count() == 0)
 		return;
 	Q_EMIT aboutToEdit();
 	bytes_ = saved_;
 	edited_ = 0;
 	referenceDiffers_ = hasReference_ ? differing(bytes_, reference_) : 0;
-	undo_.clear();
+	history_.clear();
+	typing_ = {};
 	Q_EMIT bytesEdited(0, bytes_.size());
 	Q_EMIT editChanged();
 }
 
 void FileContent::resetEdits()
 {
-	const bool had = editing_ || edited_ > 0 || undo_.count() > 0;
+	const bool had = editing_ || edited_ > 0 || history_.count() > 0;
 	saved_.clear();
 	edited_ = 0;
 	editing_ = false;
-	undo_.clear();
+	history_.clear();
+	typing_ = {};
 	if (had)
 		Q_EMIT editChanged();
 }

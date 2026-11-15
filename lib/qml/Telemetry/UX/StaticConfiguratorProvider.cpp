@@ -867,13 +867,153 @@ struct StaticConfiguratorProvider::Impl {
 	quint64 treeEpoch = 0;
 	QSet<quint64> heldKeys;
 	quint64 heldMembership = ~quint64{0};
-	struct WatchUndo {
-		bool valid = false, added = false;
-		QSet<int> addedEndpoints;
-		QVector<QPair<int, WatchList::Row>> removed;
-		quint64 membership = 0, treeEpoch = 0;
-		quint32 epoch = 0;
-	} undo;
+	// Where the Watchlist's changes go as steps (UR-1), and the target they
+	// put "watch.rows" back through, by path ("device.Voltage").
+	QPointer<UndoHistory> history;
+	UndoFunctions watchTarget;
+
+	QString pathOf(int endpoint) const
+	{
+		const auto& e = binding.endpoints[endpoint];
+		return e.catalog + QLatin1Char('.') + e.name;
+	}
+
+	// The Field a path names in this binding, or -1.
+	int endpointOf(const QString& path) const
+	{
+		for (int n = 0; n < binding.endpoints.size(); ++n)
+			if (binding.endpoints[n].category == 1 && pathOf(n) == path)
+				return n;
+		return -1;
+	}
+
+	QString rowsWords(const QStringList& paths) const
+	{
+		return paths.size() == 1 ? paths.first() : StaticConfiguratorProvider::tr("%L1 values").arg(paths.size());
+	}
+
+	int recordRows(const QString& text, QVariantMap before, QVariantMap after)
+	{
+		if (!history)
+			return 0;
+		return history->record(text, {UndoPart{&watchTarget, QStringLiteral("watch.rows"), std::move(before), std::move(after)}});
+	}
+
+	// The rows [from, end) just added, as one step.
+	int recordAdded(int from)
+	{
+		QVariantMap after;
+		QStringList paths;
+		for (int row = from; row < watchModel.rows.size(); ++row) {
+			const auto path = pathOf(watchModel.rows[row].endpoint);
+			after.insert(path, QVariantMap{{QStringLiteral("at"), row}});
+			paths << path;
+		}
+		if (paths.isEmpty())
+			return 0;
+		return recordRows(StaticConfiguratorProvider::tr("Add %1 to the Watchlist").arg(rowsWords(paths)), {},
+		                  std::move(after));
+	}
+
+	// Rows just taken out, with their places, as one step.
+	int recordRemoved(const QVector<QPair<int, WatchList::Row>>& removed, bool cleared = false)
+	{
+		QVariantMap before;
+		QStringList paths;
+		for (const auto& [at, row] : removed) {
+			const auto path = pathOf(row.endpoint);
+			before.insert(path, QVariantMap{{QStringLiteral("at"), at}});
+			paths << path;
+		}
+		if (paths.isEmpty())
+			return 0;
+		return recordRows(cleared ? StaticConfiguratorProvider::tr("Clear the Watchlist")
+		                          : StaticConfiguratorProvider::tr("Remove %1 from the Watchlist").arg(rowsWords(paths)),
+		                  std::move(before), {});
+	}
+
+	// Why the Watchlist's steps wait: it is polling, or in the middle of a
+	// change. A static binding never changes its Fields, so its rows go back
+	// with no device as well; they are read on the next cycle.
+	QString watchBlocked() const
+	{
+		if (watchActive())
+			return StaticConfiguratorProvider::tr("Stop polling to change the Watchlist.");
+		if (!owner() || publishing || deferredChanged)
+			return StaticConfiguratorProvider::tr("The Watchlist is changing; try again in a moment.");
+		return {};
+	}
+
+	// The rows a step names, back as it says, by path: those it says are
+	// absent taken out, those it says are there put back at their places.
+	UndoOutcome applyRows(const QVariantMap& state, const QStringList& keys)
+	{
+		QHash<QString, int> rowOf;
+		for (int row = 0; row < watchModel.rows.size(); ++row)
+			rowOf.insert(pathOf(watchModel.rows[row].endpoint), row);
+		QSet<int> out;
+		QVector<QPair<int, WatchList::Row>> in;
+		QStringList gone, already;
+		for (const auto& key : keys) {
+			const auto found = rowOf.constFind(key);
+			if (!state.contains(key)) {
+				if (found != rowOf.cend())
+					out.insert(watchModel.rows[found.value()].endpoint);
+				else
+					gone << key;
+				continue;
+			}
+			if (found != rowOf.cend()) {
+				already << key;
+				continue;
+			}
+			const int n = endpointOf(key);
+			if (n < 0 || !watchEligible(n)) {
+				gone << key;
+				continue;
+			}
+			WatchList::Row row;
+			row.endpoint = n;
+			in.push_back({state.value(key).toMap().value(QStringLiteral("at")).toInt(), row});
+		}
+		if (static_cast<int>(watchModel.rows.size() - out.size() + in.size()) > watchlistRowLimit ||
+		    !watchModel.canTake(in.size()))
+			return {UndoOutcome::Kind::Skipped, StaticConfiguratorProvider::tr("the Watchlist has no room for them")};
+		std::stable_sort(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		const int applied = static_cast<int>(out.size() + in.size());
+		// A model notification may delete the provider, and this with it:
+		// nothing of it is touched once it is gone.
+		const QPointer<StaticConfiguratorProvider> alive(q);
+		if (!out.isEmpty() || !in.isEmpty())
+			changeWatch([&] {
+				if (!out.isEmpty())
+					watchModel.removeEndpoints(out);
+				if (!alive)
+					return;
+				// Each place among the rows there now and those put back before it.
+				const int count = static_cast<int>(watchModel.rows.size());
+				int previous = -1;
+				for (int i = 0; i < in.size(); ++i) {
+					in[i].first = std::max(previous + 1, std::min(in[i].first, count + i));
+					previous = in[i].first;
+				}
+				watchModel.insertAt(in, epoch);
+			});
+		if (!alive)
+			return {};
+		QStringList notes;
+		const auto said = [&notes](const QStringList& paths, const char* one, const char* many) {
+			if (paths.size() == 1)
+				notes << StaticConfiguratorProvider::tr(one).arg(paths.first());
+			else if (paths.size() > 1)
+				notes << StaticConfiguratorProvider::tr(many).arg(paths.size());
+		};
+		said(already, "%1 is already watched", "%L1 values are already watched");
+		said(gone, "%1 is no longer in the Watchlist", "%L1 values are no longer in the Watchlist");
+		if (applied == 0)
+			return {UndoOutcome::Kind::Skipped, notes.join(QStringLiteral("; "))};
+		return {notes.isEmpty() ? UndoOutcome::Kind::Done : UndoOutcome::Kind::Partial, notes.join(QStringLiteral("; "))};
+	}
 
 	const QSet<quint64>& held()
 	{
@@ -906,20 +1046,6 @@ struct StaticConfiguratorProvider::Impl {
 	{
 		return owner() && !publishing && !watchActive() && !deferredChanged && ready() &&
 		       session() == epoch;
-	}
-
-	// Remembers the change just made, before it is published, so the
-	// publication already says Undo is there.
-	void recordUndo(bool added, QSet<int> addedEndpoints, QVector<QPair<int, WatchList::Row>> removed)
-	{
-		undo = {};
-		undo.valid = added ? !addedEndpoints.isEmpty() : !removed.isEmpty();
-		undo.added = added;
-		undo.addedEndpoints = std::move(addedEndpoints);
-		undo.removed = std::move(removed);
-		undo.membership = watchModel.membership;
-		undo.treeEpoch = treeEpoch;
-		undo.epoch = epoch;
 	}
 
 	Impl(StaticConfiguratorProvider* owner, StaticConfiguratorBinding value)
@@ -977,7 +1103,10 @@ struct StaticConfiguratorProvider::Impl {
 		                         : PresentationHints{};
 	          },
 	          owner),
-	      watchModel(binding, owner)
+	      watchModel(binding, owner),
+	      watchTarget([this](const QString&, const QVariantMap& state,
+	                         const QStringList& keys) { return applyRows(state, keys); },
+	                  [this] { return watchBlocked(); })
 	{
 		watchTimer.setParent(owner);
 		watchTimer.setObjectName(QStringLiteral("staticConfiguratorWatchTimer"));
@@ -1210,6 +1339,9 @@ struct StaticConfiguratorProvider::Impl {
 			scheduleReset();
 			return;
 		}
+		// Whether a step can be taken may have changed with polling.
+		if (history)
+			history->refresh();
 		Q_EMIT q->stateChanged();
 	}
 
@@ -1636,7 +1768,13 @@ bool StaticConfiguratorProvider::addWatch()
 		return false;
 	const QVector<WatchList::Row> added{
 	    {d->selected, d->session(), QStringLiteral("NotRead"), false, 0, {}, {}, 0}};
-	d->changeWatch([&] { d->watchModel.append(added); });
+	const int from = static_cast<int>(d->watchModel.rows.size());
+	QPointer<StaticConfiguratorProvider> alive(this);
+	d->changeWatch([&] {
+		d->watchModel.append(added);
+		if (alive)
+			d->recordAdded(from);
+	});
 	return true;
 }
 
@@ -1712,8 +1850,17 @@ QVariantMap StaticConfiguratorProvider::addWatchMany(const QVariantList& indexes
 	result[QStringLiteral("duplicate")] = duplicate;
 	result[QStringLiteral("unsupported")] = unsupported;
 	result[QStringLiteral("capacity")] = capacity;
-	if (added)
-		p->changeWatch([&] { p->watchModel.append(rows); });
+	if (added) {
+		const int from = static_cast<int>(p->watchModel.rows.size());
+		int serial = 0;
+		p->changeWatch([&] {
+			p->watchModel.append(rows);
+			if (alive)
+				serial = p->recordAdded(from);
+		});
+		if (alive)
+			result[QStringLiteral("serial")] = serial;
+	}
 	return result;
 }
 
@@ -1722,14 +1869,61 @@ void StaticConfiguratorProvider::removeWatch(int row)
 	if (!d->owner() || d->publishing || d->watchActive() || row < 0 ||
 	    row >= d->watchModel.rows.size())
 		return;
-	d->changeWatch([&] { d->watchModel.removeRow(row); });
+	const QVector<QPair<int, WatchList::Row>> removed{{row, d->watchModel.rows[row]}};
+	QPointer<StaticConfiguratorProvider> alive(this);
+	d->changeWatch([&] {
+		d->watchModel.removeRow(row);
+		if (alive)
+			d->recordRemoved(removed);
+	});
+}
+
+QVariantMap StaticConfiguratorProvider::removeWatchRows(const QVariantList& rows)
+{
+	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")}, {QStringLiteral("changed"), 0}};
+	if (!d->owner() || d->publishing || d->watchActive())
+		return result;
+	QSet<int> endpoints;
+	for (const auto& value : rows) {
+		bool ok = false;
+		const int row = value.toInt(&ok);
+		if (!ok || row < 0 || row >= d->watchModel.rows.size()) {
+			result[QStringLiteral("status")] = QStringLiteral("invalid");
+			return result;
+		}
+		endpoints.insert(d->watchModel.rows[row].endpoint);
+	}
+	result[QStringLiteral("status")] = QStringLiteral("ok");
+	if (endpoints.isEmpty())
+		return result;
+	int count = 0, serial = 0;
+	QPointer<StaticConfiguratorProvider> alive(this);
+	d->changeWatch([&] {
+		const auto removed = d->watchModel.removeEndpoints(endpoints);
+		count = static_cast<int>(removed.size());
+		if (alive)
+			serial = d->recordRemoved(removed);
+	});
+	if (!alive)
+		return result;
+	result[QStringLiteral("changed")] = count;
+	result[QStringLiteral("serial")] = serial;
+	return result;
 }
 
 void StaticConfiguratorProvider::clearWatch()
 {
 	if (!d->owner() || d->publishing || d->watchActive() || d->watchModel.rows.isEmpty())
 		return;
-	d->changeWatch([&] { d->watchModel.replace({}); });
+	QVector<QPair<int, WatchList::Row>> removed;
+	for (int row = 0; row < d->watchModel.rows.size(); ++row)
+		removed.push_back({row, d->watchModel.rows[row]});
+	QPointer<StaticConfiguratorProvider> alive(this);
+	d->changeWatch([&] {
+		d->watchModel.replace({});
+		if (alive)
+			d->recordRemoved(removed, true);
+	});
 }
 
 int StaticConfiguratorProvider::watchRevision() const
@@ -1737,11 +1931,17 @@ int StaticConfiguratorProvider::watchRevision() const
 	return static_cast<int>((d->watchModel.membership + d->treeEpoch) & 0x7fffffffU);
 }
 
-bool StaticConfiguratorProvider::canUndoWatch() const
+UndoHistory* StaticConfiguratorProvider::history() const
 {
-	const auto& undo = d->undo;
-	return undo.valid && undo.membership == d->watchModel.membership &&
-	       undo.treeEpoch == d->treeEpoch && undo.epoch == d->epoch && d->watchChangeable();
+	return d->history;
+}
+
+void StaticConfiguratorProvider::setHistory(UndoHistory* history)
+{
+	if (d->history == history)
+		return;
+	d->history = history;
+	Q_EMIT historyChanged();
 }
 
 int StaticConfiguratorProvider::watchState(const QModelIndex& index) const
@@ -1786,12 +1986,9 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 	result[QStringLiteral("room")] = room;
 	if (watched) {
 		QVector<WatchList::Row> rows;
-		QSet<int> added;
 		for (const auto n : fields)
-			if (!held.contains(static_cast<quint64>(n))) {
+			if (!held.contains(static_cast<quint64>(n)))
 				rows.push_back({n, p->epoch, QStringLiteral("NotRead"), false, 0, {}, {}, 0});
-				added.insert(n);
-			}
 		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - rows.size());
 		// All of them or none, as in DynamicConfiguratorProvider.
 		if (rows.size() > room) {
@@ -1804,14 +2001,17 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 				return result;
 			}
 			result[QStringLiteral("changed")] = static_cast<int>(rows.size());
+			const int from = static_cast<int>(p->watchModel.rows.size());
+			int serial = 0;
 			QPointer<StaticConfiguratorProvider> alive(this);
 			p->changeWatch([&] {
 				p->watchModel.append(rows);
 				if (alive)
-					p->recordUndo(true, added, {});
+					serial = p->recordAdded(from);
 			});
 			if (!alive)
 				return result;
+			result[QStringLiteral("serial")] = serial;
 		}
 	} else {
 		QSet<int> remove;
@@ -1820,48 +2020,21 @@ QVariantMap StaticConfiguratorProvider::setWatchMany(const QVariantList& indexes
 				remove.insert(n);
 		result[QStringLiteral("unchanged")] = static_cast<int>(fields.size() - remove.size());
 		if (!remove.isEmpty()) {
-			int count = 0;
+			int count = 0, serial = 0;
 			QPointer<StaticConfiguratorProvider> alive(this);
 			p->changeWatch([&] {
-				auto removed = p->watchModel.removeEndpoints(remove);
+				const auto removed = p->watchModel.removeEndpoints(remove);
 				count = static_cast<int>(removed.size());
 				if (alive)
-					p->recordUndo(false, {}, std::move(removed));
+					serial = p->recordRemoved(removed);
 			});
 			if (!alive)
 				return result;
 			result[QStringLiteral("changed")] = count;
+			result[QStringLiteral("serial")] = serial;
 		}
 	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
-	return result;
-}
-
-QVariantMap StaticConfiguratorProvider::undoWatch()
-{
-	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
-	                   {QStringLiteral("changed"), 0}};
-	if (!canUndoWatch())
-		return result;
-	auto* p = d.get();
-	const auto undo = std::exchange(p->undo, {});
-	int changed = 0;
-	QPointer<StaticConfiguratorProvider> alive(this);
-	if (undo.added) {
-		p->changeWatch([&] {
-			changed = static_cast<int>(p->watchModel.removeEndpoints(undo.addedEndpoints).size());
-		});
-	} else {
-		if (static_cast<int>(p->watchModel.rows.size() + undo.removed.size()) > watchlistRowLimit ||
-		    !p->watchModel.canTake(undo.removed.size()))
-			return result;
-		p->changeWatch([&] { p->watchModel.insertAt(undo.removed, p->epoch); });
-		changed = static_cast<int>(undo.removed.size());
-	}
-	if (!alive)
-		return result;
-	result[QStringLiteral("status")] = QStringLiteral("ok");
-	result[QStringLiteral("changed")] = changed;
 	return result;
 }
 

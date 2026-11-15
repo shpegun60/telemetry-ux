@@ -37,8 +37,36 @@ Window {
     }
     EndpointTreePanel { objectName: "bulkTree"; anchors.fill: parent; provider: fake }
 
-    // A provider with watch boxes (watchState, setWatchMany, undoWatch), in a
-    // window of its own so the bulk checks above keep theirs.
+    // A stand-in for a host's UndoHistory (UR-1): what the tree's status
+    // line and its Undo read and call.
+    QtObject {
+        id: boxesHistory
+        property var steps: []
+        property int serial: 0
+        readonly property bool canUndo: steps.length > 0
+        readonly property string undoText: steps.length > 0 ? steps[steps.length - 1].text : ""
+        readonly property int undoSerial: steps.length > 0 ? steps[steps.length - 1].serial : 0
+        signal recorded(int serial)
+        signal done(int serial, string text, bool undone, string note, string outcome)
+        function record(text, undo) {
+            serial += 1
+            steps = steps.concat([{ text: text, serial: serial, undo: undo }])
+            recorded(serial)
+            return serial
+        }
+        function undo() {
+            if (steps.length === 0)
+                return false
+            const step = steps[steps.length - 1]
+            steps = steps.slice(0, steps.length - 1)
+            step.undo()
+            done(step.serial, step.text, true, "", "done")
+            return true
+        }
+        function sentence(text, undone, note, outcome) { return (undone ? "Undone: " : "Redone: ") + text }
+    }
+    // A provider with watch boxes (watchState, setWatchMany) and a history, in
+    // a window of its own so the bulk checks above keep theirs.
     QtObject {
         id: boxes
         objectName: "boxesProvider"
@@ -48,7 +76,7 @@ Window {
         // The Dynamic provider's promise: changes are taken while polling.
         property bool watchChangesWhilePolling: false
         property int watchRevision: 0
-        property bool canUndoWatch: false
+        property var history: boxesHistory
         readonly property int watchLimit: 1024
         property bool full: false
         property int calls: 0
@@ -63,6 +91,7 @@ Window {
             ++calls
             if (full && on)
                 return {status: "capacity", changed: 0, unchanged: 0, fields: indexes.length, room: 0}
+            const before = watched
             const next = Object.assign({}, watched)
             let changed = 0
             for (const index of indexes) {
@@ -72,11 +101,14 @@ Window {
                 }
             }
             watched = next
-            canUndoWatch = changed > 0
             ++watchRevision
-            return {status: "ok", changed: changed, unchanged: indexes.length - changed, fields: indexes.length, room: 1024}
+            const serial = changed > 0 && history ? history.record((on ? "Add " : "Remove ") + changed + " values", () => {
+                watched = before
+                ++watchRevision
+            }) : 0
+            return {status: "ok", changed: changed, unchanged: indexes.length - changed, fields: indexes.length, room: 1024,
+                    serial: serial}
         }
-        function undoWatch() { canUndoWatch = false; watched = ({}); ++watchRevision; return {status: "ok", changed: 1} }
     }
     Window {
         objectName: "boxesWindow"
