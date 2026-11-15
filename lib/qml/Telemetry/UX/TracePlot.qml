@@ -901,11 +901,8 @@ FocusScope {
             objectName: "plotMenuRemoveAll"
             text: qsTr("Remove all curves")
             enabled: plot.plotted.length > 0
-            onTriggered: {
-                // Their readings are kept, as with each chip's ×.
-                for (const path of plot.plotted.slice())
-                    plot.traces.unplot(path)
-            }
+            // One step to undo; their readings are kept, as with each chip's ×.
+            onTriggered: plot.traces.unplotMany(plot.plotted.slice())
         }
     }
 

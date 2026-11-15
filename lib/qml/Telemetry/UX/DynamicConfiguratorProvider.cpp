@@ -2146,6 +2146,7 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 	result[QStringLiteral("added")] = static_cast<int>(count);
 	result[QStringLiteral("items")] = items;
 	result[QStringLiteral("first")] = first;
+	result[QStringLiteral("serial")] = p->batch.lastSerial();
 	return result;
 }
 
@@ -2920,6 +2921,9 @@ void DynamicConfiguratorProvider::setHistory(UndoHistory* history)
 	if (d->undoHistory == history)
 		return;
 	d->undoHistory = history;
+	// The live Plot's changes and the Batch's go to the same history.
+	d->traces.setHistory(history);
+	d->batch.setHistory(history);
 	Q_EMIT historyChanged();
 }
 

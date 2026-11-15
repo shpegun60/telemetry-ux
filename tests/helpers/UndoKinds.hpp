@@ -26,7 +26,11 @@ namespace undo_kinds {
 inline const std::map<QString, QStringList>& coverage()
 {
 	static const std::map<QString, QStringList> table{
+	    {QStringLiteral("batch.items"), {QStringLiteral("dynamic_batch")}},
 	    {QStringLiteral("file.bytes"), {QStringLiteral("device_files")}},
+	    {QStringLiteral("plot.curves"), {QStringLiteral("dynamic_qml_configurator")}},
+	    {QStringLiteral("plot.look"), {QStringLiteral("dynamic_qml_configurator")}},
+	    {QStringLiteral("plot.points"), {QStringLiteral("dynamic_qml_configurator")}},
 	    {QStringLiteral("watch.format"), {QStringLiteral("qt_connection")}},
 	    {QStringLiteral("watch.rows"), {QStringLiteral("qt_connection"), QStringLiteral("static_qml_configurator")}},
 	};

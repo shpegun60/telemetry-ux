@@ -1,6 +1,8 @@
 // Three independent installed QML panels over one actual native client/FIFO. MIT.
 #include "Fixture.hpp"
+#include "../helpers/UndoKinds.hpp"
 #include <Telemetry/UX/WatchKey.hpp>
+#include <Telemetry/UX/WatchTraces.hpp>
 #include <Telemetry/UX/WatchLeaves.hpp>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
@@ -808,6 +810,132 @@ void watchWithoutSource()
 	CHECK(leaves.count(type) == 306 && leaves.ordinal(type, u"samples[3]") == 9u);
 }
 
+// The live Plot's steps (UR-1), on a provider's own traces: every plot kind
+// held to UndoKinds' property - done, undone and redone the same, across the
+// provider losing its device and getting it back, and across the Watchlist
+// naming other paths, as after another descriptor; curves come back in
+// their places with their colours. A provider gives its traces its history.
+// restore() records nothing.
+static void plotUndoKinds()
+{
+	using telemetry::ux::UndoHistory;
+	using telemetry::ux::WatchTraces;
+	Harness h;
+	Provider provider{h.binding.get()};
+	UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	auto* traces = qobject_cast<WatchTraces*>(provider.watchTraces());
+	CHECK(traces && traces->history() == nullptr);
+	provider.setHistory(&history);
+	CHECK(traces->history() == &history);
+	const QString gain = QStringLiteral("device.Config.gain"), serial = QStringLiteral("device.Serial"),
+	              limit = QStringLiteral("device.Config.limit");
+	const auto state = [traces] {
+		QVariantMap colours;
+		for (const auto& path : traces->plotted())
+			colours.insert(path, traces->colorIndex(path));
+		auto saved = traces->capture();
+		saved.insert(QStringLiteral("colours"), colours);
+		return QVariant(saved);
+	};
+	const auto start = [&] {
+		if (!provider.connected())
+			provider.setBinding(h.binding.get());
+		CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{gain, serial}}}));
+		// Every curve's look plain, then gain's own.
+		for (const auto& path : {gain, serial, limit, QStringLiteral("device.Config.mode")}) {
+			CHECK(traces->setAppearance(path, QString{}, 1, 0));
+			traces->setPoints(path, 0);
+		}
+		CHECK(traces->setAppearance(gain, QStringLiteral("#3366cc"), 2, 0.5));
+		history.clear();
+		now += 10000;
+	};
+	const auto away = [&] {
+		provider.setBinding(nullptr);
+		events();
+		CHECK(!provider.connected());
+	};
+	const auto back = [&] {
+		provider.setBinding(h.binding.get());
+		events();
+		CHECK(provider.connected());
+	};
+	// The Watchlist now names other paths: the curves keep theirs.
+	quint64 membership = 100;
+	const auto otherPaths = [&] {
+		traces->setPaths(++membership, {{7, QStringLiteral("other.Value")}});
+	};
+	const auto done = [](const QString& outcome, const QString&) { return outcome == QStringLiteral("done"); };
+	std::vector<undo_kinds::Case> cases;
+	const auto add = [&](const char* kind, const char* name, std::function<void()> act) {
+		cases.push_back({QString::fromLatin1(kind), QString::fromLatin1(name), &history, start, std::move(act), state,
+		                 away, back, otherPaths, done});
+	};
+	add("plot.curves", "plot a curve", [&] { CHECK(traces->plot(limit).isEmpty()); });
+	add("plot.curves", "remove a curve", [&] { traces->unplot(gain); });
+	add("plot.curves", "remove all curves", [&] { traces->unplotMany(traces->plotted()); });
+	add("plot.curves", "plot several", [&] {
+		CHECK(traces->plotMany({limit, gain, QStringLiteral("device.Config.mode")}).value("added").toInt() == 2);
+	});
+	add("plot.look", "change a curve", [&] { CHECK(traces->setAppearance(serial, QStringLiteral("#aa0000"), 10, -1)); });
+	add("plot.look", "change a curve's points twice", [&] {
+		traces->setPoints(gain, 1);
+		now += 500;
+		traces->setPoints(gain, 2);
+	});
+	add("plot.points", "show the points", [&] { traces->setShowPoints(true); });
+	const auto report = undo_kinds::run(QStringLiteral("dynamic_qml_configurator"), cases);
+	CHECK(report.cases == 7 && report.disconnects == 7 && report.descriptors == 7);
+
+	// The words, and a curve back in its place with its colour.
+	start();
+	CHECK(traces->plot(limit).isEmpty() && history.undoText() == QStringLiteral("Plot device.Config.limit"));
+	const auto colour = traces->colorIndex(gain);
+	traces->unplot(gain);
+	CHECK(history.undoText() == QStringLiteral("Remove device.Config.gain from the Plot"));
+	// A curve never plotted takes the first free colour: the one gain left.
+	CHECK(traces->plot(QStringLiteral("device.Config.fresh")).isEmpty() &&
+	      traces->colorIndex(QStringLiteral("device.Config.fresh")) == colour);
+	CHECK(history.undo() && history.undo() && traces->plotted() == QStringList({gain, serial, limit}) &&
+	      traces->colorIndex(gain) == colour);
+	traces->unplotMany(traces->plotted());
+	CHECK(history.undoText() == QStringLiteral("Remove all curves from the Plot") && history.undo() &&
+	      traces->plotted() == QStringList({gain, serial, limit}));
+	now += 10000;
+	traces->setPoints(serial, 1);
+	CHECK(history.undoText() == QStringLiteral("Change the points of device.Serial"));
+	now += 500;
+	traces->setPoints(serial, 0);
+	CHECK(history.undoText() != QStringLiteral("Change the points of device.Serial"));
+	CHECK(traces->setAppearance(serial, QStringLiteral("#00aa00"), 1, 0) &&
+	      history.undoText() == QStringLiteral("Change the curve of device.Serial"));
+	traces->setShowPoints(true);
+	CHECK(history.undoText() == QStringLiteral("Show measurement points"));
+	traces->setShowPoints(false);
+	CHECK(history.undoText() == QStringLiteral("Hide measurement points"));
+	// A project's Plot put back records nothing.
+	const auto steps = history.count();
+	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}, {QStringLiteral("showPoints"), true}}) &&
+	      history.count() == steps);
+	// A curve taken off since: its plot's undo finds nothing and goes.
+	history.clear();
+	CHECK(traces->plot(gain).isEmpty());
+	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}}));
+	QString said;
+	QObject observer;
+	QObject::connect(&history, &UndoHistory::done, &observer,
+	                 [&](int, const QString& text, bool undone, const QString& note, const QString& outcome) {
+		                 said = history.sentence(text, undone, note, outcome);
+	                 });
+	CHECK(history.undo() && history.count() == 0 &&
+	      said == QStringLiteral("Skipped: Plot device.Config.gain; device.Config.gain is no longer on the Plot."));
+	// Without a history its traces record nothing either.
+	provider.setHistory(nullptr);
+	CHECK(traces->history() == nullptr && traces->plot(limit).isEmpty() && history.count() == 0);
+}
+
 // The central Undo's history itself (UR-1), on a target of the check's own: a
 // map of keys to values. A step is recorded once its change is made; undo puts
 // its states before back, redo its states after. Steps of one merge key within
@@ -1045,6 +1173,10 @@ int main(int argc, char** argv)
 		watchWithoutSource();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("submitted"))
 		submittedOncePerAcceptedRequest();
+	// Before "history", which declares a kind of the check's own that no
+	// UndoKinds case proves.
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("plot"))
+		plotUndoKinds();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("history"))
 		undoHistoryCore();
 	CHECK(warnings == 0);

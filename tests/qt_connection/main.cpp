@@ -1821,6 +1821,10 @@ void watchRowsToPlot()
 	CHECK(await([&] { return !provider->watchActive() && !provider->watchPending(); }));
 	auto* traces = qobject_cast<ux::WatchTraces*>(provider->watchTraces());
 	CHECK(traces && traces->plotted().isEmpty());
+	// The Plot's changes go to the provider's history (UR-1).
+	ux::UndoHistory history;
+	provider->setHistory(&history);
+	CHECK(traces->history() == &history);
 
 	QQmlApplicationEngine engine;
 	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
@@ -1862,7 +1866,17 @@ ApplicationWindow {
 	QTest::keyClick(window, Qt::Key_Escape);
 	// Every one on it already: Ctrl+P takes them all off.
 	CHECK(await([&] { return list->hasActiveFocus(); }));
+	const auto three = traces->plotted();
+	CHECK(history.undoText() == QStringLiteral("Plot 3 values"));
 	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().isEmpty(); }));
+	// One press, one step: the notice offers its Undo, and Ctrl+Z puts every
+	// curve back in its place.
+	CHECK(history.undoText() == QStringLiteral("Remove all curves from the Plot"));
+	CHECK(control(window->contentItem(), QStringLiteral("watchUndo")));
+	QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted() == three; }));
+	QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
 	CHECK(await([&] { return traces->plotted().isEmpty(); }));
 	object.reset();
 	connection.disconnect();

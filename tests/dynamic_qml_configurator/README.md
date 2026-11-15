@@ -57,6 +57,12 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   target's step going, the limit, the irreversible note, `clean`, a kind not
   declared or a target that is not one refused with a warning, a host's own
   kind declared; a provider's `history` assigned and announced once.
+- The live Plot's steps (UR-1) on a provider's own traces, every `plot.*` kind
+  held to `tests/helpers/UndoKinds.hpp` - done, undone and redone the same,
+  across the provider losing its device and getting it back and across the
+  Watchlist naming other paths; a curve back in its place with its colour;
+  Remove all as one step; a curve's points merged within two seconds; the
+  words; `restore()` recording nothing; a curve gone meanwhile skipped.
 
 QML warnings remain failures. The sanitizer profile uses only the existing narrow
 upstream Qt software-texture exception (`QSGRenderContext::textureForFactory`);

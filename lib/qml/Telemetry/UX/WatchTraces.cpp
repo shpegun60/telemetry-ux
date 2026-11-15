@@ -2,6 +2,7 @@
 #include "WatchTraces.hpp"
 #include <QtCore/QMetaObject>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QScopedValueRollback>
 #include <QtCore/QSet>
 #include <algorithm>
 #include <cmath>
@@ -66,7 +67,131 @@ std::optional<double> plotValue(const WatchValueBits& value) noexcept
 	return bits <= exact ? std::optional<double>(double(bits)) : std::nullopt;
 }
 
-WatchTraces::WatchTraces(QObject* parent) : QObject(parent) {}
+WatchTraces::WatchTraces(QObject* parent)
+    : QObject(parent),
+      target_([this](const QString& kind, const QVariantMap& state,
+                     const QStringList& keys) { return apply(kind, state, keys); },
+              [] { return QString{}; })
+{}
+
+void WatchTraces::setHistory(UndoHistory* history)
+{
+	if (history_ == history)
+		return;
+	history_ = history;
+	Q_EMIT historyChanged();
+}
+
+int WatchTraces::record(const QString& text, const QString& kind, QVariantMap before, QVariantMap after,
+                        const QString& mergeKey)
+{
+	if (quiet_ || !history_)
+		return 0;
+	return history_->record(text, {UndoPart{&target_, kind, std::move(before), std::move(after)}}, mergeKey);
+}
+
+QVariantMap WatchTraces::curveFragment(const QString& path) const
+{
+	return {{QStringLiteral("order"), int(plotted_.indexOf(path))},
+	        {QStringLiteral("colourIndex"), colors_.value(path, -1)}};
+}
+
+QVariantMap WatchTraces::lookState(const QString& path) const
+{
+	const auto look = appearance_.constFind(path);
+	if (look == appearance_.cend())
+		return {};
+	return {{path, QVariantMap{{QStringLiteral("color"), look->color},
+	                           {QStringLiteral("k"), look->multiplier},
+	                           {QStringLiteral("b"), look->offset},
+	                           {QStringLiteral("points"), look->points}}}};
+}
+
+int WatchTraces::freeColor() const
+{
+	QSet<int> used;
+	for (const auto& shown : plotted_)
+		used.insert(colors_.value(shown, -1));
+	int color = 0;
+	while (used.contains(color) && color < limit)
+		++color;
+	return color % limit;
+}
+
+UndoOutcome WatchTraces::apply(const QString& kind, const QVariantMap& state, const QStringList& keys)
+{
+	const QScopedValueRollback<bool> quiet(quiet_, true);
+	if (kind == QStringLiteral("plot.points")) {
+		setShowPoints(state.value(QString{}).toBool());
+		return {};
+	}
+	if (kind == QStringLiteral("plot.look")) {
+		for (const auto& path : keys) {
+			const auto look = state.value(path).toMap();
+			Appearance put;
+			put.color = look.value(QStringLiteral("color")).toString();
+			put.multiplier = look.value(QStringLiteral("k"), 1.0).toDouble();
+			put.offset = look.value(QStringLiteral("b"), 0.0).toDouble();
+			put.points = look.value(QStringLiteral("points")).toInt();
+			if (!state.contains(path) || put.plain())
+				appearance_.remove(path);
+			else
+				appearance_.insert(path, put);
+		}
+		++appearanceRevision_;
+		Q_EMIT appearanceChanged();
+		return {};
+	}
+	// "plot.curves": those it says are off, off; those it says are on, back
+	// in their places with their colours, a colour another curve took since
+	// given up for the first free one.
+	int applied = 0;
+	QStringList gone, already, full;
+	QVector<QPair<int, QString>> in;
+	for (const auto& path : keys) {
+		if (!state.contains(path)) {
+			if (plotted_.removeAll(path) > 0)
+				++applied;
+			else
+				gone << path;
+			continue;
+		}
+		if (plotted_.contains(path))
+			already << path;
+		else
+			in.push_back({state.value(path).toMap().value(QStringLiteral("order")).toInt(), path});
+	}
+	std::sort(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	for (const auto& [order, path] : std::as_const(in)) {
+		if (plotted_.size() >= limit) {
+			full << path;
+			continue;
+		}
+		int color = state.value(path).toMap().value(QStringLiteral("colourIndex"), -1).toInt();
+		for (const auto& shown : std::as_const(plotted_))
+			if (colors_.value(shown, -1) == color)
+				color = -1;
+		colors_.insert(path, color >= 0 && color < limit ? color : freeColor());
+		plotted_.insert(std::clamp(order, 0, int(plotted_.size())), path);
+		++applied;
+	}
+	if (applied > 0)
+		Q_EMIT plottedChanged();
+	QStringList notes;
+	const auto said = [&notes](const QStringList& paths, const QString& one, const QString& many) {
+		if (paths.size() == 1)
+			notes << one.arg(paths.first());
+		else if (paths.size() > 1)
+			notes << many.arg(paths.size());
+	};
+	said(full, tr("the Plot holds %1 curves, so %2 is not on it").arg(limit).arg(QStringLiteral("%1")),
+	     tr("the Plot holds %1 curves, so %2 are not on it").arg(limit).arg(QStringLiteral("%L1 values")));
+	said(already, tr("%1 is on the Plot already"), tr("%L1 values are on the Plot already"));
+	said(gone, tr("%1 is no longer on the Plot"), tr("%L1 values are no longer on the Plot"));
+	if (applied == 0)
+		return {UndoOutcome::Kind::Skipped, notes.join(QStringLiteral("; "))};
+	return {notes.isEmpty() ? UndoOutcome::Kind::Done : UndoOutcome::Kind::Partial, notes.join(QStringLiteral("; "))};
+}
 
 qint64 WatchTraces::nowNs() noexcept
 {
@@ -249,21 +374,58 @@ QString WatchTraces::plot(const QString& path)
 	QSet<int> used;
 	for (const auto& shown : std::as_const(plotted_))
 		used.insert(colors_.value(shown, -1));
-	if (!colors_.contains(path) || used.contains(colors_.value(path))) {
-		int color = 0;
-		while (used.contains(color) && color < limit)
-			++color;
-		colors_.insert(path, color % limit);
-	}
+	if (!colors_.contains(path) || used.contains(colors_.value(path)))
+		colors_.insert(path, freeColor());
 	plotted_.append(path);
 	Q_EMIT plottedChanged();
+	record(tr("Plot %1").arg(path), QStringLiteral("plot.curves"), {}, {{path, curveFragment(path)}});
 	return {};
 }
 
 void WatchTraces::unplot(const QString& path)
 {
-	if (plotted_.removeAll(path) > 0)
-		Q_EMIT plottedChanged();
+	unplotMany({path});
+}
+
+QVariantMap WatchTraces::plotMany(const QStringList& paths)
+{
+	QVariantMap after;
+	QString refusal, last;
+	{
+		const QScopedValueRollback<bool> quiet(quiet_, true);
+		for (const auto& path : paths) {
+			if (path.isEmpty() || plotted_.contains(path))
+				continue;
+			refusal = plot(path);
+			if (!refusal.isEmpty())
+				break;
+			last = path;
+			after.insert(path, curveFragment(path));
+		}
+	}
+	if (!after.isEmpty())
+		record(after.size() == 1 ? tr("Plot %1").arg(last) : tr("Plot %L1 values").arg(after.size()),
+		       QStringLiteral("plot.curves"), {}, after);
+	return {{QStringLiteral("added"), int(after.size())}, {QStringLiteral("refusal"), refusal},
+	        {QStringLiteral("last"), last}};
+}
+
+void WatchTraces::unplotMany(const QStringList& paths)
+{
+	QVariantMap before;
+	for (const auto& path : paths)
+		if (plotted_.contains(path))
+			before.insert(path, curveFragment(path));
+	if (before.isEmpty())
+		return;
+	const bool all = before.size() == plotted_.size() && before.size() > 1;
+	for (auto it = before.cbegin(); it != before.cend(); ++it)
+		plotted_.removeAll(it.key());
+	Q_EMIT plottedChanged();
+	record(all                   ? tr("Remove all curves from the Plot")
+	       : before.size() == 1 ? tr("Remove %1 from the Plot").arg(before.firstKey())
+	                            : tr("Remove %L1 curves from the Plot").arg(before.size()),
+	       QStringLiteral("plot.curves"), before, {});
 }
 
 QVariant WatchTraces::latest(const QString& path) const
@@ -326,6 +488,7 @@ bool WatchTraces::setAppearance(const QString& path, const QString& color, doubl
 	if (path.isEmpty() || !std::isfinite(multiplier) || !std::isfinite(offset) ||
 	    (!color.isEmpty() && !hex.match(color).hasMatch()))
 		return false;
+	const auto before = lookState(path);
 	auto look = appearance_.value(path);
 	look.color = color.toLower();
 	look.multiplier = multiplier;
@@ -336,6 +499,7 @@ bool WatchTraces::setAppearance(const QString& path, const QString& color, doubl
 		appearance_.insert(path, look);
 	++appearanceRevision_;
 	Q_EMIT appearanceChanged();
+	record(tr("Change the curve of %1").arg(path), QStringLiteral("plot.look"), before, lookState(path));
 	return true;
 }
 
@@ -346,6 +510,7 @@ void WatchTraces::setPoints(const QString& path, int mode)
 	auto look = appearance_.value(path);
 	if (look.points == mode)
 		return;
+	const auto before = lookState(path);
 	look.points = mode;
 	if (look.plain())
 		appearance_.remove(path);
@@ -353,6 +518,9 @@ void WatchTraces::setPoints(const QString& path, int mode)
 		appearance_.insert(path, look);
 	++appearanceRevision_;
 	Q_EMIT appearanceChanged();
+	// A curve's points changed again within two seconds are one step.
+	record(tr("Change the points of %1").arg(path), QStringLiteral("plot.look"), before, lookState(path),
+	       QStringLiteral("plot.points:") + path);
 }
 
 bool WatchTraces::pointsShown(const QString& path) const
@@ -368,6 +536,8 @@ void WatchTraces::setShowPoints(bool show)
 	showPoints_ = show;
 	++appearanceRevision_;
 	Q_EMIT appearanceChanged();
+	record(show ? tr("Show measurement points") : tr("Hide measurement points"), QStringLiteral("plot.points"),
+	       {{QString{}, !show}}, {{QString{}, show}});
 }
 
 QVariantMap WatchTraces::capture() const
@@ -384,6 +554,8 @@ QVariantMap WatchTraces::capture() const
 
 bool WatchTraces::restore(const QVariantMap& state)
 {
+	// What a project puts back is no step.
+	const QScopedValueRollback<bool> quiet(quiet_, true);
 	// A curve whose saved look is not one is skipped, not the whole Plot.
 	bool whole = true;
 	const auto curves = state.value(QStringLiteral("curves")).toMap();

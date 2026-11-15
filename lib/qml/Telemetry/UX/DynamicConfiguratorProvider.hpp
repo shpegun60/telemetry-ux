@@ -82,8 +82,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
 	// Where the Watchlist's changes go as steps to undo (UR-1): rows added and
 	// removed ("watch.rows", by path, with their places and own formats) and
-	// number formats chosen ("watch.format"). A host makes one UndoHistory and
-	// gives it; null, the default, records nothing.
+	// number formats chosen ("watch.format"), the live Plot's curves
+	// (watchTraces' "plot.*") and the Batch's items ("batch.items"). A host
+	// makes one UndoHistory and gives it; null, the default, records nothing.
 	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
 	// The Watchlist takes changes (boxes, add, remove, Undo, Clear) while it
 	// polls, between two reads. A provider without this property is locked
@@ -159,10 +160,10 @@ public:
 	// What may follow typed text: [{path, completion (what to put in the
 	// field), kind, typeText, operation, input, note, container, next}].
 	Q_INVOKABLE QVariantList batchPathCandidates(const QString& text) const;
-	// Every line, in order, or none: {status: ok, refused, unsupported,
-	// permission, previous, busy or full; added; first (the first new item);
-	// items: [{path, operation, what}]; refused: [{line, path, reason}];
-	// message}.
+	// Every line, in order, or none, as one step: {status: ok, refused,
+	// unsupported, permission, previous, busy or full; added; first (the first
+	// new item); items: [{path, operation, what}]; refused: [{line, path,
+	// reason}]; message; serial (the step's, 0 when none was recorded)}.
 	Q_INVOKABLE QVariantMap addBatchPaths(const QStringList& lines);
 	// The endpoint one line names, selected in the Device tree (for one that
 	// takes input). False when the line names none, or several.
