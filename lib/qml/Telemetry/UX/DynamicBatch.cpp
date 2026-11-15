@@ -340,6 +340,11 @@ bool DynamicBatch::supported() const
 	return d->current() && d->source.capability && d->source.capability().has_value();
 }
 
+runtime::RuntimeSchema DynamicBatch::schema() const
+{
+	return d->current() && d->source.schema ? d->source.schema() : runtime::RuntimeSchema{};
+}
+
 bool DynamicBatch::pending() const
 {
 	return bool(d->request);

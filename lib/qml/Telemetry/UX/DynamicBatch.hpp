@@ -95,6 +95,8 @@ public:
 	void invalidateValues();
 	void poll();
 	bool supported() const;
+	// The current device's schema, as the source has it; invalid otherwise.
+	runtime::RuntimeSchema schema() const;
 	bool pending() const;
 	bool active() const;
 	bool canAdd(const BatchRow& row) const;

@@ -777,9 +777,12 @@ void batchPaths()
 	const auto member = check("device.Config.Gain");
 	CHECK(member.value("path") == "device.Config" && member.value("operation") == "read");
 	CHECK(check("Setpoint").value("path") == "device.Setpoint");
-	// One that takes input is selected for Details instead.
+	// One whose input has a struct or an array goes to Details (BA-2).
 	const auto input = check("control.Execute");
-	CHECK(input.value("status") == "input" && input.value("message").toString().contains("takes input"));
+	CHECK(input.value("status") == "input" && input.value("message").toString().contains("which is filled in Details"));
+	// Input to one that takes none is refused in words; a Field's "= value" still is.
+	const auto none = check("command control.Ping now");
+	CHECK(none.value("status") == "error" && none.value("message") == "control.Ping takes no input; remove \"now\".");
 	CHECK(provider->selectBatchPath(QStringLiteral("control.Execute")) &&
 	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Execute");
 	CHECK(!provider->selectBatchPath(QStringLiteral("Ping")) && !provider->selectBatchPath(QStringLiteral("Nope")));
@@ -816,6 +819,32 @@ void batchPaths()
 	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
 	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
 	connection.disconnect();
+
+	// A Command's values typed after its path (BA-2), checked as Details would,
+	// on the demo whose control.Calibrate takes reference (f32).
+	inspector_qml::TcpDemoServer plain;
+	CHECK(plain.listen());
+	host::ConnectionSession second;
+	ux::QtConnectionBinding secondPresentation{&second};
+	auto* calibrate = secondPresentation.createProvider();
+	connect(second, plain);
+	const auto line = [calibrate](const char* text) { return calibrate->checkBatchPath(QString::fromUtf8(text)); };
+	auto typed = line("control.Calibrate");
+	CHECK(typed.value("status") == "needs" && typed.value("next") == "reference" &&
+	      typed.value("message") == "control.Calibrate needs reference (f32). Enter writes reference=; Ctrl+Enter fills it in Details.");
+	typed = line("control.Calibrate reference=abc");
+	CHECK(typed.value("status") == "error" && typed.value("message") == "reference (f32) takes a number, not \"abc\".");
+	typed = line("control.Calibrate referenc=1");
+	CHECK(typed.value("status") == "error" && typed.value("message") == "control.Calibrate has no argument referenc. Did you mean reference?");
+	// Valid, it would be added - here the device has no Batch - with its value as sent.
+	for (const auto* text : {"control.Calibrate reference=1.5", "control.Calibrate reference = 1.5", "control.Calibrate 1.5",
+	                         "Calibrate reference=0x3fc00000"}) {
+		typed = line(text);
+		const auto arguments = typed.value("arguments").toList();
+		CHECK(typed.value("status") == "unsupported" && arguments.size() == 1 &&
+		      arguments.first().toMap().value("status") == "ok" && arguments.first().toMap().value("canonical") == "1.5");
+	}
+	second.disconnect();
 }
 
 // The Watchlist outlives its device (WL-4c): a disconnect keeps every row by
