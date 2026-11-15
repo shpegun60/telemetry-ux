@@ -120,6 +120,11 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(QRectF plotArea READ plotArea NOTIFY drawn)
 	// The time at the right edge, ms since the epoch on this PC's clock.
 	Q_PROPERTY(qreal rightUtcMs READ rightUtcMs NOTIFY drawn)
+	// The time axis (LP-1h): the time of day, or the time since reading last
+	// started - the end of the last stop or disconnect before the right edge,
+	// else the first reading - whose time of day is originUtcMs.
+	Q_PROPERTY(bool fromStart READ fromStart WRITE setFromStart NOTIFY viewChanged)
+	Q_PROPERTY(qreal originUtcMs READ originUtcMs NOTIFY drawn)
 public:
 	explicit TraceView(QQuickItem* parent = nullptr);
 
@@ -215,6 +220,9 @@ public:
 	int drawnCurves() const { return drawnCurves_; }
 	QRectF plotArea() const { return plotArea_; }
 	qreal rightUtcMs() const { return rightUtcMs_; }
+	bool fromStart() const { return fromStart_; }
+	void setFromStart(bool fromStart);
+	qreal originUtcMs() const { return originUtcMs_; }
 
 	void paint(QPainter* painter) override;
 
@@ -295,6 +303,8 @@ private:
 	int drawnPoints_ = 0, rawCurves_ = 0, drawnCurves_ = 0;
 	QRectF plotArea_;
 	qreal rightUtcMs_ = 0;
+	bool fromStart_ = false;
+	qreal originUtcMs_ = 0;
 };
 } // namespace telemetry::ux
 #endif
