@@ -224,6 +224,8 @@ public:
 	bool batchAttention() const;
 	Q_INVOKABLE bool removeBatch(int row);
 	Q_INVOKABLE bool moveBatch(int row, int delta);
+	// The item at row dragged to place to (BA-4c): one undo step.
+	Q_INVOKABLE bool moveBatchTo(int row, int to);
 	Q_INVOKABLE bool clearBatch();
 	Q_INVOKABLE bool selectBatch(int row);
 	Q_INVOKABLE bool executeBatch();

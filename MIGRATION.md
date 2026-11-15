@@ -1129,6 +1129,49 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
   attention - a run that failed, or an item not done; the panel draws it in
   the warning colour, else muted.
 
+## The Batch: one-line rows, drag to reorder, Execute as the accent (BA-4c, November 2026)
+
+- **One line per item.** A Batch row (`batchRow`) is `Type.rowHeight` (22 px)
+  tall and striped, as every table of the family: the number (`batchRowNumber`,
+  caption monospace, muted, right-aligned), the kind in its own column
+  (`batchRowKind`: "read", "write", "command" or "service", caption,
+  secondary), the line in monospace (`batchRowName`, whose `text` is the whole
+  line: the path bright and cut short in the middle, its values quieter, with
+  the whole line in a tooltip when cut) and the outcome (`batchRowOutcome`,
+  caption, right-aligned). The 64 px two-line rows and the per-row "Draft" are
+  gone; an item being sent reads "Sending…", one of an earlier connection
+  "earlier connection", muted. A failure carries the error glyph and the error
+  colour; `...` and × keep their place on every row, shown on the hovered or
+  current one, so nothing moves on hover. Selection, hover and the focus frame
+  are Details'.
+- **`failed`**, a new role of the Batch's list (`BatchListModel::FailedRole`):
+  the item's outcome is a refusal, an unreadable value, or no checked outcome
+  after a run. A host's own list without it shows no failures.
+- **Drag to reorder.** A mouse drag on a row moves the item (`batchRowDrag`, a
+  `DragHandler`); a 2 px accent line (`batchMoveLine`) shows where it would
+  land, and the release makes one move. Touch, the wheel and the scroll bar
+  still scroll: the list takes no mouse buttons for flicking
+  (`acceptedButtons: Qt.NoButton`, as the Device tree). Paths dropped from
+  other panels (`batchDrop`) still join the Batch as before; the reorder drag
+  carries no mime data and never reaches that drop.
+- **`moveBatchTo(row, to)`** on the Dynamic provider, over the new
+  `DynamicBatch::moveTo(row, to)`: the item at `row` to place `to`, the others
+  closing up, the selection following its item. It is one UR-1 step of the
+  existing `batch.items` kind ("Move device.B to item 3 in the Batch"), merged
+  with that item's other moves within two seconds as `move()` is; only the
+  moved item's place is stored, and Undo puts every item back. `move(row,
+  delta)` is now `moveTo(row, row + delta)`. A host provider without
+  `moveBatchTo` is moved one place at a time through `moveBatch`.
+  `BatchPanel.moveItem(from, to)` is the panel's entry for both.
+- **The header.** The fold (`batchToggle`) keeps the panel's title and counts
+  "3 of 32 items"; Clear (`clearBatchButton`) is flat, beside it at the left,
+  with the tooltip "Remove every item. Ctrl+Z puts them back."; Execute Batch
+  (`executeBatchButton`) is the panel's one accent button at the right, as
+  Details' Apply, Execute and Call, with the tooltip "Sends every item in one
+  request, in order. This cannot be undone." A `ProgressLine`
+  (`batchProgress`) under the header shows a run. The panel's background is
+  `Theme.surfaceWindow`, with no card or radius.
+
 ## The designer's fixes to the Plot's analysis tools (November 2026)
 
 From the design review of the analysis tools. **Behaviour changes:** "From

@@ -7,6 +7,9 @@ ApplicationWindow {
     height: 520
     visible: true
     color: Theme.surfaceWindow
+    // What the checks compare the rows and the header with (BA-4c).
+    readonly property int rowHeight: Type.rowHeight
+    readonly property color accent: Theme.accent
     QtObject {
         id: fixtureProvider
         objectName: "batchAddFixture"
@@ -42,6 +45,7 @@ ApplicationWindow {
         function clearBatch() { return false }
         function selectBatch(row) { return false }
         function moveBatch(row, delta) { return batchAddCalls.move(row, delta) }
+        function moveBatchTo(row, to) { return batchAddCalls.moveTo(row, to) }
         function removeBatch(row) { return batchAddCalls.remove(row) }
         function checkBatchPath(text) { return batchAddCalls.check(text) }
         function batchPathCandidates(text) { return batchAddCalls.candidates(text) }

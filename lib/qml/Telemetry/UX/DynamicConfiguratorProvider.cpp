@@ -2183,6 +2183,12 @@ bool DynamicConfiguratorProvider::moveBatch(int row, int delta)
 	return p->batch.move(row, delta);
 }
 
+bool DynamicConfiguratorProvider::moveBatchTo(int row, int to)
+{
+	auto p = d;
+	return p->batch.moveTo(row, to);
+}
+
 bool DynamicConfiguratorProvider::clearBatch()
 {
 	auto p = d;

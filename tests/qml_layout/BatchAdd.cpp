@@ -7,6 +7,7 @@
 // and the row is off while the Batch runs. A fixture provider stands in for
 // the device. MIT.
 #include <QtCore/QDir>
+#include <QtGui/QColor>
 #include <QtCore/QVariantMap>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
@@ -18,6 +19,7 @@
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -109,6 +111,13 @@ public:
 	{
 		moved.append(QStringLiteral("%1:%2").arg(row).arg(delta));
 		return false;
+	}
+	// A drag's one move (BA-4c).
+	QStringList movedTo;
+	Q_INVOKABLE bool moveTo(int row, int to)
+	{
+		movedTo.append(QStringLiteral("%1>%2").arg(row).arg(to));
+		return true;
 	}
 	Q_INVOKABLE QVariantMap addPaths(const QStringList& lines)
 	{
@@ -381,6 +390,101 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(dropped.toBool() && calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("measure.Voltage")}));
 			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 5 to 6."));
+			settle();
+
+			// BA-4c. One line per item, Type.rowHeight tall: the number, the
+			// kind in its own column, the line and the outcome.
+			const int rowHeight = window->property("rowHeight").toInt();
+			CHECK(rowHeight > 0 && list->property("count").toInt() == 6);
+			QList<QQuickItem*> rows;
+			for (auto* child : list->property("contentItem").value<QQuickItem*>()->childItems())
+				if (child->objectName() == QLatin1String("batchRow") && child->isVisible())
+					rows.append(child);
+			std::sort(rows.begin(), rows.end(), [](QQuickItem* a, QQuickItem* b) { return a->y() < b->y(); });
+			CHECK(rows.size() == 6);
+			qreal kindX = -1;
+			for (int at = 0; at < rows.size(); ++at) {
+				CHECK(qRound(rows[at]->height()) == rowHeight && qRound(rows[at]->y()) == at * rowHeight);
+				CHECK(textOf(rows[at], "batchRowNumber") == QString::number(at + 1));
+				auto* kind = shown(rows[at], "batchRowKind");
+				CHECK(kind->property("text").toString() == QStringLiteral("read"));
+				const auto x = kind->mapToItem(list, QPointF()).x();
+				CHECK(kindX < 0 || qFuzzyCompare(kindX + 1, x + 1));
+				kindX = x;
+				// The line after the kind, on the same line.
+				auto* lineItem = shown(rows[at], "batchRowName");
+				CHECK(lineItem->mapToItem(list, QPointF()).x() > x + kind->width());
+				CHECK(qRound(lineItem->height()) == rowHeight);
+			}
+			CHECK(textOf(rows[0], "batchRowName") == QStringLiteral("device.Voltage"));
+			// The header: the fold with the count, Clear flat at the left,
+			// Execute Batch the accent at the right.
+			auto* toggle = shown(content, "batchToggle");
+			CHECK(toggle->property("countText").toString().endsWith(QStringLiteral(" of 32 items")));
+			auto* clear = shown(content, "clearBatchButton");
+			auto* execute = shown(content, "executeBatchButton");
+			CHECK(clear->property("flat").toBool() && !execute->property("flat").toBool());
+			CHECK(execute->property("text").toString() == QStringLiteral("Execute Batch"));
+			const auto clearX = clear->mapToItem(content, QPointF()).x();
+			const auto executeRight = execute->mapToItem(content, QPointF(execute->width(), 0)).x();
+			CHECK(toggle->mapToItem(content, QPointF()).x() < clearX);
+			CHECK(clearX + clear->width() < execute->mapToItem(content, QPointF()).x());
+			CHECK(executeRight > content->width() - 40);
+			const auto palette = execute->property("palette").value<QObject*>();
+			CHECK(palette && palette->property("button").value<QColor>() == window->property("accent").value<QColor>());
+			shot(window, argc, argv, QStringLiteral("batch-rows-760"));
+
+			// Drag to reorder: a 2 px accent line where the item would land,
+			// one move on release.
+			const auto centre = [&](int at) {
+				return rows[at]->mapToScene(QPointF(rows[at]->width() / 2, rowHeight / 2.0)).toPoint();
+			};
+			auto* moveLine = window->findChild<QQuickItem*>(QStringLiteral("batchMoveLine"));
+			CHECK(moveLine && !moveLine->isVisible());
+			QPoint at = centre(0);
+			QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, at);
+			for (int step = 0; step < 16; ++step) {
+				at.ry() += (2 * rowHeight + rowHeight / 2) / 16 + 1;
+				QTest::mouseMove(window, at);
+				QTest::qWait(5);
+			}
+			settle();
+			CHECK(moveLine->isVisible() && qRound(moveLine->height()) == 2);
+			CHECK(qAbs(moveLine->y() - 3 * rowHeight) <= 1);
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, at);
+			settle();
+			CHECK(calls.movedTo == QStringList({QStringLiteral("0>2")}));
+			CHECK(!moveLine->isVisible() && list->property("currentIndex").toInt() == 2);
+			// Upwards, the item lands above the row it is dropped on.
+			at = centre(4);
+			QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, at);
+			for (int step = 0; step < 16; ++step) {
+				at.ry() -= (3 * rowHeight) / 16 + 1;
+				QTest::mouseMove(window, at);
+				QTest::qWait(5);
+			}
+			settle();
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, at);
+			settle();
+			CHECK(calls.movedTo.size() == 2 && calls.movedTo.last() == QStringLiteral("4>1"));
+			// A drop back where it was moves nothing.
+			at = centre(3);
+			QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, at);
+			for (int step = 0; step < 4; ++step) {
+				at.ry() += 4;
+				QTest::mouseMove(window, at);
+				QTest::qWait(5);
+			}
+			for (int step = 0; step < 4; ++step) {
+				at.ry() -= 4;
+				QTest::mouseMove(window, at);
+				QTest::qWait(5);
+			}
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, at);
+			settle();
+			CHECK(calls.movedTo.size() == 2 && !moveLine->isVisible());
+			// The drop of paths from other panels is still the list's.
+			CHECK(drop->property("keys").toStringList() == QStringList({QStringLiteral("application/x-telemetry-paths")}));
 			// The status line: muted, in the warning colour when it asks for attention.
 			auto* status = shown(content, "batchOutcomeLabel");
 			CHECK(status->property("text").toString() == QStringLiteral("Executed at 14:02:11 - 2 of 2 done."));

@@ -95,6 +95,30 @@ QString itemText(client::Operation operation, const QVariantMap& result)
 		             "InvalidValue", "Busy", "Failed"});
 	return QStringLiteral("Read refused");
 }
+
+// Whether a row's outcome is a failure (BA-4c): a refusal of the device, an
+// unreadable value, or a run with no checked outcome. A draft, an item being
+// sent and an item done are not.
+bool failed(const BatchRow& row)
+{
+	const auto& result = row.result;
+	if (result.isEmpty())
+		return row.status != QStringLiteral("Draft") && row.status != QStringLiteral("Pending") && !row.sent.isNull();
+	const auto valueStatus = result.value(QStringLiteral("valueStatus")).toString();
+	if (valueStatus == QStringLiteral("InvalidPayload") || valueStatus == QStringLiteral("TypeMismatch"))
+		return true;
+	if (result.value(QStringLiteral("accepted")).toBool() || result.value(QStringLiteral("executed")).toBool() ||
+	    result.value(QStringLiteral("succeeded")).toBool())
+		return false;
+	if (result.value(QStringLiteral("dispatch")).toUInt() != 0)
+		return true;
+	const auto code = result.value(QStringLiteral("endpointStatus")).toUInt();
+	if (row.operation == client::Operation::Command)
+		return code > 1;
+	if (row.operation == client::Operation::Service || row.operation == client::Operation::FieldWrite)
+		return code != 0;
+	return true;
+}
 } // namespace
 
 int BatchListModel::rowCount(const QModelIndex& parent) const
@@ -132,6 +156,8 @@ QVariant BatchListModel::data(const QModelIndex& index, int role) const
 			return row.at;
 		case UidRole:
 			return QString::number(row.uid);
+		case FailedRole:
+			return failed(row);
 		default:
 			return {};
 	}
@@ -142,7 +168,7 @@ QHash<int, QByteArray> BatchListModel::roleNames() const
 	return {{NameRole, "name"},     {OperationRole, "operation"}, {EndpointIdRole, "endpointId"},
 	        {StatusRole, "status"}, {HasValueRole, "hasValue"},   {HistoricalRole, "historical"},
 	        {ResultRole, "result"},  {LineRole, "line"},           {ChangedRole, "changed"},
-	        {AtRole, "at"},          {UidRole, "uid"}};
+	        {AtRole, "at"},          {UidRole, "uid"},             {FailedRole, "failed"}};
 }
 
 bool BatchListModel::changing() const noexcept
@@ -873,25 +899,36 @@ bool DynamicBatch::remove(int row)
 
 bool DynamicBatch::move(int row, int delta)
 {
+	if (delta != -1 && delta != 1)
+		return false;
+	return moveTo(row, row + delta);
+}
+
+bool DynamicBatch::moveTo(int row, int to)
+{
 	auto p = d;
-	if (!p->editable() || (delta != -1 && delta != 1) || row < 0 || row >= count() ||
-	    row + delta < 0 || row + delta >= count())
+	if (!p->editable() || row < 0 || row >= count() || to < 0 || to >= count() || to == row)
 		return false;
 	p->lastSerial = 0;
 	p->publishing = true;
 	auto rows = p->model.rows();
 	const auto moved = rows[std::size_t(row)];
-	std::swap(rows[std::size_t(row)], rows[std::size_t(row + delta)]);
+	rows.erase(rows.begin() + row);
+	rows.insert(rows.begin() + to, moved);
+	// The selection follows its item; the items between close up.
 	if (p->selected == row)
-		p->selected += delta;
-	else if (p->selected == row + delta)
-		p->selected = row;
+		p->selected = to;
+	else if (row < to && p->selected > row && p->selected <= to)
+		--p->selected;
+	else if (to < row && p->selected >= to && p->selected < row)
+		++p->selected;
 	p->model.replace(std::move(rows));
 	p->finishPublication();
 	// One item moved again within two seconds is one step; back where it
-	// started, none.
-	p->record(QCoreApplication::translate("DynamicBatch", "Move %1 to item %L2 in the Batch").arg(moved.name).arg(row + delta + 1),
-	          {{Impl::key(moved), Impl::fragment(row, moved)}}, {{Impl::key(moved), Impl::fragment(row + delta, moved)}},
+	// started, none. Only the moved item's place is kept: putting it back
+	// moves the others back too.
+	p->record(QCoreApplication::translate("DynamicBatch", "Move %1 to item %L2 in the Batch").arg(moved.name).arg(to + 1),
+	          {{Impl::key(moved), Impl::fragment(row, moved)}}, {{Impl::key(moved), Impl::fragment(to, moved)}},
 	          QStringLiteral("batch.move:") + Impl::key(moved));
 	p->signal();
 	return true;
