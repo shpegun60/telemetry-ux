@@ -3,7 +3,8 @@
 // time, and across a disconnect and a changed descriptor. MIT.
 //
 // A suite gives a case per kind it proves (see coverage()) and calls run().
-// It fails on:
+// A host with kinds of its own (declared with UndoHistory::declareKind) names
+// the suites that prove them in run()'s `more`. It fails on:
 // - a kind UndoHistory::kinds() names that coverage() gives no suite: a kind
 //   added to the library with no case anywhere;
 // - a kind coverage() gives this suite with no case here;
@@ -95,17 +96,20 @@ inline std::pair<QString, QString> take(const Case& c, bool undo)
 }
 } // namespace detail
 
-// Runs every case of `suite`, and checks that the cases and coverage() between
-// them hold every kind the library records.
-inline Report run(const QString& suite, const std::vector<Case>& cases)
+// Runs every case of `suite`, and checks that the cases and coverage() - with
+// a host's `more` - between them hold every kind declared.
+inline Report run(const QString& suite, const std::vector<Case>& cases,
+                  const std::map<QString, QStringList>& more = {})
 {
+	auto table = coverage();
+	table.insert(more.cbegin(), more.cend());
 	Report report;
 	Case none;
 	none.name = suite;
 	for (const auto& kind : telemetry::ux::UndoHistory::kinds()) {
 		none.kind = kind;
-		const auto covered = coverage().find(kind);
-		detail::require(covered != coverage().end(), none, "a kind no suite proves");
+		const auto covered = table.find(kind);
+		detail::require(covered != table.end(), none, "a kind no suite proves");
 		if (!covered->second.contains(suite))
 			continue;
 		bool found = false;
@@ -114,8 +118,8 @@ inline Report run(const QString& suite, const std::vector<Case>& cases)
 		detail::require(found, none, "a kind this suite must prove has no case");
 	}
 	for (const auto& c : cases) {
-		const auto covered = coverage().find(c.kind);
-		detail::require(covered != coverage().end() && covered->second.contains(suite), c,
+		const auto covered = table.find(c.kind);
+		detail::require(covered != table.end() && covered->second.contains(suite), c,
 		                "a case of a kind this suite is not given");
 		detail::require(c.history && c.reset && c.act && c.state, c, "an incomplete case");
 		// Do, undo, redo, undo, redo: the states before and after, each time.
