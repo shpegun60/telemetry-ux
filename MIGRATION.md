@@ -755,3 +755,19 @@ read again 1000-1047 ms after it landed, the session publishing nothing in
 between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
+
+## Dragging rows onto the Plot and the Watchlist (LP-1g3, November 2026)
+
+The Watchlist's list and the Device tree no longer scroll by a mouse drag
+(`acceptedButtons: Qt.NoButton`; the wheel, a touchpad, the scroll bar and a
+touch screen still scroll): a mouse drag takes rows instead, as an automatic
+drag with the type `application/x-telemetry-paths`, JSON
+`{"from": "watchlist" | "device", "paths": [...]}`, and the paths as plain
+text. A Watchlist row carries its values (`WatchlistPanel.dragPaths(row)`, the
+selection's when the row is in it); a Device tree row its endpoint's path, a
+group or a category every endpoint under it
+(`EndpointTreePanel.dragPaths(index)`). `TracePlot` gains an optional
+`provider`, `dropPaths(payload)` and a `notice` line: a Watchlist drag plots
+its values; a Device tree drag joins the Watchlist first and plots the values
+under what was dropped. `WatchlistPanel.dropPaths(payload)` adds a Device tree
+drag. Both show a frame and what a drop will do while a drag is over them.
