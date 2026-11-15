@@ -556,7 +556,7 @@ Pane {
     readonly property var plotTraces: provider && provider.watchTraces ? provider.watchTraces : null
     // Puts row's values - the selection's, when row is in it, or every value
     // under a node - on the Plot, or takes them off when each is on it
-    // already (Ctrl+P, the row menu). Text is refused in words.
+    // already (Ctrl+P, the row menu), as one step. Text is refused in words.
     function togglePlot(row) {
         if (!plotTraces || !rows || row < 0)
             return false
@@ -564,25 +564,19 @@ Pane {
         if (values.length === 0)
             return false
         const numbers = values.filter(value => value.number)
+        recorded = 0
         if (numbers.length > 0 && numbers.every(value => plotTraces.isPlotted(value.path))) {
-            for (const value of numbers)
-                plotTraces.unplot(value.path)
+            plotTraces.unplotMany(numbers.map(value => value.path))
             say(numbers.length === 1 ? qsTr("%1 is off the Plot; its readings are kept").arg(numbers[0].path)
-                                     : qsTr("%L1 values are off the Plot; their readings are kept").arg(numbers.length), 0)
+                                     : qsTr("%L1 values are off the Plot; their readings are kept").arg(numbers.length),
+                recorded)
             return true
         }
-        let added = 0
-        let last = ""
-        let refusal = ""
-        for (const value of numbers) {
-            if (plotTraces.isPlotted(value.path))
-                continue
-            refusal = plotTraces.plot(value.path)
-            if (refusal.length > 0)
-                break
-            ++added
-            last = value.path
-        }
+        const plotted = plotTraces.plotMany(numbers.map(value => value.path))
+        const added = plotted.added
+        const last = plotted.last
+        const refusal = plotted.refusal
+        const serial = added > 0 ? recorded : 0
         const text = values.length - numbers.length
         if (refusal.length > 0)
             say(refusal, 0)
@@ -592,7 +586,7 @@ Pane {
             say(qsTr("%L1 of %L2 values are text and were not plotted.").arg(text).arg(values.length), 0)
         else
             say(added === 1 ? qsTr("Plotted %1").arg(last)
-                            : qsTr("Plotted %L1 values").arg(added), 0)
+                            : qsTr("Plotted %L1 values").arg(added), serial)
         return true
     }
 

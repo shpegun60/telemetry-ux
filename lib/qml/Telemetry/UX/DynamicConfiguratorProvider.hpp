@@ -82,8 +82,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(int watchLimit READ watchLimit CONSTANT)
 	// Where the Watchlist's changes go as steps to undo (UR-1): rows added and
 	// removed ("watch.rows", by path, with their places and own formats) and
-	// number formats chosen ("watch.format"). A host makes one UndoHistory and
-	// gives it; null, the default, records nothing.
+	// number formats chosen ("watch.format"), and the live Plot's curves
+	// (watchTraces' "plot.*"). A host makes one UndoHistory and gives it; null,
+	// the default, records nothing.
 	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history WRITE setHistory NOTIFY historyChanged)
 	// The Watchlist takes changes (boxes, add, remove, Undo, Clear) while it
 	// polls, between two reads. A provider without this property is locked

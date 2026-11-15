@@ -2920,6 +2920,8 @@ void DynamicConfiguratorProvider::setHistory(UndoHistory* history)
 	if (d->undoHistory == history)
 		return;
 	d->undoHistory = history;
+	// The live Plot's changes go to the same history.
+	d->traces.setHistory(history);
 	Q_EMIT historyChanged();
 }
 

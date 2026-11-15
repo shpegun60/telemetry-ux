@@ -797,3 +797,25 @@ one for its workspace and gives it to its providers; a file keeps its own.
 - Until UX-B, the panels call the history themselves: the Watchlist's Ctrl+Z,
   the hex view's Ctrl+Z and Ctrl+Y while editing, the notices' "· Undo" and
   `FileEditTools`' Undo and Redo. UX-B replaces them with one router per window.
+
+## The live Plot's changes as steps (UR-1, UX-D, November 2026)
+
+The live Plot records into the same history as the Watchlist (README, "Undo
+and Redo").
+
+- **`WatchTraces.history`** (read and write, `historyChanged`) is new. A
+  Dynamic provider gives its traces its own history when it is given one; a
+  host with traces of its own sets it there. Null records nothing.
+- **Steps.** `plot(path)` ("Plot device.Voltage"), `unplot(path)` ("Remove
+  device.Voltage from the Plot"), `setAppearance` ("Change the curve of ..."),
+  `setPoints` ("Change the points of ...", one curve's changes within two
+  seconds merging) and `showPoints` ("Show measurement points", "Hide
+  measurement points") are each a step. Kinds: `plot.curves` (by path, with
+  the curve's place and colour), `plot.look` (by path: colour, k, b, points)
+  and `plot.points`. Undo puts a curve back in its place with its colour; a
+  colour another curve took meanwhile gives way to the first free one.
+- **New: `plotMany(paths)` and `unplotMany(paths)`**, several curves as one
+  step: the Watchlist's Plot (Ctrl+P on a selection or a node) and the Plot's
+  "Remove all curves" ("Remove all curves from the Plot") use them, so one
+  press is one step. `plotMany` answers `{added, refusal, last}`.
+- **`restore(state)` records nothing**: a project's Plot put back is no step.

@@ -104,8 +104,9 @@ public:
 	void setClock(std::function<qint64()> nowMs);
 
 	// Every kind a step may hold: the library's ("watch.rows",
-	// "watch.format", "file.bytes"), then those a host declares for its own
-	// targets. A check of every kind finds them here.
+	// "watch.format", "file.bytes", "plot.curves", "plot.look",
+	// "plot.points"), then those a host declares for its own targets. A check
+	// of every kind finds them here.
 	[[nodiscard]] static QStringList kinds();
 	static void declareKind(const QString& kind);
 
