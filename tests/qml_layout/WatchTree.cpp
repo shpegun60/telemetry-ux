@@ -4,6 +4,7 @@
 // removed around it. MIT.
 #include <Telemetry/UX/WatchRows.hpp>
 #include <QtCore/QDir>
+#include <QtCore/QLocale>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
@@ -492,6 +493,76 @@ int main(int argc, char** argv)
 			settle();
 			window->setWidth(480);
 			settle();
+
+			// The pace (WL-6): from the first completed cycle a line stands in
+			// for the status, shown where a host hides the status; behind, it
+			// says the period polling achieves; its tooltip says how a cycle
+			// read; times are in words; a stop says itself at once.
+			{
+				auto* fixture = panel->property("provider").value<QObject*>();
+				const auto seconds = [](double value) { return QLocale().toString(value) + QStringLiteral(" s"); };
+				const auto pace = [](bool behind, double cycle, double achieved) {
+					return QVariantMap{{QStringLiteral("cycles"), 3},           {QStringLiteral("polling"), true},
+					                   {QStringLiteral("routine"), true},        {QStringLiteral("values"), 65},
+					                   {QStringLiteral("readMany"), 31},         {QStringLiteral("batch"), 1},
+					                   {QStringLiteral("fieldRead"), 2},         {QStringLiteral("again"), 0},
+					                   {QStringLiteral("lastCycleMs"), cycle},   {QStringLiteral("medianCycleMs"), cycle},
+					                   {QStringLiteral("medianPeriodMs"), achieved}, {QStringLiteral("achievedPeriodMs"), achieved},
+					                   {QStringLiteral("intervalMs"), 1000},     {QStringLiteral("skippedTicks"), 2},
+					                   {QStringLiteral("behind"), behind}};
+				};
+				panel->setProperty("statusShown", false);
+				fixture->setProperty("watchStatus", QStringLiteral("ReadMany complete - 65 values"));
+				fixture->setProperty("watchActive", true);
+				fixture->setProperty("watchPace", pace(true, 1200, 2000));
+				settle();
+				CHECK(textOf(content, "watchStatusLabel") ==
+				      QStringLiteral("Every 2 s, not 1 s: a cycle of 65 values takes ") + seconds(1.2));
+				const auto tip = panel->property("paceTip").toString().split(QLatin1Char('\n'));
+				CHECK(tip.size() == 3 &&
+				      tip[0] == QStringLiteral("Every 2 s, not 1 s: a cycle due while the last one still runs is skipped.") &&
+				      tip[1] == QStringLiteral("65 values in 31 ReadMany, 1 Batch and 2 FieldRead requests; the last cycle took ") +
+				                    seconds(1.2) + QLatin1Char('.') &&
+				      tip[2].startsWith(QStringLiteral("Continuous reads as soon as a cycle ends")));
+				// Within its interval, after the line's two seconds.
+				fixture->setProperty("watchPace", pace(false, 412, 1000));
+				QTest::qWait(2100);
+				settle();
+				CHECK(textOf(content, "watchStatusLabel") == QStringLiteral("A cycle of 65 values takes 410 ms"));
+				CHECK(panel->property("paceTip").toString().startsWith(QStringLiteral("Every 1 s, as asked.\n")));
+				// Times in words.
+				const auto words = [panel](double ms) {
+					QVariant out;
+					QMetaObject::invokeMethod(panel, "durationText", Q_RETURN_ARG(QVariant, out), Q_ARG(QVariant, ms));
+					return out.toString();
+				};
+				CHECK(words(9.4) == QStringLiteral("9 ms") && words(412) == QStringLiteral("410 ms") &&
+				      words(1004) == seconds(1.004) && words(1240) == seconds(1.2) && words(14200) == QStringLiteral("14 s") &&
+				      words(80000) == QStringLiteral("1 min 20 s"));
+				// Stopped: the status says itself at once, and the interval's
+				// tooltip keeps the last cycle.
+				fixture->setProperty("watchActive", false);
+				fixture->setProperty("watchStatus", QStringLiteral("Stopped"));
+				auto stopped = pace(false, 412, 1000);
+				stopped[QStringLiteral("routine")] = false;
+				fixture->setProperty("watchPace", stopped);
+				settle();
+				CHECK(panel->property("paceText").toString().isEmpty() && !named(content, "watchStatusLabel"));
+				panel->setProperty("statusShown", true);
+				settle();
+				CHECK(textOf(content, "watchStatusLabel") == QStringLiteral("Stopped"));
+				// A Read once says what it read, and in how long.
+				auto once = pace(false, 150, 0);
+				once[QStringLiteral("polling")] = false;
+				once[QStringLiteral("cycles")] = 1;
+				fixture->setProperty("watchPace", once);
+				fixture->setProperty("watchStatus", QStringLiteral("ReadMany complete - 65 values"));
+				settle();
+				CHECK(textOf(content, "watchStatusLabel") == QStringLiteral("65 values read in 150 ms"));
+				fixture->setProperty("watchPace", QVariantMap{});
+				fixture->setProperty("watchStatus", QString{});
+				settle();
+			}
 
 			// Copies (WL-4a): Ctrl+C takes "path = value" lines for what the
 			// row shows, a node every value under it; Alt+Shift+C the paths.
