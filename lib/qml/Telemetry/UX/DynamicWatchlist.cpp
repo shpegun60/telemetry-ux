@@ -9,6 +9,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -87,6 +88,81 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// a time and only while nothing else is in flight. The timer then only
 	// backs it up.
 	int intervalMs = 1000;
+	// The pace (WatchPace): the current cycle's first request and exchanges,
+	// the last five cycles and periods, and what was last worked out.
+	std::function<qint64()> clock;
+	struct Pace {
+		qint64 cycleStart = 0, lastStart = 0;
+		quint32 many = 0, batch = 0, field = 0, again = 0;
+		std::vector<qint64> cycles, periods;
+		WatchPace shown;
+	} pace;
+
+	qint64 nowNs() const
+	{
+		return clock ? clock() : WatchTimestamp::now().monotonicNs;
+	}
+
+	static void keepFive(std::vector<qint64>& last, qint64 value)
+	{
+		last.push_back(value);
+		if (last.size() > 5)
+			last.erase(last.begin());
+	}
+
+	static double medianMs(std::vector<qint64> values)
+	{
+		if (values.empty())
+			return 0;
+		std::sort(values.begin(), values.end());
+		const auto n = values.size();
+		const double ns = n % 2 ? double(values[n / 2]) : (double(values[n / 2 - 1]) + double(values[n / 2])) / 2;
+		return ns / 1e6;
+	}
+
+	void resetPace(bool polling)
+	{
+		pace = {};
+		pace.shown.polling = polling;
+		pace.shown.intervalMs = intervalMs;
+	}
+
+	// A cycle ended with every portion read: its time, its exchanges, the
+	// period and whether polling keeps up.
+	void finishPace()
+	{
+		if (!pace.cycleStart)
+			return; // nothing was sent: a list with nothing to read
+		const auto took = nowNs() - pace.cycleStart;
+		keepFive(pace.cycles, took);
+		auto& s = pace.shown;
+		++s.cycles;
+		s.polling = running;
+		s.values = model.count();
+		s.readMany = pace.many;
+		s.batch = pace.batch;
+		s.fieldRead = pace.field;
+		s.again = pace.again;
+		s.lastCycleMs = double(took) / 1e6;
+		s.medianCycleMs = medianMs(pace.cycles);
+		s.medianPeriodMs = medianMs(pace.periods);
+		s.intervalMs = intervalMs;
+		if (!running) {
+			s.achievedPeriodMs = 0;
+			s.behind = false;
+		} else if (intervalMs == 0) {
+			s.achievedPeriodMs = pace.periods.empty() ? s.lastCycleMs : s.medianPeriodMs;
+			s.behind = false;
+		} else {
+			const double interval = intervalMs;
+			// A tick due during a cycle is skipped: the next starts on a later
+			// one. Periods are whole intervals with a little jitter: the nearest.
+			const double byCycle = std::ceil(s.lastCycleMs / interval - 1e-9);
+			const double byPeriod = pace.periods.empty() ? 0.0 : std::round(s.medianPeriodMs / interval);
+			s.achievedPeriodMs = (std::max)({1.0, byCycle, byPeriod}) * interval;
+			s.behind = s.achievedPeriodMs > interval;
+		}
+	}
 
 	explicit Impl(QObject* owner) : context(owner)
 	{
@@ -140,6 +216,14 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		cycle = true;
 		cursor = 0;
 		done = 0;
+		if (running) {
+			const auto start = nowNs();
+			if (pace.lastStart)
+				keepFive(pace.periods, start - pace.lastStart);
+			pace.lastStart = start;
+		}
+		pace.cycleStart = 0;
+		pace.many = pace.batch = pace.field = pace.again = 0;
 		buildPlan();
 		return true;
 	}
@@ -244,6 +328,16 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	{
 		sequence = value.sequence;
 		++portion;
+		if (!pace.cycleStart)
+			pace.cycleStart = nowNs();
+		if (value.urgent)
+			++pace.again;
+		else if (value.kind == Portion::Kind::Many)
+			++pace.many;
+		else if (value.kind == Portion::Kind::Batch)
+			++pace.batch;
+		else
+			++pace.field;
 	}
 
 	client::Submission submit(Request& pending, WatchlistSource::Completion complete)
@@ -632,6 +726,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			return;
 		if (cursor >= int(plan.size())) {
 			cycle = false;
+			finishPace();
 			// Rows kept for paths this device lacks are never read (WL-4c).
 			const bool readable = model.hasBound();
 			status = model.count() == 0
@@ -1003,6 +1098,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// shares the session with a continuous one.
 	void tick()
 	{
+		if (running && (cycle || request))
+			++pace.shown.skippedTicks;
 		if (guarded() || reportingCompletion || !running || cycle || request || !current())
 			return;
 		if (startCycle())
@@ -1835,6 +1932,19 @@ int DynamicWatchlist::interval() const
 	return d->intervalMs;
 }
 
+WatchPace DynamicWatchlist::pace() const
+{
+	auto shown = d->pace.shown;
+	const auto& status = d->status;
+	shown.routine = status.startsWith(QLatin1String("Reading ")) || status.contains(QLatin1String(" complete - "));
+	return shown;
+}
+
+void DynamicWatchlist::setClock(std::function<qint64()> monotonicNs)
+{
+	d->clock = std::move(monotonicNs);
+}
+
 void DynamicWatchlist::setInterval(int ms)
 {
 	auto p = d;
@@ -1874,6 +1984,7 @@ bool DynamicWatchlist::begin(bool polling)
 	p->urgent.clear();
 	p->rerun = false;
 	p->running = polling;
+	p->resetPace(polling);
 	if (!p->startCycle()) return false;
 	if (polling)
 		p->timer.start();

@@ -1977,6 +1977,8 @@ void batchMembers()
 		      frames[0].rows[1].leaf == 6 && frames[1].count == 1 && frames[1].rows[0].id == twin::small &&
 		      frames[1].rows[0].leaf == 2 && frames[2].rows[0].id == twin::right);
 		CHECK(text(watch, 0) == "0" && text(watch, 1) == "1" && text(watch, 2) == "0" && text(watch, 3) == "5");
+		CHECK(watch.pace().batch == 1 && watch.pace().fieldRead == 0 && watch.pace().readMany == 0 &&
+		      watch.pace().values == 4);
 
 		// The device refuses one Field: its rows say so, the others are read,
 		// its frame carries its own outcome, and the cycle goes on.
@@ -2056,11 +2058,95 @@ void batchMembers()
 	}
 }
 
+// The pace (WL-6) on a controlled clock: a Read once's own figures; polling
+// within its interval; a slow cycle that skips the tick due during it and
+// halves the pace at once; the pace back once the periods fit; and continuous
+// reading, whose period is its cycle.
+void paceOfPolling()
+{
+	QObject owner;
+	Peer peer;
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	qint64 now = 1'000'000'000;
+	watch.setClock([&now] { return now; });
+	const auto ms = [&now](qint64 value) { now += value * 1'000'000; };
+	// A completion queues the next step, which can queue another: settle.
+	const auto settle = [] {
+		for (int i = 0; i < 4; ++i)
+			events();
+	};
+	const auto tick = [&] {
+		watch.tick();
+		settle();
+	};
+	const auto cycle = [&](qint64 took) {
+		ms(took);
+		peer.finish();
+		watch.poll();
+		settle();
+	};
+	fill(watch, 2);
+	CHECK(watch.pace().cycles == 0);
+	watch.setInterval(1000);
+	CHECK(watch.begin(false));
+	cycle(150);
+	auto pace = watch.pace();
+	CHECK(pace.cycles == 1 && !pace.polling && pace.routine && pace.values == 2 && pace.readMany == 1 &&
+	      pace.fieldRead == 0 && pace.batch == 0 && pace.lastCycleMs == 150 && pace.achievedPeriodMs == 0 && !pace.behind);
+	// Within the interval: a cycle of 200 ms, every second.
+	CHECK(watch.begin(true));
+	cycle(200);
+	pace = watch.pace();
+	CHECK(pace.cycles == 1 && pace.polling && pace.lastCycleMs == 200 && pace.achievedPeriodMs == 1000 &&
+	      !pace.behind && pace.intervalMs == 1000);
+	ms(800);
+	tick();
+	cycle(200);
+	pace = watch.pace();
+	CHECK(pace.cycles == 2 && pace.medianPeriodMs == 1000 && pace.achievedPeriodMs == 1000 && pace.skippedTicks == 0);
+	// A cycle of 1.2 s: the tick due during it is skipped, so every 2 s.
+	ms(800);
+	tick();
+	ms(1000);
+	tick();
+	cycle(200);
+	pace = watch.pace();
+	CHECK(pace.cycles == 3 && pace.lastCycleMs == 1200 && pace.skippedTicks == 1 && pace.achievedPeriodMs == 2000 &&
+	      pace.behind && pace.medianCycleMs == 200);
+	// Fast again: the periods fit, and it keeps up.
+	ms(800);
+	tick();
+	cycle(200);
+	pace = watch.pace();
+	CHECK(pace.cycles == 4 && pace.achievedPeriodMs == 1000 && !pace.behind);
+	watch.stop();
+	events();
+	// Stopped: the last figures stay; the status is no longer the cycle's.
+	CHECK(watch.pace().cycles == 4 && !watch.pace().routine);
+	// Continuous: each cycle starts as the last ends; its period is its cycle.
+	watch.setInterval(0);
+	CHECK(watch.begin(true));
+	CHECK(watch.pace().cycles == 0);
+	cycle(300);
+	cycle(300);
+	pace = watch.pace();
+	CHECK(pace.cycles == 2 && pace.intervalMs == 0 && pace.medianPeriodMs == 300 && pace.achievedPeriodMs == 300 &&
+	      !pace.behind);
+	watch.stop();
+	events();
+	ms(1000);
+	peer.finish();
+	watch.poll();
+	events();
+}
+
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	readPortions();
 	batchMembers();
+	paceOfPolling();
 
 	numberFormats();
 	typedEditors();
