@@ -399,7 +399,7 @@ int main(int argc, char** argv)
 				      reset->property("text").toString() == QStringLiteral("Reset number formats to Original"));
 				click(window, reset);
 				CHECK(formatIs("original") && ownFormats().isEmpty());
-				CHECK(textOf(content, "watchNotice") == QStringLiteral("Number formats reset to Original; 2 rows had their own"));
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Number formats reset to Original; 2 values had their own"));
 				CHECK(named(content, "watchUndo"));
 				// Ctrl+Z with the keys on the ⋯ button, not in the list.
 				more->forceActiveFocus(Qt::TabFocusReason);
@@ -425,15 +425,57 @@ int main(int argc, char** argv)
 				click(window, named(content, "watchFormat_dec"));
 				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
 				CHECK(!fixture->property("canUndoWatch").toBool());
-				// A row in a form of its own is marked by the count, and the mark
-				// shows every value as Original (WL-3c).
-				CHECK(!named(content, "watchOwnFormats"));
+				// A value in a format of its own is counted by a mark before the
+				// format control, and the mark shows every value as Original
+				// (WL-3c). With nothing to count it keeps its room, clear and out
+				// of reach, so its coming moves nothing in the row.
+				auto* mark = named(content, "watchOwnFormats");
+				const auto segmentX = [content] {
+					return named(content, "watchFormat_original")->mapToItem(content, QPointF{}).x();
+				};
+				const auto flags = [panel] {
+					QStringList set;
+					for (const char* name : {"viewInBar", "readOnceInBar", "formatInBar", "everyShown"})
+						set << QStringLiteral("%1=%2").arg(QLatin1String(name)).arg(panel->property(name).toBool());
+					return set;
+				};
+				CHECK(mark && mark->isVisible() && mark->property("rows").toInt() == 0 && mark->opacity() == 0 &&
+				      !mark->isEnabled());
+				const auto clearAt = segmentX();
+				const auto clearFlags = flags();
+				CHECK(mark->mapToItem(content, QPointF{}).x() < clearAt);
 				fixture->setProperty("rowFormats", QVariantMap{{QStringLiteral("row1"), QStringLiteral("hex")}});
 				settle();
-				auto* mark = shown(content, "watchOwnFormats");
+				CHECK(mark->property("rows").toInt() == 1 && mark->opacity() == 1 && mark->isEnabled());
+				CHECK(mark->property("text").toString() == QStringLiteral("\u25CF 1"));
+				CHECK(segmentX() == clearAt && flags() == clearFlags);
+				// By keys: the keys it held go to the list, and Ctrl+Z brings the
+				// value's own format, and the mark, back.
+				mark->forceActiveFocus(Qt::TabFocusReason);
+				settle();
+				QTest::keyClick(window, Qt::Key_Space);
+				settle();
+				CHECK(formatIs("original") && ownFormats().isEmpty() && mark->opacity() == 0);
+				CHECK(list->hasActiveFocus());
+				QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
+				settle();
+				CHECK(formatIs("dec") && mark->property("rows").toInt() == 1);
+				// A value in the Watchlist's own format is not in a format of
+				// its own: the count follows the Watchlist's, set here from
+				// elsewhere, and keys left on a mark with nothing to count go to
+				// the list.
+				mark->forceActiveFocus(Qt::TabFocusReason);
+				settle();
+				fixture->setProperty("watchFormat", QStringLiteral("hex"));
+				settle();
+				CHECK(mark->property("rows").toInt() == 0 && mark->opacity() == 0 && !mark->isEnabled());
+				CHECK(list->hasActiveFocus());
+				click(window, named(content, "watchFormat_dec"));
 				CHECK(mark->property("rows").toInt() == 1);
+				// Dec keeps the keys from its click; the reset chooses Original
+				// under it without a warning (a focused segment keeps its stop).
 				click(window, mark);
-				CHECK(formatIs("original") && ownFormats().isEmpty() && !named(content, "watchOwnFormats"));
+				CHECK(formatIs("original") && ownFormats().isEmpty() && mark->property("rows").toInt() == 0);
 				// With everything Original there is nothing to reset.
 				click(window, named(content, "watchFormat_original"));
 				click(window, more);

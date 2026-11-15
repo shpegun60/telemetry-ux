@@ -141,6 +141,7 @@ public:
 	// false, and nothing changed, for more than formatLimit paths.
 	bool setPathFormats(QHash<QString, WatchNumberFormat> formats);
 	static constexpr int formatLimit = 4 * maxRows;
+	static_assert(formatLimit > maxRows, "the watched rows' own formats always fit");
 	[[nodiscard]] std::optional<WatchNumberFormat> rowFormat(int row) const;
 	// The type of the row's last reading; invalid before its first.
 	[[nodiscard]] WatchValueType valueType(int row) const;

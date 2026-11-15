@@ -198,19 +198,24 @@ void numberFormats()
 
 	// Past formatLimit the paths not watched now give way, the longest unset
 	// first (WL-3c); a watched row's format stays.
+	// Set from the highest name down, so the oldest is the last by name; an
+	// Undo's put-back in between keeps when each was set.
 	ux::WatchlistModel bounded;
 	CHECK(bounded.add(ux::WatchEntry::of(1, "kept.Watched")) && bounded.setRowFormat(0, WatchNumberFormat::Hex));
+	const auto path = [](int at) { return QStringLiteral("old.P%1").arg(at, 4, 10, QLatin1Char('0')); };
 	bool every = true;
-	for (int at = 0; at < ux::WatchlistModel::formatLimit && every; ++at) {
-		const quint64 id = quint64(at) + 2;
-		every = bounded.add(ux::WatchEntry::of(id, QStringLiteral("old.P%1").arg(at))) &&
-		        bounded.setRowFormat(1, WatchNumberFormat::Dec) && bounded.removeIds({id}).size() == 1;
+	for (int at = ux::WatchlistModel::formatLimit; at > 0 && every; --at) {
+		const quint64 id = quint64(at) + 1;
+		every = bounded.add(ux::WatchEntry::of(id, path(at))) && bounded.setRowFormat(1, WatchNumberFormat::Dec) &&
+		        bounded.removeIds({id}).size() == 1;
+		if (at == 2048)
+			every = every && bounded.setPathFormats(bounded.pathFormats());
 	}
 	CHECK(every);
 	const auto kept = bounded.pathFormats();
 	CHECK(kept.size() == ux::WatchlistModel::formatLimit && kept.value("kept.Watched") == WatchNumberFormat::Hex);
-	CHECK(!kept.contains("old.P0") && kept.contains("old.P1") &&
-	      kept.contains(QStringLiteral("old.P%1").arg(ux::WatchlistModel::formatLimit - 1)));
+	CHECK(!kept.contains(path(ux::WatchlistModel::formatLimit)) && kept.contains(path(ux::WatchlistModel::formatLimit - 1)) &&
+	      kept.contains(path(1)));
 }
 
 void typedEditors()

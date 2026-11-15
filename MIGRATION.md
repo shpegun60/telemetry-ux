@@ -368,9 +368,13 @@ announced once it settles.
 ## A mark for rows in a format of their own (WL-3c, November 2026)
 
 `DynamicConfiguratorProvider::watchOwnFormatCount` counts the watched rows
-shown in a format of their own other than the Watchlist's; the panel shows it
-as a small mark beside the format control ("● 3"), whose press shows every
-value as Original (with Undo), and keeps its room in the toolbar whether
-shown or not. Past `WatchlistModel::formatLimit`, the formats of paths not
-watched now give way oldest first (by when each was set), no longer in hash
-order; formats put back together (`setPathFormats`) count as set in path order.
+shown in a format of their own other than the Watchlist's, counted once per
+change of the formats or the rows; the reset's notice counts the same rows. The
+panel shows it as a small mark before the format control in both its shapes
+("● 3"), whose press shows every value as Original (with Undo). Where a
+provider has the count the mark is always in the row, only clear and out of
+reach while it counts nothing, so its coming and going moves nothing. Past
+`WatchlistModel::formatLimit`, the formats of paths not watched now give way
+oldest first (by when each was set), no longer in hash order; formats put back
+together (`setPathFormats`, an Undo) keep when each held path was set, and the
+paths new to the map count as set in path order.

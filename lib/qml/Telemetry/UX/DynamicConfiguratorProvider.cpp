@@ -321,6 +321,23 @@ struct DynamicConfiguratorProvider::Impl {
 	// Moves with every change of a format, from wherever it comes (a panel, a
 	// project loaded): a reset's Undo holds only while it has not moved.
 	quint64 formatRevision = 0;
+	// The rows shown in a format of their own, counted once per change of the
+	// formats or the rows, not on every reading (WL-3c).
+	mutable quint64 ownCountedRevision = ~quint64{0}, ownCountedMembership = ~quint64{0};
+	mutable int ownCount = 0;
+	int ownFormatRows() const
+	{
+		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
+		if (ownCountedRevision == formatRevision && ownCountedMembership == watch.membership())
+			return ownCount;
+		ownCount = 0;
+		for (int row = 0; model && row < model->count(); ++row)
+			if (const auto own = model->rowFormat(row); own && *own != watchFormat)
+				++ownCount;
+		ownCountedRevision = formatRevision;
+		ownCountedMembership = watch.membership();
+		return ownCount;
+	}
 	QHash<QString, WatchNumberFormat> pathFormats() const
 	{
 		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
@@ -2182,12 +2199,7 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 
 int DynamicConfiguratorProvider::watchOwnFormatCount() const
 {
-	const auto* model = qobject_cast<const WatchlistModel*>(d->watch.model());
-	int rows = 0;
-	for (int row = 0; model && row < model->count(); ++row)
-		if (const auto own = model->rowFormat(row); own && *own != d->watchFormat)
-			++rows;
-	return rows;
+	return d->ownFormatRows();
 }
 
 bool DynamicConfiguratorProvider::watchFormatsDiffer() const
@@ -2208,10 +2220,7 @@ QVariantMap DynamicConfiguratorProvider::resetWatchFormats()
 	auto before = p->pathFormats();
 	if (p->watchFormat == WatchNumberFormat::Original && before.isEmpty())
 		return result;
-	int rows = 0;
-	if (const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model()))
-		for (int row = 0; row < model->count(); ++row)
-			rows += model->rowFormat(row) ? 1 : 0;
+	const int rows = p->ownFormatRows();
 	if (!p->putPathFormats({})) {
 		result[QStringLiteral("status")] = QStringLiteral("refused");
 		return result;

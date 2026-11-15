@@ -193,7 +193,8 @@ public:
 	// format of a row's own, those kept for paths not watched now too, as one
 	// change undoWatch takes back while no format has changed since.
 	// {status: ok, unchanged (nothing to reset) or refused, rows: the watched
-	// rows that had a format of their own}.
+	// rows that were shown in a format of their own, as watchOwnFormatCount
+	// counts them}.
 	Q_INVOKABLE QVariantMap resetWatchFormats();
 	// The Watchlist's "+" row (WL-4b). What a typed path would add, in words
 	// for the line under it: {status: "adds", "watched", "missing", "error"

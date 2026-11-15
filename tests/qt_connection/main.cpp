@@ -1477,7 +1477,13 @@ ApplicationWindow {
 		const auto gain = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
 		const QVariantMap own{{gain, QStringLiteral("hex")}, {QStringLiteral("device.Gone"), QStringLiteral("dec")}};
 		CHECK(provider->setWatchRowFormats(own));
+		// The mark's count (WL-3c): watched rows in a format other than the
+		// Watchlist's; a path not watched now is not one of them.
+		CHECK(provider->watchOwnFormatCount() == 1);
+		provider->setWatchFormat(QStringLiteral("hex"));
+		CHECK(provider->watchOwnFormatCount() == 0);
 		provider->setWatchFormat(QStringLiteral("dec"));
+		CHECK(provider->watchOwnFormatCount() == 1);
 		CHECK(provider->watchFormatsDiffer());
 		QSignalSpy changed(provider, &ux::DynamicConfiguratorProvider::stateChanged);
 		const auto revision = provider->watchRevision();
@@ -1491,7 +1497,7 @@ ApplicationWindow {
 		CHECK(provider->undoWatch().value("status") == "ok");
 		CHECK(provider->watchFormat() == QStringLiteral("dec") && provider->watchRowFormats() == own);
 		CHECK(rows->data(rows->index(0, 0), ux::WatchlistModel::FormatRole).toString() == QStringLiteral("hex"));
-		CHECK(!provider->canUndoWatch());
+		CHECK(!provider->canUndoWatch() && provider->watchOwnFormatCount() == 1);
 		// A format chosen after it - here, in another panel, by a project
 		// loaded - ends the reset's Undo.
 		CHECK(provider->resetWatchFormats().value("status") == "ok" && provider->canUndoWatch());
