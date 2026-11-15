@@ -781,3 +781,82 @@ group or a category every endpoint under it
 its values; a Device tree drag joins the Watchlist first and plots the values
 under what was dropped. `WatchlistPanel.dropPaths(payload)` adds a Device tree
 drag. Both show a frame and what a drop will do while a drag is over them.
+
+## A copy's state, the trees' marks and the two places' words (FL-1e, November 2026)
+
+There are two places, the device and the project, and the Viewer now says
+which. `FileViewer`'s footer begins with how the copy stands with the
+device's file, then its size, format and path: "Same as the device's · read
+12:04" (with the date when not today), "Saved in the project · 3 bytes differ
+from the device's", "Written 12:10 · read back the same" or, in the warning
+colour, "· 1 byte reads back different", "! The device's file changed after
+12:04", "The device's bytes are not known", "Read-only · made by the device's
+firmware", each followed by "· not connected" while the copy's device is not.
+A file from disk has no state, only its size, format and path, and the
+footer no longer says when the copy was loaded. The footer is a `RowLayout`
+now (still `fileViewerFooter`, its whole line in `text`, the project's path
+and the times in `details`, shown on hover), the state a label of its own,
+`fileViewerState`. A change of the state is announced to a screen reader
+(`Accessible.announce`); the first state of a file is not.
+
+New on `FileViewer`: `deviceConnected` (the copy's device is the connected
+one; follows `reloadable` unless the host sets it), `readOnlyNote` (the few
+words after "Read-only · ", the host's), `stateKind`, `stateText`,
+`saveCopy()`. New on `FileContent`: `referenceAt` (when the device's bytes
+were read or read back), `savedAt` (the copy's last write), `savedDiffers`
+(the saved copy against the device's bytes, edits not saved left out),
+`deviceChanged` (a write found the device's file changed; until it is read
+again; a host may set it), `localUrl()`, the signal `saved()`; on
+`OpenFiles`, `fileSaved(localFile)`. `FileContent::Reference` gains `at`, the
+time the bytes were read: code that brace-initialises a `Reference` adds it.
+
+The words: Save in the project ("Save descriptor.bin in the project. The
+device's file is unchanged."), Read again from the device (was Reload; shown
+for a device's file only, "(not connected)" when it cannot), Save a copy as…,
+which writes what the tab shows, edits not saved included, through the
+viewer's own dialog. It replaces both "Save as…" and "Save the edited bytes
+as…": the `⋯` menu no longer emits `saveAsRequested`, which stays declared for
+hosts that connect to it, and the menu item `hexSaveCopy` is gone. The hex
+state line reads "Saved in the project · 1 byte differs from the device's";
+"here", "locally" and "on this computer" read "in the project" in the tool
+tips, the discard question and an upload's "nothing in the project records".
+
+`DeviceFilesModel.copyFolder` names the device's folder in the project; each
+file's `copyDiffers` then counts the bytes its copy there is saved
+differently from the device's bytes as read, with `copyReadAt`, and
+`refreshCopies()` compares them again. `DeviceFileRow` shows a `≠` after the
+name in the info colour, its words on hover ("The project's copy differs from
+this file as read at 12:04: 3 bytes. Open it to write or restore.") and in
+the row's spoken name. It adds two required properties, `copyDiffers` and
+`copyReadAt`: a host's own model for the row gives both.
+
+`DeviceBytes::compare(localFile, devicePath)` is that comparison, kept until
+the copy or a record changes (`DeviceBytes::changed()` says a copy was
+written, as `FileContent::save()`, a download and `copyFile` do);
+`DeviceFileTransfers::copyState` now reads it. `DeviceBytes::devicePathOf` and
+`DeviceFileTransfers::devicePathOf` give the device's path a copy's record
+names, so a host opens a copy from its project tree as that device's file -
+the same document as from the device. `DeviceFileTransfers::deviceFolderFound`
+gives the connected device's folder without making or renaming it.
+
+## A descriptor that is not the connected device's (FL-1f, November 2026)
+
+`FileContent` gains `fingerprint` and `referenceFingerprint` (the descriptor
+fingerprints in the copy's header and in the device's bytes as read, "0x" and
+16 digits as `DescriptorContent` writes them; `descriptorFingerprint(bytes)`
+reads one) and `connectedFingerprint` (the connected device's, from the
+codecs' context), with the signal `contextChanged`, which
+`OpenFiles::contextChanged()` now sends each file. A descriptor from a device
+that is not the connected device's shows "This descriptor is not the
+connected device's (3f2a… against 9b10…)" over its view
+(`fileViewerOtherDescriptorBar`) with Read again from the device; while its
+device is connected and the bytes it was read from are another fingerprint,
+the state line says the device's file changed after that read.
+
+`DeviceFileTransfers::keepOtherDescriptor(deviceFolder, versionFolder)` keeps
+the project's copy of the descriptor, with its record, as a device version
+under `versionFolder` when its fingerprint is not the connected device's -
+once for each fingerprint - and leaves the copy itself as it is. A downloaded
+descriptor is checked against the one read at connect: one of another
+fingerprint ends its row "… · its fingerprint 0x… is not the one read at
+connect (0x…): connect again" and keeps it (`descriptorNote`).

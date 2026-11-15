@@ -1,23 +1,32 @@
 // One file in the viewer: its format's own view when a codec read it, a table
 // when it is CSV, text when it is text, hex always, with a switch between the
-// ones it has. Hex edits the bytes once Edit is on; Reload asks first when
-// edits are not saved. MIT.
+// ones it has. Hex edits the bytes once Edit is on; Read again from the
+// device asks first when edits are not saved. MIT.
 //
 // Editing's actions - Edit, Save, Undo, Redo, as pictograms (FileEditTools) -
 // are on the viewer's top row; a host with a toolbar of its own sets
 // editToolsShown to false and puts a FileEditTools there for the viewer in
 // front, as an editor's toolbar acts on the editor in front. Either calls
-// startEditing(), stopEditing(), save(); askDiscard() and saveEditedCopy()
-// are also in the `⋯` menu. A host that offers the file's actions elsewhere -
+// startEditing(), stopEditing(), save(); askDiscard() and saveCopy() are
+// also in the `⋯` menu. A host that offers the file's actions elsewhere -
 // a tab's right-click menu - sets menuButtonShown to false; the top row then
 // appears only for a file with more than one view, to switch between them.
 //
 // The host gives `content`, a FileContent - usually a row of OpenFiles, whose
 // role of that name fills it in a view's delegate - and answers the requests:
 // reloadRequested() to read the device's file again, cancelRequested() while
-// it is being read, openExternallyRequested, showInFolderRequested and
-// saveAsRequested with the local file, closeRequested. The file's actions are
-// in its `⋯` menu (and the host's tab menu), not in a row of buttons.
+// it is being read, openExternallyRequested and showInFolderRequested with
+// the local file, closeRequested. The file's actions are in its `⋯` menu (and
+// the host's tab menu), not in a row of buttons. Save a copy as… writes what
+// the tab shows itself (saveCopy()); saveAsRequested is no longer sent.
+//
+// The footer says first how the copy stands with the device's file (FL-1e):
+// the same, saved differently in the project, written and read back, changed
+// on the device since it was read, not known, read-only - "· not connected"
+// while its device is not (deviceConnected) - then its size, format and
+// path; the project's path and the times on hover. A change of it is
+// announced to a screen reader. A descriptor whose fingerprint is not the
+// connected device's says so over its view (FL-1f).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -48,6 +57,12 @@ Pane {
     Component.onDestruction: retiring = true
     // The host can read the device's file again (connected, the file listed).
     property bool reloadable: false
+    // This copy's device is the one connected: the state line says
+    // "· not connected" otherwise. As reloadable unless the host says.
+    property bool deviceConnected: reloadable
+    // After "Read-only · " in the state line, why in a few words ("made by
+    // the device's firmware"); the host's, as its read-only reason is.
+    property string readOnlyNote: ""
     // "decoded", "table", "text" or "hex"; empty for the format's own first choice.
     property string mode: ""
     // Editing's pictograms on the top row; false when the host has them on its toolbar.
@@ -76,6 +91,7 @@ Pane {
     signal cancelRequested()
     signal openExternallyRequested(string localFile)
     signal showInFolderRequested(string localFile)
+    // Kept for hosts that handled it; the menu now writes the copy itself.
     signal saveAsRequested(string localFile)
     signal closeRequested()
 
@@ -119,8 +135,96 @@ Pane {
         viewer.mode = "hex"
         hexPane.openReplace()
     }
-    function saveEditedCopy() { hexPane.saveCopy() }
-    // Reload loses edits not saved: asked first, then read again.
+    // Save a copy as…: what the tab shows, edits not saved included.
+    function saveCopy() {
+        if (viewer.ready)
+            hexPane.saveCopy()
+    }
+    function saveEditedCopy() { saveCopy() }
+    // "12:04", with the date when not today.
+    function timeText(when) {
+        if (!when || !(when instanceof Date) || isNaN(when.getTime()))
+            return ""
+        return when.toDateString() === new Date().toDateString()
+               ? when.toLocaleTimeString(Qt.locale(), Locale.ShortFormat)
+               : when.toLocaleString(Qt.locale(), Locale.ShortFormat)
+    }
+    // A fingerprint's first four digits, as the designer writes them: "3f2a".
+    function fingerprintStart(fingerprint) {
+        return String(fingerprint).substring(2, 6).toLowerCase()
+    }
+    // FL-1f: a descriptor that reads, from a device, whose fingerprint is not
+    // the connected device's - the firmware changed, or another device's.
+    readonly property bool otherDescriptor: ready && !!content.decoded && content.codecName === "Descriptor"
+        && content.devicePath.length > 0 && content.fingerprint.length > 0
+        && content.connectedFingerprint.length > 0 && content.fingerprint !== content.connectedFingerprint
+    // The device's file changed after its bytes here were read: a write found
+    // it so, or the connected device gave another descriptor.
+    readonly property bool deviceFileChanged: ready && content.devicePath.length > 0 && content.hasReference
+        && (content.deviceChanged || (viewer.deviceConnected && content.referenceFingerprint.length > 0
+            && content.connectedFingerprint.length > 0
+            && content.referenceFingerprint !== content.connectedFingerprint))
+    // How the copy stands with the device's file: "same", "saved",
+    // "written", "writtenDiffers", "changed", "unknown", "readOnly"; empty
+    // for a file from disk.
+    readonly property string stateKind: {
+        if (!ready || content.devicePath.length === 0)
+            return ""
+        if (!content.hasReference)
+            return "unknown"
+        if (deviceFileChanged)
+            return "changed"
+        // Written and read back, and not saved since.
+        if (content.referenceWritten && !(content.savedAt > content.referenceAt))
+            return content.savedDiffers > 0 ? "writtenDiffers" : "written"
+        if (content.savedDiffers > 0)
+            return "saved"
+        if (content.readOnlyReason.length > 0)
+            return "readOnly"
+        return "same"
+    }
+    // The designer's words for it.
+    readonly property string stateText: {
+        if (stateKind.length === 0)
+            return ""
+        const when = timeText(content.referenceAt)
+        const count = content.savedDiffers
+        let line = ""
+        switch (stateKind) {
+        case "unknown": line = qsTr("The device's bytes are not known"); break
+        case "changed": line = qsTr("! The device's file changed after %1").arg(when); break
+        case "written": line = qsTr("Written %1 · read back the same").arg(when); break
+        case "writtenDiffers":
+            line = count === 1 ? qsTr("Written %1 · 1 byte reads back different").arg(when)
+                               : qsTr("Written %1 · %L2 bytes read back different").arg(when).arg(count)
+            break
+        case "saved":
+            line = count === 1 ? qsTr("Saved in the project · 1 byte differs from the device's")
+                               : qsTr("Saved in the project · %L1 bytes differ from the device's").arg(count)
+            break
+        case "readOnly":
+            line = viewer.readOnlyNote.length > 0 ? qsTr("Read-only · %1").arg(viewer.readOnlyNote) : qsTr("Read-only")
+            break
+        default: line = qsTr("Same as the device's · read %1").arg(when)
+        }
+        return viewer.deviceConnected ? line : qsTr("%1 · not connected").arg(line)
+    }
+    // A change of the state line is news; the first one of a file is not.
+    property var announcedContent: null
+    property string announcedState: ""
+    onStateTextChanged: {
+        if (!viewer.content || viewer.retiring)
+            return
+        if (viewer.announcedContent !== viewer.content) {
+            viewer.announcedContent = viewer.content
+            viewer.announcedState = viewer.stateText
+            return
+        }
+        if (viewer.stateText.length > 0 && viewer.stateText !== viewer.announcedState && viewer.visible)
+            viewer.Accessible.announce(viewer.stateText)
+        viewer.announcedState = viewer.stateText
+    }
+    // Read again from the device loses edits not saved: asked first, then read again.
     function askReload() {
         if (!content || !content.modified) {
             viewer.reloadRequested()
@@ -274,17 +378,12 @@ Pane {
             objectName: "fileViewerMenu"
             MenuItem {
                 objectName: "fileViewerReload"
-                text: qsTr("&Reload%1\tCtrl+R").arg(viewer.reloadable ? "" : qsTr(" (not connected)"))
+                // A device's file only; a file from disk has nothing to read again.
+                visible: !!viewer.content && viewer.content.devicePath.length > 0
+                height: visible ? implicitHeight : 0
+                text: qsTr("&Read again from the device%1\tCtrl+R").arg(viewer.reloadable ? "" : qsTr(" (not connected)"))
                 enabled: viewer.reloadable && !viewer.reading
                 onTriggered: viewer.askReload()
-            }
-            MenuItem {
-                objectName: "hexSaveCopy"
-                // The bytes as edited, not yet saved, written elsewhere.
-                visible: !!viewer.content && viewer.content.modified
-                height: visible ? implicitHeight : 0
-                text: qsTr("Save the &edited bytes as…")
-                onTriggered: viewer.saveEditedCopy()
             }
             MenuItem {
                 objectName: "fileViewerRestore"
@@ -302,9 +401,10 @@ Pane {
             }
             MenuItem {
                 objectName: "fileViewerSaveAs"
-                text: qsTr("&Save as…\tCtrl+Shift+S")
+                // What the tab shows, edits not saved included.
+                text: qsTr("Save a cop&y as…\tCtrl+Shift+S")
                 enabled: viewer.ready
-                onTriggered: viewer.saveAsRequested(viewer.content.localFile)
+                onTriggered: viewer.saveCopy()
             }
             MenuSeparator {}
             MenuItem {
@@ -450,6 +550,43 @@ Pane {
             }
         }
 
+        // FL-1f: a descriptor that is not the connected device's - its
+        // firmware changed since this copy was read, or it is another
+        // device's - says so over its view, with the way to the device's own.
+        ColumnLayout {
+            objectName: "fileViewerOtherDescriptorBar"
+            visible: viewer.otherDescriptor
+            Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            Layout.bottomMargin: Type.tight
+            spacing: Type.tight
+            Label {
+                objectName: "fileViewerOtherDescriptor"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.warning
+                text: viewer.otherDescriptor
+                      ? qsTr("This descriptor is not the connected device's (%1… against %2…)")
+                            .arg(viewer.fingerprintStart(viewer.content.fingerprint))
+                            .arg(viewer.fingerprintStart(viewer.content.connectedFingerprint))
+                      : ""
+                Accessible.role: Accessible.AlertMessage
+                HoverHandler { id: otherHover }
+                ToolTip.visible: otherHover.hovered && viewer.otherDescriptor
+                ToolTip.text: viewer.otherDescriptor
+                              ? qsTr("This file's fingerprint is %1; the connected device's is %2.")
+                                    .arg(viewer.content.fingerprint).arg(viewer.content.connectedFingerprint)
+                              : ""
+            }
+            LinkButton {
+                objectName: "fileViewerOtherDescriptorReadAgain"
+                visible: viewer.reloadable
+                text: qsTr("Read again from the device")
+                onClicked: viewer.askReload()
+            }
+        }
+
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -473,6 +610,8 @@ Pane {
             HexPane {
                 id: hexPane
                 content: viewer.content
+                // A copy that could not be saved says why in Hex.
+                onCopyProblem: viewer.mode = "hex"
                 inspectorActive: !viewer.retiring
                 // A codec's parts of the file, tinted and named in the hex view;
                 // bound to the model's own property, which says when they change.
@@ -534,35 +673,67 @@ Pane {
             }
         }
 
-        // How big, when it was read, what it is, and where it came from.
-        Label {
+        // How the copy stands with the device's file (the state line), then
+        // how big, what it is, and where it came from.
+        RowLayout {
+            id: footer
             objectName: "fileViewerFooter"
             visible: viewer.ready
             Layout.fillWidth: true
             Layout.margins: Type.padding
-            elide: Text.ElideMiddle
-            font.pointSize: Type.caption
-            color: Theme.textSecondary
+            spacing: 0
             // The path is the device's text: it goes in last, under the highest number.
-            // Once Live has read the device's file, this copy's time is when it
-            // was downloaded; the view says when the shown values were read.
-            readonly property bool readSince: !!viewer.content && !!viewer.content.live && viewer.content.live.reads > 0
-            text: !viewer.ready ? ""
-                : (readSince ? qsTr("%1 · downloaded %2 · %3 · %4") : qsTr("%1 · read %2 · %3 · %4"))
-                    .arg(viewer.content.sizeText)
-                    .arg(Qt.formatTime(viewer.content.readAt, "HH:mm:ss"))
-                    .arg(viewer.content.format)
+            readonly property string facts: !viewer.ready ? ""
+                : qsTr("%1 · %2 · %3").arg(viewer.content.sizeText).arg(viewer.content.format)
                     .arg(viewer.content.devicePath.length > 0 ? viewer.content.devicePath : viewer.content.localFile)
-            // The device's layer, one hover away: the same as the device's
-            // bytes, how many differ, or not known - which look alike on screen.
-            readonly property string deviceLayer: !viewer.ready || viewer.content.devicePath.length === 0 ? ""
-                : !viewer.content.hasReference ? qsTr("The device's bytes are not known for this copy.")
-                : viewer.content.referenceDiffers === 0 ? qsTr("The same as %1.").arg(viewer.content.referenceLabel)
-                : viewer.content.referenceDiffers === 1 ? qsTr("1 byte differs from %1.").arg(viewer.content.referenceLabel)
-                : qsTr("%L1 bytes differ from %2.").arg(viewer.content.referenceDiffers).arg(viewer.content.referenceLabel)
+            // The whole line, as a screen reader and a check read it.
+            readonly property string text: viewer.stateText.length > 0
+                ? qsTr("%1 · %2").arg(viewer.stateText).arg(facts) : facts
+            // On hover: where the copy is in the project, and the times.
+            readonly property string details: {
+                if (!viewer.ready)
+                    return ""
+                const lines = [qsTr("In the project: %1").arg(viewer.content.localFile)]
+                if (viewer.content.devicePath.length > 0)
+                    lines.push(qsTr("On the device: %1").arg(viewer.content.devicePath))
+                const read = viewer.timeText(viewer.content.referenceAt)
+                if (viewer.content.hasReference && read.length > 0)
+                    lines.push(viewer.content.referenceWritten ? qsTr("Written to the device and read back: %1").arg(read)
+                                                               : qsTr("Read from the device: %1").arg(read))
+                const saved = viewer.timeText(viewer.content.savedAt)
+                if (saved.length > 0)
+                    lines.push(qsTr("Saved in the project: %1").arg(saved))
+                return lines.join("\n")
+            }
+            Label {
+                objectName: "fileViewerState"
+                visible: viewer.stateText.length > 0
+                // Most of the line at most: the path keeps the rest.
+                Layout.maximumWidth: Math.max(0, viewer.width * 0.6)
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                // A change on the device or a read-back that differs is a
+                // warning; bytes saved differently the device's layer's info
+                // colour; not known stays quiet.
+                color: viewer.stateKind === "changed" || viewer.stateKind === "writtenDiffers" ? Theme.warning
+                     : viewer.stateKind === "saved" ? Theme.info
+                     : viewer.stateKind === "unknown" ? Theme.textMuted : Theme.textSecondary
+                text: qsTr("%1 · ").arg(viewer.stateText)
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                elide: Text.ElideMiddle
+                font.pointSize: Type.caption
+                color: Theme.textSecondary
+                text: footer.facts
+            }
             HoverHandler { id: footerHover }
-            ToolTip.visible: footerHover.hovered && (truncated || deviceLayer.length > 0)
-            ToolTip.text: deviceLayer.length > 0 ? text + "\n" + deviceLayer : text
+            ToolTip.visible: footerHover.hovered && footer.details.length > 0
+            ToolTip.text: footer.details
+            Accessible.role: Accessible.StaticText
+            Accessible.name: footer.text
+            Accessible.description: footer.details
         }
     }
 }
