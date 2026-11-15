@@ -14,6 +14,29 @@ Pane {
     property var selectionHandler: null
     // Evaluate the provider's O(1) current-index projection once per panel,
     // rather than querying it separately for every visible delegate.
+    // What a row's drag carries (LP-1g3): an endpoint's path, or every
+    // endpoint's under a group or a category, in the tree's order.
+    function dragPaths(index) {
+        const model = provider.endpoints
+        if (!model || typeof model.pathOf !== "function" || !index || !index.valid)
+            return []
+        const out = []
+        const walk = (at, depth) => {
+            const path = model.pathOf(at)
+            // An endpoint, or a value inside one, goes whole; a group or a
+            // category gives its endpoints.
+            if (path.length > 0 && !model.isGroup(at)) {
+                out.push(path)
+                return
+            }
+            if (depth > 6)
+                return
+            for (let r = 0; r < model.rowCount(at); ++r)
+                walk(model.index(r, 0, at), depth + 1)
+        }
+        walk(index, 0)
+        return out
+    }
     readonly property var selectedEndpointIndex: provider.selectedEndpointIndex
     readonly property var searchSource: provider.endpoints
     property var searchResults: []
@@ -988,6 +1011,9 @@ Pane {
                 function onRowHeightChanged() { Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() }) }
             }
             objectName: "endpointTree"
+            // A mouse drag takes a row to the Watchlist, the Plot or the Batch
+            // (LP-1g3); the wheel and the scroll bar scroll.
+            acceptedButtons: Qt.NoButton
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: searchInput.text.trim().length === 0
@@ -1072,6 +1098,23 @@ Pane {
             // reads its required roles, never model.display.
             delegate: EndpointTreeRow {
                 id: endpointDelegate
+                // Dragged: the endpoint's path, or a group's endpoints.
+                property var dragged: []
+                Drag.dragType: Drag.Automatic
+                Drag.supportedActions: Qt.CopyAction
+                Drag.active: endpointDrag.active
+                Drag.mimeData: ({"application/x-telemetry-paths": JSON.stringify({from: "device", paths: endpointDelegate.dragged}),
+                                "text/plain": endpointDelegate.dragged.join("\n")})
+                // The paths are taken at the press, before the drag starts.
+                PointHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: if (active) endpointDelegate.dragged = panel.dragPaths(sourceIndex)
+                }
+                DragHandler {
+                    id: endpointDrag
+                    target: null
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                }
                 tableMode: true
                 nameColumnWidth: endpointTree.width
                 valueColumnWidth: panel.valueColumn

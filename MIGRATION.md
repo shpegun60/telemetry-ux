@@ -765,3 +765,19 @@ day is `originUtcMs`. Labels read "12 s", "1:30", "1:02:00" or "−0:12".
 `TracePlot`'s axis caption is now a flat button, "Time of day ▾" or "From
 start ▾", with a two-item menu; with the axis from the start, the cursor chip
 reads "17.911 s · 22:27:02.379".
+
+## Dragging rows onto the Plot and the Watchlist (LP-1g3, November 2026)
+
+The Watchlist's list and the Device tree no longer scroll by a mouse drag
+(`acceptedButtons: Qt.NoButton`; the wheel, a touchpad, the scroll bar and a
+touch screen still scroll): a mouse drag takes rows instead, as an automatic
+drag with the type `application/x-telemetry-paths`, JSON
+`{"from": "watchlist" | "device", "paths": [...]}`, and the paths as plain
+text. A Watchlist row carries its values (`WatchlistPanel.dragPaths(row)`, the
+selection's when the row is in it); a Device tree row its endpoint's path, a
+group or a category every endpoint under it
+(`EndpointTreePanel.dragPaths(index)`). `TracePlot` gains an optional
+`provider`, `dropPaths(payload)` and a `notice` line: a Watchlist drag plots
+its values; a Device tree drag joins the Watchlist first and plots the values
+under what was dropped. `WatchlistPanel.dropPaths(payload)` adds a Device tree
+drag. Both show a frame and what a drop will do while a drag is over them.

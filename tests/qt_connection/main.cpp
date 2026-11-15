@@ -1,4 +1,5 @@
 // Installed owner and reusable UI: real TCP, single FIFO, no replay. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/WatchlistModel.hpp>
@@ -1798,6 +1799,97 @@ ApplicationWindow {
 	connection.disconnect();
 }
 
+// Drags onto the Plot and the Watchlist (LP-1g3): what a Watchlist row and a
+// Device tree row carry, and what a drop of them does - a Watchlist row's
+// values plot; a Device tree Field joins the Watchlist and plots; a group
+// carries every endpoint under it.
+void dragOntoPlot()
+{
+	inspector_qml::TcpDemoServer peer;
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	for (const auto& name : {QStringLiteral("Counter"), QStringLiteral("Offset")}) {
+		const auto field = endpoint(provider->endpoints(), name);
+		CHECK(field.isValid() && provider->addWatchMany({QVariant::fromValue(field)}).value("added").toInt() == 1);
+	}
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && !provider->watchPending(); }));
+	auto* traces = qobject_cast<ux::WatchTraces*>(provider->watchTraces());
+
+	QQmlApplicationEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	QQmlComponent component(&engine);
+	component.setData(R"qml(
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Telemetry.UX
+ApplicationWindow {
+    width: 1000; height: 600; visible: true
+    RowLayout {
+        anchors.fill: parent
+        EndpointTreePanel { objectName: "testTree"; provider: testProvider; Layout.fillHeight: true; Layout.preferredWidth: 300 }
+        WatchlistPanel { objectName: "testWatch"; provider: testProvider; collapsible: false; Layout.fillHeight: true; Layout.preferredWidth: 350 }
+        TracePlot { objectName: "testPlot"; traces: testProvider.watchTraces; provider: testProvider; Layout.fillHeight: true; Layout.fillWidth: true }
+    }
+}
+)qml", QUrl(QStringLiteral("drag-onto-plot.qml")));
+	if (!component.isReady())
+		std::fprintf(stderr, "%s\n", qPrintable(component.errorString()));
+	CHECK(component.isReady());
+	std::unique_ptr<QObject> object(component.create());
+	auto* window = qobject_cast<QQuickWindow*>(object.get());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	auto* tree = window->findChild<QQuickItem*>(QStringLiteral("testTree"));
+	auto* watch = window->findChild<QQuickItem*>(QStringLiteral("testWatch"));
+	auto* plot = window->findChild<QQuickItem*>(QStringLiteral("testPlot"));
+	CHECK(tree && watch && plot);
+	const auto call = [](QObject* on, const char* method, const QVariant& argument) {
+		QVariant out;
+		CHECK(QMetaObject::invokeMethod(on, method, Q_RETURN_ARG(QVariant, out), Q_ARG(QVariant, argument)));
+		return out;
+	};
+	// A Watchlist row carries its value's path; dropped on the Plot, it plots.
+	const auto first = provider->watchlist()->index(0, 0).data(ux::WatchlistModel::NameRole).toString();
+	const auto carried = call(watch, "dragPaths", 0).toStringList();
+	CHECK(carried == QStringList{first});
+	CHECK(call(plot, "dropPaths", QVariantMap{{"from", "watchlist"}, {"paths", carried}}).toBool() &&
+	      traces->plotted() == QStringList{first});
+	// Dropped again: said, nothing added twice.
+	CHECK(!call(plot, "dropPaths", QVariantMap{{"from", "watchlist"}, {"paths", carried}}).toBool() &&
+	      plot->property("notice").toString() == QStringLiteral("%1 is on the Plot already.").arg(first));
+	// A Device tree Field not in the Watchlist: its row carries its path, and
+	// dropped on the Plot it joins the Watchlist and plots.
+	const auto mode = endpoint(provider->endpoints(), QStringLiteral("Mode"));
+	CHECK(mode.isValid());
+	const auto modePaths = call(tree, "dragPaths", QVariant::fromValue(mode)).toStringList();
+	CHECK(modePaths.size() == 1 && modePaths.first().endsWith(QStringLiteral(".Mode")));
+	const int before = provider->watchCount();
+	CHECK(call(plot, "dropPaths", QVariantMap{{"from", "device"}, {"paths", modePaths}}).toBool());
+	CHECK(provider->watchCount() == before + 1 && traces->isPlotted(modePaths.first()));
+	// A group carries every endpoint under it, in the tree's order.
+	const auto group = mode.parent();
+	const auto groupPaths = call(tree, "dragPaths", QVariant::fromValue(group)).toStringList();
+	CHECK(groupPaths.size() > 1 && groupPaths.contains(modePaths.first()));
+	// Dropped on the Watchlist, Device tree paths join it; its own rows do not.
+	const auto voltage = endpoint(provider->endpoints(), QStringLiteral("Voltage"));
+	const auto voltagePaths = call(tree, "dragPaths", QVariant::fromValue(voltage)).toStringList();
+	CHECK(voltagePaths.size() == 1);
+	// measure.Voltage is a Field of three values: all three join.
+	const int beforeDrop = provider->watchCount();
+	CHECK(call(watch, "dropPaths", QVariantMap{{"from", "device"}, {"paths", voltagePaths}}).toBool() &&
+	      provider->watchCount() == beforeDrop + 3);
+	CHECK(!call(watch, "dropPaths", QVariantMap{{"from", "watchlist"}, {"paths", carried}}).toBool());
+	// Rows are dragged with the mouse: the lists no longer scroll by it.
+	CHECK(control(window->contentItem(), QStringLiteral("watchlistView"))->property("acceptedButtons").toInt() == int(Qt::NoButton));
+	object.reset();
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -2237,6 +2329,8 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	// TraceView, a C++ type of the module, for the Plot in dragOntoPlot.
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;
@@ -2260,6 +2354,7 @@ int main(int argc, char** argv)
 	watchRowWriteUnknown();
 	watchRowSignedZero();
 	watchRowsToPlot();
+	dragOntoPlot();
 	presentationPanels();
 	disconnectedPanels();
 	outcomeAttention();
