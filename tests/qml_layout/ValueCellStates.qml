@@ -9,7 +9,7 @@ import Telemetry.UX
 ApplicationWindow {
     id: window
     width: 420
-    height: 260
+    height: 300
     visible: true
     color: Theme.surfaceWindow
 
@@ -33,6 +33,7 @@ ApplicationWindow {
     FakeRow { id: enabledRow; objectName: "enabledRow"; text: "false"; accepts: function(t) { return t === "true" || t === "false" } }
     FakeRow { id: modeRow; objectName: "modeRow"; text: "1"; accepts: function(t) { return /^\d+$/.test(t) } }
     FakeRow { id: factorRow; objectName: "factorRow"; text: "0.1"; accepts: function(t) { return !isNaN(Number(t)) && t.length > 0 } }
+    FakeRow { id: piRow; objectName: "piRow"; text: "3.14159274"; accepts: function(t) { return !isNaN(Number(t)) && t.length > 0 } }
 
     Column {
         x: Type.padding
@@ -93,6 +94,24 @@ ApplicationWindow {
             width: parent.width
             name: "Measured"; typeText: "f32"
             value: "230.5"
+        }
+        // A Value column narrower than its value, as Details' is: the owner
+        // gives the Name column's room to its left.
+        Item {
+            width: parent.width
+            height: piCell.height
+            Label { objectName: "piName"; text: "Pi"; height: Type.rowHeight; verticalAlignment: Text.AlignVCenter }
+            ValueCell {
+                id: piCell
+                objectName: "piCell"
+                x: parent.width - width
+                width: 60
+                editorRoom: parent.width - width - Type.bodyPixels * 2
+                name: "Pi"; typeText: "f32"; editable: true
+                value: piRow.text; editorText: piRow.text
+                takes: "Enter a number."
+                setText: function(text) { return piRow.set(text) }
+            }
         }
     }
 }
