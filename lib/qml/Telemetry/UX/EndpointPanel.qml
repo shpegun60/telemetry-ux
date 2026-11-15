@@ -579,18 +579,25 @@ Pane {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumWidth: 160
                 Layout.minimumHeight: Type.rowHeight * 3
+                // The heading and caption above the table count too, so a
+                // request's rows keep their whole height before its response.
+                readonly property real headingsHeight: (valueSectionHeading.visible ? valueSectionHeading.implicitHeight + spacing : 0)
+                    + (valueSectionCaption.visible ? valueSectionCaption.implicitHeight + spacing : 0)
+                    + (noArgumentsLabel.visible ? noArgumentsLabel.implicitHeight + spacing : 0)
                 Layout.preferredHeight: panel.showResponse && !responseSection.hasRows
-                    ? Math.min(Type.rowHeight * 10 + valueHeading.implicitHeight,
+                    ? headingsHeight + Math.min(Type.rowHeight * 10 + valueHeading.implicitHeight,
                         Math.max(Type.rowHeight * 3, valueTree.contentHeight) + valueHeading.implicitHeight)
-                    : Type.rowHeight * 8
+                    : headingsHeight + Type.rowHeight * 8
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
                 spacing: Type.tight
                 SectionHeading {
+                    id: valueSectionHeading
                     objectName: "valueSectionHeading"
                     visible: panel.provider.commandSelected || panel.provider.serviceSelected
                     text: panel.provider.serviceSelected ? qsTr("Request") : qsTr("Arguments")
                 }
                 Label {
+                    id: valueSectionCaption
                     objectName: "valueSectionCaption"
                     visible: (panel.provider.commandSelected || panel.provider.serviceSelected) && !panel.noArguments
                     Layout.fillWidth: true
@@ -601,6 +608,7 @@ Pane {
                     text: qsTr("Start at zero, not at the device's defaults.")
                 }
                 Label {
+                    id: noArgumentsLabel
                     objectName: "noArgumentsLabel"
                     visible: panel.noArguments
                     Layout.fillWidth: true
@@ -627,14 +635,23 @@ Pane {
                             TreeView {
                                 id: metadataTree
                                 objectName: "metadataTree"
-                                // The Field's members, without the Field's own row.
-                                readonly property var fieldIndex: {
-                                    void panel.valueModelRevision
-                                    const root = panel.provider.definitionRootIndex
-                                    const field = model ? model.index(0, 0, root) : undefined
-                                    return field && field.valid && model.hasChildren(field) ? field : root
+                                // The Field's members, without the Field's own row. Set
+                                // on the next turn: showing them loads the tree's rows,
+                                // which must not happen inside a host's selection.
+                                readonly property var definitionRoot: panel.provider.definitionRootIndex
+                                onDefinitionRootChanged: fieldRoot.restart()
+                                Component.onCompleted: fieldRoot.restart()
+                                Timer {
+                                    id: fieldRoot
+                                    interval: 0
+                                    onTriggered: {
+                                        const root = metadataTree.definitionRoot
+                                        const model = metadataTree.model
+                                        const field = model ? model.index(0, 0, root) : undefined
+                                        metadataTree.rootIndex = field && field.valid && model.hasChildren(field) ? field : root
+                                    }
                                 }
-                                clip: true; model: panel.provider.definitions; rootIndex: fieldIndex
+                                clip: true; model: panel.provider.definitions; rootIndex: definitionRoot
                                 activeFocusOnTab: true; alternatingRows: false
                                 selectionModel: ItemSelectionModel { model: metadataTree.model }
                                 contentWidth: width
