@@ -1016,14 +1016,22 @@ int main(int argc, char** argv)
 				tag->setProperty("text", shortWords);
 				settle(40);
 				CHECK(step() == longStep && plotRoot->property("narrowNeed").toInt() == shortStep);
-				// The Plot's own width: a pixel wider takes the step the short
-				// words need, the spans back; far narrower folds everything.
+				// The Plot's own width takes the step afresh: a pixel wider, the
+				// step the short words need and the spans back; the long words
+				// fold them again, and narrower still takes what it needs.
+				const auto need = [&] { return plotRoot->property("narrowNeed").toInt(); };
 				window->setWidth(threshold + 1);
 				settle(80);
-				CHECK(step() <= 1 && spansShown());
-				window->setWidth(threshold - 200);
+				CHECK(step() == need() && step() <= 1 && spansShown());
+				window->setWidth(threshold);
 				settle(80);
-				CHECK(step() >= 3 && !spansShown());
+				CHECK(step() == need() && step() == shortStep && spansShown());
+				tag->setProperty("text", longWords);
+				settle(40);
+				CHECK(step() >= 2 && !spansShown());
+				window->setWidth(threshold - 120);
+				settle(80);
+				CHECK(step() == need() && step() >= longStep && !spansShown());
 				window->setWidth(760);
 				settle(80);
 				CHECK(step() == 0 && spansShown());
