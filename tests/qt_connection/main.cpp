@@ -1090,6 +1090,74 @@ void watchKeptAcrossReconnect()
 	connection.disconnect();
 }
 
+// Polling that only a lost link stopped resumes by itself when the same
+// device - the same descriptor fingerprint - is back (WL-8); not after a
+// Stop, and not on another device, which forgets it.
+void watchResumesOnSameDevice()
+{
+	inspector_qml::TcpDemoServer peer, other;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen() && other.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	ux::UndoHistory history;
+	provider->setHistory(&history);
+	// Typed with no device: kept as a row by its path, one step, and read on
+	// the device once it is there (WL-8). A path not well formed is refused.
+	const auto gain = QStringLiteral("device.Config.Gain");
+	CHECK(provider->checkWatchPath(gain).value("status") == "missing");
+	CHECK(provider->checkWatchPath(QStringLiteral("device")).value("status") == "error");
+	const auto kept = provider->addWatchPaths({gain, QStringLiteral("device")});
+	CHECK(kept.value("status") == "ok" && kept.value("offline").toBool() && kept.value("missing").toList().size() == 1 &&
+	      kept.value("refused").toList().size() == 1 && kept.value("added").toInt() == 0 && provider->watchCount() == 1);
+	CHECK(provider->checkWatchPath(gain).value("status") == "watched" && provider->checkWatchPath(gain).value("row") == 0);
+	CHECK(provider->addWatchPaths({gain}).value("already").toInt() == 1 && provider->watchCount() == 1);
+	CHECK(history.count() == 1 && history.undoText() == QStringLiteral("Add device.Config.Gain to the Watchlist"));
+	auto* list = provider->watchlist();
+	const auto bound = [list] {
+		return list->rowCount() == 1 &&
+		       list->index(0, 0).data(ux::WatchlistModel::WatchKeyRole).toULongLong() < (quint64{1} << 52);
+	};
+	CHECK(!bound() && list->index(0, 0).data(ux::WatchlistModel::StatusRole).toString().isEmpty());
+	connect(connection, peer);
+	CHECK(await(bound));
+	const auto away = [&] {
+		connection.disconnect();
+		CHECK(await([&] { return !provider->connected() && !provider->watchActive(); }));
+	};
+	provider->startWatch();
+	CHECK(provider->watchActive());
+	away();
+	CHECK(provider->watchStatus().contains(QStringLiteral("polling resumes when this device is back")));
+	connect(connection, peer);
+	CHECK(await([&] { return provider->watchActive(); }));
+	// Stopped by hand, it stays stopped.
+	provider->stopWatch();
+	CHECK(await([&] { return !provider->watchActive(); }));
+	away();
+	CHECK(!provider->watchStatus().contains(QStringLiteral("polling resumes")));
+	connect(connection, peer);
+	CHECK(await([&] { return provider->connected(); }));
+	QTest::qWait(50);
+	CHECK(!provider->watchActive());
+	// Another device forgets it: back on the first one, it stays stopped.
+	provider->startWatch();
+	CHECK(provider->watchActive());
+	away();
+	connect(connection, other);
+	CHECK(await([&] { return provider->connected(); }));
+	QTest::qWait(50);
+	CHECK(!provider->watchActive());
+	away();
+	CHECK(!provider->watchStatus().contains(QStringLiteral("polling resumes")));
+	connect(connection, peer);
+	CHECK(await([&] { return provider->connected(); }));
+	QTest::qWait(50);
+	CHECK(!provider->watchActive());
+	connection.disconnect();
+}
+
 // A value inside a struct is written from its row by writing its whole Field:
 // the Field is read, the value changed in it, the whole Field written and read
 // back. The other values keep what was read. The row says what Write all covers.
@@ -2611,6 +2679,7 @@ int main(int argc, char** argv)
 	memberRowWrite();
 	watchBindings();
 	watchKeptAcrossReconnect();
+	watchResumesOnSameDevice();
 	batchPaths();
 	watchChangesWhilePolling();
 	watchUndoKinds();

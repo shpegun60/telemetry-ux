@@ -105,6 +105,43 @@ struct Schema {
 };
 } // namespace twin
 
+// Groups whose names hold dots (WL-8): power.Total, then power.meter.Voltage
+// and power.meter.Current.
+namespace dotted {
+struct Device {
+	std::uint32_t total() const noexcept { return 1; }
+	std::uint32_t voltage() const noexcept { return 230; }
+	std::uint32_t current() const noexcept { return 5; }
+};
+inline Device device;
+inline constexpr telemetry::FieldTable power{telemetry::field<&Device::total>("Total", device)};
+inline constexpr telemetry::FieldTable meter{telemetry::field<&Device::voltage>("Voltage", device),
+                                             telemetry::field<&Device::current>("Current", device)};
+inline constexpr telemetry::FieldCatalogTable catalogs{telemetry::group("power", power),
+                                                       telemetry::group("power.meter", meter)};
+inline constexpr telemetry::ServiceCatalogTable<> services{};
+inline constexpr telemetry::Model model{catalogs, telemetry::emptyCommands, services};
+inline constexpr telemetry::descriptor::Descriptor descriptor{model};
+inline constexpr auto descriptorBytes = telemetry::descriptor::packDescriptor<descriptor>();
+
+struct Schema {
+	std::array<std::byte, descriptorBytes.size()> bytes = descriptorBytes;
+	std::array<rt::RuntimeType, 16> types{};
+	std::array<rt::RuntimeMember, 8> members{};
+	std::array<rt::RuntimeEnumEntry, 4> enums{};
+	std::array<rt::RuntimeCatalog, 4> catalogs{};
+	std::array<rt::RuntimeEndpoint, 8> endpoints{};
+	rt::RuntimeSchemaWorkspace workspace{types, members, enums, catalogs, endpoints};
+	rt::RuntimeSchema schema;
+	Schema()
+	{
+		const auto parsed = rt::RuntimeSchema::parse(bytes, workspace);
+		if (!parsed) std::abort();
+		schema = parsed.schema;
+	}
+};
+} // namespace dotted
+
 namespace {
 unsigned checks = 0;
 #define CHECK(...)                                                                                 \
@@ -151,7 +188,7 @@ void numberFormats()
 	const QHash<quint64, QString> names{{2, "High"}, {0xff, "Off"}};
 	CHECK(all(bits(ux::WatchScalar::U8, 1, 2, true), &names) == QStringList({"High", "2", "0x02"}));
 	CHECK(all(bits(ux::WatchScalar::S8, 1, 0xff, true), &names) == QStringList({"Off", "-1", "0xFF"}));
-	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 5, true), WatchNumberFormat::Original, &names) == "5 (unknown)");
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 5, true), WatchNumberFormat::Original, &names) == "Unknown (5)");
 	// Without the type's names, Original has nothing to add: the row keeps its text.
 	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Original).isEmpty());
 	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Hex) == "0x02");
@@ -195,12 +232,23 @@ void numberFormats()
 	CHECK(wf::range(type(ux::WatchScalar::S16, 2)) == "-32768 to 32767, or 0x0000 to 0xFFFF as bits");
 	CHECK(wf::range(type(ux::WatchScalar::F32, 4)).isEmpty());
 	CHECK(encode("65536", type(ux::WatchScalar::U16, 2)).error ==
-	      "“65536” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF).");
+	      "“65536” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
 	CHECK(encode("0x10000", type(ux::WatchScalar::U16, 2)).error ==
-	      "“0x10000” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF).");
-	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("enter 0 to 255 (0x00 to 0xFF)"));
+	      "“0x10000” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("Enter a number from 0 to 255 (0x00 to 0xFF)"));
 	CHECK(encode("40000", type(ux::WatchScalar::S16, 2)).error ==
-	      "“40000” is out of range for i16: enter -32768 to 32767, or 0x0000 to 0xFFFF as bits.");
+	      "“40000” is out of range for i16. Enter a number from -32768 to 32767, or 0x0000 to 0xFFFF as bits.");
+	// A row shown in hex hears its range in hex first (WL-8).
+	CHECK(wf::encode(u"65536", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex).error ==
+	      "“65536” is out of range for u16. Enter a number from 0x0000 to 0xFFFF (0 to 65535).");
+	CHECK(wf::encode(u"0x10000", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex).error ==
+	      "“0x10000” is out of range for u16. Enter a number from 0x0000 to 0xFFFF (0 to 65535).");
+	CHECK(wf::fromHex(u"0x100", type(ux::WatchScalar::U8, 1), WatchNumberFormat::Hex).error ==
+	      "“0x100” is out of range for u8. Enter a number from 0x00 to 0xFF (0 to 255).");
+	CHECK(wf::encode(u"40000", type(ux::WatchScalar::S16, 2), WatchNumberFormat::Hex).error ==
+	      "“40000” is out of range for i16. Enter a number from 0x0000 to 0xFFFF as bits, or -32768 to 32767.");
+	CHECK(wf::encode(u"65536", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Dec).error.contains("from 0 to 65535 (0x0000"));
+	CHECK(wf::range(type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex) == "0x0000 to 0xFFFF (0 to 65535)");
 	CHECK(encode("abc", type(ux::WatchScalar::U16, 2)).error == "“abc” is not a number for u16.");
 	CHECK(encode("+7", type(ux::WatchScalar::U16, 2)).error == "“+7”: write it without the + sign.");
 	CHECK(encode("1e3", type(ux::WatchScalar::U16, 2)).error == "“1e3”: u16 takes whole numbers only.");
@@ -341,6 +389,8 @@ struct Peer {
 	quint32 memberField = 0;
 	// Set for the twin schema; batchLimits set: the device has Batch.
 	std::shared_ptr<twin::Schema> twin;
+	// Set for the dotted schema: groups whose names hold dots.
+	std::shared_ptr<dotted::Schema> dotted;
 	std::optional<ux::WatchlistSource::Limits> batchLimits;
 	QHash<quint32, unsigned> valueSizes{{twin::left, 605}, {twin::right, 605}, {twin::small, 4}};
 	using Fields = std::vector<std::pair<quint32, std::vector<std::uint32_t>>>;
@@ -360,8 +410,9 @@ struct Peer {
 		source.capability = [this]() -> std::optional<ux::WatchlistSource::Limits> {
 			return supported ? std::optional{limits} : std::nullopt;
 		};
-		source.fieldBytes = [](quint32 id) -> std::optional<unsigned> {
-			return id < 100 ? std::optional<unsigned>{8} : std::nullopt;
+		// The dotted schema's Field ids carry their catalog: every one is held.
+		source.fieldBytes = [this](quint32 id) -> std::optional<unsigned> {
+			return id < 100 || dotted ? std::optional<unsigned>{8} : std::nullopt;
 		};
 		source.readMany = [this](std::span<const std::uint32_t> ids,
 		                         ux::WatchlistSource::Completion done) {
@@ -390,8 +441,8 @@ struct Peer {
 				return {cl::Status::Ok, {}};
 			};
 		}
-		if (schema || twin) {
-			source.schema = [this] { return schema ? schema->schema : twin->schema; };
+		if (schema || twin || dotted) {
+			source.schema = [this] { return schema ? schema->schema : twin ? twin->schema : dotted->schema; };
 			source.readMembers = [this](quint32 field, std::span<const std::uint32_t> leaves,
 			                            ux::WatchlistSource::Completion done) -> cl::Submission {
 				CHECK(current && !busy && !completion && !leaves.empty() && leaves.size() <= std::size_t(ux::watchlistRowLimit));
@@ -525,7 +576,7 @@ struct Peer {
 			borrowed.fill(std::byte{0x55}); // RX borrow expires before the scheduler sees it.
 			result.rows[row].text = pending[row] == 1   ? QStringLiteral("18446744073709551615")
 			                        : pending[row] == 2 ? QStringLiteral("-9223372036854775808")
-			                        : pending[row] == 3 ? QStringLiteral("-123 (unknown)")
+			                        : pending[row] == 3 ? QStringLiteral("Unknown (-123)")
 			                                            : QString::number(pending[row]);
 			// The typed facts a real binding takes from the same value (sampleOf).
 			result.rows[row].sample =
@@ -888,7 +939,7 @@ void chunks()
 	CHECK(!watch.active() && watch.status().contains(QStringLiteral("complete")));
 	CHECK(text(watch, 0) == QStringLiteral("18446744073709551615"));
 	CHECK(text(watch, 1) == QStringLiteral("-9223372036854775808"));
-	CHECK(text(watch, 2) == QStringLiteral("-123 (unknown)"));
+	CHECK(text(watch, 2) == QStringLiteral("Unknown (-123)"));
 	CHECK(text(watch, 64) == QStringLiteral("65"));
 	CHECK(peer.calls[0].front() == 1 && peer.calls[1].front() == 33 && peer.calls[2].front() == 65);
 	watch.setInterval(1);
@@ -1384,6 +1435,45 @@ void pathResolution()
 	CHECK(watch.pathCandidates("device.Config.samples[", 0).isEmpty());
 }
 
+// A group whose name holds dots ("power.meter"): a path is read with the
+// longest group it starts with, then the Field (WL-8).
+void dottedGroups()
+{
+	QObject owner;
+	Peer peer;
+	peer.dotted = std::make_shared<dotted::Schema>();
+	ux::DynamicWatchlist watch(&owner);
+	watch.setSource(peer.source());
+	const auto paths = [&](const char* text) {
+		QStringList out;
+		for (const auto& c : watch.pathCandidates(QString::fromLatin1(text)))
+			out << c.path;
+		return out;
+	};
+	auto r = watch.resolvePath(QStringLiteral("power.meter.Voltage"));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "power.meter.Voltage" &&
+	      ux::watch_key::isWhole(r.entries[0].key));
+	const auto voltage = r.entries[0].key;
+	r = watch.resolvePath(QStringLiteral("power.Total"));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && ux::watch_key::isWhole(r.entries[0].key) &&
+	      r.entries[0].key != voltage);
+	r = watch.resolvePath(QStringLiteral("power.meter.Nope"));
+	CHECK(r.missing && r.error == "power.meter.Nope is not on this device.");
+	CHECK(paths("pow") == QStringList({"power.", "power.meter."}));
+	// "power." offers the group that goes on from it, then power's own Fields.
+	CHECK(paths("power.") == QStringList({"power.meter.", "power.Total"}));
+	CHECK(paths("power.m") == QStringList({"power.meter."}));
+	CHECK(paths("power.meter.") == QStringList({"power.meter.Voltage", "power.meter.Current"}));
+	CHECK(paths("power.meter.C") == QStringList({"power.meter.Current"}));
+	// Added by the path, saved by its group and name.
+	CHECK(watch.addEntries(watch.resolvePath("power.meter.Current").entries).value("added").toInt() == 1);
+	CHECK(watch.binding(0) == QVariantMap({{"group", "power.meter"}, {"name", "Current"}}));
+	// Kept without the Field, saved by the same group.
+	CHECK(watch.addEntries({watch.missingEntry("power.meter.Frequency")}).value("added").toInt() == 1);
+	watch.rebindRows();
+	CHECK(watch.binding(1) == QVariantMap({{"group", "power.meter"}, {"name", "Frequency"}}));
+}
+
 void memberPlan()
 {
 	QObject owner;
@@ -1619,7 +1709,7 @@ void removeDuringRead()
 	peer.finish(); watch.poll(); events();
 	CHECK(frames.size() == 1 && frames[0].phase == ux::WatchCompletionPhase::Current && frames[0].correlated &&
 	      frames[0].count == 3 && frames[0].membership == asked);
-	CHECK(text(watch, 0) == "18446744073709551615" && text(watch, 1) == "-123 (unknown)");
+	CHECK(text(watch, 0) == "18446744073709551615" && text(watch, 1) == "Unknown (-123)");
 	CHECK(watch.active() && !watch.status().startsWith("Watch read failed"));
 	// The next cycle reads the rows there now.
 	watch.tick();
@@ -2192,6 +2282,7 @@ int main(int argc, char** argv)
 	schedulingAndReentrancy();
 	replaceSourceDuringPublication();
 	pathResolution();
+	dottedGroups();
 	missingRows();
 	memberPlan();
 	memberFanOut();

@@ -153,7 +153,7 @@ void formattingChecks()
 	CHECK(text("wide", "U64_0") == "18446744073709551615");
 	CHECK(text("signed", "S64_0") == "-9223372036854775808");
 	CHECK(text("flags", "Bool_0") == "true (1)" && text("flags", "Bool_1") == "false (0)");
-	CHECK(text("modes", "Enum_0") == "-2 (unknown)");
+	CHECK(text("modes", "Enum_0") == "Unknown (-2)");
 	CHECK(text("real", "F32_0") == "NaN (0x7fc12345)");
 	CHECK(text("real", "F32_1") == "-0 (0x80000000)");
 	CHECK(text("real", "F32_2") == "1.25" && text("real", "F32_3") == "-inf");
@@ -229,7 +229,7 @@ void controllerChecks()
 	}));
 	CHECK(watchText(controller, 0) == "18446744073709551615");
 	CHECK(watchText(controller, 1) == "-9223372036854775808");
-	CHECK(watchText(controller, 2) == "-2 (unknown)");
+	CHECK(watchText(controller, 2) == "Unknown (-2)");
 	CHECK(watchText(controller, 3) == "NaN (0x7fc12345)");
 	CHECK(watchText(controller, 4) == "-0 (0x8000000000000000)");
 	CHECK(controller.inspector().snapshotInfo().bytes == snapshot.bytes);

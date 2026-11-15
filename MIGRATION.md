@@ -950,3 +950,39 @@ button, the Measure table (M), copy picture (Ctrl+C), copy values
 (Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
 result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 `WatchTraces.categorical` is invokable from QML.
+
+## The Watchlist's leftovers of WL-3b and WL-4d (WL-8, November 2026)
+
+- A number out of range is said in the row's form: "“65536” is out of range
+  for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF)." and, on a row
+  shown in hex, "... from 0x0000 to 0xFFFF (0 to 65535)." `watch_format::encode`,
+  `fromHex` and `range` take an optional `WatchNumberFormat form` (Original by
+  default); the dynamic provider passes the row's own form, or the Watchlist's.
+  The sentence changed from "...: enter 0 to 65535 (...)" to the one above.
+- An enum's choices in the row editor follow the row's form: on a row shown
+  in hex they read "Idle (0x00)". The model now puts the row's own code first
+  when no choice is it: by its name when the type has one past the choice
+  limit, else "Unknown (5)". The unknown code is "Unknown (5)" everywhere in
+  the Watchlist (`watch_format::text`, `WatchlistModel::formatValue`), no
+  longer "5 (unknown)". The Inspector's own value text (`DynamicModels`) is
+  unchanged.
+- Polling resumes by itself when the same device comes back.
+  `DynamicWatchlist::resumes()` holds polling the operator started and that
+  nothing but a lost link stopped (not `stop()`, `clear()`, or a failure while
+  the device is still there); `forgetResume()` drops it. The dynamic provider
+  remembers the descriptor fingerprint polling was started on and begins
+  polling again when a device with that fingerprint is attached; another
+  device forgets it. While away, the status says "polling resumes when this
+  device is back"; a read drained after the link went now says the same
+  no-device line, not "Stopped - accepted read drained".
+- The "+" row works with no device: `addWatchPaths` keeps every well-formed
+  path as a row by its path (one step, `offline: true` in the answer) that is
+  read on a device that has it; `checkWatchPath` answers "missing" with "No
+  device. Enter keeps it; ..." or "watched" for a path kept already.
+  `DynamicWatchlist::PathResolution` gains `offline`.
+- A group whose name holds dots ("power.meter") is read as the longest known
+  group a path starts with, then the Field: `resolvePath`, `pathCandidates`
+  ("power." offers "power.meter." and power's own Fields) and a kept row's
+  saved binding.
+- Undo of rows removed while offline was already done by UR-1 (One history
+  for Undo and Redo); nothing changed for it.
