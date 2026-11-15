@@ -10,6 +10,8 @@
 #include "Telemetry/UX/WatchTraces.hpp"
 #include "Telemetry/UX/UndoHistory.hpp"
 #include <QtCore/QDir>
+#include <QtGui/QClipboard>
+#include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QGuiApplication>
@@ -714,7 +716,11 @@ int main(int argc, char** argv)
 				colours.insert(path, traces.colorIndex(path));
 			const auto steps = history.count();
 			openGraphMenu(0.4);
-			click(window, shown(content, "plotMenuRemoveAll"));
+			// The menu is taller than this 360 px window: the item is chosen
+			// as a key would choose it, and the menu closed.
+			QMetaObject::invokeMethod(shown(content, "plotMenuRemoveAll"), "triggered");
+			if (auto* menu = window->findChild<QObject*>(QStringLiteral("plotGraphMenu")))
+				QMetaObject::invokeMethod(menu, "close");
 			settle(200);
 			CHECK(traces.plotted().isEmpty() && traces.count(voltage) > 0 && shown(content, "plotEmpty"));
 			// One step (UR-1): Undo puts every curve back in its place, with
@@ -744,6 +750,206 @@ int main(int argc, char** argv)
 			CHECK(history.undoText() == QStringLiteral("Remove %1 from the Plot").arg(voltage) && history.undo() &&
 			      traces.plotted() == order);
 			QTest::mouseMove(window, QPoint(4, 4));
+			settle(150);
+		}
+
+		// LP-1h. The time axis from the start of reading: labels in time since
+		// the end of the last stop, the cursor chip with both times; its menu
+		// brings the time of day back.
+		{
+			const auto clockLabels = view->property("timeLabels").toStringList();
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
+			view->setProperty("fromStart", true);
+			settle(200);
+			const auto since = view->property("timeLabels").toStringList();
+			bool elapsed = !since.isEmpty();
+			for (const auto& label : since)
+				elapsed = elapsed && (label.endsWith(QStringLiteral(" s")) || label.count(QLatin1Char(':')) == 1);
+			CHECK(elapsed && since != clockLabels && view->property("originUtcMs").toDouble() > 0 &&
+			      view->property("originUtcMs").toDouble() <= view->property("rightUtcMs").toDouble());
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("From start")));
+			shot(window, argc, argv, QStringLiteral("trace-plot-from-start-760"));
+			click(window, shown(content, "plotTimeTitle"));
+			settle(300);
+			click(window, shown(content, "plotAxisTimeOfDay"));
+			settle(200);
+			CHECK(!view->property("fromStart").toBool() &&
+			      shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
+		}
+
+		// Analysis: Ctrl and a drag draw a box, and its release zooms the time
+		// to its width and the values to its height; Backspace goes back to the
+		// view before it, and the Back button says when there is none.
+		{
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			const double spanBefore = view->property("spanSeconds").toDouble();
+			const auto area = view->property("plotArea").toRectF();
+			const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.3, area.top() + area.height() * 0.2)).toPoint();
+			const auto to = view->mapToScene(QPointF(area.left() + area.width() * 0.5, area.top() + area.height() * 0.6)).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, (from + to) / 2);
+			QTest::mouseMove(window, to);
+			settle(100);
+			CHECK(view->property("boxShown").toBool());
+			shot(window, argc, argv, QStringLiteral("trace-plot-box-760"));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, to);
+			settle(200);
+			CHECK(!view->property("boxShown").toBool() && !view->property("following").toBool() &&
+			      !view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() < spanBefore * 0.3 &&
+			      view->property("canGoBack").toBool() && shown(content, "plotBack")->property("enabled").toBool());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(200);
+			CHECK(view->property("valueAuto").toBool() && qFuzzyCompare(view->property("spanSeconds").toDouble(), spanBefore));
+			// Everything gone back on: the button says there is nothing left.
+			while (view->property("canGoBack").toBool())
+				QMetaObject::invokeMethod(view, "goBack");
+			settle(100);
+			CHECK(!shown(content, "plotBack")->property("enabled").toBool());
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
+		// Analysis: the readings in view as text for a spreadsheet and as a
+		// CSV file, and the picture onto the clipboard, each said once.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(plotRoot);
+			int readings = 0;
+			CHECK(QMetaObject::invokeMethod(view, "readingsInRange", Q_RETURN_ARG(int, readings)) && readings > 0);
+			QString text;
+			CHECK(QMetaObject::invokeMethod(view, "valuesText", Q_RETURN_ARG(QString, text), Q_ARG(bool, false)));
+			const auto lines = text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+			CHECK(lines.size() == readings + 1 && lines.first().startsWith(QStringLiteral("Time of day\tSeconds from start\t")) &&
+			      lines.first().contains(QStringLiteral("device.Voltage")));
+			// A state in words, a number as read.
+			CHECK(text.contains(QStringLiteral("\ttrue")) || text.contains(QStringLiteral("\tfalse")));
+			CHECK(QMetaObject::invokeMethod(plotRoot, "copyValues"));
+			settle(50);
+			CHECK(QGuiApplication::clipboard()->text() == text &&
+			      plotRoot->property("notice").toString().startsWith(QStringLiteral("Copied ")));
+			const auto file = QDir::temp().filePath(QStringLiteral("telemetry-plot-check.csv"));
+			QFile::remove(file);
+			QVariant savedOk;
+			CHECK(QMetaObject::invokeMethod(plotRoot, "saveValuesTo", Q_RETURN_ARG(QVariant, savedOk),
+			                                Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(file)))) && savedOk.toBool());
+			QFile csv(file);
+			const bool saved = csv.open(QIODevice::ReadOnly);
+			const auto written = saved ? QString::fromUtf8(csv.readAll()) : QString();
+			CHECK(saved && written.startsWith(QStringLiteral("Time of day,Seconds from start,")) &&
+			      written.count(QLatin1Char('\n')) == readings + 1);
+			csv.close();
+			QFile::remove(file);
+			CHECK(plotRoot->property("notice").toString().startsWith(QStringLiteral("Saved ")));
+			QGuiApplication::clipboard()->clear();
+			CHECK(QMetaObject::invokeMethod(plotRoot, "copyPicture"));
+			CHECK(QTest::qWaitFor([] { return !QGuiApplication::clipboard()->image().isNull(); }, 3000));
+			CHECK(plotRoot->property("notice").toString() == QStringLiteral("Copied the picture."));
+		}
+
+		// Analysis: the measurements. M turns the chips into a table of every
+		// curve over the time in view; a reference and an end (Shift and a
+		// click) make the range theirs, shaded; a state gives its shares of
+		// the time; Min and Max put the cursor on their reading.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			CHECK(plotRoot->setProperty("measuring", true));
+			settle(300);
+			CHECK(shown(content, "plotMeasure") && !named(content, "plotLegend") &&
+			      all(content, "plotMeasureRow").size() == traces.plotted().size());
+			CHECK(shown(content, "plotMeasureRange")->property("text").toString().startsWith(QStringLiteral("In view · ")));
+			const auto stat = [&](const QString& path) {
+				QVariantMap out;
+				CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, out), Q_ARG(QString, path)));
+				return out;
+			};
+			const auto voltage = stat(QStringLiteral("device.Voltage"));
+			const double low = voltage.value("min").toDouble(), high = voltage.value("max").toDouble(),
+			             mean = voltage.value("mean").toDouble();
+			CHECK(voltage.value("count").toInt() > 0 && low <= mean && mean <= high &&
+			      qFuzzyCompare(voltage.value("peakToPeak").toDouble() + 1, high - low + 1) && voltage.value("deviation").toDouble() >= 0);
+			const auto ready = stat(QStringLiteral("device.Ready"));
+			double shares = 0;
+			for (const auto& share : ready.value("shares").toList())
+				shares += share.toMap().value("share").toDouble();
+			CHECK(ready.value("count").toInt() > 0 && std::abs(shares - 1) < 1e-9 && ready.value("changes").toInt() >= 0);
+			CHECK(shown(content, "plotMeasureShares")->property("text").toString().contains(QStringLiteral("% of the time")));
+			// Min puts the cursor on the lowest reading.
+			CHECK(QMetaObject::invokeMethod(view, "putCursorAt", Q_ARG(qreal, voltage.value("minUtcMs").toDouble())));
+			settle(100);
+			CHECK(view->property("cursorShown").toBool() &&
+			      std::abs(view->property("cursorUtcMs").toDouble() - voltage.value("minUtcMs").toDouble()) < 1);
+			// A reference, then Shift and a click: the end; the range is theirs.
+			const auto area = view->property("plotArea").toRectF();
+			const auto at = [&](double part) {
+				return view->mapToScene(QPointF(area.left() + area.width() * part, area.center().y())).toPoint();
+			};
+			QTest::mouseMove(window, at(0.4) + QPoint(-5, 0));
+			QTest::mouseMove(window, at(0.4));
+			settle(60);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, at(0.4));
+			settle(60);
+			QTest::mouseMove(window, at(0.6) + QPoint(-5, 0));
+			QTest::mouseMove(window, at(0.6));
+			settle(60);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::ShiftModifier, at(0.6));
+			settle(200);
+			QVariantMap range;
+			CHECK(QMetaObject::invokeMethod(view, "measureRange", Q_RETURN_ARG(QVariantMap, range)));
+			CHECK(view->property("referenceShown").toBool() && view->property("endShown").toBool() && range.value("pinned").toBool() &&
+			      range.value("seconds").toDouble() > 0 &&
+			      shown(content, "plotMeasureRange")->property("text").toString().startsWith(QStringLiteral("Reference to end · ")));
+			shot(window, argc, argv, QStringLiteral("trace-plot-measure-760"));
+			// Esc: the end first, then the reference.
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle(100);
+			CHECK(!view->property("endShown").toBool() && view->property("referenceShown").toBool());
+			QTest::keyClick(window, Qt::Key_Escape);
+			settle(100);
+			CHECK(!view->property("referenceShown").toBool());
+			// M turns it off again.
+			QTest::keyClick(window, Qt::Key_M);
+			settle(200);
+			CHECK(!plotRoot->property("measuring").toBool() && shown(content, "plotLegend"));
+			QTest::mouseMove(window, QPoint(4, 4));
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
+		// Analysis: Ctrl+Right and Ctrl+Left step the cursor from change to
+		// change of the states (device.Ready flips every five seconds); past
+		// the last, the notice says so.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(view->setProperty("following", false));
+			QMetaObject::invokeMethod(view, "hideCursor");
+			settle(150);
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+			settle(100);
+			CHECK(view->property("cursorShown").toBool());
+			const double first = view->property("cursorUtcMs").toDouble();
+			QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+			settle(100);
+			const double second = view->property("cursorUtcMs").toDouble();
+			CHECK(second > first);
+			QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+			settle(100);
+			CHECK(std::abs(view->property("cursorUtcMs").toDouble() - first) < 1);
+			// Focused on the state, past its last change: said in words.
+			view->setProperty("focusedPath", QStringLiteral("device.Ready"));
+			bool stepped = true;
+			for (int i = 0; i < 40 && stepped; ++i)
+				CHECK(QMetaObject::invokeMethod(view, "stepChange", Q_RETURN_ARG(bool, stepped), Q_ARG(int, 1)));
+			settle(100);
+			CHECK(!stepped && plotRoot->property("notice").toString().startsWith(QStringLiteral("No change of device.Ready after ")));
+			view->setProperty("focusedPath", QString());
+			QMetaObject::invokeMethod(view, "hideCursor");
+			CHECK(view->setProperty("following", true));
 			settle(150);
 		}
 
@@ -787,6 +993,41 @@ int main(int argc, char** argv)
 			CHECK(since);
 			CHECK(view->property("drawnEnds").toInt() >= 1);
 			shot(window, argc, argv, QStringLiteral("trace-plot-not-read-760"));
+		}
+
+		// TR-2. A recording shown with the same view: two hours of one run,
+		// set by the host - past the live ten minutes and 65,536 readings -
+		// with a time of day from its anchor, drawn per pixel, its chip never
+		// "not read since".
+		{
+			ux::WatchTraces recorded;
+			const qint64 start = 1'000'000'000'000;
+			recorded.setAnchor({start, 1'763'200'000'000});
+			std::vector<ux::TraceReading> readings;
+			for (int i = 0; i < 72'000; ++i)
+				readings.push_back({start + qint64(i) * 100'000'000, std::sin(i / 600.0) * 10});
+			readings[36'000].value = std::numeric_limits<double>::quiet_NaN();
+			recorded.setRecorded(QStringLiteral("run.Speed"), std::move(readings), false);
+			recorded.setRecorded(QStringLiteral("run.Running"), {{start, 1}, {start + 3'600'000'000'000, 0}}, true);
+			CHECK(recorded.count(QStringLiteral("run.Speed")) == 72'000 && recorded.watched(QStringLiteral("run.Speed")) &&
+			      recorded.categorical(QStringLiteral("run.Running")) && recorded.anchor().utcMs == 1'763'200'000'000);
+			CHECK(recorded.plot(QStringLiteral("run.Speed")).isEmpty() && recorded.plot(QStringLiteral("run.Running")).isEmpty());
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &recorded);
+			settle(300);
+			CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+			settle(300);
+			// 72,000 readings drawn as each pixel's extremes, over the run's two hours.
+			const auto hours = view->property("timeLabels").toStringList();
+			CHECK(view->property("showAll").toBool() && view->property("drawnPoints").toInt() > 0 &&
+			      view->property("drawnPoints").toInt() < 10'000 && view->property("laneLabels").toStringList().size() == 1 &&
+			      !hours.isEmpty() && hours.first() != hours.last());
+			bool gone = false;
+			for (auto* value : all(content, "plotChipValue"))
+				gone = gone || value->property("text").toString().startsWith(QStringLiteral("not read"));
+			CHECK(!gone);
+			shot(window, argc, argv, QStringLiteral("trace-plot-recorded-760"));
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
+			settle(300);
 		}
 
 		// At most 65,536 readings, and ten minutes, a value.

@@ -937,3 +937,63 @@ The Batch records into the same history as the Watchlist and the Plot (README,
   answers `add(lines) -> {notice, undoable, serial, clear}` and the row emits
   `added(notice, undoable, serial)`; `BatchAddRow` and `WatchAddRow` give the
   step's serial, and the Batch's additions are undoable.
+
+## The live Plot's time axis from the start of reading (LP-1h, November 2026)
+
+`TraceView.fromStart` switches the time axis between the time of day (the
+default) and the time since reading last started: the end of the last stop
+or disconnect up to the right edge, else the first reading, whose time of
+day is `originUtcMs`. Labels read "12 s", "1:30", "1:02:00" or "−0:12".
+`TracePlot`'s axis caption is now a flat button, "Time of day ▾" or "From
+start ▾", with a two-item menu; with the axis from the start, the cursor chip
+reads "17.911 s · 22:27:02.379".
+
+## A recorded run on the Plot's view (TR-2, November 2026)
+
+`WatchTraces::setRecorded(path, readings, states)` and `setAnchor(anchor)`
+let a host show a recording with the same TracePlot: a path's readings, one
+run's, in time order and NaN for a gap, with the anchor that gives them a
+time of day. The live rules do not apply to them (no ten minutes, no cap per
+path) and the path counts as watched. `TraceView` fits its values afresh when
+its `traces` change or a curve is plotted or removed.
+
+## Dragging rows onto the Plot and the Watchlist (LP-1g3, November 2026)
+
+The Watchlist's list and the Device tree no longer scroll by a mouse drag
+(`acceptedButtons: Qt.NoButton`; the wheel, a touchpad, the scroll bar and a
+touch screen still scroll): a mouse drag takes rows instead, as an automatic
+drag with the type `application/x-telemetry-paths`, JSON
+`{"from": "watchlist" | "device", "paths": [...]}`, and the paths as plain
+text. A Watchlist row carries its values (`WatchlistPanel.dragPaths(row)`, the
+selection's when the row is in it); a Device tree row its endpoint's path, a
+group or a category every endpoint under it
+(`EndpointTreePanel.dragPaths(index)`). `TracePlot` gains an optional
+`provider`, `dropPaths(payload)` and a `notice` line: a Watchlist drag plots
+its values; a Device tree drag joins the Watchlist first and plots the values
+under what was dropped. `WatchlistPanel.dropPaths(payload)` adds a Device tree
+drag. Both show a frame and what a drop will do while a drag is over them.
+
+## A recorded run on the Plot's view (TR-2, November 2026)
+
+`WatchTraces::setRecorded(path, readings, states)` and `setAnchor(anchor)`
+let a host show a recording with the same TracePlot: a path's readings, one
+run's, in time order and NaN for a gap, with the anchor that gives them a
+time of day. The live rules do not apply to them (no ten minutes, no cap per
+path) and the path counts as watched. `TraceView` fits its values afresh when
+its `traces` change or a curve is plotted or removed.
+
+## Analysis on the Plot: box zoom, Back, copy and save, Measure, find (November 2026)
+
+`TraceView` gains, from the designer's analysis audit: a box drawn with Ctrl
+and a drag (`zoomToBox`, `boxShown`) and a way back through every view moved
+by hand (`goBack`, `canGoBack`; Backspace, Alt+Left); the readings of the
+range as text and CSV (`valuesText`, `readingsInRange`, `saveValues`); an end
+pin beside the reference (`endShown`, `endUtcMs`, `endX`, `pinEnd`,
+`clearEnd`; Shift and a click, Shift+Enter) making the range measured,
+copied and saved (`measureRange`); per-curve statistics over it
+(`statistics(path)`); `putCursorAt(utcMs)`; and `stepChange(direction)` with
+`findFailed(words)` (Ctrl+Right, Ctrl+Left). `TracePlot` adds the Back
+button, the Measure table (M), copy picture (Ctrl+C), copy values
+(Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
+result in its notice line. `Clipboard.setImage` and `hasImage` are new;
+`WatchTraces.categorical` is invokable from QML.
