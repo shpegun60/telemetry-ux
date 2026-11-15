@@ -1493,7 +1493,9 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 			}
 			out[QStringLiteral("next")] = typed->next;
 			// What Enter writes while values are missing: the next "name=",
-			// or a name or a value half typed, completed.
+			// or a name or a value half typed, completed; empty, nothing -
+			// a value still to type, or several it could become.
+			out[QStringLiteral("line")] = QString{};
 			if (!typed->adding.isEmpty()) {
 				auto base = text;
 				while (!base.isEmpty() && base.back().isSpace())
@@ -1877,8 +1879,15 @@ bool DynamicConfiguratorProvider::selectBatchPath(const QString& text)
 		const auto root = values.index(0, 0);
 		if (bare)
 			return root;
-		while (values.rowCount(root) <= place && values.canFetchMore(root))
+		// fetchMore may add nothing (the model changing, a row it cannot
+		// read) while canFetchMore stays true: stop when no row came.
+		for (int rows = values.rowCount(root); rows <= place && values.canFetchMore(root);) {
 			values.fetchMore(root);
+			const int now = values.rowCount(root);
+			if (now <= rows)
+				break;
+			rows = now;
+		}
 		return place < values.rowCount(root) ? values.index(place, 0, root) : QModelIndex{};
 	};
 	for (std::size_t i = 0; i < typed->items.size(); ++i)

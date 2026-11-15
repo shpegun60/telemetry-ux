@@ -84,12 +84,8 @@ PathAddRow {
             // "name=", or a name or a value half typed, completed.
             if (status === "needs") {
                 const line = batchAdd.check.line || ""
-                const next = batchAdd.check.next || ""
-                const trimmed = text.replace(/\s+$/, "")
                 if (line.length > 0)
                     batchAdd.setText(line)
-                else if (next.length > 0 && !trimmed.endsWith("=") && batchAdd.check.line === undefined)
-                    batchAdd.setText(trimmed + " " + next + "=")
                 return true
             }
             // Values with no names: Enter writes the names in, adds nothing.

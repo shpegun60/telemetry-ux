@@ -464,6 +464,10 @@ void requestArguments()
 	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fo");
 	CHECK(result.error.isEmpty() && result.items[5].status == Status::Missing && result.typing == "Fo" &&
 	      result.adding == "Forward " && result.message == "mode (enum) takes Reverse or Forward, or a code.");
+	// A "name=" waiting before other values: Enter writes nothing, never
+	// that name a second time.
+	result = ra::check(schema, config->typeId, "device.Config", u"serial= offset=1");
+	CHECK(result.error.isEmpty() && result.next == "serial" && result.adding.isEmpty() && result.typing.isEmpty());
 	result = ra::check(schema, config->typeId, "device.Config", u"mode=Fast");
 	CHECK(result.items[5].status == Status::Error &&
 	      result.message == "mode (enum) takes Reverse or Forward, or a code, not \"Fast\".");

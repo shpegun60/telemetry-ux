@@ -58,6 +58,7 @@ public:
 			                                        : "control.Scale needs value (f32) and factor (f32). Enter writes value=; "
 			                                          "Ctrl+Enter fills it in Details."},
 			        {"next", typed.endsWith('2') ? "factor" : "value"}, {"path", "control.Scale"}, {"operation", "service"},
+			        {"line", typed + (typed.endsWith('2') ? " factor=" : " value=")},
 			        {"arguments", typed.endsWith('2') ? QVariantList{QVariantMap{{"name", "value"}, {"status", "ok"}},
 			                                                         QVariantMap{{"name", "factor"}, {"status", "missing"}}}
 			                                          : QVariantList{}}};
@@ -67,7 +68,7 @@ public:
 			return {{"status", "needs"}, {"message", "control.Scale needs value (f32) and factor (f32). Enter writes factor=."},
 			        {"next", "factor"}, {"line", "control.Scale factor="}, {"path", "control.Scale"}, {"operation", "service"}};
 		if (typed == QStringLiteral("control.Scale value="))
-			return {{"status", "needs"}, {"message", "value (f32) takes a number."}, {"next", "value"},
+			return {{"status", "needs"}, {"message", "value (f32) takes a number."}, {"next", "value"}, {"line", ""},
 			        {"path", "control.Scale"}, {"operation", "service"}};
 		if (typed == QStringLiteral("control.Scale 2 3"))
 			return {{"status", "unnamed"},

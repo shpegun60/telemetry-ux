@@ -843,7 +843,7 @@ void batchPaths()
 	// "reference=" waits for its value, quietly.
 	typed = line("control.Calibrate reference=");
 	CHECK(typed.value("status") == "needs" && typed.value("message") == "reference (f32) takes a number." &&
-	      !typed.contains("line"));
+	      typed.contains("line") && typed.value("line").toString().isEmpty());
 	typed = line("control.Calibrate reference=abc");
 	CHECK(typed.value("status") == "error" && typed.value("message") == "reference (f32) takes a number, not \"abc\".");
 	typed = line("control.Calibrate referenc=1");
