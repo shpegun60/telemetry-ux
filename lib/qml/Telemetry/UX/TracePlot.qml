@@ -229,6 +229,17 @@ FocusScope {
                 shortcutText: qsTr("Plus")
                 onClicked: view.zoom(0.8)
             }
+            // Back to the view before the last move by hand: a zoom, a box, a
+            // pan, a preset.
+            IconToolButton {
+                objectName: "plotBack"
+                iconName: "undo"
+                text: qsTr("Go back to the previous view")
+                shortcutText: qsTr("Backspace")
+                enabled: view.canGoBack
+                disabledReason: qsTr("no earlier view")
+                onClicked: view.goBack()
+            }
             Item { Layout.fillWidth: true }
         }
 
@@ -790,6 +801,12 @@ FocusScope {
                 view.following = !view.following
                 checked = Qt.binding(() => view.following)
             }
+        }
+        MenuItem {
+            objectName: "plotMenuBack"
+            text: qsTr("Go back") + "	" + qsTr("Backspace")
+            enabled: view.canGoBack
+            onTriggered: view.goBack()
         }
         MenuItem {
             objectName: "plotMenuPin"

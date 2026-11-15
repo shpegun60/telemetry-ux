@@ -124,6 +124,12 @@ class TraceView : public QQuickPaintedItem {
 	// started - the end of the last stop or disconnect before the right edge,
 	// else the first reading - whose time of day is originUtcMs.
 	Q_PROPERTY(bool fromStart READ fromStart WRITE setFromStart NOTIFY viewChanged)
+	// Box zoom and Back (analysis): Ctrl and a drag draw a box whose width
+	// becomes the time in view and whose height the values; every move of the
+	// view by hand can be gone back on (Backspace, Alt+Left), one gesture a
+	// step, the last 50. Not the Undo of edits: views are not changes.
+	Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY viewChanged)
+	Q_PROPERTY(bool boxShown READ boxShown NOTIFY cursorChanged)
 	Q_PROPERTY(qreal originUtcMs READ originUtcMs NOTIFY drawn)
 public:
 	explicit TraceView(QQuickItem* parent = nullptr);
@@ -221,6 +227,13 @@ public:
 	QRectF plotArea() const { return plotArea_; }
 	qreal rightUtcMs() const { return rightUtcMs_; }
 	bool fromStart() const { return fromStart_; }
+	bool canGoBack() const { return !back_.empty(); }
+	bool boxShown() const { return boxing_; }
+	Q_INVOKABLE void goBack();
+	// Zooms to the box between two points of the item: the time to its width,
+	// the values to its height when it is at least 8 px tall and over the
+	// numbers.
+	Q_INVOKABLE void zoomToBox(QPointF from, QPointF to);
 	void setFromStart(bool fromStart);
 	qreal originUtcMs() const { return originUtcMs_; }
 
@@ -304,6 +317,19 @@ private:
 	QRectF plotArea_;
 	qreal rightUtcMs_ = 0;
 	bool fromStart_ = false;
+	// What a view by hand was, to go back to.
+	struct ViewState {
+		bool following = true, showAll = false, valueAuto = true;
+		qint64 heldAllNs = 0, frozenNs = 0;
+		qreal spanSeconds = 60;
+		double manualLow = 0, manualHigh = 0;
+	};
+	std::vector<ViewState> back_;
+	qint64 rememberedAtMs_ = 0;
+	// Before a view changes by hand: what it was, once a gesture.
+	void remember();
+	bool boxing_ = false;
+	QPointF boxFrom_, boxTo_;
 	qreal originUtcMs_ = 0;
 };
 } // namespace telemetry::ux

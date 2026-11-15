@@ -189,6 +189,7 @@ int TraceView::preset() const
 
 void TraceView::choosePreset(int seconds)
 {
+	remember();
 	heldAllNs_ = 0;
 	if (seconds <= 0) {
 		showAll_ = true;
@@ -476,10 +477,78 @@ void TraceView::hold(qint64 right)
 	update();
 }
 
+void TraceView::remember()
+{
+	// A run of wheel steps or keys is one step back: 600 ms of quiet closes it.
+	const auto now = QDateTime::currentMSecsSinceEpoch();
+	const bool sameGesture = rememberedAtMs_ && now - rememberedAtMs_ < 600;
+	rememberedAtMs_ = now;
+	if (sameGesture && !back_.empty())
+		return;
+	back_.push_back({following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high});
+	if (back_.size() > 50)
+		back_.erase(back_.begin());
+	Q_EMIT viewChanged();
+}
+
+void TraceView::goBack()
+{
+	if (back_.empty())
+		return;
+	const auto state = back_.back();
+	back_.pop_back();
+	rememberedAtMs_ = 0;
+	following_ = state.following;
+	showAll_ = state.showAll;
+	heldAllNs_ = state.heldAllNs;
+	spanSeconds_ = state.spanSeconds;
+	if (!state.following)
+		frozenNs_ = state.frozenNs;
+	valueAuto_ = state.valueAuto;
+	manual_ = {state.manualLow, state.manualHigh};
+	if (valueAuto_)
+		range_ = {};
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::zoomToBox(QPointF from, QPointF to)
+{
+	const QRectF box = QRectF(from, to).normalized().intersected(plotArea_);
+	if (box.width() < 4 || plotArea_.width() <= 0)
+		return;
+	remember();
+	const auto span = spanNs();
+	const auto right = rightNs();
+	const auto left = right - span;
+	const auto nsAt = [&](qreal x) { return left + qint64(double(span) * (x - plotArea_.left()) / plotArea_.width()); };
+	const auto newLeft = nsAt(box.left()), newRight = nsAt(box.right());
+	showAll_ = false;
+	heldAllNs_ = 0;
+	spanSeconds_ = std::max(0.01, double(newRight - newLeft) / 1e9);
+	// The values too, from a box over the numbers at least 8 px tall.
+	if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
+	    box.top() <= valuesArea_.bottom()) {
+		const auto valueAt = [&](qreal y) {
+			return shown_.high - (y - valuesArea_.top()) / valuesArea_.height() * (shown_.high - shown_.low);
+		};
+		const double high = valueAt(std::max(box.top(), valuesArea_.top())), low = valueAt(std::min(box.bottom(), valuesArea_.bottom()));
+		if (high > low) {
+			valueAuto_ = false;
+			manual_ = {low, high};
+		}
+	}
+	following_ = false;
+	frozenNs_ = newRight;
+	Q_EMIT viewChanged();
+	update();
+}
+
 void TraceView::zoom(qreal factor, qreal at)
 {
 	if (!(factor > 0))
 		return;
+	remember();
 	const auto span = spanNs();
 	const auto right = rightNs();
 	at = std::clamp<qreal>(at, 0, 1);
@@ -505,6 +574,7 @@ void TraceView::zoom(qreal factor, qreal at)
 
 void TraceView::pan(qreal part)
 {
+	remember();
 	hold(rightNs() + qint64(double(spanNs()) * part));
 }
 
@@ -513,6 +583,7 @@ void TraceView::toOldest()
 	const auto [oldest, newest] = kept();
 	if (!newest)
 		return;
+	remember();
 	hold(oldest + spanNs());
 }
 
@@ -562,6 +633,7 @@ void TraceView::zoomValues(qreal factor, qreal at)
 {
 	if (!(factor > 0) || !shown_.valid())
 		return;
+	remember();
 	const double pinned = shown_.high - std::clamp<qreal>(at, 0, 1) * (shown_.high - shown_.low);
 	Range next{pinned - (pinned - shown_.low) * factor, pinned + (shown_.high - pinned) * factor};
 	if (!(next.high - next.low > std::abs(pinned) * 1e-12 + 1e-300) || next.low < -valueLimit || next.high > valueLimit)
@@ -576,6 +648,7 @@ void TraceView::panValues(qreal part)
 {
 	if (!shown_.valid())
 		return;
+	remember();
 	const double shift = (shown_.high - shown_.low) * part;
 	valueAuto_ = false;
 	manual_ = {shown_.low + shift, shown_.high + shift};
@@ -587,6 +660,7 @@ void TraceView::autoValues()
 {
 	if (valueAuto_)
 		return;
+	remember();
 	valueAuto_ = true;
 	range_ = {};
 	Q_EMIT viewChanged();
@@ -602,6 +676,8 @@ void TraceView::mousePressEvent(QMouseEvent* event)
 	pressRange_ = shown_;
 	valueDrag_ = event->position().x() < plotArea_.left();
 	dragging_ = false;
+	boxing_ = !valueDrag_ && (event->modifiers() & Qt::ControlModifier) && plotArea_.contains(event->position());
+	boxFrom_ = boxTo_ = event->position();
 	event->accept();
 }
 
@@ -615,13 +691,22 @@ void TraceView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TraceView::mouseMoveEvent(QMouseEvent* event)
 {
+	if (boxing_) {
+		boxTo_ = event->position();
+		Q_EMIT cursorChanged();
+		update();
+		event->accept();
+		return;
+	}
 	if (valueDrag_) {
 		// Over the value labels: the values follow the pointer up and down.
 		const qreal down = event->position().y() - pressY_;
 		if (!dragging_ && std::abs(down) < 4)
 			return;
-		if (!dragging_)
+		if (!dragging_) {
 			setCursor(Qt::ClosedHandCursor);
+			remember();
+		}
 		dragging_ = true;
 		if (pressRange_.valid() && valuesArea_.height() > 0) {
 			const double shift = (pressRange_.high - pressRange_.low) * down / valuesArea_.height();
@@ -637,8 +722,10 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 	// A drag of more than a few pixels pans; less is a click.
 	if (!dragging_ && std::abs(moved) < 4)
 		return;
-	if (!dragging_)
+	if (!dragging_) {
 		setCursor(Qt::ClosedHandCursor);
+		remember();
+	}
 	dragging_ = true;
 	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
 	hold(pressRightNs_ - qint64(double(spanNs()) * moved / widthPx));
@@ -647,6 +734,14 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 
 void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
+	if (boxing_) {
+		boxing_ = false;
+		zoomToBox(boxFrom_, event->position());
+		Q_EMIT cursorChanged();
+		update();
+		event->accept();
+		return;
+	}
 	if (dragging_) {
 		setCursor(Qt::CrossCursor);
 	} else if (!valueDrag_ && plotArea_.contains(event->position())) {
@@ -702,8 +797,13 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 		case Qt::Key_A:
 			autoValues();
 			break;
+		case Qt::Key_Backspace:
+			goBack();
+			break;
 		case Qt::Key_Left:
-			if (shift)
+			if (event->modifiers() & Qt::AltModifier)
+				goBack();
+			else if (shift)
 				stepCursor(-1);
 			else
 				pan(-0.1);
@@ -1290,6 +1390,29 @@ void TraceView::paint(QPainter* painter)
 	drawnPoints_ = points;
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
+	// The box being drawn (Ctrl and a drag): its frame, and its size in time
+	// and values.
+	if (boxing_) {
+		const QRectF box = QRectF(boxFrom_, boxTo_).normalized().intersected(area);
+		painter->save();
+		QColor fill = referenceColor_;
+		fill.setAlphaF(0.12);
+		painter->fillRect(box, fill);
+		QPen frame(referenceColor_, 1, Qt::DashLine);
+		frame.setCosmetic(true);
+		painter->setPen(frame);
+		painter->setBrush(Qt::NoBrush);
+		painter->drawRect(box);
+		const double seconds = double(span) / 1e9 * box.width() / std::max<qreal>(1, area.width());
+		QString size = QString::number(seconds, 'f', seconds < 10 ? 3 : 1) + QStringLiteral(" s");
+		if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0)
+			size += QStringLiteral(" × ") +
+			        QString::number((shown_.high - shown_.low) * box.height() / valuesArea_.height(), 'g', 3);
+		painter->setPen(labelColor_);
+		painter->setFont(font_);
+		painter->drawText(box.adjusted(pad / 2, pad / 2, -pad / 2, -pad / 2), Qt::AlignRight | Qt::AlignTop, size);
+		painter->restore();
+	}
 	plotArea_ = area;
 	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;

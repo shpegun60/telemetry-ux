@@ -753,6 +753,40 @@ int main(int argc, char** argv)
 			      shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
 		}
 
+		// Analysis: Ctrl and a drag draw a box, and its release zooms the time
+		// to its width and the values to its height; Backspace goes back to the
+		// view before it, and the Back button says when there is none.
+		{
+			CHECK(view->setProperty("following", false));
+			settle(150);
+			const double spanBefore = view->property("spanSeconds").toDouble();
+			const auto area = view->property("plotArea").toRectF();
+			const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.3, area.top() + area.height() * 0.2)).toPoint();
+			const auto to = view->mapToScene(QPointF(area.left() + area.width() * 0.5, area.top() + area.height() * 0.6)).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, (from + to) / 2);
+			QTest::mouseMove(window, to);
+			settle(100);
+			CHECK(view->property("boxShown").toBool());
+			shot(window, argc, argv, QStringLiteral("trace-plot-box-760"));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, to);
+			settle(200);
+			CHECK(!view->property("boxShown").toBool() && !view->property("following").toBool() &&
+			      !view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() < spanBefore * 0.3 &&
+			      view->property("canGoBack").toBool() && shown(content, "plotBack")->property("enabled").toBool());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(200);
+			CHECK(view->property("valueAuto").toBool() && qFuzzyCompare(view->property("spanSeconds").toDouble(), spanBefore));
+			// Everything gone back on: the button says there is nothing left.
+			while (view->property("canGoBack").toBool())
+				QMetaObject::invokeMethod(view, "goBack");
+			settle(100);
+			CHECK(!shown(content, "plotBack")->property("enabled").toBool());
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);
