@@ -1506,8 +1506,7 @@ int main(int argc, char** argv)
 			// and before the axis' words; Back and Measure stay.
 			trend->setProperty("writing", true);
 			QQmlComponent hostControl(&engine);
-			hostControl.setData("import QtQuick
-Rectangle { implicitWidth: 120; implicitHeight: 20 }", QUrl());
+			hostControl.setData("import QtQuick; Rectangle { implicitWidth: 120; implicitHeight: 20 }", QUrl());
 			std::unique_ptr<QQuickItem> leadingControl(qobject_cast<QQuickItem*>(hostControl.create()));
 			std::unique_ptr<QQuickItem> trailingControl(qobject_cast<QQuickItem*>(hostControl.create()));
 			auto* leadingSlot = trend->findChild<QQuickItem*>(QStringLiteral("plotLeading"));
