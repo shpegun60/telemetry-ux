@@ -52,7 +52,8 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
 - The central Undo's history (UR-1) on a target of the check's own: a step
   recorded once its change is made, undo and redo putting states back, steps
   of one merge key within two seconds merging (and going when back where they
-  started), a blocked step keeping its words, a skipped step and a dead
+  started), a merge window of the caller's own and 0 (merged while the key
+  stays the same), a blocked step keeping its words, a skipped step and a dead
   target's step going, the limit, the irreversible note, `clean`, a kind not
   declared or a target that is not one refused with a warning, a host's own
   kind declared; a provider's `history` assigned and announced once.

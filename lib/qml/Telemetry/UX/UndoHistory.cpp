@@ -172,7 +172,7 @@ QString UndoHistory::sentence(const QString& text, bool undone, const QString& n
 	return note.isEmpty() ? said : tr("%1. %2.").arg(said, note);
 }
 
-int UndoHistory::record(const QString& text, QVector<UndoPart> parts, const QString& mergeKey)
+int UndoHistory::record(const QString& text, QVector<UndoPart> parts, const QString& mergeKey, qint64 mergeWindowMs)
 {
 	if (taking_)
 		return 0;
@@ -193,7 +193,7 @@ int UndoHistory::record(const QString& text, QVector<UndoPart> parts, const QStr
 	if (parts.isEmpty())
 		return 0;
 	const int serial = ++serial_;
-	auto* made = new UndoStep(text, std::move(parts), serial, mergeKey, now());
+	auto* made = new UndoStep(text, std::move(parts), serial, mergeKey, now(), mergeWindowMs);
 	// The next step taken after an action on the device ends its note.
 	irreversible_.clear();
 	stack_.push(made);

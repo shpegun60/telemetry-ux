@@ -29,8 +29,10 @@ QStringList UndoPart::keys() const
 	return all;
 }
 
-UndoStep::UndoStep(QString text, QVector<UndoPart> parts, int serial, QString mergeKey, qint64 atMs)
-    : parts_(std::move(parts)), serial_(serial), mergeKey_(std::move(mergeKey)), at_(atMs)
+UndoStep::UndoStep(QString text, QVector<UndoPart> parts, int serial, QString mergeKey, qint64 atMs,
+                   qint64 windowMs)
+    : parts_(std::move(parts)), serial_(serial), mergeKey_(std::move(mergeKey)), at_(atMs),
+      window_(windowMs < 0 ? mergeWindowMs : windowMs)
 {
 	setText(text);
 }
@@ -44,8 +46,11 @@ int UndoStep::id() const
 bool UndoStep::mergeWith(const QUndoCommand* command)
 {
 	const auto* next = dynamic_cast<const UndoStep*>(command);
+	// The step that comes says how long it still joins the one before: a
+	// window, or 0 for as long as its key is the same (the caller changes the
+	// key to end it, as an editor does when its cell is left).
 	if (!next || mergeKey_.isEmpty() || next->mergeKey_ != mergeKey_ || next->at_ < at_ ||
-	    next->at_ - at_ > mergeWindowMs)
+	    (next->window_ > 0 && next->at_ - at_ > next->window_))
 		return false;
 	for (const auto& later : next->parts_) {
 		const auto found = std::find_if(parts_.begin(), parts_.end(), [&later](const UndoPart& part) {

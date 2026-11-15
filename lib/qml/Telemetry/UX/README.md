@@ -468,7 +468,10 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
   every step), `clean`, `count`. Methods `undo()`, `redo()`, `clear()`,
   `setClean()`, `noteIrreversible(words)`, `acknowledgeIrreversible()` and
   `sentence(text, undone, note, outcome)`, the words after an undo or a redo;
-  for C++ `record(text, parts, mergeKey)`, `refresh()` and `stack()`. Signals
+  for C++ `record(text, parts, mergeKey, mergeWindowMs)` (2000 unless said; 0
+  merges for as long as the key stays the same, the caller ending it by
+  changing the key, as an editor does when its cell is left), `refresh()` and
+  `stack()`. Signals
   `changed()`, `recorded(serial)` and `done(serial, text, undone, note,
   outcome)`, outcome `done`, `partial` or `skipped`. Never persisted.
 - **Files.** `FileContent.history` is the file's own: 1000 steps, emptied by a
