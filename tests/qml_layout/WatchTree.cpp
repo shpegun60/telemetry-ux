@@ -425,6 +425,15 @@ int main(int argc, char** argv)
 				click(window, named(content, "watchFormat_dec"));
 				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
 				CHECK(!fixture->property("canUndoWatch").toBool());
+				// A row in a form of its own is marked by the count, and the mark
+				// shows every value as Original (WL-3c).
+				CHECK(!named(content, "watchOwnFormats"));
+				fixture->setProperty("rowFormats", QVariantMap{{QStringLiteral("row1"), QStringLiteral("hex")}});
+				settle();
+				auto* mark = shown(content, "watchOwnFormats");
+				CHECK(mark->property("rows").toInt() == 1);
+				click(window, mark);
+				CHECK(formatIs("original") && ownFormats().isEmpty() && !named(content, "watchOwnFormats"));
 				// With everything Original there is nothing to reset.
 				click(window, named(content, "watchFormat_original"));
 				click(window, more);

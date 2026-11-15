@@ -76,6 +76,7 @@ ApplicationWindow {
             formatChanged()
             return true
         }
+        readonly property int watchOwnFormatCount: Object.values(rowFormats).filter(format => format !== watchFormat).length
         function watchFormatsDiffer() {
             return watchFormat !== "original" || Object.values(rowFormats).some(format => format !== "original")
         }

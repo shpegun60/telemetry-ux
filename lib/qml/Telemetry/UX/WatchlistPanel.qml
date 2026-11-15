@@ -427,8 +427,11 @@ Pane {
     readonly property real barBase: (fold.visible ? fold.implicitWidth + barGap : 0)
                                     + start.barWidth + barGap + interval.barWidth
                                     + 2 * barGap + more.implicitWidth
-    readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap : 0
-    readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap : 0
+    // The mark of rows in a form of their own keeps its room whether shown or
+    // not, so its coming and going moves nothing in the row.
+    readonly property real ownMarkWidth: formatsResettable ? ownFormats.implicitWidth + barGap : 0
+    readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap + ownMarkWidth : 0
+    readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap + ownMarkWidth : 0
     readonly property bool viewInBar: treeAvailable
                                       && availableWidth >= barBase + formatButtonWidth + viewSegments.implicitWidth + barGap
     readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0) + formatButtonWidth
@@ -810,6 +813,49 @@ Pane {
                         ToolTip.text: modelData.tip
                     }
                 }
+            }
+            // Rows shown in a form of their own, other than the Watchlist's
+            // (WL-3c): how many, and a press shows every value as Original.
+            Basic.ToolButton {
+                id: ownFormats
+                objectName: "watchOwnFormats"
+                readonly property int rows: typeof panel.provider.watchOwnFormatCount === "number"
+                                            ? panel.provider.watchOwnFormatCount : 0
+                visible: panel.formatsResettable && rows > 0
+                Layout.leftMargin: panel.barGap
+                Layout.preferredHeight: Type.controlHeight
+                Layout.preferredWidth: implicitWidth
+                FontMetrics { id: ownMetrics; font: ownFormats.font }
+                // As wide as the widest count it can show, so it never jumps.
+                implicitWidth: Math.ceil(ownMetrics.advanceWidth("\u25CF 9999")) + leftPadding + rightPadding
+                padding: Type.tight
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                text: "\u25CF " + rows
+                contentItem: Text {
+                    text: ownFormats.text
+                    font: ownFormats.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    color: ownFormats.hovered ? Theme.textPrimary : Theme.textSecondary
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: ownFormats.down ? Theme.statePressed : ownFormats.hovered ? Theme.stateHover : "transparent"
+                    border.width: ownFormats.visualFocus ? 2 : 0
+                    border.color: Theme.focusRing
+                }
+                onClicked: {
+                    // The mark goes with what it counted: the keys go to the list first.
+                    watchList.forceActiveFocus(Qt.OtherFocusReason)
+                    panel.resetFormats()
+                }
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("%Ln rows shown in a format of their own. Press to show every value as Original.", "", rows)
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("%Ln rows in a format of their own", "", rows)
+                Accessible.description: qsTr("Press to show every value as Original")
             }
             // Too narrow for three: one button showing the form, "Hex ▾", as
             // wide as its widest word.

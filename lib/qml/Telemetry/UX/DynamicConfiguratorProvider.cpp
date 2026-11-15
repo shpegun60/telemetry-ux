@@ -2180,6 +2180,16 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 	return done;
 }
 
+int DynamicConfiguratorProvider::watchOwnFormatCount() const
+{
+	const auto* model = qobject_cast<const WatchlistModel*>(d->watch.model());
+	int rows = 0;
+	for (int row = 0; model && row < model->count(); ++row)
+		if (const auto own = model->rowFormat(row); own && *own != d->watchFormat)
+			++rows;
+	return rows;
+}
+
 bool DynamicConfiguratorProvider::watchFormatsDiffer() const
 {
 	if (d->watchFormat != WatchNumberFormat::Original)

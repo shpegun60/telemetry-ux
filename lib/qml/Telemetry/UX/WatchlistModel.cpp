@@ -418,16 +418,27 @@ bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> form
 		return false;
 	if (format) {
 		pathFormats_.insert(rows_[row].name, *format);
-		// Bounded: the oldest unwatched paths give way first.
+		pathStamps_.insert(rows_[row].name, ++stamp_);
+		// Bounded: the paths not watched now give way, the longest unset first.
 		if (pathFormats_.size() > formatLimit) {
 			QSet<QString> watched;
 			for (int at = 0; at < count_; ++at)
 				watched.insert(rows_[at].name);
-			for (auto it = pathFormats_.begin(); it != pathFormats_.end() && pathFormats_.size() > formatLimit;)
-				it = watched.contains(it.key()) ? std::next(it) : pathFormats_.erase(it);
+			QVector<std::pair<quint64, QString>> unwatched;
+			for (auto it = pathFormats_.cbegin(); it != pathFormats_.cend(); ++it)
+				if (!watched.contains(it.key()))
+					unwatched.push_back({pathStamps_.value(it.key()), it.key()});
+			std::sort(unwatched.begin(), unwatched.end());
+			for (const auto& [stamp, path] : std::as_const(unwatched)) {
+				if (pathFormats_.size() <= formatLimit)
+					break;
+				pathFormats_.remove(path);
+				pathStamps_.remove(path);
+			}
 		}
 	} else {
 		pathFormats_.remove(rows_[row].name);
+		pathStamps_.remove(rows_[row].name);
 	}
 	if (rows_[row].format == format)
 		return true;
@@ -441,6 +452,13 @@ bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
 	if (changing_ || formats.size() > formatLimit)
 		return false;
 	pathFormats_ = std::move(formats);
+	// Formats put back all at once (a project) are as old as each other: in
+	// path order, so which give way first does not depend on a hash.
+	pathStamps_.clear();
+	QStringList paths = pathFormats_.keys();
+	std::sort(paths.begin(), paths.end());
+	for (const auto& path : std::as_const(paths))
+		pathStamps_.insert(path, ++stamp_);
 	for (int row = 0; row < count_; ++row) {
 		const auto remembered = pathFormats_.constFind(rows_[row].name);
 		rows_[row].format = remembered != pathFormats_.cend() ? std::optional(remembered.value()) : std::nullopt;

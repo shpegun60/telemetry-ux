@@ -195,6 +195,22 @@ void numberFormats()
 	CHECK(shown(0) == "7" && model.rowFormat(0) == WatchNumberFormat::Dec && !model.rowFormat(1));
 	// Not read yet: no form to show.
 	CHECK(shown(1).isEmpty());
+
+	// Past formatLimit the paths not watched now give way, the longest unset
+	// first (WL-3c); a watched row's format stays.
+	ux::WatchlistModel bounded;
+	CHECK(bounded.add(ux::WatchEntry::of(1, "kept.Watched")) && bounded.setRowFormat(0, WatchNumberFormat::Hex));
+	bool every = true;
+	for (int at = 0; at < ux::WatchlistModel::formatLimit && every; ++at) {
+		const quint64 id = quint64(at) + 2;
+		every = bounded.add(ux::WatchEntry::of(id, QStringLiteral("old.P%1").arg(at))) &&
+		        bounded.setRowFormat(1, WatchNumberFormat::Dec) && bounded.removeIds({id}).size() == 1;
+	}
+	CHECK(every);
+	const auto kept = bounded.pathFormats();
+	CHECK(kept.size() == ux::WatchlistModel::formatLimit && kept.value("kept.Watched") == WatchNumberFormat::Hex);
+	CHECK(!kept.contains("old.P0") && kept.contains("old.P1") &&
+	      kept.contains(QStringLiteral("old.P%1").arg(ux::WatchlistModel::formatLimit - 1)));
 }
 
 void typedEditors()
