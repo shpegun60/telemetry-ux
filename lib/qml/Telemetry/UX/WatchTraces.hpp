@@ -174,8 +174,9 @@ public:
 	// This PC's time of path's newest reading with a value, NaN when none.
 	Q_INVOKABLE double lastReadUtcMs(const QString& path) const;
 	// Why path cannot be plotted, or empty: a value whose readings are not a
-	// number, a bool or an enum (text).
-	[[nodiscard]] QString refusal(const QString& path) const;
+	// number, a bool or an enum (text). A drop passes such a value over and
+	// plots the rest.
+	Q_INVOKABLE QString refusal(const QString& path) const;
 
 Q_SIGNALS:
 	void appended();

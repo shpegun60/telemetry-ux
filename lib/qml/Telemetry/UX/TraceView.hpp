@@ -120,9 +120,10 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(QRectF plotArea READ plotArea NOTIFY drawn)
 	// The time at the right edge, ms since the epoch on this PC's clock.
 	Q_PROPERTY(qreal rightUtcMs READ rightUtcMs NOTIFY drawn)
-	// The time axis (LP-1h): the time of day, or the time since reading last
-	// started - the end of the last stop or disconnect before the right edge,
-	// else the first reading - whose time of day is originUtcMs.
+	// The time axis (LP-1h): the time of day, or the time since the start -
+	// the first reading of this run, or a recording's start (the anchor),
+	// one fixed moment whatever the view or a stop - whose time of day is
+	// originUtcMs.
 	Q_PROPERTY(bool fromStart READ fromStart WRITE setFromStart NOTIFY viewChanged)
 	// Box zoom and Back (analysis): Ctrl and a drag draw a box whose width
 	// becomes the time in view and whose height the values; every move of the
@@ -137,6 +138,14 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(qreal endX READ endX NOTIFY drawn)
 	Q_PROPERTY(bool boxShown READ boxShown NOTIFY cursorChanged)
 	Q_PROPERTY(qreal originUtcMs READ originUtcMs NOTIFY drawn)
+	// A chip's fill and height, as the Plot's own chips have them: the box's
+	// size is said on one, framed in referenceColor, in laneTextColor.
+	Q_PROPERTY(QColor chipColor READ chipColor WRITE setChipColor NOTIFY styleChanged)
+	Q_PROPERTY(qreal chipHeight READ chipHeight WRITE setChipHeight NOTIFY styleChanged)
+	// Where the last paint drew each time label and the box's size (item
+	// coordinates; an empty rect with no box), for its checks.
+	Q_PROPERTY(QVariantList timeLabelRects READ timeLabelRects NOTIFY drawn)
+	Q_PROPERTY(QRectF boxCaptionRect READ boxCaptionRect NOTIFY drawn)
 public:
 	explicit TraceView(QQuickItem* parent = nullptr);
 
@@ -216,6 +225,9 @@ public:
 	// number, or undefined when there is none or it brought none.
 	Q_INVOKABLE QVariant valueAt(const QString& path) const;
 	Q_INVOKABLE QVariant referenceValue(const QString& path) const;
+	// path's reading at or before the end pin, likewise; undefined while no
+	// end is pinned.
+	Q_INVOKABLE QVariant endValue(const QString& path) const;
 	QVariantList colors() const { return colors_; }
 	void setColors(const QVariantList& colors);
 	QColor gridColor() const { return gridColor_; }
@@ -254,10 +266,12 @@ public:
 	Q_INVOKABLE void putCursorAt(qreal utcMs);
 	// The cursor to the next (direction 1) or previous (-1) change of a state:
 	// the focused one's if it is a state, else any lane's (Ctrl+Right,
-	// Ctrl+Left). False, and findFailed says why, when there is none.
+	// Ctrl+Left). True, and changeFound; false, and findFailed says why,
+	// when there is none.
 	Q_INVOKABLE bool stepChange(int direction);
 	// The readings of every plotted value in the time in view, one row per
-	// reading time: "Time of day", "Seconds from start" and a column per
+	// reading time: "Time of day", "Seconds from start" (from originUtcMs, as
+	// the axis and the cursor's chip count them) and a column per
 	// path; a missing or failed read is an empty cell, a state is its word,
 	// a number is the reading (never k x value + b). For the clipboard (tabs,
 	// this PC's decimal sign) or a CSV file ("." and ","). readingsInRange
@@ -272,6 +286,12 @@ public:
 	Q_INVOKABLE void zoomToBox(QPointF from, QPointF to);
 	void setFromStart(bool fromStart);
 	qreal originUtcMs() const { return originUtcMs_; }
+	QColor chipColor() const { return chipColor_; }
+	void setChipColor(const QColor& color);
+	qreal chipHeight() const { return chipHeight_; }
+	void setChipHeight(qreal height);
+	QVariantList timeLabelRects() const { return timeLabelRects_; }
+	QRectF boxCaptionRect() const { return boxCaptionRect_; }
 
 	void paint(QPainter* painter) override;
 
@@ -287,8 +307,10 @@ protected:
 
 Q_SIGNALS:
 	void tracesChanged();
-	// A find that found nothing, in words for the host to say.
+	// A find that found nothing, in words for the host to say; one that found
+	// its change, so the host can take those words away.
 	void findFailed(const QString& words);
+	void changeFound();
 	void viewChanged();
 	void cursorChanged();
 	void styleChanged();
@@ -374,6 +396,10 @@ private:
 	std::pair<qint64, qint64> measuredNs() const;
 	QPointF boxFrom_, boxTo_;
 	qreal originUtcMs_ = 0;
+	QColor chipColor_{0x16, 0x1b, 0x22};
+	qreal chipHeight_ = 0;
+	QVariantList timeLabelRects_;
+	QRectF boxCaptionRect_;
 };
 } // namespace telemetry::ux
 #endif

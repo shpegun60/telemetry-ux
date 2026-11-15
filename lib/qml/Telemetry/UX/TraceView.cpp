@@ -592,6 +592,7 @@ bool TraceView::stepChange(int direction)
 		return false;
 	}
 	putCursorAt(utc(*found));
+	Q_EMIT changeFound();
 	return true;
 }
 
@@ -608,6 +609,15 @@ QVariant TraceView::referenceValue(const QString& path) const
 {
 	const auto it = referenceValues_.constFind(path);
 	return referenceShown_ && it != referenceValues_.cend() ? QVariant(*it) : QVariant();
+}
+
+QVariant TraceView::endValue(const QString& path) const
+{
+	if (!endShown_ || !traces_)
+		return {};
+	const auto* readings = traces_->readings(path);
+	const auto* at = readings ? atOrBefore(*readings, endNs_) : nullptr;
+	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
 }
 
 void TraceView::hoverMoveEvent(QHoverEvent* event)
@@ -783,7 +793,7 @@ QString TraceView::valuesText(bool csv) const
 		const auto ns = rows.times[row];
 		const auto utc = double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6;
 		QStringList fields{QDateTime::fromMSecsSinceEpoch(qint64(utc)).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
-		                   locale.toString(double(ns - rows.times.front()) / 1e9, 'f', 3)};
+		                   locale.toString(double(ns - anchor.monotonicNs) / 1e9, 'f', 3)};
 		for (int column = 0; column < paths.size(); ++column) {
 			const auto& value = rows.cells[std::size_t(column)][row];
 			if (!value) {
@@ -891,6 +901,25 @@ void TraceView::setFromStart(bool fromStart)
 		return;
 	fromStart_ = fromStart;
 	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::setChipColor(const QColor& color)
+{
+	if (color == chipColor_)
+		return;
+	chipColor_ = color;
+	Q_EMIT styleChanged();
+	update();
+}
+
+void TraceView::setChipHeight(qreal height)
+{
+	height = std::max<qreal>(0, height);
+	if (qFuzzyCompare(height + 1, chipHeight_ + 1))
+		return;
+	chipHeight_ = height;
+	Q_EMIT styleChanged();
 	update();
 }
 
@@ -1370,16 +1399,25 @@ void TraceView::paint(QPainter* painter)
 			break;
 		}
 	QStringList timeLabels;
-	// Since reading last started: the end of the last stop or disconnect up
-	// to the right edge, else the first reading.
-	qint64 originNs = anchor.monotonicNs;
-	if (traces_)
-		for (auto pause = traces_->pauses().crbegin(); pause != traces_->pauses().crend(); ++pause)
-			if (pause->toNs && pause->toNs <= right) {
-				originNs = pause->toNs;
-				break;
-			}
-	originUtcMs_ = anchor.monotonicNs ? qreal(utcOf(originNs)) : 0;
+	QVariantList timeLabelRects;
+	// A label under its tick, drawn only whole: one the edge would cut reads
+	// as another time ("14:14:4"). Its grid line stays either way.
+	const auto timeLabel = [&](qreal x, const QString& text, const QString& widest) {
+		const qreal w = metrics.horizontalAdvance(widest) + pad;
+		if (x - w / 2 < 0 || x + w / 2 > width())
+			return;
+		const QRectF box(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2);
+		timeLabels.push_back(text);
+		timeLabelRects.push_back(box);
+		painter->setPen(labelColor_);
+		painter->drawText(box, Qt::AlignHCenter | Qt::AlignTop, text);
+	};
+	// From the start: the first reading of this run, or a recording's start -
+	// the anchor, so a reading has one time from start in every view, across
+	// any stop, in the CSV as on the axis.
+	const qint64 originNs = anchor.monotonicNs;
+	originUtcMs_ = anchor.monotonicNs ? qreal(anchor.utcMs) : 0;
+	int ticks = 0;
 	if (anchor.monotonicNs && fromStart_) {
 		const double leftMs = double(left - originNs) / double(msNs), rightMs = double(right - originNs) / double(msNs);
 		for (qint64 at = qint64(std::ceil(leftMs / double(timeStep))) * timeStep; double(at) <= rightMs; at += timeStep) {
@@ -1387,12 +1425,8 @@ void TraceView::paint(QPainter* painter)
 			painter->setPen(grid);
 			painter->drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
 			const auto text = elapsedText(at, timeStep);
-			timeLabels.push_back(text);
-			painter->setPen(labelColor_);
-			const qreal w = metrics.horizontalAdvance(text) + pad;
-			painter->drawText(QRectF(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2),
-			                  Qt::AlignHCenter | Qt::AlignTop, text);
-			if (timeLabels.size() > 400)
+			timeLabel(x, text, text);
+			if (++ticks > 400)
 				break;
 		}
 	} else if (anchor.monotonicNs) {
@@ -1409,12 +1443,8 @@ void TraceView::paint(QPainter* painter)
 				text += QLatin1Char('\n') +
 				        QLocale().toString(QDateTime::fromMSecsSinceEpoch(local - offsetMs).date(), QStringLiteral("d MMM"));
 			previousDay = day;
-			timeLabels.push_back(text);
-			painter->setPen(labelColor_);
-			const qreal w = metrics.horizontalAdvance(text.section(QLatin1Char('\n'), 0, 0)) + pad;
-			painter->drawText(QRectF(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2),
-			                  Qt::AlignHCenter | Qt::AlignTop, text);
-			if (timeLabels.size() > 400)
+			timeLabel(x, text, text.section(QLatin1Char('\n'), 0, 0));
+			if (++ticks > 400)
 				break;
 		}
 	}
@@ -1706,18 +1736,20 @@ void TraceView::paint(QPainter* painter)
 	}
 	painter->restore();
 
-	const bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
-	                     raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_ ||
-	                     laneLabels != laneLabels_ || laneStates != laneStates_;
+	bool changed = timeLabels != timeLabels_ || valueLabels != valueLabels_ || points != drawnPoints_ ||
+	               raw != rawCurves_ || curves != drawnCurves_ || area != plotArea_ ||
+	               laneLabels != laneLabels_ || laneStates != laneStates_ || timeLabelRects != timeLabelRects_;
 	laneLabels_ = laneLabels;
 	laneStates_ = laneStates;
 	timeLabels_ = timeLabels;
+	timeLabelRects_ = timeLabelRects;
 	valueLabels_ = valueLabels;
 	drawnPoints_ = points;
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
 	// The box being drawn (Ctrl and a drag): its frame, and its size in time
 	// and values.
+	QRectF boxCaption;
 	if (boxing_) {
 		const QRectF box = QRectF(boxFrom_, boxTo_).normalized().intersected(area);
 		painter->save();
@@ -1734,11 +1766,38 @@ void TraceView::paint(QPainter* painter)
 		if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0)
 			size += QStringLiteral(" × ") +
 			        QString::number((shown_.high - shown_.low) * box.height() / valuesArea_.height(), 'g', 3);
-		painter->setPen(labelColor_);
+		// On a chip, as the cursor's time is: framed in the reference colour,
+		// at the corner under the pointer - outside the box where it fits,
+		// always inside the plot area - where the eye already is.
 		painter->setFont(font_);
-		painter->drawText(box.adjusted(pad / 2, pad / 2, -pad / 2, -pad / 2), Qt::AlignRight | Qt::AlignTop, size);
+		const qreal w = metrics.horizontalAdvance(size) + pad, h = chipHeight_ > 0 ? chipHeight_ : metrics.height() + pad / 2;
+		const QPointF corner(std::clamp(boxTo_.x(), area.left(), area.right()), std::clamp(boxTo_.y(), area.top(), area.bottom()));
+		const bool rightward = boxTo_.x() >= boxFrom_.x(), downward = boxTo_.y() >= boxFrom_.y();
+		const qreal gap = pad / 2;
+		const qreal outX = rightward ? corner.x() + gap : corner.x() - gap - w, inX = rightward ? corner.x() - w : corner.x();
+		const qreal outY = downward ? corner.y() + gap : corner.y() - gap - h, inY = downward ? corner.y() - h : corner.y();
+		QPointF at(inX, inY);
+		for (const QPointF place : {QPointF(outX, outY), QPointF(inX, outY), QPointF(outX, inY)})
+			if (place.x() >= area.left() && place.x() + w <= area.right() && place.y() >= area.top() && place.y() + h <= area.bottom()) {
+				at = place;
+				break;
+			}
+		at = QPointF(std::clamp(at.x(), area.left(), std::max(area.left(), area.right() - w)),
+		             std::clamp(at.y(), area.top(), std::max(area.top(), area.bottom() - h)));
+		const QRectF chip(at, QSizeF(w, h));
+		QPen edge(referenceColor_, 1);
+		edge.setCosmetic(true);
+		painter->setPen(edge);
+		painter->setBrush(chipColor_);
+		// Type.radius.
+		painter->drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+		painter->setPen(laneTextColor_);
+		painter->drawText(chip, Qt::AlignCenter, size);
 		painter->restore();
+		boxCaption = chip;
 	}
+	changed = changed || boxCaption != boxCaptionRect_;
+	boxCaptionRect_ = boxCaption;
 	plotArea_ = area;
 	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;
@@ -1750,7 +1809,8 @@ void TraceView::paint(QPainter* painter)
 	const qreal behind = !following_ && newest > right ? qreal(newest - right) / 1e9 : 0;
 	const bool behindChanged = !qFuzzyCompare(behind + 1, behindSeconds_ + 1);
 	behindSeconds_ = behind;
-	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2);
+	const bool linesMoved = !qFuzzyCompare(cursorX + 2, cursorX_ + 2) || !qFuzzyCompare(referenceX + 2, referenceX_ + 2) ||
+	                        !qFuzzyCompare(endX + 2, endX_ + 2);
 	cursorX_ = cursorX;
 	referenceX_ = referenceX;
 	endX_ = endX;

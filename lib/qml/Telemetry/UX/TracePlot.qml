@@ -49,24 +49,52 @@ FocusScope {
         }
         return stats.shares.slice(0, 4).map(s => s.name + " " + percentText(s.share)).join(" · ") + " · " + changes
     }
-    // What the last drop, copy, save or find did, until the next one or ×.
+    // What the last drop, copy, save or find did. "Copied …", "Saved …" and
+    // a find that found nothing leave after 5 s, and a find that found its
+    // change takes a find's words away; a refusal, and a file that could not
+    // be written, stay until ×.
     property string notice: ""
+    // How the notice leaves: "done" and "find" after 5 s, "refusal" by ×.
+    property string noticeKind: ""
+    function tell(words, kind) {
+        noticeKind = kind
+        notice = words
+        noticeTimer.restart()
+    }
+    // One timer, started again by every notice.
+    Timer {
+        id: noticeTimer
+        interval: 5000
+        onTriggered: {
+            if (plot.noticeKind !== "refusal")
+                plot.notice = ""
+        }
+    }
     Connections {
         target: view
-        function onFindFailed(words) { plot.notice = words }
+        function onFindFailed(words) { plot.tell(words, "find") }
+        function onChangeFound() {
+            if (plot.noticeKind === "find")
+                plot.notice = ""
+        }
     }
-    // The Plot as shown, onto the clipboard.
+    // The graph with its table or chips, as shown, onto the clipboard: not
+    // the toolbar, the notice or the pointer's cursor; the reference, the
+    // end and their chips stay.
     function copyPicture() {
-        plot.grabToImage(result => {
-            plot.notice = Clipboard.setImage(result.image) ? qsTr("Copied the picture.")
-                                                           : qsTr("The picture could not be copied.")
+        view.hideCursor()
+        plotPicture.grabToImage(result => {
+            if (Clipboard.setImage(result.image))
+                plot.tell(qsTr("Copied the picture."), "done")
+            else
+                plot.tell(qsTr("The picture could not be copied."), "refusal")
         })
     }
     // The readings in view, for a spreadsheet: tabs, this PC's decimal sign.
     function copyValues() {
         const readings = view.readingsInRange()
         Clipboard.setText(view.valuesText(false))
-        notice = qsTr("Copied %L1 readings of %L2 values.").arg(readings).arg(plotted.length)
+        tell(qsTr("Copied %L1 readings of %L2 values.").arg(readings).arg(plotted.length), "done")
     }
     // "plot 2026-11-15 12-04-31.csv"
     function csvName() {
@@ -76,7 +104,10 @@ FocusScope {
         const readings = view.readingsInRange()
         const why = view.saveValues(url)
         const name = String(url).replace(/^.*[\\/]/, "")
-        notice = why.length > 0 ? why : qsTr("Saved %L1 readings of %L2 values to %3.").arg(readings).arg(plotted.length).arg(name)
+        if (why.length > 0)
+            tell(why, "refusal")
+        else
+            tell(qsTr("Saved %L1 readings of %L2 values to %3.").arg(readings).arg(plotted.length).arg(name), "done")
         return why.length === 0
     }
     FileDialog {
@@ -99,7 +130,7 @@ FocusScope {
         let values = dropped
         if (payload.from === "device") {
             if (!provider || typeof provider.addWatchPaths !== "function" || typeof provider.watchBindings !== "function") {
-                notice = qsTr("Add these to the Watchlist first; the Plot draws what the Watchlist reads.")
+                tell(qsTr("Add these to the Watchlist first; the Plot draws what the Watchlist reads."), "refusal")
                 return false
             }
             provider.addWatchPaths(dropped)
@@ -112,21 +143,39 @@ FocusScope {
                     values.push(path)
             }
         }
-        let added = 0, refusal = ""
-        for (const path of values) {
-            if (traces.isPlotted(path))
-                continue
-            refusal = traces.plot(path)
-            if (refusal.length > 0)
-                break
-            ++added
-        }
-        notice = refusal.length > 0 ? refusal
-               : values.length === 0 ? qsTr("Nothing here can be plotted: the Plot draws values the Watchlist reads.")
-               : added === 0 ? (values.length === 1 ? qsTr("%1 is on the Plot already.").arg(values[0])
-                                                    : qsTr("These %L1 values are on the Plot already.").arg(values.length))
-               : ""
+        // Text is passed over and counted; the rest go on as one step of the
+        // history, and only the Plot's sixteen curves end them.
+        const fresh = values.filter(path => !traces.isPlotted(path))
+        const texts = fresh.filter(path => traces.refusal(path).length > 0).length
+        const result = traces.plotMany(fresh.filter(path => traces.refusal(path).length === 0))
+        const added = result.added, refusal = result.refusal
+        const textWords = texts === 0 ? ""
+                        : values.length === 1 ? traces.refusal(values[0])
+                        : texts === 1 ? qsTr("1 of %L1 values is text and was not plotted.").arg(values.length)
+                        : qsTr("%L1 of %L2 values are text and were not plotted.").arg(texts).arg(values.length)
+        const words = [refusal, textWords].filter(part => part.length > 0).join(" ")
+        if (words.length > 0)
+            tell(words, "refusal")
+        else if (values.length === 0)
+            tell(qsTr("Nothing here can be plotted: the Plot draws values the Watchlist reads."), "refusal")
+        else if (added === 0)
+            tell(values.length === 1 ? qsTr("%1 is on the Plot already.").arg(values[0])
+                                     : qsTr("These %L1 values are on the Plot already.").arg(values.length), "refusal")
+        else
+            notice = ""
         return added > 0
+    }
+    // What a drop will do, said while a drag is over the Plot. A Device tree
+    // branch joins the Watchlist whole - often more than the sixteen curves
+    // the Plot draws - so it says so.
+    function dropWords(payload) {
+        const paths = payload && payload.paths ? Array.from(payload.paths) : []
+        if (paths.length === 0)
+            return ""
+        if (payload.from === "device")
+            return paths.length === 1 ? qsTr("Drop to add %1 to the Watchlist and plot it").arg(paths[0])
+                                      : qsTr("Drop to add %L1 to the Watchlist and plot them").arg(paths.length)
+        return paths.length === 1 ? qsTr("Drop to plot %1").arg(paths[0]) : qsTr("Drop to plot %L1 values").arg(paths.length)
     }
     // The curves' colours, by palette place (WatchTraces.colorIndex).
     property var curveColors: ["#58a6ff", "#f3b562", "#56c8a0", "#d49bff", "#ff7e8f", "#62d4e6", "#d8ce67", "#a3b8cc",
@@ -233,6 +282,43 @@ FocusScope {
             return "–"
         const text = valueText(Math.abs(value))
         return (value < 0 ? "−" : "+") + text
+    }
+    // The decimals a number's text shows: "4.95" 2, "−100" 0; -1 for one in
+    // powers of ten ("1e-7") or none ("–").
+    function decimalsOf(text) {
+        if (!/^[−-]?\d+(\.\d+)?$/.test(text))
+            return -1
+        const at = text.indexOf(".")
+        return at < 0 ? 0 : text.length - at - 1
+    }
+    // value to so many decimals, with the typographic minus and never "−0.0".
+    function fixedText(value, decimals) {
+        if (value === undefined || value === null || isNaN(value))
+            return "–"
+        let text = value.toFixed(decimals)
+        if (Number(text) === 0)
+            text = text.replace("-", "")
+        return text.startsWith("-") ? "−" + text.substring(1) : text
+    }
+    // Where a chip of width w for the line at lineX sits under the axis:
+    // centred on its line, else beside a chip it would cover, 4 px apart -
+    // the free place nearest the centre.
+    function chipX(lineX, w, bound, others) {
+        const centred = Math.max(0, Math.min(bound - w, lineX - w / 2))
+        const gap = 4
+        const shown = others.filter(other => other.visible)
+        const free = at => at >= 0 && at + w <= bound
+                           && shown.every(other => at + w + gap <= other.x || at >= other.x + other.width + gap)
+        if (free(centred))
+            return centred
+        let best = centred, distance = Infinity
+        for (const other of shown)
+            for (const at of [other.x + other.width + gap, other.x - w - gap])
+                if (free(at) && Math.abs(at - centred) < distance) {
+                    best = at
+                    distance = Math.abs(at - centred)
+                }
+        return best
     }
     function valueText(value) {
         if (value === undefined || value === null || isNaN(value))
@@ -343,19 +429,19 @@ FocusScope {
                 onClicked: view.goBack()
             }
             Item { Layout.fillWidth: true }
-            Basic.Button {
+            // A segment as the spans are: filled while on, the header's height.
+            Button {
                 id: measureToggle
                 objectName: "plotMeasureToggle"
                 visible: plot.plotted.length > 0
+                Layout.preferredHeight: Type.controlHeight
+                verticalPadding: 0
+                font.pointSize: Type.caption
                 text: qsTr("Measure")
                 checkable: true
                 checked: plot.measuring
                 flat: !checked
                 focusPolicy: Qt.TabFocus
-                font.pointSize: Type.caption
-                padding: Type.tight
-                leftPadding: Type.padding
-                rightPadding: Type.padding
                 onToggled: plot.measuring = checked
                 ToolTip.visible: hovered || visualFocus
                 ToolTip.delay: 700
@@ -394,725 +480,928 @@ FocusScope {
                 onClicked: plot.notice = ""
             }
         }
-        // A chip per plotted value: its colour, its path, its newest reading,
-        // and × to take it off the Plot (its readings are kept).
-        // The measurements: what range, then a row per curve.
+        // What Copy picture takes: the table or the chips, and the graph.
         ColumnLayout {
-            id: measureTable
-            objectName: "plotMeasure"
-            visible: plot.measuring && plot.plotted.length > 0
-            Layout.fillWidth: true
-            Layout.leftMargin: Type.padding
-            Layout.rightMargin: Type.padding
-            spacing: 0
-            readonly property var range: {
-                plot.shownTick
-                view.cursorShown
-                view.referenceShown
-                view.endShown
-                return measureTable.visible ? view.measureRange() : ({})
-            }
-            readonly property real cell: Math.max(valueCell.advanceWidth, headerCell.advanceWidth) + Type.spacing
-            readonly property bool narrow: width < 640
-            TextMetrics { id: valueCell; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "−0.000000" }
-            TextMetrics { id: headerCell; font.pointSize: Type.caption; text: qsTr("At cursor") }
-            Label {
-                objectName: "plotMeasureRange"
-                Layout.fillWidth: true
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                color: Theme.textSecondary
-                font.pointSize: Type.caption
-                text: !measureTable.range.toUtcMs ? ""
-                    : (measureTable.range.pinned ? qsTr("Reference to end") : qsTr("In view")) + " · "
-                      + plot.clockText(measureTable.range.fromUtcMs) + " – " + plot.clockText(measureTable.range.toUtcMs) + " · "
-                      + plot.spanText(measureTable.range.seconds * 1000) + " · "
-                      + qsTr("%L1 readings").arg(measureTable.range.readings)
-            }
-            // The column titles.
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 0
-                Item { Layout.preferredWidth: Type.chipHeight }
-                Text { Layout.fillWidth: true; text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption }
-                Repeater {
-                    model: [view.cursorShown ? qsTr("At cursor") : qsTr("Newest"), "Δ", qsTr("Min"), qsTr("Max"),
-                            qsTr("Mean"), qsTr("Pk-pk"), qsTr("Std dev")].slice(0, measureTable.narrow ? 5 : 7)
-                    delegate: Text {
-                        required property string modelData
-                        Layout.preferredWidth: measureTable.cell
-                        horizontalAlignment: Text.AlignRight
-                        text: modelData
-                        color: Theme.textSecondary
-                        font.pointSize: Type.caption
-                    }
-                }
-                Item { Layout.preferredWidth: Type.chipHeight }
-            }
-            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.outlineVariant }
-            Repeater {
-                model: plot.plotted
-                delegate: Rectangle {
-                    id: measureRow
-                    required property string modelData
-                    required property int index
-                    objectName: "plotMeasureRow"
-                    readonly property string path: modelData
-                    readonly property bool states: plot.traces ? plot.traces.categorical(path) : false
-                    readonly property var stats: {
-                        plot.shownTick
-                        measureTable.range
-                        return measureTable.visible ? view.statistics(path) : ({})
-                    }
-                    readonly property var current: {
-                        plot.shownTick
-                        view.cursorUtcMs
-                        return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
-                    }
-                    readonly property var reference: { view.referenceShown; return view.referenceValue(path) }
-                    function number(value) { return plot.valueText(value) }
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Type.rowHeight
-                    color: index % 2 ? Theme.surfaceAlternate : "transparent"
-                    RowLayout {
-                        anchors.fill: parent
-                        spacing: 0
-                        Item {
-                            Layout.preferredWidth: Type.chipHeight
-                            Layout.fillHeight: true
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: Type.iconSize
-                                height: 2
-                                color: { plot.traces ? plot.traces.appearanceRevision : 0; return view.curveColor(measureRow.path) }
-                            }
-                            TapHandler { onTapped: curveSettings.openFor(measureRow.path) }
-                        }
-                        Text {
-                            objectName: "plotMeasureName"
-                            Layout.fillWidth: true
-                            text: measureRow.path
-                            elide: Text.ElideMiddle
-                            color: Theme.textPrimary
-                            font.pointSize: Type.caption
-                            TapHandler { onTapped: view.focusedPath = view.focusedPath === measureRow.path ? "" : measureRow.path }
-                        }
-                        // A state: its share of the time and its changes, over
-                        // the statistics' columns.
-                        Text {
-                            objectName: "plotMeasureShares"
-                            visible: measureRow.states
-                            Layout.preferredWidth: measureTable.cell * (measureTable.narrow ? 5 : 7)
-                            horizontalAlignment: Text.AlignRight
-                            elide: Text.ElideRight
-                            text: plot.sharesText(measureRow.stats)
-                            color: Theme.textPrimary
-                            font.pointSize: Type.caption
-                        }
-                        Repeater {
-                            model: measureRow.states ? [] : [
-                                {key: "now", text: measureRow.number(measureRow.current)},
-                                {key: "delta", text: measureRow.reference === undefined || measureRow.current === undefined ? ""
-                                                     : plot.deltaText(measureRow.current - measureRow.reference)},
-                                {key: "min", text: measureRow.number(measureRow.stats.min), at: measureRow.stats.minUtcMs},
-                                {key: "max", text: measureRow.number(measureRow.stats.max), at: measureRow.stats.maxUtcMs},
-                                {key: "mean", text: measureRow.number(measureRow.stats.mean)},
-                                {key: "pkpk", text: measureRow.number(measureRow.stats.peakToPeak)},
-                                {key: "std", text: measureRow.number(measureRow.stats.deviation)}].slice(0, measureTable.narrow ? 5 : 7)
-                            delegate: Text {
-                                id: statCell
-                                required property var modelData
-                                objectName: "plotMeasure_" + modelData.key
-                                Layout.preferredWidth: measureTable.cell
-                                horizontalAlignment: Text.AlignRight
-                                text: modelData.text
-                                textFormat: Text.PlainText
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.caption
-                                font.underline: modelData.at !== undefined && extremeHover.hovered
-                                color: modelData.at !== undefined && extremeHover.hovered ? Theme.accent : Theme.textPrimary
-                                // Min and Max: a click puts the cursor on that reading.
-                                HoverHandler { id: extremeHover; enabled: statCell.modelData.at !== undefined }
-                                TapHandler {
-                                    enabled: statCell.modelData.at !== undefined
-                                    onTapped: view.putCursorAt(statCell.modelData.at)
-                                }
-                            }
-                        }
-                        ToolButton {
-                            Layout.preferredWidth: Type.chipHeight
-                            Layout.preferredHeight: Type.rowHeight
-                            padding: 0
-                            flat: true
-                            focusPolicy: Qt.TabFocus
-                            text: qsTr("×")
-                            Accessible.name: qsTr("Remove %1 from the Plot").arg(measureRow.path)
-                            onClicked: plot.traces.unplot(measureRow.path)
-                        }
-                    }
-                    TapHandler {
-                        acceptedButtons: Qt.RightButton
-                        onTapped: chipMenu.openFor(measureRow.path)
-                    }
-                    Accessible.role: Accessible.Row
-                    Accessible.name: measureRow.states ? qsTr("%1, %2").arg(measureRow.path).arg(plot.sharesText(measureRow.stats))
-                        : qsTr("%1: minimum %2, maximum %3, mean %4, peak to peak %5, standard deviation %6")
-                            .arg(measureRow.path).arg(measureRow.number(measureRow.stats.min)).arg(measureRow.number(measureRow.stats.max))
-                            .arg(measureRow.number(measureRow.stats.mean)).arg(measureRow.number(measureRow.stats.peakToPeak))
-                            .arg(measureRow.number(measureRow.stats.deviation))
-                }
-            }
-        }
-        Flow {
-            id: legend
-            objectName: "plotLegend"
-            Layout.fillWidth: true
-            Layout.leftMargin: Type.padding
-            Layout.rightMargin: Type.padding
-            spacing: Type.spacing
-            visible: plot.plotted.length > 0 && !plot.measuring
-            Repeater {
-                model: plot.plotted
-                delegate: Rectangle {
-                    id: chip
-                    required property string modelData
-                    required property int index
-                    objectName: "plotChip"
-                    readonly property string path: modelData
-                    readonly property color curve: {
-                        plot.traces ? plot.traces.appearanceRevision : 0
-                        return view.curveColor(path)
-                    }
-                    readonly property string drawnAs: {
-                        plot.traces ? plot.traces.appearanceRevision : 0
-                        return plot.traces ? plot.transformText(plot.traces.multiplier(path), plot.traces.offset(path)) : ""
-                    }
-                    // Its newest reading; its reading at the cursor while the
-                    // cursor is shown.
-                    readonly property var current: {
-                        plot.shownTick
-                        view.cursorUtcMs
-                        if (!plot.traces)
-                            return undefined
-                        return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
-                    }
-                    // Taken out of the Watchlist: its readings stay, none come.
-                    readonly property bool gone: {
-                        plot.shownTick
-                        return plot.traces !== null && !plot.traces.watched(path)
-                    }
-                    readonly property string goneText: {
-                        if (!gone || plot.cursorInView)
-                            return ""
-                        const at = plot.traces.lastReadUtcMs(path)
-                        return isNaN(at) ? qsTr("not read") : qsTr("not read since %1").arg(Qt.formatTime(new Date(at), "HH:mm:ss"))
-                    }
-                    // A bool or an enum in words ("true", "Idle"), a number as one.
-                    readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
-                    readonly property string shown: words.length > 0 ? words : plot.valueText(current)
-                    // Its difference from the reference, once one is pinned.
-                    readonly property string delta: {
-                        // A state has no difference: a number does.
-                        if (!view.referenceShown || words.length > 0)
-                            return ""
-                        const reference = view.referenceValue(path)
-                        return reference === undefined || current === undefined ? "Δ –"
-                                                                                : "Δ " + plot.deltaText(current - reference)
-                    }
-                    readonly property bool focused: view.focusedPath === path
-                    implicitWidth: chipRow.implicitWidth + 2 * Type.padding
-                    implicitHeight: Type.controlHeight
-                    radius: Type.radius
-                    color: focused ? Theme.stateSelectedInactive : Theme.surface
-                    border.color: Theme.outlineVariant
-                    RowLayout {
-                        id: chipRow
-                        anchors.fill: parent
-                        anchors.leftMargin: Type.padding
-                        anchors.rightMargin: Type.tight
-                        spacing: Type.spacing
-                        ToolButton {
-                            id: curveMark
-                            objectName: "plotChipSettings"
-                            Layout.preferredWidth: Type.chipHeight
-                            Layout.preferredHeight: Type.chipHeight
-                            padding: 0
-                            flat: true
-                            focusPolicy: Qt.TabFocus
-                            Accessible.name: qsTr("Curve settings for %1").arg(chip.path)
-                            ToolTip.text: qsTr("Curve settings: color, multiplier and offset")
-                            ToolTip.visible: hovered || visualFocus
-                            ToolTip.delay: 700
-                            onClicked: curveSettings.openFor(chip.path)
-                            // The chip's menu from the keyboard.
-                            Keys.onPressed: (event) => {
-                                if (event.key === Qt.Key_Delete) {
-                                    plot.traces.unplot(chip.path)
-                                    event.accepted = true
-                                } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
-                                    chipMenu.path = chip.path
-                                    chipMenu.popup(curveMark, 0, curveMark.height)
-                                    event.accepted = true
-                                }
-                            }
-                            contentItem: Item {
-                                implicitWidth: Type.iconSize
-                                implicitHeight: Type.iconSize
-                                Rectangle {
-                                    anchors.centerIn: parent
-                                    width: parent.width
-                                    height: 2
-                                    color: chip.curve
-                                }
-                            }
-                        }
-                        Text {
-                            id: chipName
-                            objectName: "plotChipName"
-                            Layout.maximumWidth: Type.bodyPixels * 18
-                            textFormat: Text.PlainText
-                            elide: Text.ElideMiddle
-                            color: Theme.textPrimary
-                            font.pointSize: Type.body
-                            text: chip.path
-                            HoverHandler { id: nameHover }
-                            // A click focuses the curve: the values fit it.
-                            TapHandler {
-                                onTapped: view.focusedPath = chip.focused ? "" : chip.path
-                            }
-                            PlainToolTip {
-                                visible: nameHover.hovered
-                                text: chip.focused ? qsTr("%1. Click to fit the values to every curve again.").arg(chip.path)
-                                                   : qsTr("%1. Click to fit the values to this curve.").arg(chip.path)
-                                delay: 700
-                            }
-                        }
-                        // Drawn as other than read: says how, in the warning
-                        // colour, so the line is never read as the value.
-                        Rectangle {
-                            objectName: "plotChipTransform"
-                            visible: chip.drawnAs.length > 0
-                            Layout.preferredWidth: transformText.implicitWidth + 2 * Type.tight
-                            Layout.preferredHeight: Type.chipHeight - 2
-                            radius: Type.radius
-                            color: "transparent"
-                            border.color: Theme.warning
-                            Text {
-                                id: transformText
-                                anchors.centerIn: parent
-                                textFormat: Text.PlainText
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.caption
-                                color: Theme.warning
-                                text: chip.drawnAs
-                            }
-                        }
-                        Text {
-                            objectName: "plotChipValue"
-                            Layout.minimumWidth: valueWidth.advanceWidth
-                            horizontalAlignment: Text.AlignRight
-                            textFormat: Text.PlainText
-                            color: chip.goneText.length > 0 ? Theme.textMuted : Theme.textPrimary
-                            font.family: Type.fixedFamily
-                            font.pointSize: Type.body
-                            text: chip.goneText.length > 0 ? chip.goneText : chip.shown
-                            TextMetrics {
-                                id: valueWidth
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.body
-                                text: "-0.000000"
-                            }
-                        }
-                        Text {
-                            objectName: "plotChipDelta"
-                            visible: chip.delta.length > 0
-                            // As wide as a long difference from the moment a
-                            // reference is pinned, so the legend never re-wraps.
-                            Layout.minimumWidth: deltaWidth.advanceWidth
-                            TextMetrics {
-                                id: deltaWidth
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.caption
-                                text: "Δ −0.000000"
-                            }
-                            textFormat: Text.PlainText
-                            color: Theme.textSecondary
-                            font.family: Type.fixedFamily
-                            font.pointSize: Type.caption
-                            text: chip.delta
-                        }
-                        ToolButton {
-                            objectName: "plotChipRemove"
-                            Layout.preferredWidth: Type.chipHeight
-                            Layout.preferredHeight: Type.chipHeight
-                            flat: true
-                            padding: 0
-                            focusPolicy: Qt.TabFocus
-                            text: qsTr("×")
-                            Accessible.name: qsTr("Remove %1 from the Plot").arg(chip.path)
-                            Accessible.description: qsTr("Its readings are kept.")
-                            ToolTip.visible: hovered || visualFocus
-                            ToolTip.text: qsTr("Remove from the Plot; its readings are kept")
-                            onClicked: plot.traces.unplot(chip.path)
-                        }
-                    }
-                    // Its menu: right-click, or the Menu key on its settings.
-                    TapHandler {
-                        acceptedButtons: Qt.RightButton
-                        onTapped: chipMenu.openFor(chip.path)
-                    }
-                    Accessible.role: Accessible.StaticText
-                    Accessible.description: chip.drawnAs.length > 0 ? qsTr("Drawn %1; the value is the reading").arg(chip.drawnAs) : ""
-                    Accessible.name: plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
-                                                      : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
-                }
-            }
-        }
-
-        Item {
+            id: plotPicture
+            objectName: "plotPicture"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            TraceView {
-                id: view
-                objectName: "plotView"
-                anchors.fill: parent
-                traces: plot.traces
-                colors: plot.curveColors
-                gridColor: Theme.outlineVariant
-                labelColor: Theme.textSecondary
-                cursorColor: Theme.textMuted
-                // A row of its own under the time labels for the chips.
-                bottomInset: Type.chipHeight + Type.tight
-                // A bool's or an enum's lane, a row high.
-                laneHeight: Type.rowHeight
-                laneFillColor: Theme.neutralContainer
-                laneTextColor: Theme.textPrimary
-                gapColor: Theme.surfaceAlternate
-                referenceColor: Theme.info
-                dotRingColor: Theme.surfaceWindow
-                font.family: Type.fixedFamily
-                font.pointSize: Type.caption
-                visible: plot.plotted.length > 0 && !plot.waiting
-                // The graph's menu from the keyboard.
-                Keys.onPressed: (event) => {
-                    if (event.key === Qt.Key_M && event.modifiers === Qt.NoModifier) {
-                        plot.measuring = !plot.measuring
-                        event.accepted = true
-                        return
+            spacing: Type.spacing
+
+            // The measurements: what range, then a row per curve.
+            ColumnLayout {
+                id: measureTable
+                objectName: "plotMeasure"
+                visible: plot.measuring && plot.plotted.length > 0
+                Layout.fillWidth: true
+                Layout.leftMargin: Type.padding
+                Layout.rightMargin: Type.padding
+                spacing: 0
+                readonly property var range: {
+                    plot.shownTick
+                    view.cursorShown
+                    view.referenceShown
+                    view.endShown
+                    return measureTable.visible ? view.measureRange() : ({})
+                }
+                readonly property real cell: Math.max(valueCell.advanceWidth, headerCell.advanceWidth) + Type.spacing
+                // The Name column keeps nine characters of the body at the least:
+                // all seven figures when they fit beside it, else five, else three.
+                readonly property real nameWidth: Type.bodyPixels * 9
+                // The scroll bar's room while the rows scroll.
+                readonly property real barRoom: measureRows.scrolls ? measureBar.width : 0
+                readonly property int columns: {
+                    const room = width - 2 * Type.chipHeight - Type.spacing - barRoom - nameWidth
+                    return room >= 7 * cell ? 7 : room >= 5 * cell ? 5 : 3
+                }
+                // The figures shown, in order; a row's tooltip gives the others.
+                readonly property var keys: columns === 7 ? ["now", "delta", "min", "max", "mean", "pkpk", "std"]
+                                          : columns === 5 ? ["now", "delta", "min", "max", "mean"] : ["now", "min", "max"]
+                // The cells a state's shares span: every figure after its reading
+                // and its empty Δ.
+                readonly property int sharesCells: columns - (keys.indexOf("delta") >= 0 ? 2 : 1)
+                // A column's title. The first says whose reading it is: the
+                // cursor's while the cursor is in view, else the end's while one is
+                // pinned, else the newest.
+                function title(key) {
+                    switch (key) {
+                    case "now":
+                        return plot.cursorInView ? qsTr("At cursor") : view.endShown ? qsTr("At end") : qsTr("Newest")
+                    case "delta":
+                        return "Δ"
+                    case "min":
+                        return qsTr("Min")
+                    case "max":
+                        return qsTr("Max")
+                    case "mean":
+                        return qsTr("Mean")
+                    case "pkpk":
+                        return qsTr("Pk-pk")
+                    default:
+                        return qsTr("Std dev")
                     }
-                    if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
-                        if (event.modifiers & Qt.ShiftModifier)
-                            plot.copyValues()
-                        else
-                            plot.copyPicture()
-                        event.accepted = true
-                        return
-                    }
-                    if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
-                        graphMenu.at = -1
-                        graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
-                        event.accepted = true
-                    }
                 }
-                Accessible.role: Accessible.Graphic
-                Accessible.name: {
-                    const state = view.following ? qsTr("following")
-                                                  : qsTr("%1 behind").arg(plot.behindWords(view.behindSeconds))
-                    return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
-                                                     : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
-                }
-                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again.")
-            }
-            // The keys are on the graph: the lists' focus frame round it.
-            Rectangle {
-                objectName: "plotFocus"
-                visible: view.visible && view.activeFocus
-                x: view.plotArea.x - 1
-                y: view.plotArea.y - 1
-                width: view.plotArea.width + 2
-                height: view.plotArea.height + 2
-                color: "transparent"
-                border.width: 2
-                border.color: Theme.focusRing
-                Accessible.ignored: true
-            }
-            // The graph's menu: right-click.
-            TapHandler {
-                acceptedButtons: Qt.RightButton
-                onTapped: (point) => {
-                    graphMenu.at = point.position.x
-                    graphMenu.popup()
-                }
-            }
-            // Values zoomed or panned by hand: a way back to fitting them.
-            Basic.Button {
-                id: autoValues
-                objectName: "plotAuto"
-                visible: view.visible && !view.valueAuto
-                x: view.valuesArea.left + Type.padding
-                y: view.valuesArea.top + Type.padding
-                height: Type.chipHeight
-                padding: Type.tight
-                leftPadding: Type.padding
-                rightPadding: Type.padding
-                focusPolicy: Qt.TabFocus
-                font.pointSize: Type.caption
-                text: qsTr("Auto (A)")
-                onClicked: view.autoValues()
-                Accessible.name: qsTr("Fit the values again")
-                Accessible.description: qsTr("A, or a double-click on the value labels")
-                contentItem: Text {
-                    text: autoValues.text
-                    font: autoValues.font
-                    color: Theme.textPrimary
-                    Accessible.ignored: true
-                }
-                background: Rectangle {
-                    radius: Type.radius
-                    color: autoValues.down ? Theme.statePressed : autoValues.hovered ? Theme.stateHover : Theme.surface
-                    border.width: autoValues.visualFocus ? 2 : 1
-                    border.color: autoValues.visualFocus ? Theme.focusRing : Theme.outline
-                }
-            }
-            // Fitted to one curve: says which, on a chip so it reads over
-            // the curves.
-            Rectangle {
-                objectName: "plotFittedChip"
-                visible: view.visible && view.valueAuto && view.focusedPath.length > 0
-                x: view.valuesArea.left + Type.padding
-                y: view.valuesArea.top + Type.padding
-                width: fitted.implicitWidth + 2 * Type.padding
-                height: Type.chipHeight
-                radius: Type.radius
-                color: Theme.surface
-                border.color: Theme.outlineVariant
+                TextMetrics { id: valueCell; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "−0.000000" }
+                TextMetrics { id: headerCell; font.pointSize: Type.caption; text: qsTr("At cursor") }
                 Label {
-                    id: fitted
-                    objectName: "plotFitted"
-                    anchors.centerIn: parent
+                    objectName: "plotMeasureRange"
+                    Layout.fillWidth: true
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
                     color: Theme.textSecondary
                     font.pointSize: Type.caption
-                    text: qsTr("Fitted to %1").arg(view.focusedPath)
+                    text: !measureTable.range.toUtcMs ? ""
+                        : (measureTable.range.pinned ? qsTr("Reference to end") : qsTr("In view")) + " · "
+                          + plot.clockText(measureTable.range.fromUtcMs) + " – " + plot.clockText(measureTable.range.toUtcMs) + " · "
+                          + plot.spanText(measureTable.range.seconds * 1000) + " · "
+                          + qsTr("%L1 readings").arg(measureTable.range.readings)
                 }
-            }
-            // The reference's time, under the axis where it is pinned.
-            Rectangle {
-                id: referenceChip
-                objectName: "plotReferenceChip"
-                visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
-                         && view.referenceX <= view.plotArea.right
-                width: referenceText.implicitWidth + 2 * Type.padding
-                height: Type.chipHeight
-                x: Math.max(0, Math.min(parent.width - width, view.referenceX - width / 2))
-                y: view.height - height
-                radius: Type.radius
-                color: Theme.infoContainer
-                border.color: Theme.info
-                Text {
-                    id: referenceText
-                    anchors.centerIn: parent
-                    textFormat: Text.PlainText
-                    font.family: Type.fixedFamily
-                    font.pointSize: Type.caption
-                    color: Theme.textPrimary
-                    text: plot.clockText(view.referenceUtcMs)
-                }
-                Accessible.role: Accessible.StaticText
-                Accessible.name: qsTr("Reference at %1").arg(referenceText.text)
-                Accessible.description: qsTr("Escape removes it.")
-            }
-            // The cursor's time under the axis: how long ago while following,
-            // the time since the reference once one is pinned.
-            Rectangle {
-                objectName: "plotCursorChip"
-                visible: view.visible && view.cursorShown && view.cursorX >= view.plotArea.left
-                         && view.cursorX <= view.plotArea.right
-                width: cursorText.implicitWidth + 2 * Type.padding
-                height: Type.chipHeight
-                // Centred on its line, but never over the reference's chip:
-                // beside it, 4 px apart, on the cursor's side.
-                x: {
-                    const centred = Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
-                    if (!referenceChip.visible)
-                        return centred
-                    const gap = 4
-                    if (centred + width + gap <= referenceChip.x || centred >= referenceChip.x + referenceChip.width + gap)
-                        return centred
-                    const after = referenceChip.x + referenceChip.width + gap
-                    const before = referenceChip.x - width - gap
-                    if (view.cursorX >= view.referenceX)
-                        return after + width <= parent.width ? after : Math.max(0, before)
-                    return before >= 0 ? before : Math.min(parent.width - width, after)
-                }
-                y: view.height - height
-                radius: Type.radius
-                color: Theme.surface
-                border.color: Theme.outline
-                Text {
-                    id: cursorText
-                    objectName: "plotCursorText"
-                    anchors.centerIn: parent
-                    textFormat: Text.PlainText
-                    font.family: Type.fixedFamily
-                    font.pointSize: Type.caption
-                    color: Theme.textPrimary
-                    text: {
-                        // From the start: the time since it, then the time of day.
-                        const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
-                                                                  .arg(plot.clockText(view.cursorUtcMs))
-                                                  : plot.clockText(view.cursorUtcMs)
-                        if (view.referenceShown)
-                            return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
-                        if (view.following)
-                            return qsTr("%1 · %2 ago").arg(at).arg(plot.agoText(view.cursorAgoSeconds))
-                        return at
-                    }
-                }
-                Accessible.role: Accessible.StaticText
-                Accessible.name: view.referenceShown
-                                 ? qsTr("Cursor at %1, %2 from the reference").arg(plot.clockText(view.cursorUtcMs))
-                                       .arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs))
-                                 : view.following ? qsTr("Cursor at %1, %2 seconds ago").arg(plot.clockText(view.cursorUtcMs))
-                                                        .arg(view.cursorAgoSeconds.toFixed(1))
-                                                  : qsTr("Cursor at %1").arg(plot.clockText(view.cursorUtcMs))
-            }
-            // Held: how far behind the newest reading, and a way back to it.
-            Basic.Button {
-                id: behind
-                objectName: "plotBehind"
-                visible: view.visible && !view.following
-                x: view.plotArea.right - width - Type.padding
-                y: view.plotArea.top + Type.padding
-                height: Type.chipHeight
-                padding: Type.tight
-                leftPadding: Type.padding
-                rightPadding: Type.padding
-                focusPolicy: Qt.TabFocus
-                font.pointSize: Type.caption
-                readonly property bool atNewest: view.behindSeconds < 0.5 || view.plotArea.width < 240
-                text: atNewest ? qsTr("Follow (End)")
-                               : qsTr("%1 behind · Follow (End)").arg(plot.behindText(view.behindSeconds))
-                Accessible.name: atNewest ? qsTr("Follow the newest readings")
-                                          : qsTr("%1 behind. Follow the newest readings").arg(plot.behindWords(view.behindSeconds))
-                Accessible.description: qsTr("End")
-                onClicked: view.follow()
-                // A chip over the plot, not a toolbar button: the time in the
-                // fixed face, the way back in the primary text colour.
-                contentItem: Row {
+                // The column titles.
+                RowLayout {
+                    Layout.fillWidth: true
                     spacing: 0
-                    Text {
-                        visible: !behind.atNewest
-                        text: plot.behindText(view.behindSeconds) + " " + qsTr("behind") + " · "
-                        font.family: Type.fixedFamily
-                        font.pointSize: Type.caption
-                        color: Theme.textSecondary
-                        Accessible.ignored: true
+                    Item { Layout.preferredWidth: Type.chipHeight }
+                    Text { Layout.fillWidth: true; text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption }
+                    Repeater {
+                        model: measureTable.keys
+                        delegate: Text {
+                            required property string modelData
+                            objectName: "plotMeasureTitle_" + modelData
+                            Layout.preferredWidth: measureTable.cell
+                            horizontalAlignment: Text.AlignRight
+                            text: measureTable.title(modelData)
+                            color: Theme.textSecondary
+                            font.pointSize: Type.caption
+                        }
                     }
-                    Text {
-                        text: qsTr("Follow (End)")
-                        font.pointSize: Type.caption
+                    Item {
+                        Layout.leftMargin: Type.spacing
+                        Layout.preferredWidth: Type.chipHeight + measureTable.barRoom
+                    }
+                }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.outlineVariant }
+                // A row per curve: three at the least, else up to 40 % of the
+                // Plot's height, then they scroll.
+                ListView {
+                    id: measureRows
+                    objectName: "plotMeasureRows"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: count * Type.rowHeight
+                    Layout.maximumHeight: Math.max(3 * Type.rowHeight, plot.height * 0.4)
+                    readonly property bool scrolls: contentHeight > height + 0.5
+                    clip: true
+                    interactive: scrolls
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: plot.plotted
+                    ScrollBar.vertical: ScrollBar {
+                        id: measureBar
+                        objectName: "plotMeasureScrollBar"
+                        policy: ScrollBar.AsNeeded
+                    }
+                    delegate: Rectangle {
+                        id: measureRow
+                        required property string modelData
+                        required property int index
+                        objectName: "plotMeasureRow"
+                        readonly property string path: modelData
+                        readonly property bool states: plot.traces ? plot.traces.categorical(path) : false
+                        readonly property var stats: {
+                            plot.shownTick
+                            measureTable.range
+                            return measureTable.visible ? view.statistics(path) : ({})
+                        }
+                        // The reading at the cursor while it is in view, else at the
+                        // end while one is pinned, else the newest.
+                        readonly property var current: {
+                            plot.shownTick
+                            view.cursorUtcMs
+                            view.endUtcMs
+                            if (!plot.traces)
+                                return undefined
+                            return plot.cursorInView ? view.valueAt(path)
+                                 : view.endShown ? view.endValue(path) : plot.traces.latest(path)
+                        }
+                        readonly property var reference: {
+                            view.referenceShown
+                            view.referenceUtcMs
+                            return view.referenceValue(path)
+                        }
+                        readonly property string drawnAs: {
+                            plot.traces ? plot.traces.appearanceRevision : 0
+                            return plot.traces ? plot.transformText(plot.traces.multiplier(path), plot.traces.offset(path)) : ""
+                        }
+                        // Mean and Std dev to one decimal more than Min and Max
+                        // give; -1 when those are not plain decimals.
+                        readonly property int decimals: {
+                            const low = plot.decimalsOf(number(stats.min)), high = plot.decimalsOf(number(stats.max))
+                            return low < 0 || high < 0 ? -1 : Math.max(low, high) + 1
+                        }
+                        // Every figure's text. A state gives its reading in words
+                        // and no difference.
+                        readonly property var cells: ({
+                            now: states ? (current === undefined ? "–" : plot.traces.stateText(path, current)) : number(current),
+                            delta: states || reference === undefined || current === undefined ? ""
+                                                                                             : plot.deltaText(current - reference),
+                            min: number(stats.min),
+                            max: number(stats.max),
+                            mean: spread(stats.mean),
+                            pkpk: number(stats.peakToPeak),
+                            std: spread(stats.deviation)
+                        })
+                        // What a narrow table leaves out, for the row's tooltip:
+                        // "Δ +2.4 · Mean 4.95 · Pk-pk 2.3 · Std dev 0.69".
+                        readonly property string hidden: {
+                            if (states)
+                                return ""
+                            const names = {delta: "Δ", mean: qsTr("Mean"), pkpk: qsTr("Pk-pk"), std: qsTr("Std dev")}
+                            const parts = []
+                            for (const key of ["delta", "mean", "pkpk", "std"])
+                                if (measureTable.keys.indexOf(key) < 0 && cells[key].length > 0 && cells[key] !== "–")
+                                    parts.push(names[key] + " " + cells[key])
+                            return parts.join(" · ")
+                        }
+                        // Min or Max under the pointer: their tooltip, not the row's.
+                        property int extremeHovers: 0
+                        function number(value) { return plot.valueText(value) }
+                        function spread(value) { return decimals < 0 ? number(value) : plot.fixedText(value, decimals) }
+                        width: measureRows.width - measureTable.barRoom
+                        height: Type.rowHeight
+                        color: index % 2 ? Theme.surfaceAlternate : "transparent"
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: 0
+                            Item {
+                                Layout.preferredWidth: Type.chipHeight
+                                Layout.fillHeight: true
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: Type.iconSize
+                                    height: 2
+                                    color: { plot.traces ? plot.traces.appearanceRevision : 0; return view.curveColor(measureRow.path) }
+                                }
+                                TapHandler { onTapped: curveSettings.openFor(measureRow.path) }
+                            }
+                            // Its name, then how it is drawn when not as read: the
+                            // table gives readings while the line is drawn scaled.
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                spacing: Type.tight
+                                Text {
+                                    objectName: "plotMeasureName"
+                                    Layout.fillWidth: true
+                                    Layout.maximumWidth: implicitWidth
+                                    text: measureRow.path
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideMiddle
+                                    color: Theme.textPrimary
+                                    font.pointSize: Type.caption
+                                    TapHandler { onTapped: view.focusedPath = view.focusedPath === measureRow.path ? "" : measureRow.path }
+                                }
+                                Rectangle {
+                                    objectName: "plotMeasureTransform"
+                                    visible: measureRow.drawnAs.length > 0
+                                    Layout.preferredWidth: measureTag.implicitWidth + 2 * Type.tight
+                                    Layout.preferredHeight: Type.chipHeight - 2
+                                    radius: Type.radius
+                                    color: "transparent"
+                                    border.color: Theme.warning
+                                    Text {
+                                        id: measureTag
+                                        anchors.centerIn: parent
+                                        textFormat: Text.PlainText
+                                        font.family: Type.fixedFamily
+                                        font.pointSize: Type.caption
+                                        color: Theme.warning
+                                        text: measureRow.drawnAs
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+                            Repeater {
+                                model: measureTable.keys
+                                delegate: Text {
+                                    id: statCell
+                                    required property string modelData
+                                    // Min's and Max's reading time: a click puts the
+                                    // cursor there.
+                                    readonly property var at: modelData === "min" ? measureRow.stats.minUtcMs
+                                                            : modelData === "max" ? measureRow.stats.maxUtcMs : undefined
+                                    objectName: "plotMeasure_" + modelData
+                                    // A state shows its reading and an empty Δ; its
+                                    // shares span the rest.
+                                    visible: !measureRow.states || modelData === "now" || modelData === "delta"
+                                    Layout.preferredWidth: measureTable.cell
+                                    horizontalAlignment: Text.AlignRight
+                                    text: measureRow.cells[modelData]
+                                    textFormat: Text.PlainText
+                                    elide: measureRow.states ? Text.ElideRight : Text.ElideNone
+                                    font.family: Type.fixedFamily
+                                    font.pointSize: Type.caption
+                                    font.underline: at !== undefined && extremeHover.hovered
+                                    color: at !== undefined && extremeHover.hovered ? Theme.accent : Theme.textPrimary
+                                    HoverHandler {
+                                        id: extremeHover
+                                        enabled: statCell.at !== undefined
+                                        cursorShape: Qt.PointingHandCursor
+                                        onHoveredChanged: measureRow.extremeHovers += hovered ? 1 : -1
+                                    }
+                                    TapHandler {
+                                        enabled: statCell.at !== undefined
+                                        onTapped: view.putCursorAt(statCell.at)
+                                    }
+                                    PlainToolTip {
+                                        visible: extremeHover.hovered
+                                        delay: 700
+                                        text: statCell.at === undefined ? ""
+                                            : qsTr("Put the cursor on this reading, %1").arg(plot.clockText(statCell.at))
+                                    }
+                                }
+                            }
+                            // A state: its share of the time and its changes, over
+                            // the figures after its reading.
+                            Text {
+                                objectName: "plotMeasureShares"
+                                visible: measureRow.states
+                                Layout.preferredWidth: measureTable.cell * measureTable.sharesCells
+                                horizontalAlignment: Text.AlignRight
+                                elide: Text.ElideRight
+                                text: plot.sharesText(measureRow.stats)
+                                color: Theme.textPrimary
+                                font.pointSize: Type.caption
+                            }
+                            ToolButton {
+                                objectName: "plotMeasureRemove"
+                                Layout.leftMargin: Type.spacing
+                                Layout.preferredWidth: Type.chipHeight
+                                Layout.preferredHeight: Type.rowHeight
+                                padding: 0
+                                flat: true
+                                focusPolicy: Qt.TabFocus
+                                text: qsTr("×")
+                                Accessible.name: qsTr("Remove %1 from the Plot").arg(measureRow.path)
+                                onClicked: plot.traces.unplot(measureRow.path)
+                            }
+                        }
+                        HoverHandler { id: rowHover }
+                        PlainToolTip {
+                            objectName: "plotMeasureRowTip"
+                            visible: rowHover.hovered && measureRow.hidden.length > 0 && measureRow.extremeHovers === 0
+                            delay: 700
+                            text: measureRow.hidden
+                        }
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: chipMenu.openFor(measureRow.path)
+                        }
+                        Accessible.role: Accessible.Row
+                        Accessible.name: measureRow.states ? qsTr("%1, %2").arg(measureRow.path).arg(plot.sharesText(measureRow.stats))
+                            : qsTr("%1: minimum %2, maximum %3, mean %4, peak to peak %5, standard deviation %6")
+                                .arg(measureRow.path).arg(measureRow.number(measureRow.stats.min)).arg(measureRow.number(measureRow.stats.max))
+                                .arg(measureRow.number(measureRow.stats.mean)).arg(measureRow.number(measureRow.stats.peakToPeak))
+                                .arg(measureRow.number(measureRow.stats.deviation))
+                    }
+                }
+            }
+            // A chip per plotted value: its colour, its path, its newest reading,
+            // and × to take it off the Plot (its readings are kept). Up to three
+            // rows of them, then they scroll, so the graph keeps its room.
+            Flickable {
+                id: legendScroll
+                objectName: "plotLegendScroll"
+                visible: plot.plotted.length > 0 && !plot.measuring
+                Layout.fillWidth: true
+                Layout.leftMargin: Type.padding
+                Layout.rightMargin: Type.padding
+                Layout.preferredHeight: Math.min(legend.implicitHeight, 3 * Type.controlHeight + 2 * Type.spacing)
+                readonly property bool scrolls: legend.implicitHeight > height + 0.5
+                contentWidth: width
+                contentHeight: legend.implicitHeight
+                clip: true
+                interactive: scrolls
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar {
+                    id: legendBar
+                    objectName: "plotLegendScrollBar"
+                    policy: ScrollBar.AsNeeded
+                }
+                Flow {
+                    id: legend
+                    objectName: "plotLegend"
+                    width: legendScroll.width - (legendScroll.scrolls ? legendBar.width : 0)
+                    spacing: Type.spacing
+                    Repeater {
+                        model: plot.plotted
+                        delegate: Rectangle {
+                            id: chip
+                            required property string modelData
+                            required property int index
+                            objectName: "plotChip"
+                            readonly property string path: modelData
+                            readonly property color curve: {
+                                plot.traces ? plot.traces.appearanceRevision : 0
+                                return view.curveColor(path)
+                            }
+                            readonly property string drawnAs: {
+                                plot.traces ? plot.traces.appearanceRevision : 0
+                                return plot.traces ? plot.transformText(plot.traces.multiplier(path), plot.traces.offset(path)) : ""
+                            }
+                            // Its newest reading; its reading at the cursor while the
+                            // cursor is shown.
+                            readonly property var current: {
+                                plot.shownTick
+                                view.cursorUtcMs
+                                if (!plot.traces)
+                                    return undefined
+                                return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
+                            }
+                            // Taken out of the Watchlist: its readings stay, none come.
+                            readonly property bool gone: {
+                                plot.shownTick
+                                return plot.traces !== null && !plot.traces.watched(path)
+                            }
+                            readonly property string goneText: {
+                                if (!gone || plot.cursorInView)
+                                    return ""
+                                const at = plot.traces.lastReadUtcMs(path)
+                                return isNaN(at) ? qsTr("not read") : qsTr("not read since %1").arg(Qt.formatTime(new Date(at), "HH:mm:ss"))
+                            }
+                            // A bool or an enum in words ("true", "Idle"), a number as one.
+                            readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
+                            readonly property string shown: words.length > 0 ? words : plot.valueText(current)
+                            // Its difference from the reference, once one is pinned.
+                            readonly property string delta: {
+                                // A state has no difference: a number does.
+                                if (!view.referenceShown || words.length > 0)
+                                    return ""
+                                const reference = view.referenceValue(path)
+                                return reference === undefined || current === undefined ? "Δ –"
+                                                                                        : "Δ " + plot.deltaText(current - reference)
+                            }
+                            readonly property bool focused: view.focusedPath === path
+                            implicitWidth: chipRow.implicitWidth + 2 * Type.padding
+                            implicitHeight: Type.controlHeight
+                            radius: Type.radius
+                            color: focused ? Theme.stateSelectedInactive : Theme.surface
+                            border.color: Theme.outlineVariant
+                            RowLayout {
+                                id: chipRow
+                                anchors.fill: parent
+                                anchors.leftMargin: Type.padding
+                                anchors.rightMargin: Type.tight
+                                spacing: Type.spacing
+                                ToolButton {
+                                    id: curveMark
+                                    objectName: "plotChipSettings"
+                                    Layout.preferredWidth: Type.chipHeight
+                                    Layout.preferredHeight: Type.chipHeight
+                                    padding: 0
+                                    flat: true
+                                    focusPolicy: Qt.TabFocus
+                                    Accessible.name: qsTr("Curve settings for %1").arg(chip.path)
+                                    ToolTip.text: qsTr("Curve settings: color, multiplier and offset")
+                                    ToolTip.visible: hovered || visualFocus
+                                    ToolTip.delay: 700
+                                    onClicked: curveSettings.openFor(chip.path)
+                                    // The chip's menu from the keyboard.
+                                    Keys.onPressed: (event) => {
+                                        if (event.key === Qt.Key_Delete) {
+                                            plot.traces.unplot(chip.path)
+                                            event.accepted = true
+                                        } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                                            chipMenu.path = chip.path
+                                            chipMenu.popup(curveMark, 0, curveMark.height)
+                                            event.accepted = true
+                                        }
+                                    }
+                                    contentItem: Item {
+                                        implicitWidth: Type.iconSize
+                                        implicitHeight: Type.iconSize
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: parent.width
+                                            height: 2
+                                            color: chip.curve
+                                        }
+                                    }
+                                }
+                                Text {
+                                    id: chipName
+                                    objectName: "plotChipName"
+                                    Layout.maximumWidth: Type.bodyPixels * 18
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideMiddle
+                                    color: Theme.textPrimary
+                                    font.pointSize: Type.body
+                                    text: chip.path
+                                    HoverHandler { id: nameHover }
+                                    // A click focuses the curve: the values fit it.
+                                    TapHandler {
+                                        onTapped: view.focusedPath = chip.focused ? "" : chip.path
+                                    }
+                                    PlainToolTip {
+                                        visible: nameHover.hovered
+                                        text: chip.focused ? qsTr("%1. Click to fit the values to every curve again.").arg(chip.path)
+                                                           : qsTr("%1. Click to fit the values to this curve.").arg(chip.path)
+                                        delay: 700
+                                    }
+                                }
+                                // Drawn as other than read: says how, in the warning
+                                // colour, so the line is never read as the value.
+                                Rectangle {
+                                    objectName: "plotChipTransform"
+                                    visible: chip.drawnAs.length > 0
+                                    Layout.preferredWidth: transformText.implicitWidth + 2 * Type.tight
+                                    Layout.preferredHeight: Type.chipHeight - 2
+                                    radius: Type.radius
+                                    color: "transparent"
+                                    border.color: Theme.warning
+                                    Text {
+                                        id: transformText
+                                        anchors.centerIn: parent
+                                        textFormat: Text.PlainText
+                                        font.family: Type.fixedFamily
+                                        font.pointSize: Type.caption
+                                        color: Theme.warning
+                                        text: chip.drawnAs
+                                    }
+                                }
+                                Text {
+                                    objectName: "plotChipValue"
+                                    Layout.minimumWidth: valueWidth.advanceWidth
+                                    horizontalAlignment: Text.AlignRight
+                                    textFormat: Text.PlainText
+                                    color: chip.goneText.length > 0 ? Theme.textMuted : Theme.textPrimary
+                                    font.family: Type.fixedFamily
+                                    font.pointSize: Type.body
+                                    text: chip.goneText.length > 0 ? chip.goneText : chip.shown
+                                    TextMetrics {
+                                        id: valueWidth
+                                        font.family: Type.fixedFamily
+                                        font.pointSize: Type.body
+                                        text: "-0.000000"
+                                    }
+                                }
+                                Text {
+                                    objectName: "plotChipDelta"
+                                    visible: chip.delta.length > 0
+                                    // As wide as a long difference from the moment a
+                                    // reference is pinned, so the legend never re-wraps.
+                                    Layout.minimumWidth: deltaWidth.advanceWidth
+                                    TextMetrics {
+                                        id: deltaWidth
+                                        font.family: Type.fixedFamily
+                                        font.pointSize: Type.caption
+                                        text: "Δ −0.000000"
+                                    }
+                                    textFormat: Text.PlainText
+                                    color: Theme.textSecondary
+                                    font.family: Type.fixedFamily
+                                    font.pointSize: Type.caption
+                                    text: chip.delta
+                                }
+                                ToolButton {
+                                    objectName: "plotChipRemove"
+                                    Layout.preferredWidth: Type.chipHeight
+                                    Layout.preferredHeight: Type.chipHeight
+                                    flat: true
+                                    padding: 0
+                                    focusPolicy: Qt.TabFocus
+                                    text: qsTr("×")
+                                    Accessible.name: qsTr("Remove %1 from the Plot").arg(chip.path)
+                                    Accessible.description: qsTr("Its readings are kept.")
+                                    ToolTip.visible: hovered || visualFocus
+                                    ToolTip.text: qsTr("Remove from the Plot; its readings are kept")
+                                    onClicked: plot.traces.unplot(chip.path)
+                                }
+                            }
+                            // Its menu: right-click, or the Menu key on its settings.
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: chipMenu.openFor(chip.path)
+                            }
+                            Accessible.role: Accessible.StaticText
+                            Accessible.description: chip.drawnAs.length > 0 ? qsTr("Drawn %1; the value is the reading").arg(chip.drawnAs) : ""
+                            Accessible.name: plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
+                                                              : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
+                        }
+                    }
+                }
+            }
+
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                TraceView {
+                    id: view
+                    objectName: "plotView"
+                    anchors.fill: parent
+                    traces: plot.traces
+                    colors: plot.curveColors
+                    gridColor: Theme.outlineVariant
+                    labelColor: Theme.textSecondary
+                    cursorColor: Theme.textMuted
+                    // A row of its own under the time labels for the chips.
+                    bottomInset: Type.chipHeight + Type.tight
+                    // A bool's or an enum's lane, a row high.
+                    laneHeight: Type.rowHeight
+                    laneFillColor: Theme.neutralContainer
+                    laneTextColor: Theme.textPrimary
+                    gapColor: Theme.surfaceAlternate
+                    referenceColor: Theme.info
+                    dotRingColor: Theme.surfaceWindow
+                    // The box's size on a chip, as the cursor's time is.
+                    chipColor: Theme.surface
+                    chipHeight: Type.chipHeight
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    visible: plot.plotted.length > 0 && !plot.waiting
+                    // The graph's menu from the keyboard.
+                    Keys.onPressed: (event) => {
+                        if (event.key === Qt.Key_M && event.modifiers === Qt.NoModifier) {
+                            plot.measuring = !plot.measuring
+                            event.accepted = true
+                            return
+                        }
+                        if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
+                            if (event.modifiers & Qt.ShiftModifier)
+                                plot.copyValues()
+                            else
+                                plot.copyPicture()
+                            event.accepted = true
+                            return
+                        }
+                        if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                            graphMenu.at = -1
+                            graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
+                            event.accepted = true
+                        }
+                    }
+                    Accessible.role: Accessible.Graphic
+                    Accessible.name: {
+                        const state = view.following ? qsTr("following")
+                                                      : qsTr("%1 behind").arg(plot.behindWords(view.behindSeconds))
+                        return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
+                                                         : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
+                    }
+                    Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again.")
+                }
+                // The keys are on the graph: the lists' focus frame round it.
+                Rectangle {
+                    objectName: "plotFocus"
+                    visible: view.visible && view.activeFocus
+                    x: view.plotArea.x - 1
+                    y: view.plotArea.y - 1
+                    width: view.plotArea.width + 2
+                    height: view.plotArea.height + 2
+                    color: "transparent"
+                    border.width: 2
+                    border.color: Theme.focusRing
+                    Accessible.ignored: true
+                }
+                // The graph's menu: right-click.
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: (point) => {
+                        graphMenu.at = point.position.x
+                        graphMenu.popup()
+                    }
+                }
+                // Values zoomed or panned by hand: a way back to fitting them.
+                Basic.Button {
+                    id: autoValues
+                    objectName: "plotAuto"
+                    visible: view.visible && !view.valueAuto
+                    x: view.valuesArea.left + Type.padding
+                    y: view.valuesArea.top + Type.padding
+                    height: Type.chipHeight
+                    padding: Type.tight
+                    leftPadding: Type.padding
+                    rightPadding: Type.padding
+                    focusPolicy: Qt.TabFocus
+                    font.pointSize: Type.caption
+                    text: qsTr("Auto (A)")
+                    onClicked: view.autoValues()
+                    Accessible.name: qsTr("Fit the values again")
+                    Accessible.description: qsTr("A, or a double-click on the value labels")
+                    contentItem: Text {
+                        text: autoValues.text
+                        font: autoValues.font
                         color: Theme.textPrimary
                         Accessible.ignored: true
                     }
-                }
-                background: Rectangle {
-                    radius: Type.radius
-                    color: behind.down ? Theme.statePressed : behind.hovered ? Theme.stateHover : Theme.surface
-                    border.width: behind.visualFocus ? 2 : 1
-                    border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
-                }
-            }
-            // The time axis: the time of day, or since reading started (LP-1h).
-            Basic.Button {
-                id: timeAxis
-                objectName: "plotTimeTitle"
-                visible: view.visible
-                anchors.right: parent.right
-                anchors.rightMargin: Type.tight
-                anchors.bottom: parent.bottom
-                flat: true
-                focusPolicy: Qt.TabFocus
-                padding: Type.tight
-                leftPadding: Type.padding
-                rightPadding: Type.padding
-                font.pointSize: Type.caption
-                text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
-                contentItem: Text {
-                    text: timeAxis.text
-                    font: timeAxis.font
-                    color: timeAxis.hovered || timeAxis.visualFocus ? Theme.textPrimary : Theme.textSecondary
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    radius: Type.radius
-                    color: timeAxis.down ? Theme.statePressed : timeAxis.hovered ? Theme.stateHover : "transparent"
-                    border.width: timeAxis.visualFocus ? 2 : 0
-                    border.color: Theme.focusRing
-                }
-                Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
-                ToolTip.visible: hovered || visualFocus
-                ToolTip.delay: 700
-                ToolTip.text: view.fromStart
-                              ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
-                              : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
-                onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
-                Menu {
-                    id: axisMenu
-                    objectName: "plotAxisMenu"
-                    ButtonGroup { id: axisModes }
-                    MenuItem {
-                        objectName: "plotAxisTimeOfDay"
-                        text: qsTr("Time of day")
-                        checkable: true
-                        checked: !view.fromStart
-                        ButtonGroup.group: axisModes
-                        onTriggered: view.fromStart = false
-                    }
-                    MenuItem {
-                        objectName: "plotAxisFromStart"
-                        text: qsTr("From the start of reading")
-                        checkable: true
-                        checked: view.fromStart
-                        ButtonGroup.group: axisModes
-                        onTriggered: view.fromStart = true
+                    background: Rectangle {
+                        radius: Type.radius
+                        color: autoValues.down ? Theme.statePressed : autoValues.hovered ? Theme.stateHover : Theme.surface
+                        border.width: autoValues.visualFocus ? 2 : 1
+                        border.color: autoValues.visualFocus ? Theme.focusRing : Theme.outline
                     }
                 }
-            }
-            // Plotted, nothing read yet.
-            Label {
-                objectName: "plotWaiting"
-                visible: plot.waiting
-                anchors.centerIn: parent
-                width: Math.min(parent.width - 2 * Type.padding, 360)
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                color: Theme.textSecondary
-                text: plot.plotted.length === 1 ? qsTr("Waiting for the first reading of %1…").arg(plot.plotted[0])
-                                                : qsTr("Waiting for the first readings…")
-            }
-            // Nothing plotted: how to plot something.
-            ColumnLayout {
-                objectName: "plotEmpty"
-                visible: plot.plotted.length === 0
-                anchors.centerIn: parent
-                width: Math.min(parent.width - 2 * Type.padding, 360)
-                spacing: Type.spacing
+                // Fitted to one curve: says which, on a chip so it reads over
+                // the curves.
+                Rectangle {
+                    objectName: "plotFittedChip"
+                    visible: view.visible && view.valueAuto && view.focusedPath.length > 0
+                    x: view.valuesArea.left + Type.padding
+                    y: view.valuesArea.top + Type.padding
+                    width: fitted.implicitWidth + 2 * Type.padding
+                    height: Type.chipHeight
+                    radius: Type.radius
+                    color: Theme.surface
+                    border.color: Theme.outlineVariant
+                    Label {
+                        id: fitted
+                        objectName: "plotFitted"
+                        anchors.centerIn: parent
+                        color: Theme.textSecondary
+                        font.pointSize: Type.caption
+                        text: qsTr("Fitted to %1").arg(view.focusedPath)
+                    }
+                }
+                // The reference's time, under the axis where it is pinned.
+                Rectangle {
+                    id: referenceChip
+                    objectName: "plotReferenceChip"
+                    visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
+                             && view.referenceX <= view.plotArea.right
+                    width: referenceText.implicitWidth + 2 * Type.padding
+                    height: Type.chipHeight
+                    x: Math.max(0, Math.min(parent.width - width, view.referenceX - width / 2))
+                    y: view.height - height
+                    radius: Type.radius
+                    color: Theme.infoContainer
+                    border.color: Theme.info
+                    Text {
+                        id: referenceText
+                        anchors.centerIn: parent
+                        textFormat: Text.PlainText
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: Theme.textPrimary
+                        text: plot.clockText(view.referenceUtcMs)
+                    }
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: qsTr("Reference at %1").arg(referenceText.text)
+                    Accessible.description: qsTr("Escape removes it.")
+                }
+                // The end's time under the axis: how long after the reference,
+                // then the time of day, beside the reference's chip.
+                Rectangle {
+                    id: endChip
+                    objectName: "plotEndChip"
+                    visible: view.visible && view.endShown && view.endX >= view.plotArea.left
+                             && view.endX <= view.plotArea.right
+                    width: endText.implicitWidth + 2 * Type.padding
+                    height: Type.chipHeight
+                    x: plot.chipX(view.endX, width, parent.width, [referenceChip])
+                    y: view.height - height
+                    radius: Type.radius
+                    color: Theme.infoContainer
+                    border.color: Theme.info
+                    readonly property real afterMs: view.endUtcMs - view.referenceUtcMs
+                    Text {
+                        id: endText
+                        objectName: "plotEndText"
+                        anchors.centerIn: parent
+                        textFormat: Text.PlainText
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: Theme.textPrimary
+                        text: qsTr("Δ %1 · %2").arg(plot.spanText(endChip.afterMs)).arg(plot.clockText(view.endUtcMs))
+                    }
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: endChip.afterMs >= 0
+                                     ? qsTr("End at %1, %2 after the reference").arg(plot.clockText(view.endUtcMs))
+                                           .arg(plot.spanText(endChip.afterMs))
+                                     : qsTr("End at %1, %2 before the reference").arg(plot.clockText(view.endUtcMs))
+                                           .arg(plot.spanText(-endChip.afterMs))
+                    Accessible.description: qsTr("Escape removes it.")
+                }
+                // The cursor's time under the axis: how long ago while following,
+                // the time since the reference once one is pinned.
+                Rectangle {
+                    objectName: "plotCursorChip"
+                    // On the end, the end's chip says it all.
+                    visible: view.visible && view.cursorShown && view.cursorX >= view.plotArea.left
+                             && view.cursorX <= view.plotArea.right
+                             && !(endChip.visible && view.cursorUtcMs === view.endUtcMs)
+                    width: cursorText.implicitWidth + 2 * Type.padding
+                    height: Type.chipHeight
+                    // Centred on its line, but never over the reference's or
+                    // the end's chip: beside them, 4 px apart.
+                    x: plot.chipX(view.cursorX, width, parent.width, [referenceChip, endChip])
+                    y: view.height - height
+                    radius: Type.radius
+                    color: Theme.surface
+                    border.color: Theme.outline
+                    Text {
+                        id: cursorText
+                        objectName: "plotCursorText"
+                        anchors.centerIn: parent
+                        textFormat: Text.PlainText
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: Theme.textPrimary
+                        text: {
+                            // From the start: the time since it, then the time of day.
+                            const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
+                                                                      .arg(plot.clockText(view.cursorUtcMs))
+                                                      : plot.clockText(view.cursorUtcMs)
+                            if (view.referenceShown)
+                                return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
+                            if (view.following)
+                                return qsTr("%1 · %2 ago").arg(at).arg(plot.agoText(view.cursorAgoSeconds))
+                            return at
+                        }
+                    }
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: view.referenceShown
+                                     ? qsTr("Cursor at %1, %2 from the reference").arg(plot.clockText(view.cursorUtcMs))
+                                           .arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs))
+                                     : view.following ? qsTr("Cursor at %1, %2 seconds ago").arg(plot.clockText(view.cursorUtcMs))
+                                                            .arg(view.cursorAgoSeconds.toFixed(1))
+                                                      : qsTr("Cursor at %1").arg(plot.clockText(view.cursorUtcMs))
+                }
+                // Held: how far behind the newest reading, and a way back to it.
+                Basic.Button {
+                    id: behind
+                    objectName: "plotBehind"
+                    visible: view.visible && !view.following
+                    x: view.plotArea.right - width - Type.padding
+                    y: view.plotArea.top + Type.padding
+                    height: Type.chipHeight
+                    padding: Type.tight
+                    leftPadding: Type.padding
+                    rightPadding: Type.padding
+                    focusPolicy: Qt.TabFocus
+                    font.pointSize: Type.caption
+                    readonly property bool atNewest: view.behindSeconds < 0.5 || view.plotArea.width < 240
+                    text: atNewest ? qsTr("Follow (End)")
+                                   : qsTr("%1 behind · Follow (End)").arg(plot.behindText(view.behindSeconds))
+                    Accessible.name: atNewest ? qsTr("Follow the newest readings")
+                                              : qsTr("%1 behind. Follow the newest readings").arg(plot.behindWords(view.behindSeconds))
+                    Accessible.description: qsTr("End")
+                    onClicked: view.follow()
+                    // A chip over the plot, not a toolbar button: the time in the
+                    // fixed face, the way back in the primary text colour.
+                    contentItem: Row {
+                        spacing: 0
+                        Text {
+                            visible: !behind.atNewest
+                            text: plot.behindText(view.behindSeconds) + " " + qsTr("behind") + " · "
+                            font.family: Type.fixedFamily
+                            font.pointSize: Type.caption
+                            color: Theme.textSecondary
+                            Accessible.ignored: true
+                        }
+                        Text {
+                            text: qsTr("Follow (End)")
+                            font.pointSize: Type.caption
+                            color: Theme.textPrimary
+                            Accessible.ignored: true
+                        }
+                    }
+                    background: Rectangle {
+                        radius: Type.radius
+                        color: behind.down ? Theme.statePressed : behind.hovered ? Theme.stateHover : Theme.surface
+                        border.width: behind.visualFocus ? 2 : 1
+                        border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
+                    }
+                }
+                // The time axis: the time of day, or since reading started (LP-1h).
+                Basic.Button {
+                    id: timeAxis
+                    objectName: "plotTimeTitle"
+                    visible: view.visible
+                    anchors.right: parent.right
+                    anchors.rightMargin: Type.tight
+                    anchors.bottom: parent.bottom
+                    flat: true
+                    focusPolicy: Qt.TabFocus
+                    padding: Type.tight
+                    leftPadding: Type.padding
+                    rightPadding: Type.padding
+                    font.pointSize: Type.caption
+                    text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                    contentItem: Text {
+                        text: timeAxis.text
+                        font: timeAxis.font
+                        color: timeAxis.hovered || timeAxis.visualFocus ? Theme.textPrimary : Theme.textSecondary
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        radius: Type.radius
+                        color: timeAxis.down ? Theme.statePressed : timeAxis.hovered ? Theme.stateHover : "transparent"
+                        border.width: timeAxis.visualFocus ? 2 : 0
+                        border.color: Theme.focusRing
+                    }
+                    Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
+                    ToolTip.visible: hovered || visualFocus
+                    ToolTip.delay: 700
+                    ToolTip.text: view.fromStart
+                                  ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
+                                  : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                    onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
+                    Menu {
+                        id: axisMenu
+                        objectName: "plotAxisMenu"
+                        ButtonGroup { id: axisModes }
+                        MenuItem {
+                            objectName: "plotAxisTimeOfDay"
+                            text: qsTr("Time of day")
+                            checkable: true
+                            checked: !view.fromStart
+                            ButtonGroup.group: axisModes
+                            onTriggered: view.fromStart = false
+                        }
+                        MenuItem {
+                            objectName: "plotAxisFromStart"
+                            text: qsTr("From the start of reading")
+                            checkable: true
+                            checked: view.fromStart
+                            ButtonGroup.group: axisModes
+                            onTriggered: view.fromStart = true
+                        }
+                    }
+                }
+                // Plotted, nothing read yet.
                 Label {
-                    Layout.fillWidth: true
+                    objectName: "plotWaiting"
+                    visible: plot.waiting
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 2 * Type.padding, 360)
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
                     color: Theme.textSecondary
-                    text: plot.traces ? qsTr("Add a value from the Watchlist to plot it.")
-                                      : qsTr("Connect to a device to plot its values.")
+                    text: plot.plotted.length === 1 ? qsTr("Waiting for the first reading of %1…").arg(plot.plotted[0])
+                                                    : qsTr("Waiting for the first readings…")
                 }
-                Label {
-                    Layout.fillWidth: true
-                    visible: plot.traces !== null
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.Wrap
-                    color: Theme.textMuted
-                    font.pointSize: Type.caption
-                    text: qsTr("Right-click a row and choose Plot, or press Ctrl+P on a row or a selection.")
+                // Nothing plotted: how to plot something.
+                ColumnLayout {
+                    objectName: "plotEmpty"
+                    visible: plot.plotted.length === 0
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 2 * Type.padding, 360)
+                    spacing: Type.spacing
+                    Label {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        color: Theme.textSecondary
+                        text: plot.traces ? qsTr("Add a value from the Watchlist to plot it.")
+                                          : qsTr("Connect to a device to plot its values.")
+                    }
+                    // Rows have no grip: here a user learns that dragging works.
+                    Label {
+                        objectName: "plotEmptyHint"
+                        Layout.fillWidth: true
+                        visible: plot.traces !== null
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        color: Theme.textMuted
+                        font.pointSize: Type.caption
+                        text: qsTr("Right-click a row and choose Plot, press Ctrl+P, or drag rows here.")
+                    }
                 }
             }
         }
@@ -1483,7 +1772,7 @@ FocusScope {
                 drag.accepted = false
                 return
             }
-            words = paths.length === 1 ? qsTr("Drop to plot %1").arg(paths[0]) : qsTr("Drop to plot %L1 values").arg(paths.length)
+            words = plot.dropWords(payload)
         }
         onExited: words = ""
         onDropped: (drop) => {
