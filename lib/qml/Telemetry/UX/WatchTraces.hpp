@@ -57,6 +57,8 @@ public:
 	// that left or came back breaks its line just before it.
 	[[nodiscard]] quint64 membership() const noexcept { return membership_; }
 	void setPaths(quint64 membership, QHash<quint64, QString> paths, QHash<QString, bool> categorical = {}, qint64 at = 0);
+	// An enum value's state names by code, for its lane and its chip (LP-1d).
+	void setStates(const QString& path, QHash<qint64, QString> names);
 	// Every reading kept, over every ring.
 	[[nodiscard]] std::size_t total() const noexcept { return total_; }
 	// A completed read: each of its rows appended to its value's ring.
@@ -64,6 +66,9 @@ public:
 
 	[[nodiscard]] const std::deque<TraceReading>* readings(const QString& path) const;
 	[[nodiscard]] bool categorical(const QString& path) const;
+	// A bool's or an enum's reading in words: "true", "Idle"; an enum code
+	// with no name "Code 7"; empty for a number.
+	Q_INVOKABLE QString stateText(const QString& path, const QVariant& value) const;
 	// The time origin every reading's ns is measured against, as this PC's
 	// clock: utcMs at monotonicNs (the first frame's stamp).
 	[[nodiscard]] WatchTimestamp anchor() const noexcept { return anchor_; }
@@ -112,6 +117,7 @@ private:
 	QHash<QString, Trace> traces_;
 	QHash<quint64, QString> paths_;
 	QHash<QString, bool> categorical_;
+	QHash<QString, QHash<qint64, QString>> states_;
 	QStringList plotted_;
 	QHash<QString, int> colors_;
 	WatchTimestamp anchor_;

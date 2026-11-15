@@ -235,10 +235,13 @@ FocusScope {
                             return undefined
                         return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
                     }
-                    readonly property string shown: plot.valueText(current)
+                    // A bool or an enum in words ("true", "Idle"), a number as one.
+                    readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
+                    readonly property string shown: words.length > 0 ? words : plot.valueText(current)
                     // Its difference from the reference, once one is pinned.
                     readonly property string delta: {
-                        if (!view.referenceShown)
+                        // A state has no difference: a number does.
+                        if (!view.referenceShown || words.length > 0)
                             return ""
                         const reference = view.referenceValue(path)
                         return reference === undefined || current === undefined ? "Δ –"
@@ -343,6 +346,10 @@ FocusScope {
                 cursorColor: Theme.textMuted
                 // A row of its own under the time labels for the chips.
                 bottomInset: Type.chipHeight + Type.tight
+                // A bool's or an enum's lane, a row high.
+                laneHeight: Type.rowHeight
+                laneFillColor: Theme.neutralContainer
+                laneTextColor: Theme.textPrimary
                 referenceColor: Theme.info
                 dotRingColor: Theme.surfaceWindow
                 font.family: Type.fixedFamily
