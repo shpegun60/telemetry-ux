@@ -6,6 +6,7 @@
  */
 #include "WatchRows.hpp"
 
+#include <QtCore/QRegularExpression>
 #include <QtCore/QStringView>
 #include <algorithm>
 #include <array>
@@ -471,6 +472,28 @@ QVariantList WatchRows::selectedSourceRows() const
 QString WatchRows::selectedLines(bool paths) const
 {
 	return linesOf(selectedSourceRows(), paths);
+}
+
+QVariantList WatchRows::plotValues(int row) const
+{
+	QVariantList out;
+	if (row < 0 || row >= count())
+		return out;
+	const auto sources = isSelected(row) ? selectedSourceRows() : sourceRows(row);
+	for (const auto& source : sources) {
+		const int at = source.toInt();
+		const auto kind = sourceData(at, EditorKindRole).toString();
+		const bool states = kind == QStringLiteral("bool") || kind == QStringLiteral("enum");
+		// A number's type, even while its reading is one a double does not
+		// hold (a u64 counter at its top); else what its reading was.
+		static const QRegularExpression numeric(QStringLiteral("^[usif](8|16|32|64)$"));
+		const bool typed = numeric.match(sourceData(at, TypeTextRole).toString()).hasMatch();
+		const bool read = sourceData(at, StatusRole).toString() == QStringLiteral("Ok");
+		const bool number = states || typed || !read || sourceData(at, SampleExactRole).toBool();
+		out.append(QVariantMap{{QStringLiteral("path"), sourceData(at, NameRole).toString()},
+		                       {QStringLiteral("number"), number}});
+	}
+	return out;
 }
 
 void WatchRows::setSelection(QSet<QString> next, const QString& anchor)

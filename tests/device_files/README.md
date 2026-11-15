@@ -96,6 +96,26 @@ over localhost TCP to the SDK's native server. No board.
     three ranges of 65 536, then one of 256, on the way. An object of many
     keys opens as ranges too, named by their first and last key; a range copied
     as JSON is its members in brackets, as the file writes them.
+  - A descriptor that cannot be read says why in the files-only card's words
+    (`DescriptorContent::check` and `phrase`): empty, too large, another
+    version, ending early at a byte, a fingerprint that does not match its
+    content, bytes not laid out as a descriptor at the byte where the header
+    shows it, or without a byte past the header - never a status number. In
+    the viewer: "This descriptor cannot be read: its fingerprint does not match
+    its content, so it was changed after it was built. It is shown as Hex."
+    values.bin beside such a copy is read with the context's descriptor of its
+    fingerprint (the connected device's), the good one beside it still first;
+    with none it says "values.bin cannot be decoded: telemetry/descriptor.bin
+    beside it cannot be read."
+  - What a project's copy is against the device's bytes as read
+    (`DeviceFileTransfers::copyState`), for the question before a read replaces
+    it: the same, a byte saved differently, a length changed, a record of
+    another path, no record, no copy.
+  - A file the host keeps read-only (`OpenFiles::setReadOnlyLookup`,
+    `FileContent::readOnlyReason`): its reason, editing and overwriting
+    refused; a broken copy put back to the device's bytes by Restore and saved,
+    after which it reads; another device path, and the same bytes from disk,
+    editable; a path that becomes read-only ends editing.
   - The read-many and batch capability records (TRM1, TBM1), written by the
     SDK's own `writeCapability`: every field in words, the descriptor they
     bind to (the connected device's, or another in the warning colour), their
@@ -148,6 +168,15 @@ over localhost TCP to the SDK's native server. No board.
     outcome (done, partial, refused) given apart from its words.
   - **The pictograms** (`ToolIcon`): each name draws, undo's arrow on the left
     and redo's on the right; an unknown name draws nothing.
+  - **A read-only file** in the viewer: Edit off with the reason in its tooltip,
+    editing refused however asked, the state line saying Read-only; a copy its
+    codec cannot read shows the reason, then Restore the device's version
+    (which opens its question) and Read again from the device while the host
+    can read it.
+  - **A pictogram that cannot act** (`IconToolButton.disabledReason`): its
+    reason in brackets after its name in the tooltip, which shows on hover while
+    it is disabled, and as its accessible description; enabled, the name and
+    the shortcut only.
 
   The panel itself:
   - the not-connected words, the tree once connected, the column headings;

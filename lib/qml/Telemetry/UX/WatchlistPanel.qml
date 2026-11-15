@@ -534,6 +534,50 @@ Pane {
         return true
     }
 
+    // The live Plot (LP-1), when the provider has one.
+    readonly property var plotTraces: provider && provider.watchTraces ? provider.watchTraces : null
+    // Puts row's values - the selection's, when row is in it, or every value
+    // under a node - on the Plot, or takes them off when each is on it
+    // already (Ctrl+P, the row menu). Text is refused in words.
+    function togglePlot(row) {
+        if (!plotTraces || !rows || row < 0)
+            return false
+        const values = rows.plotValues(row)
+        if (values.length === 0)
+            return false
+        const numbers = values.filter(value => value.number)
+        if (numbers.length > 0 && numbers.every(value => plotTraces.isPlotted(value.path))) {
+            for (const value of numbers)
+                plotTraces.unplot(value.path)
+            say(numbers.length === 1 ? qsTr("%1 is off the Plot; its readings are kept").arg(numbers[0].path)
+                                     : qsTr("%L1 values are off the Plot; their readings are kept").arg(numbers.length), false)
+            return true
+        }
+        let added = 0
+        let last = ""
+        let refusal = ""
+        for (const value of numbers) {
+            if (plotTraces.isPlotted(value.path))
+                continue
+            refusal = plotTraces.plot(value.path)
+            if (refusal.length > 0)
+                break
+            ++added
+            last = value.path
+        }
+        const text = values.length - numbers.length
+        if (refusal.length > 0)
+            say(refusal, false)
+        else if (text > 0 && values.length === 1)
+            say(qsTr("%1 is text; only numbers, booleans and enums are plotted.").arg(values[0].path), false)
+        else if (text > 0)
+            say(qsTr("%L1 of %L2 values are text and were not plotted.").arg(text).arg(values.length), false)
+        else
+            say(added === 1 ? qsTr("Plotted %1").arg(last)
+                            : qsTr("Plotted %L1 values").arg(added), false)
+        return true
+    }
+
     // A row's status in a word or two; the provider's own word is the tooltip.
     // A word not known here is shown as it is.
     function statusWord(status) {
@@ -1468,6 +1512,14 @@ Pane {
             Layout.minimumHeight: panel.open && panel.addAvailable ? Math.min(contentHeight, Type.rowHeight * 3) : 0
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // Rows are made as they come into view, at once. With the default
+            // cache buffer the rows past the edge were made in the background,
+            // and a row still being made when the rows changed was dropped half
+            // made: Qt 6.12 warned "DelegateModel::cancel: index out range" when
+            // the list emptied, or kept counting the row's controls as being
+            // created until the engine closed. The client's emulated-device
+            // check failed 21 runs in 60 that way.
+            cacheBuffer: 0
             model: !panel.open ? null : panel.rows ? panel.rows : panel.provider.watchlist
             // The keyboard: arrows move the current row, Delete removes it,
             // F2 or Enter writes a writable one.
@@ -1495,6 +1547,8 @@ Pane {
                     event.accepted = true
                 if (event.key === Qt.Key_A && event.modifiers === Qt.ControlModifier && panel.selectable
                         && !(currentItem && currentItem.editing))
+                    event.accepted = true
+                if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier && currentIndex >= 0 && panel.plotTraces)
                     event.accepted = true
             }
             Keys.onPressed: event => {
@@ -1565,6 +1619,11 @@ Pane {
                 }
                 if (event.key === Qt.Key_C && event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)) {
                     event.accepted = panel.copyRows(currentIndex, "paths")
+                    return
+                }
+                // On the live Plot, or off it: the selection, a node's values.
+                if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier) {
+                    event.accepted = panel.togglePlot(currentIndex)
                     return
                 }
                 if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers === Qt.ShiftModifier)) {
@@ -2582,7 +2641,13 @@ Pane {
         readonly property string own: item && typeof item.model.format === "string" ? item.model.format : ""
         // Opened inside a selection of several: the menu is the selection's.
         property int many: 0
-        onAboutToShow: many = panel.onSelection(panel.menuRow) ? panel.rows.selectedSourceRows().length : 0
+        // The values the Plot item would take.
+        property int plotCount: 0
+        onAboutToShow: {
+            many = panel.onSelection(panel.menuRow) ? panel.rows.selectedSourceRows().length : 0
+            const values = panel.plotTraces && panel.rows ? panel.rows.plotValues(panel.menuRow) : []
+            plotCount = values.filter(value => value.number).length
+        }
         Menu {
             id: rowFormatMenu
             objectName: "watchRowFormatMenu"
@@ -2629,28 +2694,26 @@ Pane {
             onAboutToShow: differ = panel.formatsDiffer()
         }
         // On the live Plot (LP-1), or off it; its readings are kept either way.
+        // A selection or a node plots every value in it.
         MenuItem {
             id: plotItem
             objectName: "watchRowPlot"
-            readonly property var traces: panel.provider && panel.provider.watchTraces ? panel.provider.watchTraces : null
-            readonly property string path: rowMenu.item && rowMenu.item.isValue ? rowMenu.item.name : ""
+            readonly property var traces: panel.plotTraces
+            readonly property bool one: rowMenu.many === 0 && rowMenu.item !== null && rowMenu.item.isValue
+            readonly property string path: one ? rowMenu.item.name : ""
             readonly property bool shown: traces !== null && path.length > 0 && traces.plotted.indexOf(path) >= 0
             visible: traces !== null
             height: visible ? implicitHeight : 0
-            enabled: rowMenu.many === 0 && path.length > 0
-            checkable: true
+            enabled: rowMenu.plotCount > 0
+            checkable: one
             checked: shown
-            text: qsTr("Plot")
-            Accessible.description: path.length > 0 ? qsTr("Shows the readings of %1 on the Plot.").arg(path)
-                                                    : qsTr("Only a value can be plotted, not a group or a struct.")
+            text: (one ? qsTr("Plot") : qsTr("Plot %L1 values").arg(rowMenu.plotCount)) + "\t" + qsTr("Ctrl+P")
+            Accessible.description: one && rowMenu.plotCount === 0 ? qsTr("%1 is text; only numbers, booleans and enums are plotted.").arg(path)
+                                  : one ? qsTr("Shows the readings of %1 on the Plot.").arg(path)
+                                  : rowMenu.plotCount > 0 ? qsTr("Shows their readings on the Plot, or takes them off when all are on it.")
+                                                          : qsTr("Nothing here can be plotted.")
             onTriggered: {
-                if (traces.isPlotted(path)) {
-                    traces.unplot(path)
-                } else {
-                    const why = traces.plot(path)
-                    if (why.length > 0)
-                        panel.say(why, false)
-                }
+                panel.togglePlot(panel.menuRow)
                 checked = Qt.binding(() => plotItem.shown)
             }
         }

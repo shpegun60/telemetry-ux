@@ -256,6 +256,17 @@ FocusScope {
                             return undefined
                         return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
                     }
+                    // Taken out of the Watchlist: its readings stay, none come.
+                    readonly property bool gone: {
+                        plot.shownTick
+                        return plot.traces !== null && !plot.traces.watched(path)
+                    }
+                    readonly property string goneText: {
+                        if (!gone || plot.cursorInView)
+                            return ""
+                        const at = plot.traces.lastReadUtcMs(path)
+                        return isNaN(at) ? qsTr("not read") : qsTr("not read since %1").arg(Qt.formatTime(new Date(at), "HH:mm:ss"))
+                    }
                     // A bool or an enum in words ("true", "Idle"), a number as one.
                     readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
                     readonly property string shown: words.length > 0 ? words : plot.valueText(current)
@@ -295,7 +306,10 @@ FocusScope {
                             onClicked: curveSettings.openFor(chip.path)
                             // The chip's menu from the keyboard.
                             Keys.onPressed: (event) => {
-                                if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                                if (event.key === Qt.Key_Delete) {
+                                    plot.traces.unplot(chip.path)
+                                    event.accepted = true
+                                } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
                                     chipMenu.path = chip.path
                                     chipMenu.popup(curveMark, 0, curveMark.height)
                                     event.accepted = true
@@ -358,10 +372,10 @@ FocusScope {
                             Layout.minimumWidth: valueWidth.advanceWidth
                             horizontalAlignment: Text.AlignRight
                             textFormat: Text.PlainText
-                            color: Theme.textPrimary
+                            color: chip.goneText.length > 0 ? Theme.textMuted : Theme.textPrimary
                             font.family: Type.fixedFamily
                             font.pointSize: Type.body
-                            text: chip.shown
+                            text: chip.goneText.length > 0 ? chip.goneText : chip.shown
                             TextMetrics {
                                 id: valueWidth
                                 font.family: Type.fixedFamily
@@ -433,6 +447,7 @@ FocusScope {
                 laneHeight: Type.rowHeight
                 laneFillColor: Theme.neutralContainer
                 laneTextColor: Theme.textPrimary
+                gapColor: Theme.surfaceAlternate
                 referenceColor: Theme.info
                 dotRingColor: Theme.surfaceWindow
                 font.family: Type.fixedFamily
@@ -441,6 +456,7 @@ FocusScope {
                 // The graph's menu from the keyboard.
                 Keys.onPressed: (event) => {
                     if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                        graphMenu.at = -1
                         graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
                         event.accepted = true
                     }
@@ -470,7 +486,10 @@ FocusScope {
             // The graph's menu: right-click.
             TapHandler {
                 acceptedButtons: Qt.RightButton
-                onTapped: graphMenu.popup()
+                onTapped: (point) => {
+                    graphMenu.at = point.position.x
+                    graphMenu.popup()
+                }
             }
             // Values zoomed or panned by hand: a way back to fitting them.
             Basic.Button {
@@ -697,7 +716,7 @@ FocusScope {
                     wrapMode: Text.Wrap
                     color: Theme.textMuted
                     font.pointSize: Type.caption
-                    text: qsTr("Right-click a row and choose Plot.")
+                    text: qsTr("Right-click a row and choose Plot, or press Ctrl+P on a row or a selection.")
                 }
             }
         }
@@ -706,6 +725,37 @@ FocusScope {
     Menu {
         id: graphMenu
         objectName: "plotGraphMenu"
+        // Where it was opened on the graph; -1 from the keyboard.
+        property real at: -1
+        MenuItem {
+            objectName: "plotMenuFollow"
+            text: qsTr("Follow") + "\t" + qsTr("End")
+            checkable: true
+            checked: view.following
+            onTriggered: {
+                view.following = !view.following
+                checked = Qt.binding(() => view.following)
+            }
+        }
+        MenuItem {
+            objectName: "plotMenuPin"
+            text: qsTr("Pin reference here") + "\t" + qsTr("Enter")
+            enabled: plot.plotted.length > 0
+            onTriggered: {
+                if (graphMenu.at >= view.plotArea.left)
+                    view.setCursorAt(graphMenu.at)
+                else if (!view.cursorShown)
+                    view.stepCursor(0)
+                view.pinReference()
+            }
+        }
+        MenuItem {
+            objectName: "plotMenuUnpin"
+            text: qsTr("Remove reference") + "\t" + qsTr("Esc")
+            enabled: view.referenceShown
+            onTriggered: view.clearReference()
+        }
+        MenuSeparator {}
         MenuItem {
             objectName: "plotShowPoints"
             text: qsTr("Show measurement points")
@@ -714,6 +764,17 @@ FocusScope {
             onTriggered: {
                 plot.traces.showPoints = !plot.traces.showPoints
                 checked = Qt.binding(() => plot.traces !== null && plot.traces.showPoints)
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotMenuRemoveAll"
+            text: qsTr("Remove all curves")
+            enabled: plot.plotted.length > 0
+            onTriggered: {
+                // Their readings are kept, as with each chip's ×.
+                for (const path of plot.plotted.slice())
+                    plot.traces.unplot(path)
             }
         }
     }

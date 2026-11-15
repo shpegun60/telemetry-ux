@@ -676,6 +676,55 @@ int main(int argc, char** argv)
 			settle(300);
 			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
 			traces.setShowPoints(false);
+			settle(150);
+
+			// LP-1g. The graph's menu: Follow off and on, a reference pinned
+			// where it was opened and removed, every curve off and back.
+			const auto openGraphMenu = [&](double part) {
+				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+				                  view->mapToScene(QPointF(graph.left() + graph.width() * part, graph.center().y())).toPoint());
+				settle(300);
+			};
+			openGraphMenu(0.3);
+			click(window, shown(content, "plotMenuFollow"));
+			settle(200);
+			CHECK(!view->property("following").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuPin"));
+			settle(200);
+			CHECK(view->property("referenceShown").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuUnpin"));
+			settle(200);
+			CHECK(!view->property("referenceShown").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuFollow"));
+			settle(200);
+			CHECK(view->property("following").toBool());
+			const auto before = traces.capture();
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuRemoveAll"));
+			settle(200);
+			CHECK(traces.plotted().isEmpty() && traces.count(voltage) > 0 && shown(content, "plotEmpty"));
+			CHECK(traces.restore(before) && traces.plotted() == order);
+			settle(200);
+			// A stop, then readings again: a band where nothing was read.
+			CHECK(view->property("drawnGaps").toInt() == 0);
+			traces.breakAll();
+			CHECK(traces.pauses().size() == 1 && traces.pauses().back().toNs == 0);
+			settle(700);
+			traces.append(frame(ux::WatchTraces::nowNs(), {{1, 0, bits(S::F32, 4, floatBits(7.5f))}, {2, 0, bits(S::Boolean, 1, 1)}}));
+			settle(300);
+			CHECK(traces.pauses().back().toNs > traces.pauses().back().fromNs + 500'000'000);
+			CHECK(view->property("drawnGaps").toInt() == 1);
+			shot(window, argc, argv, QStringLiteral("trace-plot-gap-760"));
+			// Delete on a chip's settings button takes that curve off.
+			auto* settingsButton = all(content, "plotChipSettings").first();
+			settingsButton->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Delete);
+			settle(200);
+			CHECK(!traces.isPlotted(voltage) && traces.plotted().size() == order.size() - 1);
+			CHECK(traces.restore(before) && traces.plotted() == order);
 			QTest::mouseMove(window, QPoint(4, 4));
 			settle(150);
 		}
@@ -687,7 +736,7 @@ int main(int argc, char** argv)
 		                  removes[0]->mapToScene(QPointF(removes[0]->width() / 2, removes[0]->height() / 2)).toPoint());
 		settle();
 		CHECK(traces.plotted() == QStringList({QStringLiteral("device.Ready"), QStringLiteral("device.Config.Gain")}) &&
-		      traces.count(QStringLiteral("device.Voltage")) == 63);
+		      traces.count(QStringLiteral("device.Voltage")) == 65);
 		// Plotted again, it keeps its colour; a colour another curve took
 		// meanwhile is never shared.
 		CHECK(traces.plot(QStringLiteral("device.Voltage")).isEmpty() && traces.colorIndex(QStringLiteral("device.Voltage")) == 0);
@@ -705,7 +754,22 @@ int main(int argc, char** argv)
 		// A value that leaves the Watchlist breaks its line there; its
 		// readings stay.
 		traces.setPaths(2, {{2, QStringLiteral("device.Ready")}, {gain, QStringLiteral("device.Config.Gain")}});
-		CHECK(traces.count(QStringLiteral("device.Voltage")) == 64 && !traces.latest(QStringLiteral("device.Voltage")).isValid());
+		CHECK(traces.count(QStringLiteral("device.Voltage")) == 66 && !traces.latest(QStringLiteral("device.Voltage")).isValid());
+		CHECK(!traces.watched(QStringLiteral("device.Voltage")) && traces.watched(QStringLiteral("device.Ready")) &&
+		      !std::isnan(traces.lastReadUtcMs(QStringLiteral("device.Voltage"))));
+		settle(600);
+		{
+			bool since = false;
+			for (auto* chip : all(content, "plotChip")) {
+				auto* name = named(chip, "plotChipName");
+				auto* value = named(chip, "plotChipValue");
+				if (name && value && name->property("text").toString() == QStringLiteral("device.Voltage"))
+					since = value->property("text").toString().startsWith(QStringLiteral("not read since "));
+			}
+			CHECK(since);
+			CHECK(view->property("drawnEnds").toInt() >= 1);
+			shot(window, argc, argv, QStringLiteral("trace-plot-not-read-760"));
+		}
 
 		// At most 65,536 readings, and ten minutes, a value.
 		traces.setPaths(3, {{5, QStringLiteral("device.Fast")}, {6, QStringLiteral("device.Slow")}});

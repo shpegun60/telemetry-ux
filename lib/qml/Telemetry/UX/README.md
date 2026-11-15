@@ -183,7 +183,7 @@ Actions retain the existing provider signatures:
   - `watchRevision` moves whenever a box may show something else: the Fields
     held, the tree, or whether boxes can be answered at all (a model update, a
     new connection, the Watchlist's source). A view asks `watchState` again
-    then. `watchLimit` is 1024.
+    then. `watchLimit` is 8192 (1024 until WL-7).
   - Nothing is answered until it can be: without a current session, or while
     the Watchlist cannot tell which Fields it holds, `watchState` is `-1` and
     no empty answer is kept. A read into Details does not hold the boxes.
@@ -303,7 +303,7 @@ operation is in flight leaves `watchStatus` saying so. `busy` is this view's own
 and leaves the Watchlist's reads out, so Cancel and Batch editing stay available
 while it polls. Several Watchlists on one session take turns: each session
 progress starts with the next panel, and a Batch is never refused because the
-session is busy. One Watchlist holds at most 1024 rows
+session is busy. One Watchlist holds at most 8192 rows
 (`watchlistRowLimit`); past it `addWatchMany` counts the rest as `capacity`.
 
 **Values inside struct and array Fields (S3-A).** A row is keyed by
@@ -315,7 +315,7 @@ key holds under one descriptor fingerprint only; what is saved is a path.
 A cycle reads whole Fields in ReadMany portions (or FieldReads) as before,
 and every value watched in one struct or array Field with one FieldRead,
 through the source's optional `readMembers(field, leaves, completion)`
-(ordinals ascending, 1 to 1024; answered in `completion.members`). That read
+(ordinals ascending, 1 to 8192; answered in `completion.members`). That read
 is published as `WatchFrame`s of at most 32 rows of the same cycle and portion,
 each row carrying `leaf` (0 for a whole Field, else 1 + its ordinal); a series
 is `id | leaf << 32`. A Field read for its values is at most 64 KiB
@@ -331,7 +331,7 @@ The generated Static provider uses Individual FieldRead cycles instead. Its open
 Field or Command/Service request draft prevents Watchlist reads, foreground actions
 wait for the current cycle, and an accepted mutation stops polling. It supports
 0–60000 ms, with a 10 ms cooperative timer for continuous mode, and the same
-1024-Field host limit. See the [Static provider contract](StaticConfigurator.md).
+8192-Field host limit. See the [Static provider contract](StaticConfigurator.md).
 
 The view consumes `readFinished(bool published)` and model `modelReset()`
 signals to restore the first visible expansion. Models support their normal Qt
