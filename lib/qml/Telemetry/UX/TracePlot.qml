@@ -256,6 +256,17 @@ FocusScope {
                             return undefined
                         return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
                     }
+                    // Taken out of the Watchlist: its readings stay, none come.
+                    readonly property bool gone: {
+                        plot.shownTick
+                        return plot.traces !== null && !plot.traces.watched(path)
+                    }
+                    readonly property string goneText: {
+                        if (!gone || plot.cursorInView)
+                            return ""
+                        const at = plot.traces.lastReadUtcMs(path)
+                        return isNaN(at) ? qsTr("not read") : qsTr("not read since %1").arg(Qt.formatTime(new Date(at), "HH:mm:ss"))
+                    }
                     // A bool or an enum in words ("true", "Idle"), a number as one.
                     readonly property string words: plot.traces && current !== undefined ? plot.traces.stateText(path, current) : ""
                     readonly property string shown: words.length > 0 ? words : plot.valueText(current)
@@ -361,10 +372,10 @@ FocusScope {
                             Layout.minimumWidth: valueWidth.advanceWidth
                             horizontalAlignment: Text.AlignRight
                             textFormat: Text.PlainText
-                            color: Theme.textPrimary
+                            color: chip.goneText.length > 0 ? Theme.textMuted : Theme.textPrimary
                             font.family: Type.fixedFamily
                             font.pointSize: Type.body
-                            text: chip.shown
+                            text: chip.goneText.length > 0 ? chip.goneText : chip.shown
                             TextMetrics {
                                 id: valueWidth
                                 font.family: Type.fixedFamily
@@ -436,6 +447,7 @@ FocusScope {
                 laneHeight: Type.rowHeight
                 laneFillColor: Theme.neutralContainer
                 laneTextColor: Theme.textPrimary
+                gapColor: Theme.surfaceAlternate
                 referenceColor: Theme.info
                 dotRingColor: Theme.surfaceWindow
                 font.family: Type.fixedFamily
