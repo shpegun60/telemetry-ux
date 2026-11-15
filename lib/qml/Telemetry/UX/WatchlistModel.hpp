@@ -141,6 +141,7 @@ public:
 	// false, and nothing changed, for more than formatLimit paths.
 	bool setPathFormats(QHash<QString, WatchNumberFormat> formats);
 	static constexpr int formatLimit = 4 * maxRows;
+	static_assert(formatLimit > maxRows, "the watched rows' own formats always fit");
 	[[nodiscard]] std::optional<WatchNumberFormat> rowFormat(int row) const;
 	// The type of the row's last reading; invalid before its first.
 	[[nodiscard]] WatchValueType valueType(int row) const;
@@ -221,6 +222,10 @@ private:
 	quint64 sampleEpoch_ = 0;
 	WatchNumberFormat format_ = WatchNumberFormat::Original;
 	QHash<QString, WatchNumberFormat> pathFormats_;
+	// When each path's format was last set: past formatLimit, the paths not
+	// watched now give way, the longest unset first.
+	QHash<QString, quint64> pathStamps_;
+	quint64 stamp_ = 0;
 	quint64 membership_ = 0;
 };
 } // namespace telemetry::ux

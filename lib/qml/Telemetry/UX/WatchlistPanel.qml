@@ -149,8 +149,8 @@ Pane {
         if (!result || result.status !== "ok")
             return false
         forgetMeasured()
-        say(result.rows === 1 ? qsTr("Number formats reset to Original; 1 row had its own")
-            : result.rows > 1 ? qsTr("Number formats reset to Original; %L1 rows had their own").arg(result.rows)
+        say(result.rows === 1 ? qsTr("Number formats reset to Original; 1 value had its own")
+            : result.rows > 1 ? qsTr("Number formats reset to Original; %Ln values had their own", "", result.rows)
             : qsTr("Number formats reset to Original"), true)
         return true
     }
@@ -427,8 +427,13 @@ Pane {
     readonly property real barBase: (fold.visible ? fold.implicitWidth + barGap : 0)
                                     + start.barWidth + barGap + interval.barWidth
                                     + 2 * barGap + more.implicitWidth
-    readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap : 0
-    readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap : 0
+    // The mark of values in a form of their own is always in the row where it
+    // can show, clear when it counts nothing, so it moves nothing.
+    readonly property bool ownMarkShown: formatsResettable && typeof provider.watchOwnFormatCount === "number"
+    readonly property int ownFormatRows: ownMarkShown ? provider.watchOwnFormatCount : 0
+    readonly property real ownMarkWidth: ownMarkShown ? ownFormats.implicitWidth + 2 * barGap : 0
+    readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap + ownMarkWidth : 0
+    readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap + ownMarkWidth : 0
     readonly property bool viewInBar: treeAvailable
                                       && availableWidth >= barBase + formatButtonWidth + viewSegments.implicitWidth + barGap
     readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0) + formatButtonWidth
@@ -745,7 +750,11 @@ Pane {
                         checked: panel.treeView === modelData.tree
                         flat: !checked
                         ButtonGroup.group: viewModes
-                        focusPolicy: checked ? Qt.StrongFocus : Qt.ClickFocus
+                        // One Tab stop a group, the checked one; a segment keeps
+                        // its stop while it has the keys, since a choice made
+                        // elsewhere (an arrow, Undo, a project) cannot take the
+                        // stop from the item the keys are on.
+                        focusPolicy: checked || activeFocus ? Qt.StrongFocus : Qt.ClickFocus
                         Accessible.role: Accessible.RadioButton
                         onClicked: panel.showTree(modelData.tree)
                         Keys.onLeftPressed: {
@@ -763,6 +772,61 @@ Pane {
                         ToolTip.text: modelData.tip
                     }
                 }
+            }
+            // Values shown in a form of their own, other than the Watchlist's
+            // (WL-3c): how many, and a press shows every value as Original.
+            // Before the format control in both its shapes; always in the row
+            // and only clear when there is nothing to count, so its coming
+            // and going moves nothing.
+            Basic.ToolButton {
+                id: ownFormats
+                objectName: "watchOwnFormats"
+                readonly property int rows: panel.ownFormatRows
+                visible: panel.ownMarkShown
+                opacity: rows > 0 ? 1 : 0
+                // Held while it has the keys: a control the keys are on cannot
+                // leave the Tab chain, so they go to the list first.
+                enabled: rows > 0 || activeFocus
+                onRowsChanged: if (rows === 0 && activeFocus) watchList.forceActiveFocus(Qt.TabFocusReason)
+                Layout.leftMargin: panel.barGap
+                Layout.preferredHeight: Type.controlHeight
+                Layout.preferredWidth: implicitWidth
+                FontMetrics { id: ownMetrics; font: ownFormats.font }
+                // As wide as the most it can count, the Watchlist's rows.
+                implicitWidth: {
+                    void ownMetrics.font
+                    return Math.ceil(ownMetrics.advanceWidth("\u25CF " + "9".repeat(String(Math.max(1, panel.count)).length)))
+                           + leftPadding + rightPadding
+                }
+                padding: Type.tight
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                text: "\u25CF " + rows.toLocaleString(Qt.locale(), "f", 0)
+                contentItem: Text {
+                    text: ownFormats.text
+                    font: ownFormats.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    color: ownFormats.hovered ? Theme.textPrimary : Theme.textSecondary
+                    Accessible.ignored: true
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: ownFormats.down ? Theme.statePressed : ownFormats.hovered ? Theme.stateHover : "transparent"
+                    border.width: ownFormats.visualFocus ? 2 : 0
+                    border.color: Theme.focusRing
+                }
+                onClicked: if (rows > 0) panel.resetFormats()
+                readonly property string counted: rows === 1 ? qsTr("1 value shown in a format of its own")
+                                                             : qsTr("%Ln values shown in a format of their own", "", rows)
+                ToolTip.visible: rows > 0 && (hovered || visualFocus)
+                ToolTip.delay: 700
+                ToolTip.text: panel.format === "original"
+                              ? qsTr("%1. Press to show every value as Original (Undo takes it back).").arg(counted)
+                              : qsTr("%1. Press to show every value as Original, the Watchlist's format too (Undo takes it back).").arg(counted)
+                Accessible.role: Accessible.Button
+                Accessible.ignored: rows === 0
+                Accessible.name: qsTr("Show every value as Original (%1)").arg(counted)
             }
             // Original | Dec | Hex, as List | Tree.
             Row {
@@ -792,7 +856,11 @@ Pane {
                         checked: panel.format === modelData.name
                         flat: !checked
                         ButtonGroup.group: formatModes
-                        focusPolicy: checked ? Qt.StrongFocus : Qt.ClickFocus
+                        // One Tab stop a group, the checked one; a segment keeps
+                        // its stop while it has the keys, since a choice made
+                        // elsewhere (an arrow, Undo, a project) cannot take the
+                        // stop from the item the keys are on.
+                        focusPolicy: checked || activeFocus ? Qt.StrongFocus : Qt.ClickFocus
                         Accessible.role: Accessible.RadioButton
                         onClicked: panel.setFormat(modelData.name)
                         Keys.onLeftPressed: if (index > 0) {
@@ -1755,7 +1823,7 @@ Pane {
                             visible: nameHover.hovered && (!watchRow.isValue || prefixText.truncated || leafText.truncated)
                             text: watchRow.isValue ? watchRow.name
                                 : [watchRow.name, watchRow.typeText,
-                                   qsTr("%Ln values watched", "", watchRow.leaves)]
+                                   watchRow.leaves === 1 ? qsTr("1 value watched") : qsTr("%Ln values watched", "", watchRow.leaves)]
                                   .filter(part => part.length > 0).join(" \u00B7 ")
                             delay: 700
                         }
@@ -2214,6 +2282,7 @@ Pane {
                             }
                             onClicked: panel.removeAt(watchRow.index, false, true)
                             readonly property string what: watchRow.isValue ? qsTr("Remove %1").arg(watchRow.name)
+                                : watchRow.leaves === 1 ? qsTr("Remove the 1 value of %1").arg(watchRow.name)
                                 : qsTr("Remove the %Ln values of %1", "", watchRow.leaves).arg(watchRow.name)
                             Accessible.name: what
                             ToolTip.visible: hovered

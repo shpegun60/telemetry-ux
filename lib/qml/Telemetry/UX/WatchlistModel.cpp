@@ -418,16 +418,30 @@ bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> form
 		return false;
 	if (format) {
 		pathFormats_.insert(rows_[row].name, *format);
-		// Bounded: the oldest unwatched paths give way first.
+		pathStamps_.insert(rows_[row].name, ++stamp_);
+		// Bounded: the paths not watched now give way, the longest unset first.
+		// One over the limit at a time, so one pass finds the one to go.
 		if (pathFormats_.size() > formatLimit) {
 			QSet<QString> watched;
 			for (int at = 0; at < count_; ++at)
 				watched.insert(rows_[at].name);
-			for (auto it = pathFormats_.begin(); it != pathFormats_.end() && pathFormats_.size() > formatLimit;)
-				it = watched.contains(it.key()) ? std::next(it) : pathFormats_.erase(it);
+			while (pathFormats_.size() > formatLimit) {
+				QString oldest;
+				quint64 oldestStamp = std::numeric_limits<quint64>::max();
+				for (auto it = pathStamps_.cbegin(); it != pathStamps_.cend(); ++it)
+					if (it.value() < oldestStamp && !watched.contains(it.key())) {
+						oldestStamp = it.value();
+						oldest = it.key();
+					}
+				if (oldest.isEmpty())
+					break;
+				pathFormats_.remove(oldest);
+				pathStamps_.remove(oldest);
+			}
 		}
 	} else {
 		pathFormats_.remove(rows_[row].name);
+		pathStamps_.remove(rows_[row].name);
 	}
 	if (rows_[row].format == format)
 		return true;
@@ -441,6 +455,21 @@ bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
 	if (changing_ || formats.size() > formatLimit)
 		return false;
 	pathFormats_ = std::move(formats);
+	// A path held already keeps when it was set (an Undo puts formats back);
+	// one new to the map is as old as the others put back with it, in path
+	// order, so which give way first never depends on a hash.
+	QHash<QString, quint64> stamps;
+	QStringList fresh;
+	for (auto it = pathFormats_.cbegin(); it != pathFormats_.cend(); ++it) {
+		if (const auto held = pathStamps_.constFind(it.key()); held != pathStamps_.cend())
+			stamps.insert(it.key(), held.value());
+		else
+			fresh << it.key();
+	}
+	std::sort(fresh.begin(), fresh.end());
+	for (const auto& path : std::as_const(fresh))
+		stamps.insert(path, ++stamp_);
+	pathStamps_ = std::move(stamps);
 	for (int row = 0; row < count_; ++row) {
 		const auto remembered = pathFormats_.constFind(rows_[row].name);
 		rows_[row].format = remembered != pathFormats_.cend() ? std::optional(remembered.value()) : std::nullopt;

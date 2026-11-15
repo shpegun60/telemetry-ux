@@ -76,12 +76,13 @@ ApplicationWindow {
             formatChanged()
             return true
         }
+        readonly property int watchOwnFormatCount: Object.values(rowFormats).filter(format => format !== watchFormat).length
         function watchFormatsDiffer() {
             return watchFormat !== "original" || Object.values(rowFormats).some(format => format !== "original")
         }
         function resetWatchFormats() {
-            const rows = Object.keys(rowFormats).length
-            if (watchFormat === "original" && rows === 0)
+            const rows = watchOwnFormatCount
+            if (watchFormat === "original" && Object.keys(rowFormats).length === 0)
                 return { status: "unchanged", rows: 0 }
             const undo = { format: watchFormat, rows: Object.assign({}, rowFormats) }
             resetting = true

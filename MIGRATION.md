@@ -364,3 +364,17 @@ values watched; × names what it removes; rows tell a screen reader what a
 member or element belongs to and whether a node is expandable and expanded
 (Qt 6.12's `Accessible.expandable`/`expanded`), and the selection's size is
 announced once it settles.
+
+## A mark for rows in a format of their own (WL-3c, November 2026)
+
+`DynamicConfiguratorProvider::watchOwnFormatCount` counts the watched rows
+shown in a format of their own other than the Watchlist's, counted once per
+change of the formats or the rows; the reset's notice counts the same rows. The
+panel shows it as a small mark before the format control in both its shapes
+("● 3"), whose press shows every value as Original (with Undo). Where a
+provider has the count the mark is always in the row, only clear and out of
+reach while it counts nothing, so its coming and going moves nothing. Past
+`WatchlistModel::formatLimit`, the formats of paths not watched now give way
+oldest first (by when each was set), no longer in hash order; formats put back
+together (`setPathFormats`, an Undo) keep when each held path was set, and the
+paths new to the map count as set in path order.

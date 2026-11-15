@@ -47,6 +47,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	// How the Watchlist shows its numbers: "original", "dec" or "hex" (WL-3).
 	// The view's only: the recording, Trend and a write are the same in all.
 	Q_PROPERTY(QString watchFormat READ watchFormat WRITE setWatchFormat NOTIFY stateChanged)
+	// Watched rows shown in a format of their own, other than the Watchlist's
+	// (WL-3c): the panel marks them by their count.
+	Q_PROPERTY(int watchOwnFormatCount READ watchOwnFormatCount NOTIFY stateChanged)
 	Q_PROPERTY(bool watchWriting READ watchWriting NOTIFY stateChanged)
 	Q_PROPERTY(QString watchWriteOutcome READ watchWriteOutcome NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -185,11 +188,13 @@ public:
 	// Whether any watched value is shown other than as Original: the
 	// Watchlist's format, or a row's own that is not Original.
 	Q_INVOKABLE bool watchFormatsDiffer() const;
+	int watchOwnFormatCount() const;
 	// Every value back to Original (WL-3b): the Watchlist's format and every
 	// format of a row's own, those kept for paths not watched now too, as one
 	// change undoWatch takes back while no format has changed since.
 	// {status: ok, unchanged (nothing to reset) or refused, rows: the watched
-	// rows that had a format of their own}.
+	// rows that were shown in a format of their own, as watchOwnFormatCount
+	// counts them}.
 	Q_INVOKABLE QVariantMap resetWatchFormats();
 	// The Watchlist's "+" row (WL-4b). What a typed path would add, in words
 	// for the line under it: {status: "adds", "watched", "missing", "error"
