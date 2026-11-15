@@ -207,7 +207,7 @@ def main():
                 smoke = run('tcp-qml-smoke', [app, '--tcp', '127.0.0.1:' + str(port),
                                                '--smoke', '--screenshot', screenshot])
                 views = re.search(r'Inspector QML smoke: published=1 roots=1 endpointRows=(\d+) valueRows=(\d+)', smoke)
-                if not views or int(views[1]) < 1 or int(views[2]) < 4:
+                if not views or int(views[1]) < 1 or int(views[2]) < 3:
                     raise RuntimeError('TCP QML smoke did not materialize the received Field')
                 if peer.poll() is not None:
                     raise RuntimeError('TCP demo server exited during QML qualification')

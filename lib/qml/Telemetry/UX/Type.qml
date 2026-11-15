@@ -69,4 +69,7 @@ QtObject {
     property int spacing: Math.round(bodyPixels * 0.3)
     property int groupSpacing: Math.round(bodyPixels * 0.6)
     property int tight: Math.max(2, Math.round(bodyPixels * 0.2))
+    // Between two columns of a table (12 px): groupSpacing is too tight
+    // between a right-aligned number and a left-aligned type, "230 f32".
+    property int columnGap: Math.round(bodyPixels * 0.9)
 }

@@ -354,6 +354,65 @@ int main(int argc, char** argv)
 		checkGeometry();
 		click(stateWindow, service);
 		CHECK(stateProvider->property("services").toInt() == 1);
+		// The family's rows (BA-4·0b): one row tall, striped, Name, Value and
+		// Type at one x, nothing sideways, Type gone before Name is cut, and the
+		// header's line 2 and status line under the path.
+		{
+			auto* readValues = stateWindow->findChild<QObject*>(QStringLiteral("readValues"));
+			CHECK(readValues && stateProvider->setProperty("serviceSelected", false) &&
+			      stateProvider->setProperty("commandSelected", false) &&
+			      stateProvider->setProperty("editing", false) &&
+			      stateProvider->setProperty("values", QVariant::fromValue(readValues)));
+			for (const int width : {480, 360, 280}) {
+				stateWindow->setWidth(width);
+				settle();
+				auto* tree = item(statePanel, QStringLiteral("valueTree"));
+				CHECK(tree && tree->property("rows").toInt() == 4);
+				CHECK(tree->property("contentWidth").toReal() <= tree->width() + 0.75);
+				QList<QQuickItem*> rows;
+				for (int row = 0; row < 4; ++row) {
+					QQuickItem* at = nullptr;
+					CHECK(QMetaObject::invokeMethod(tree, "itemAtCell", Q_RETURN_ARG(QQuickItem*, at),
+					                                Q_ARG(QPoint, QPoint(0, row))));
+					rows.append(at);
+					CHECK(rows.last());
+				}
+				const auto rowHeight = rows.first()->height();
+				CHECK(rowHeight >= 20 && rowHeight <= 24);
+				const auto stripe = [](QQuickItem* row) {
+					auto* background = qvariant_cast<QQuickItem*>(row->property("background"));
+					return background ? background->property("color").value<QColor>() : QColor();
+				};
+				for (auto* row : rows) {
+					CHECK(std::abs(row->height() - rowHeight) < 0.5);
+					auto* name = item(row, QStringLiteral("detailCellName"));
+					auto* value = item(row, QStringLiteral("valueCell"));
+					auto* type = item(row, QStringLiteral("detailCellType"));
+					CHECK(name && value && type);
+					// Value and Type at one x on every row; Type hides before
+					// Name is narrower than 96 px at the default body.
+					const auto valueX = value->mapToScene(QPointF()).x();
+					CHECK(std::abs(valueX - item(rows.first(), QStringLiteral("valueCell"))->mapToScene(QPointF()).x()) < 0.5);
+					CHECK(!type->isVisible() || name->width() >= 96 - 1);
+					CHECK(name->mapToScene(QPointF(name->width(), 0)).x() <= valueX + 0.5);
+					CHECK(!type->isVisible() || value->mapToScene(QPointF(value->width(), 0)).x() <=
+					                                type->mapToScene(QPointF()).x() + 0.5);
+				}
+				CHECK(stripe(rows[1]) == QColor(QStringLiteral("#151d27")) && stripe(rows[3]) == stripe(rows[1]));
+				CHECK(stripe(rows[0]).alpha() == 0 || stripe(rows[0]) != stripe(rows[1]));
+				auto* line2 = item(statePanel, QStringLiteral("endpointSelectionInfo"));
+				auto* status = item(statePanel, QStringLiteral("endpointStatusLine"));
+				CHECK(line2 && line2->property("text").toString() == QStringLiteral("Field"));
+				CHECK(status && status->property("text").toString() == QStringLiteral("Read"));
+				CHECK(item(statePanel, QStringLiteral("endpointProgress")));
+				CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) +
+				                                     QStringLiteral("/details-family-%1.png").arg(width)));
+			}
+			CHECK(stateProvider->setProperty("editing", true));
+			settle();
+			CHECK(item(statePanel, QStringLiteral("endpointStatusLine"))->property("text").toString() ==
+			      QStringLiteral("Edited, not applied"));
+		}
 		delete stateWindow;
 		QCoreApplication::processEvents();
 		CHECK(warnings == 0);

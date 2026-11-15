@@ -13,6 +13,8 @@
 #include "WatchTraces.hpp"
 #include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QTime>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QPointer>
@@ -257,6 +259,63 @@ void DynamicConfiguratorBinding::requestSubmitted()
 }
 
 namespace {
+QString said(const char* text)
+{
+	return QCoreApplication::translate("DynamicConfiguratorProvider", text);
+}
+
+// Why an action did not finish, in words for "Couldn't read: <why>.".
+QString whyText(const ins::OperationResult& result)
+{
+	switch (result.status) {
+		case cl::Status::Ok:
+			break;
+		case cl::Status::OutcomeUnknown:
+			return said("the reply was lost, and it may have run");
+		case cl::Status::Timeout:
+			return said("no reply in time");
+		case cl::Status::QueueFull:
+		case cl::Status::Busy:
+			return said("the device was busy");
+		case cl::Status::Cancelled:
+			return said("it was cancelled");
+		case cl::Status::CodecError:
+			return said("the reply could not be read");
+		default:
+			return said("the session refused it (status %1)").arg(static_cast<unsigned>(result.status));
+	}
+	if (result.dispatch != 0)
+		return said("the device refused it");
+	const auto code = result.endpointStatus;
+	switch (result.operation) {
+		case cl::Operation::FieldWrite:
+			return code == 2   ? said("it is read-only on the device")
+			       : code == 3 ? said("the device does not take this value")
+			       : code == 4 ? said("the device was busy")
+			       : code == 5 ? said("it is unavailable")
+			                   : said("the device refused it");
+		case cl::Operation::Command:
+			return code == 4 || code == 5 ? said("the device does not take these arguments")
+			       : code == 6            ? said("the device was busy")
+			       : code == 3            ? said("it is unavailable")
+			       : code == 7            ? said("it failed on the device")
+			                              : said("the device refused it");
+		case cl::Operation::Service:
+			return code == 1   ? said("the device does not take these request values")
+			       : code == 2 ? said("it is unavailable")
+			       : code == 3 ? said("the device was busy")
+			       : code == 4 ? said("it failed on the device")
+			                   : said("the device refused it");
+		default:
+			return said("the device refused it");
+	}
+}
+
+QString clockText()
+{
+	return QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+}
+
 QString operationText(const ins::OperationResult& result)
 {
 	if (result.status == cl::Status::OutcomeUnknown)
@@ -412,6 +471,60 @@ struct DynamicConfiguratorProvider::Impl {
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
 	bool writeAttention = false, commandAttention = false, serviceAttention = false;
+	// The last finished action of each kind (a Field's read or write, a
+	// Command, a Service), for Details' status line while its endpoint shows.
+	struct Outcome {
+		quint32 id = 0, session = 0;
+		QString text, tip;
+		bool failed = false;
+	};
+	std::array<Outcome, 3> outcomes;
+	void finished(QString text, bool failed, QString tip = {})
+	{
+		if (category >= 1 && category <= 3)
+			outcomes[std::size_t(category - 1)] = {state ? state->endpointId : 0, state ? state->view.session() : 0,
+			                                       std::move(text), std::move(tip), failed};
+	}
+	// The request sent last, for its unsent marks and a stale response.
+	struct Sent {
+		int category = 0;
+		quint32 id = 0, session = 0;
+		QHash<QString, QString> texts;
+		QString at;
+		QElapsedTimer timer;
+	} sent;
+	bool sentHere() const
+	{
+		return state && sent.category == category && sent.id == state->endpointId &&
+		       sent.session == state->view.session() && !sent.texts.isEmpty();
+	}
+	// texts: the request's values as they were when it was submitted.
+	void remember(QHash<QString, QString> texts)
+	{
+		sent.category = category;
+		sent.id = state->endpointId;
+		sent.session = state->view.session();
+		sent.texts = std::move(texts);
+		sent.at = clockText();
+		sent.timer.start();
+	}
+	// After a reset of the request's values: they are marked against what was
+	// sent, and a Service's response is stale once they differ.
+	void markSent()
+	{
+		if (category != 2 && category != 3)
+			return;
+		if (sentHere())
+			values.setBaseline(sent.texts);
+		staleResponse();
+	}
+	void staleResponse()
+	{
+		const bool changed = category == 3 && sentHere() && values.unsentCount() > 0;
+		responses.setStale(changed, changed ? said("From the call at %1, with %2; the values changed since.")
+		                                          .arg(sent.at, values.baselineLine())
+		                                    : QString{});
+	}
 	std::uint32_t writeSession = 0, commandSession = 0, serviceSession = 0;
 	int category = 0;
 	quint32 responseId = 0;
@@ -760,6 +873,10 @@ struct DynamicConfiguratorProvider::Impl {
 				           snapshot.revision == result.revision;
 				status =
 				    *readDone ? QStringLiteral("Read complete") : operationText(result.operation);
+				if (*readDone)
+					finished(said("Read %1").arg(clockText()), false);
+				else if (!result.operation.succeeded())
+					finished(said("Couldn't read: %1.").arg(whyText(result.operation)), true);
 			}
 			if (state->applied) {
 				const auto result = *state->applied;
@@ -774,6 +891,12 @@ struct DynamicConfiguratorProvider::Impl {
 				            ? QStringLiteral("Applied - readback unconfirmed")
 				            : operationText(result.write);
 				status = write;
+				if (*applyDone)
+					finished(said("Applied %1 · read back").arg(clockText()), false);
+				else if (result.writeCompleted && result.write.succeeded())
+					finished(said("Applied %1 · not read back").arg(clockText()), false);
+				else
+					finished(said("Couldn't write: %1.").arg(whyText(result.write)), true);
 			}
 			if (state->commanded) {
 				const auto result = *state->commanded;
@@ -782,12 +905,24 @@ struct DynamicConfiguratorProvider::Impl {
 				command = status = operationText(result);
 				commandAttention = !result.executed();
 				commandDone = {result.executed(), result.accepted()};
+				if (result.executed())
+					finished(said("Executed %1").arg(clockText()), false);
+				else if (result.accepted())
+					finished(said("Executed %1 · accepted").arg(clockText()), false,
+					         said("Accepted means the device took the Command, not that it finished."));
+				else
+					finished(said("Couldn't execute: %1.").arg(whyText(result)), true);
 			}
 			if (state->serviced) {
 				const auto result = *state->serviced;
 				state->serviced.reset();
 				state->action = DynamicViewState::Action::None;
 				serviceDone = {result.operation.succeeded(), result.published};
+				if (result.operation.succeeded())
+					finished(said("Called %1 · took %L2 ms").arg(clockText()).arg(sent.timer.isValid() ? sent.timer.elapsed() : 0),
+					         false);
+				else
+					finished(said("Couldn't call: %1.").arg(whyText(result.operation)), true);
 				serviceAttention = !result.operation.succeeded() ||
 				                   (!result.published &&
 				                    (result.valueStatus != integration::dynamic::ValueStatus::NoValue ||
@@ -837,6 +972,7 @@ struct DynamicConfiguratorProvider::Impl {
 				} else {
 					values.resetSnapshot(state->view);
 					responses.resetServiceResponse(state->view);
+					markSent();
 				}
 			}
 			state->dirty = false;
@@ -3252,6 +3388,43 @@ QString DynamicConfiguratorProvider::statusText() const
 	return d->status;
 }
 
+QVariantMap DynamicConfiguratorProvider::detailsStatus() const
+{
+	const auto& p = *d;
+	if (!p.current() || p.category == 0)
+		return {};
+	const auto line = [](const QString& text, bool failed = false, const QString& tip = {}) {
+		return QVariantMap{{QStringLiteral("text"), text}, {QStringLiteral("failed"), failed},
+		                   {QStringLiteral("tip"), tip}};
+	};
+	switch (p.state->action) {
+		case DynamicViewState::Action::Read:
+			return line(said("Reading…"));
+		case DynamicViewState::Action::Apply:
+			return line(said("Writing…"));
+		case DynamicViewState::Action::Command:
+			return line(said("Executing…"));
+		case DynamicViewState::Action::Service:
+			return line(said("Calling…"));
+		default:
+			break;
+	}
+	if (p.category == 1 && editing()) {
+		const auto changes = p.values.unsentCount();
+		return line(changes == 0   ? said("Edited, not applied")
+		            : changes == 1 ? said("Edited, not applied · 1 change")
+		                           : said("Edited, not applied · %L1 changes").arg(changes));
+	}
+	if (const auto& last = p.outcomes[std::size_t(p.category - 1)];
+	    !last.text.isEmpty() && last.id == p.state->endpointId && last.session == p.state->view.session())
+		return line(last.text, last.failed, last.tip);
+	if (p.category == 2)
+		return line(said("Not executed yet"));
+	if (p.category == 3)
+		return line(said("Not called yet"));
+	return line(p.values.rowCount() > 0 ? said("Read") : said("Not read yet"));
+}
+
 bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 {
 	auto p = d;
@@ -3296,6 +3469,7 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	p->state->staleData = false;
 	p->values.resetSnapshot(p->state->view);
 	p->responses.clear();
+	p->markSent();
 	p->present();
 	p->status = category == 1
 	                ? QStringLiteral("Press Refresh to read")
@@ -3405,6 +3579,7 @@ bool DynamicConfiguratorProvider::executeCommand()
 	if (!canExecute())
 		return false;
 	auto state = p->state;
+	auto texts = p->values.texts();
 	const auto submitted = state->view.execute([state](const ins::OperationResult& value) noexcept {
 		state->commanded = value;
 		state->dirty = true;
@@ -3416,6 +3591,7 @@ bool DynamicConfiguratorProvider::executeCommand()
 		return false;
 	}
 	state->action = DynamicViewState::Action::Command;
+	p->remember(std::move(texts));
 	p->commandSession = state->view.session();
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
@@ -3440,6 +3616,7 @@ bool DynamicConfiguratorProvider::callService()
 	if (!canCallService())
 		return false;
 	auto state = p->state;
+	auto texts = p->values.texts();
 	const auto submitted =
 	    state->view.callService([state](const wb::ServiceResult& value) noexcept {
 		    state->serviced = value;
@@ -3452,6 +3629,7 @@ bool DynamicConfiguratorProvider::callService()
 		return false;
 	}
 	state->action = DynamicViewState::Action::Service;
+	p->remember(std::move(texts));
 	p->serviceSession = state->view.session();
 	p->responseEndpoint = p->selection;
 	p->responseId = state->endpointId;
@@ -3508,6 +3686,8 @@ bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const 
 		p->invalid.insert(index.internalId());
 	if (!request && p->state->view.editing() && !p->state->view.dirty() && p->invalid.isEmpty())
 		p->state->view.cancelEdit();
+	if (request && valid)
+		p->staleResponse();
 	p->status = valid ? QStringLiteral("Local draft updated")
 	                  : QStringLiteral("Invalid exact scalar value - draft unchanged");
 	p->notify();

@@ -107,6 +107,12 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool commandOutcomeNeedsAttention READ commandOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(bool serviceOutcomeNeedsAttention READ serviceOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
+	// Details' status line for the selection (family spec C): {text, failed,
+	// tip}. "Read 12:04:31", "Edited, not applied · 2 changes", "Applied
+	// 12:05:02 · read back", "Executed 12:05:10 · accepted", "Called 12:05:21 ·
+	// took 3 ms", "Reading…", "Not called yet", or "Couldn't read: <why>."
+	// with failed true. Empty with nothing selected.
+	Q_PROPERTY(QVariantMap detailsStatus READ detailsStatus NOTIFY stateChanged)
 	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 public:
 	explicit DynamicConfiguratorProvider(DynamicConfiguratorBinding* binding = nullptr,
@@ -317,6 +323,7 @@ public:
 	bool commandOutcomeNeedsAttention() const;
 	bool serviceOutcomeNeedsAttention() const;
 	QString statusText() const;
+	QVariantMap detailsStatus() const;
 	Q_INVOKABLE bool setPresentation(const QByteArray& json);
 	QString presentationError() const;
 	Q_INVOKABLE bool selectEndpoint(const QModelIndex& index);

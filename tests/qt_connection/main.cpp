@@ -1970,24 +1970,35 @@ ApplicationWindow {
 	std::unique_ptr<QObject> object(component.create());
 	auto* window = qobject_cast<QQuickWindow*>(object.get());
 	CHECK(window && QTest::qWaitForWindowExposed(window));
-	CHECK(visual(window->contentItem(), QStringLiteral("writeOutcomeLabel")));
-	CHECK(!visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")));
-	CHECK(!visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
+	// Each panel's outcome is on its status line (family spec C), under the
+	// header: the Field's write while Config shows, nothing for the others.
+	auto* fieldPanel = window->findChild<QQuickItem*>(QStringLiteral("fieldPanel"));
+	auto* commandPanel = window->findChild<QQuickItem*>(QStringLiteral("commandPanel"));
+	auto* servicePanel = window->findChild<QQuickItem*>(QStringLiteral("servicePanel"));
+	CHECK(fieldPanel && commandPanel && servicePanel);
+	const auto statusOf = [](QQuickItem* panel) {
+		auto* line = visual(panel, QStringLiteral("endpointStatusLine"));
+		return line ? line->property("text").toString() : QString{};
+	};
+	// The panel reads the Field it shows (changes are allowed), so its line
+	// says that read, the newest of the Field's actions.
+	CHECK(await([&] { return statusOf(fieldPanel).startsWith(QStringLiteral("Read ")); }));
+	CHECK(statusOf(commandPanel).isEmpty() && statusOf(servicePanel).isEmpty());
 	const auto writes = peer.nativeWrites(), commands = peer.nativeCommands(), services = peer.nativeServices();
 	connection.disconnect();
 	CHECK(!provider->writeOutcomeNeedsAttention() && !provider->commandOutcomeNeedsAttention() &&
 	      !provider->serviceOutcomeNeedsAttention());
+	// After the drop each panel keeps its kind's outcome, said as such.
+	const QString before = QStringLiteral("Before the connection dropped: ");
 	CHECK(await([&] {
-		return visual(window->contentItem(), QStringLiteral("writeOutcomeLabel")) &&
-		       visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")) &&
-		       visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel"));
+		return statusOf(fieldPanel).startsWith(before) && statusOf(commandPanel).startsWith(before) &&
+		       statusOf(servicePanel).startsWith(before);
 	}));
 	CHECK(!visual(window->contentItem(), QStringLiteral("applyButton")) &&
 	      !visual(window->contentItem(), QStringLiteral("executeButton")) &&
 	      !visual(window->contentItem(), QStringLiteral("callServiceButton")));
 	connect(connection, peer);
-	CHECK(!visual(window->contentItem(), QStringLiteral("commandOutcomeLabel")) &&
-	      !visual(window->contentItem(), QStringLiteral("serviceOutcomeLabel")));
+	CHECK(await([&] { return statusOf(commandPanel).isEmpty() && statusOf(servicePanel).isEmpty(); }));
 	CHECK(peer.nativeWrites() == writes && peer.nativeCommands() == commands && peer.nativeServices() == services);
 	connection.disconnect();
 }

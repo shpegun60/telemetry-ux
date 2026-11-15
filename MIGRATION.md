@@ -796,3 +796,51 @@ device…" shown on time, while the session publishes nothing.
   yet, none while another request is pending, none with changes off. A check
   that counts reads after selecting a Field with changes allowed counts one
   more; one that wants the unread definition turns changes off first.
+
+## Details looks like the family (BA-4·0b, November 2026)
+
+- **Header, line 2, status line.** The header holds the path (elided in the
+  middle) and the panel's actions in a row at the right, which take their own
+  row below 360 px. Under it a `ProgressLine` (`endpointProgress`) runs while
+  the provider is busy; the BusyIndicator is gone. Line 2
+  (`endpointSelectionInfo`, a caption) says the selection in words, from the
+  provider's `selectionInfo.detail` ("Field · f32 · 4 bytes · read only"),
+  which the Dynamic provider now supplies; other providers get it composed.
+  The status line (`endpointStatusLine`) replaces "Local draft",
+  `definitionUnreadNote`, "Previous connection" and the bottom
+  `writeOutcomeLabel`, `commandOutcomeLabel` and `serviceOutcomeLabel`, which
+  are removed. After a disconnect a category panel's status line keeps its
+  outcomes as "Before the connection dropped: …". A check that read those
+  labels reads the status line.
+- **`DynamicConfiguratorProvider::detailsStatus`** (new, `{text, failed,
+  tip}`): "Read 12:04:31", "Edited, not applied · 2 changes", "Applied
+  12:05:02 · read back", "Executed 12:05:10 · accepted", "Called 12:05:21 ·
+  took 3 ms", "Reading…", "Not read yet", "Not executed yet", "Not called
+  yet", and on a failure "Couldn't write: the device does not take this
+  value." with `failed` true (an error glyph, the text in the primary colour).
+  A provider without it gets a status line made from its outcomes.
+- **Tables.** No root rows: a struct's or a request's members are the top rows
+  (`ValueModel::contentRoot()`, used as the TreeView's `rootIndex`; the model
+  keeps its root, so C++ code that walks `index(0, 0)` is unchanged). Rows are
+  striped with `surfaceAlternate`, hovered with `stateHover`, selected with
+  `stateSelected` (`stateSelectedInactive` without focus). Columns follow
+  family spec A3: Name fills, Value grows to the widest value shown, Type to
+  the widest type (40 to 128 px) and hides before Name is narrower than 96 px;
+  nothing scrolls sideways any more (the horizontal scroll bars are gone).
+  New token `Type.columnGap` (12 px at the default body).
+- **Section headings and captions.** A Command's values are headed
+  "Arguments", a Service's "Request" and "Response", each once, under the
+  caption "Start at zero, not at the device's defaults."; a Service that takes
+  nothing says "Takes no request values.". The panel has no card and no radius
+  any more (`framed` keeps only its padding).
+- **Unsent and stale.** New `ValueModel` roles `unsent`, `stale` and
+  `staleNote`, properties `stale` and `staleNote`, and `texts()`,
+  `setBaseline()`, `clearBaseline()`, `unsentCount()`, `baselineLine()` and
+  `setStale()`. A draft's value that differs from the value read, and a
+  request's value that differs from the one last sent, have a 2 px accent line
+  at the row's left. A Service's response whose request changed since the call
+  is italic and muted under "From the call at 14:02:11, with value=2 factor=3;
+  the values changed since." (`responseStaleNote`).
+- **For the Batch's pane (BA-4a)** the panel takes `title`, `infoPrefix`,
+  `actionsComponent` (replaces Read, Cancel, Apply, Execute and Call) and
+  `emptyResponseText`; `refusalText` and `contextHelp` may be set.

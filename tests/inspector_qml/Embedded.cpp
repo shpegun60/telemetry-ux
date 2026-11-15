@@ -199,7 +199,7 @@ int main(int argc, char** argv)
 	const auto gain = member(values, QStringLiteral("Gain"));
 	CHECK(gain.isValid());
 	CHECK(values.data(gain, ui::ValueModel::ValueRole).toString() == QStringLiteral("10"));
-	CHECK(control(*window, QStringLiteral("writeOutcomeLabel"))
+	CHECK(control(*window, QStringLiteral("endpointStatusLine"))
 	          ->property("text")
 	          .toString()
 	          .contains(QStringLiteral("applied"), Qt::CaseInsensitive));

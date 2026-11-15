@@ -51,3 +51,9 @@ putting the last value back, Escape the value it had when opened, Tab and
 Shift+Tab asking for the next and previous cell, a bool's and an enum's choice
 as wide as its items with "Enter code…", a float's Encoded caption, and a locked
 or read-only cell that never opens (`value-cell-*.png`).
+
+`EndpointStates.qml` also gives Details a Field's read values (BA-4·0b): at
+480, 360 and 280 px every row is one row tall, striped with `surfaceAlternate`,
+Value and Type at one x on every row, nothing scrolls sideways, Type hides
+before Name is narrower than 96 px, and line 2 and the status line say "Field"
+and "Read", then "Edited, not applied" with a draft (`details-family-*.png`).

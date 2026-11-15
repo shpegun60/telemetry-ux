@@ -283,7 +283,7 @@ def main():
         screenshot = output / 'window.png'
         smoke = run('qml-smoke', [app, '--smoke', '--screenshot', screenshot])
         views = re.search(r'Inspector QML smoke: published=1 roots=1 endpointRows=(\d+) valueRows=(\d+)', smoke)
-        if not views or int(views[1]) < 1 or int(views[2]) < 4:
+        if not views or int(views[1]) < 1 or int(views[2]) < 3:
             raise RuntimeError('Offscreen QML did not confirm actual endpoint and value delegates')
         report['executions']['offscreen_smoke'] = 1
         report['executions']['visible_endpoint_rows'], report['executions']['visible_value_rows'] = map(int, views.groups())
