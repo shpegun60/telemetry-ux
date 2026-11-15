@@ -13,6 +13,14 @@ same-peer fresh admission, removing accepted panels, factory self-deletion,
 reentrant disconnect and deleting Session from model reset. The same shipped
 example QML is loaded with zero tolerated warnings.
 
+The Session runs only when it has work (SDK #63), and a provider's Refresh,
+Apply, Command, Service and Watchlist row write go straight into its Workbench,
+past it: each wakes it (SDK-2b). The first check times each of them over TCP
+and requires every one under 100 ms - without the wake each waited for the
+Session's 1 s idle heartbeat - and requires that a connected Session with two
+bound providers, no Watchlist and no previews publishes no `progressed()` in
+half a second, before and after.
+
 The maintained outcome assertions also cover the optional typed attention flags:
 confirmed Write/readback and Executed are neutral; Accepted, unknown results and
 unconfirmed readback require attention; successful Void is neutral. Terminal

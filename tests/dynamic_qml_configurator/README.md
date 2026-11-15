@@ -45,6 +45,10 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   normalized readback and bounded 128-row lazy array materialization.
 - Post-handoff lost Command result remains `OutcomeUnknown` at the owner even
   when its presentation is removed; late old replies are rejected.
+- `DynamicConfiguratorBinding::submitted()` once per accepted Refresh, Apply,
+  Command and Service, with the request already in the owner's queue (an
+  Apply's read back is the Workbench's own and adds none), and never for a
+  refusal - what a host whose owner runs only on demand wakes it on.
 
 QML warnings remain failures. The sanitizer profile uses only the existing narrow
 upstream Qt software-texture exception (`QSGRenderContext::textureForFactory`);

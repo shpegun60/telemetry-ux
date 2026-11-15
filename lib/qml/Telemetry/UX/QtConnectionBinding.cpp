@@ -640,6 +640,14 @@ public:
 		    owner->inspector, owner, nullptr,
 		    QStringLiteral("0x%1").arg(owner->schema.fingerprint(), 16, 16, QLatin1Char('0')));
 		current->setMutationsAllowed(allowed);
+		// The providers submit to the session's Workbench, past the session,
+		// which runs only when it has work: each accepted request wakes it, or
+		// it would wait for the session's idle heartbeat, up to a second.
+		QObject::connect(current.get(), &DynamicConfiguratorBinding::submitted, session.data(),
+		                 [target = QPointer<integration::qt::ConnectionSession>(session)] {
+			                 if (target)
+				                 target->wake();
+		                 });
 		EndpointPreviewSource source;
 		const QPointer<ConnectionViews> registry(this);
 		const QPointer<integration::qt::ConnectionSession> target(session);

@@ -5,6 +5,7 @@
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 #include <algorithm>
 #include <limits>
 
@@ -56,8 +57,32 @@ struct EndpointPreviews::Impl {
     bool landedOnce = false, readSoon = true;
     int intervalMs = intervalDefaultMs;
     bool polling = false;
+    // The session runs only when it has work, so its progress is no clock:
+    // this wakes poll() when a cycle falls due and when the ages shown move on.
+    QTimer next;
 
     int staleMs() const { return std::max(staleFloorMs, 3 * intervalMs); }
+    // Armed for the nearest of: the next cycle, the next whole second (the
+    // ages shown), while Fields are in view and the source is current; off
+    // otherwise. A reply in flight, or a cycle held back while the session is
+    // busy, is polled by the progress that ends it; the second's tick stays
+    // as the backstop.
+    void arm() {
+        if (!q || !current() || demanded.isEmpty()) {
+            next.stop();
+            return;
+        }
+        const auto at = now();
+        qint64 wait = 1000 - ((at % 1000) + 1000) % 1000;
+        if (!cycle && !pending && source.read) {
+            const auto since = at - landed;
+            qint64 due = landedOnce ? intervalMs - since : 0;
+            if (readSoon) due = std::min(due, qint64(soonMs) - since);
+            if (due > 0) wait = std::min(wait, due);
+            else if (!source.busy || !source.busy()) wait = 0;
+        }
+        next.start(int(std::clamp<qint64>(wait, 0, 1000)));
+    }
     static EndpointPreviewResult failed(client::Status status, QString reason)
     {
         EndpointPreviewResult out;
@@ -275,9 +300,14 @@ EndpointPreviews::EndpointPreviews(QObject* parent, Clock clock)
         const auto timer = d->elapsed;
         d->now = [timer] { return timer.elapsed(); };
     }
+    d->next.setSingleShot(true);
+    // Exact: a coarse timer may fire early and find nothing due yet.
+    d->next.setTimerType(Qt::PreciseTimer);
+    connect(&d->next, &QTimer::timeout, this, &EndpointPreviews::poll);
 }
 EndpointPreviews::~EndpointPreviews() {
     d->q.clear();
+    d->next.stop();
     for (auto& lease : d->leases) QObject::disconnect(lease.destroyed);
 }
 void EndpointPreviews::setSource(EndpointPreviewSource source) {
@@ -286,6 +316,7 @@ void EndpointPreviews::setSource(EndpointPreviewSource source) {
     for (auto& lease : p->leases) QObject::disconnect(lease.destroyed);
     p->leases.clear(); p->demanded.clear(); p->entries.clear(); p->fields.clear();
     p->source = std::move(source); p->cycle.reset(); p->landedOnce = false; p->readSoon = true;
+    p->arm();
     // The schema outlives the loop: endpoints() refers into it.
     if (p->current()) {
         const auto schema = p->schema();
@@ -297,7 +328,7 @@ void EndpointPreviews::setSource(EndpointPreviewSource source) {
 }
 void EndpointPreviews::retire() { setSource({}); }
 void EndpointPreviews::invalidateValues() {
-    auto p = d; p->invalidate(); Q_EMIT changed();
+    auto p = d; p->invalidate(); p->arm(); Q_EMIT changed();
 }
 bool EndpointPreviews::current() const { return d->current(); }
 runtime::RuntimeSchema EndpointPreviews::schema() const { return d->schema(); }
@@ -319,6 +350,7 @@ bool EndpointPreviews::setDemand(QObject* view, const QList<quint32>& ids) {
     if (lease->ids == accepted) return true;
     lease->ids = std::move(accepted);
     p->collect();
+    p->arm();
     Q_EMIT changed();
     return true;
 }
@@ -330,6 +362,7 @@ void EndpointPreviews::clearDemand(QObject* view) {
         QObject::disconnect(lease.destroyed); return true;
     });
     p->collect();
+    p->arm();
     if (count != p->leases.size()) Q_EMIT changed();
 }
 
@@ -383,10 +416,12 @@ QString EndpointPreviews::value(quint32 id, TypeId typeId, quint32 offset) const
 int EndpointPreviews::cachedFields() const { return int(d->entries.size()); }
 int EndpointPreviews::cachedBytes() const { return d->bytes(); }
 bool EndpointPreviews::pending() const { return d->pending.has_value(); }
+int EndpointPreviews::nextPollInMs() const { return d->next.isActive() ? d->next.remainingTime() : -1; }
 
 int EndpointPreviews::interval() const { return d->intervalMs; }
 void EndpointPreviews::setInterval(int ms) {
     d->intervalMs = std::clamp(ms, int(intervalMinimumMs), int(intervalMaximumMs));
+    d->arm();
 }
 void EndpointPreviews::readNow() {
     d->readSoon = true;
@@ -445,6 +480,7 @@ void EndpointPreviews::poll() {
         p->ageTick = now / 1000; tell = true;
     }
     p->polling = false;
+    p->arm();
     if (tell && p->q) Q_EMIT p->q->changed();
 }
 

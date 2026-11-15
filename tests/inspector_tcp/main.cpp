@@ -10,6 +10,7 @@
 #include <telemetry/descriptor/Format.hpp>
 #include <wire/EncodedWire.hpp>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
@@ -20,6 +21,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 
 namespace ui = inspector_qml;
 
@@ -642,6 +644,59 @@ void writableSocketCycle()
 	CHECK(client.values.rowCount() == 0);
 }
 
+// Over TCP the Inspector's requests go straight into the SDK session's
+// Workbench, past the session, which runs only when it has work: each one
+// wakes it (SDK-2b), and so does a Configurator panel's through its binding.
+// Each from rest, they end far inside the session's 1 s idle heartbeat.
+void tcpRequestsWakeTheSession()
+{
+	ui::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	Client client;
+	client.connect(peer);
+	auto* panel = qobject_cast<telemetry::ux::DynamicConfiguratorProvider*>(client.controller.createConfigurator());
+	CHECK(panel);
+	// Waits for the next event, waking at least every millisecond: a 1 ms
+	// sleep lasts a Windows timer quantum and would measure the wait.
+	const auto timed = [&](const std::function<bool()>& submit, const std::function<bool()>& done) {
+		CHECK(await([&] { return !client.controller.busy() && !panel->busy(); }));
+		QTest::qWait(50);
+		QTimer wake;
+		wake.setTimerType(Qt::PreciseTimer);
+		wake.start(1);
+		QElapsedTimer clock;
+		clock.start();
+		CHECK(submit());
+		while (!done() && clock.elapsed() < 10000)
+			QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents);
+		CHECK(done());
+		return clock.elapsed();
+	};
+	client.select(0);
+	const auto finished = client.finished.count();
+	const auto refresh = timed([&] { return client.controller.refresh(); }, [&] {
+		return client.finished.count() == finished + 1 && !client.controller.busy();
+	});
+	CHECK(client.finished.last().at(0).toBool() && client.values.rowCount() == 1);
+	client.controller.setWritesEnabled(true);
+	CHECK(client.controller.beginEdit());
+	CHECK(client.controller.setScalarText(
+	    named(client.values, client.values.index(0, 0), QStringLiteral("Gain")), QStringLiteral("25")));
+	QSignalSpy applied{&client.controller, &ui::InspectorController::applyFinished};
+	const auto apply = timed([&] { return client.controller.apply(); },
+	                         [&] { return applied.count() == 1 && !client.controller.busy(); });
+	CHECK(applied.last()[0].toBool() && peer.fieldWrites() == 1);
+	auto* fields = qobject_cast<ui::EndpointModel*>(panel->endpoints());
+	CHECK(fields && panel->selectEndpoint(endpoint(*fields, 1, 0)));
+	const auto panelRefresh = timed([&] { return panel->refresh(); },
+	                                [&] { return !panel->busy() && panel->values()->rowCount() == 1; });
+	std::printf("Inspector TCP wake refresh=%lldms apply=%lldms panel_refresh=%lldms\n",
+	            static_cast<long long>(refresh), static_cast<long long>(apply),
+	            static_cast<long long>(panelRefresh));
+	CHECK(refresh < 100 && apply < 100 && panelRefresh < 100);
+}
+
 void explicitDisconnectWrites()
 {
 	for (const bool confirmedWrite : {false, true}) {
@@ -1025,6 +1080,7 @@ void serviceSocketOutcomes()
 int main(int argc, char** argv)
 {
 	QGuiApplication application{argc, argv};
+	tcpRequestsWakeTheSession();
 	explicitDisconnectWrites();
 	realSocketReads();
 	connectionBoundaries();

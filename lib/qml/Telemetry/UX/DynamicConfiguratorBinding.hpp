@@ -9,7 +9,8 @@ class DynamicConfiguratorProvider;
 class DynamicViewState;
 
 // One binding borrows one admitted Workbench. It creates no client, transport,
-// timer or execution queue. The host calls poll() AFTER progressing the owner.
+// timer or execution queue. The host calls poll() AFTER progressing the owner,
+// and starts the owner's progress on submitted() when it runs only on demand.
 // ownerStorage retains the Workbench, Descriptor and caller-owned buffers.
 // Retire this binding before closing the owner. Destroy only after drained().
 class DynamicConfiguratorBinding final : public QObject {
@@ -32,6 +33,14 @@ public:
 Q_SIGNALS:
 	void changed();
 	void managedMutationAccepted();
+	// A provider's view put a request in the owner's queue: a Refresh, Apply,
+	// Command, Service, or either step of a Watchlist row write. Once per
+	// accepted submission, never for a refused one, synchronously inside the
+	// provider's call. A host whose owner runs only when it has work starts a
+	// pass here - QtConnectionBinding connects it to ConnectionSession::wake().
+	// A receiver queues that work; it must not progress the owner or destroy a
+	// provider or this binding from inside the signal.
+	void submitted();
 	// Delivered once after native progress, including panels removed in flight.
 	// Owns operation facts only; values remain in each view's guarded snapshot.
 	void operationFinished(QVariantMap facts);
@@ -42,5 +51,6 @@ private:
 	std::unique_ptr<Impl> d;
 	std::shared_ptr<DynamicViewState> acquire();
 	void mutationAccepted(const std::shared_ptr<DynamicViewState>& origin);
+	void requestSubmitted();
 };
 } // namespace telemetry::ux

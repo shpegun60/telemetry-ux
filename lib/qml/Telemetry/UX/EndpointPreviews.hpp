@@ -72,12 +72,16 @@ public:
     // are retained. Visible children request their owning Field, never a leaf.
     bool setDemand(QObject* view, const QList<quint32>& ids);
     void clearDemand(QObject* view);
-    // Called LAST by the existing progress owner, after foreground/Watch/Batch.
-    // At most one accepted background request, sent only while the session is
-    // idle; no timer and no retry backlog. A cycle reads the Fields in view in
-    // as few requests as the device allows - scalars by ReadMany, the rest
-    // whole in a Batch, each on its own without them - and its values land
-    // together when the last reply is in.
+    // Called LAST by the existing progress owner, after foreground/Watch/Batch,
+    // which takes in a reply; and by its own single-shot timer, armed only
+    // while Fields are in view, for the next cycle falling due and for the
+    // next whole second, when the ages shown move on (the session runs only
+    // when it has work, so its progress is no clock). At most one accepted
+    // background request, sent only while the session is idle; no retry
+    // backlog. A cycle reads the Fields in view in as few requests as the
+    // device allows - scalars by ReadMany, the rest whole in a Batch, each on
+    // its own without them - and its values land together when the last reply
+    // is in.
     void poll();
     int interval() const;
     void setInterval(int ms); // clamped to intervalMinimumMs..intervalMaximumMs
@@ -91,6 +95,9 @@ public:
     int cachedFields() const;
     int cachedBytes() const;
     bool pending() const;
+    // In how many ms poll() runs on its own timer; -1 while it is off (no
+    // Field in view, or no current source).
+    int nextPollInMs() const;
 Q_SIGNALS:
     void sourceChanged();
     // id == 0 is not a sentinel: the signal invalidates the whole local cache.

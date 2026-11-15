@@ -37,6 +37,12 @@ one-active-client admission, and invalid stream prefixes. The server's fault
 controls make these boundaries deterministic; they do not assert how an operating
 system happens to segment TCP traffic.
 
+The SDK session runs only when it has work (SDK #63), and the Inspector puts its
+TCP requests straight into the session's Workbench. The first check sends a
+Refresh, an Apply and a Configurator panel's Refresh, each with the session at
+rest, and requires each to end within 100 ms: each wakes the session, where it
+would otherwise wait for the session's 1 s idle heartbeat (SDK-2b).
+
 A complete checked response followed immediately by EOF must produce exactly one
 successful completion before disconnect clears its displayed snapshot. A response
 that misses the request deadline must not publish success. A correlated temporary

@@ -5,6 +5,9 @@
 #include <Telemetry/UX/WatchTraces.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
+#include <QtCore/QTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -163,6 +166,95 @@ void click(QQuickWindow& window, QQuickItem& item)
 	CHECK(target->isEnabled() && !visible.isEmpty() && point.x() >= 0 && point.y() >= 0 &&
 	      point.x() < window.width() && point.y() < window.height());
 	QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
+}
+
+// The session runs only when it has work and cannot see a request a provider
+// puts straight into its Workbench: each one wakes it (SDK-2b). Without that
+// every Refresh, Apply, Command, Service and row write waited for the
+// session's idle heartbeat, about a second. Idle, with providers bound and no
+// Watchlist or preview running, nothing is published at all.
+void wakesTheSession()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	auto* sibling = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	CHECK(sibling && sibling->connected());
+	QSignalSpy progressed(&connection, &host::ConnectionSession::progressed);
+	const auto idle = [&] {
+		CHECK(await([&] {
+			return !connection.busy() && !provider->busy() && !provider->watchPending() &&
+			       !provider->watchActive() && !provider->watchWriting();
+		}));
+		QTest::qWait(50);
+		progressed.clear();
+		QTest::qWait(500);
+		return progressed.count();
+	};
+	const auto quietBefore = idle();
+	// Runs the loop as a program does, waiting for the next event and waking at
+	// least every millisecond: await()'s 1 ms sleeps last a Windows timer
+	// quantum, about 15.6 ms, and would measure the wait, not the request.
+	// Each from rest: the pass the Session queues after a completion would
+	// otherwise carry the next request out without a wake of its own.
+	const auto timed = [&](const std::function<bool()>& submit, const std::function<bool()>& done) {
+		CHECK(await([&] { return !connection.busy() && !provider->busy(); }));
+		QTest::qWait(50);
+		QTimer wake;
+		wake.setTimerType(Qt::PreciseTimer);
+		wake.start(1);
+		QElapsedTimer clock;
+		clock.start();
+		CHECK(submit());
+		while (!done() && clock.elapsed() < 10000)
+			QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents);
+		CHECK(done());
+		return clock.elapsed();
+	};
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Config"))));
+	const auto refresh = timed([&] { return provider->refresh(); },
+	                           [&] { return !provider->busy() && provider->values()->rowCount() == 1; });
+	CHECK(provider->beginEdit());
+	CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")), QStringLiteral("2.5")));
+	QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+	const auto writes = peer.nativeWrites();
+	const auto apply = timed([&] { return provider->apply(); },
+	                         [&] { return applied.count() == 1 && !provider->busy(); });
+	CHECK(applied.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
+	const auto commands = peer.executedCommands();
+	const auto execute = timed([&] { return provider->executeCommand(); },
+	                           [&] { return !provider->busy() && peer.executedCommands() == commands + 1; });
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Ping"), {}, 3)));
+	QSignalSpy serviced(provider, &ux::DynamicConfiguratorProvider::serviceFinished);
+	const auto service = timed([&] { return provider->callService(); },
+	                           [&] { return serviced.count() == 1 && !provider->busy(); });
+	CHECK(serviced.last().at(0).toBool());
+	// A Watchlist row write is two requests: the Field read, then the write
+	// with its read back.
+	provider->setWatchIndividual(true);
+	const auto setpoint = endpoint(provider->endpoints(), QStringLiteral("Setpoint"));
+	CHECK(provider->addWatchMany({QVariant::fromValue(setpoint)}).value("added").toInt() == 1);
+	CHECK(await([&] { return provider->canWriteWatch(); }));
+	QSignalSpy wrote(provider, &ux::DynamicConfiguratorProvider::watchWriteFinished);
+	const auto rowWrite = timed([&] { return provider->writeWatch(0, QStringLiteral("321")); },
+	                            [&] { return wrote.count() == 1; });
+	CHECK(wrote.last().at(0).toBool());
+	const auto quietAfter = idle();
+	std::printf("Qt Session wake refresh=%lldms apply=%lldms execute=%lldms service=%lldms row_write=%lldms "
+	            "idle_progressed=%d,%d\n",
+	            static_cast<long long>(refresh), static_cast<long long>(apply),
+	            static_cast<long long>(execute), static_cast<long long>(service),
+	            static_cast<long long>(rowWrite), int(quietBefore), int(quietAfter));
+	CHECK(refresh < 100 && apply < 100 && execute < 100 && service < 100 && rowWrite < 100);
+	CHECK(quietBefore == 0 && quietAfter == 0);
+	connection.disconnect();
 }
 
 void twoPanels()
@@ -2082,6 +2174,7 @@ int main(int argc, char** argv)
 			++warnings;
 		std::fprintf(stderr, "%s\n", qPrintable(text));
 	});
+	wakesTheSession();
 	twoPanels();
 	nativeWatchFrames();
 	bulkSessionWatch();

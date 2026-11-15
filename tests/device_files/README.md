@@ -21,6 +21,11 @@ over localhost TCP to the SDK's native server. No board.
     when cancelled.
   - A transfers model destroyed in the middle of a read hands its reader to the
     session, which stays usable.
+  - A device that keeps its answer back mid-download: the Session, which runs
+    only when it has work, publishes nothing, yet the row is published on the
+    model's own 250 ms clock - the rate once it can be trusted, then "waiting
+    for the device…" three seconds after the last byte - and, released, the
+    file is whole; once nothing runs the row is not published again.
   - Uploads (`DeviceFileTransfers::upload`) to writable files of a device of
     its own, each ending with its `Outcome`: written, saved and read back, the
     record (marked as written) and the open viewer's reference then the new

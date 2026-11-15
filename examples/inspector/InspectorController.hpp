@@ -340,6 +340,9 @@ private:
 	void notifyState(Completion completion, std::optional<bool> read = {});
 	void bindTransportSignals();
 	void bindCurrentState();
+	// A request accepted straight into the TCP session's Workbench, past the
+	// session: wake it, since it runs only when it has work.
+	void wakeTcpSession();
 	void tcpAdmissionChanged();
 	void transportFailed(quint64 epoch, QString error);
 	void transportDescriptor(quint64 epoch, QByteArray bytes);

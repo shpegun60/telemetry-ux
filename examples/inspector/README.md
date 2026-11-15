@@ -234,6 +234,14 @@ is copied before `prepareHandoff()`, then only its unsent tail is written. Qt
 owns each accepted socket-write copy. Replies retain their received session and
 request ID; old identities cannot be relabelled as the current request.
 
+Over TCP the Inspector's State is the SDK `ConnectionSession`'s storage, and its
+Refresh, Apply, Command, Service and Watchlist reads go straight into that
+session's Workbench. The session runs only when it has work and cannot see
+them, so each accepted one calls `ConnectionSession::wake()`; the Configurator
+panels of `createConfigurator()` do the same through their binding's
+`submitted()`. Without it each request would wait for the session's idle
+heartbeat, up to a second.
+
 The supported server profile is a direct, single-active-client connection with
 synchronous dispatch. The server must finish dispatch and release the previous
 connection before serving a new client's Descriptor. Both the included host
