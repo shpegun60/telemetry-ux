@@ -20,12 +20,114 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 FocusScope {
     id: plot
     // A provider's WatchTraces (provider.watchTraces); null shows nothing.
     property var traces: null
+    // The provider, optional: with it, values dropped from the Device tree
+    // join the Watchlist first, so they are read and plotted (LP-1g3).
+    property var provider: null
+    // The measurements (analysis, M): a table of every curve over the time
+    // in view, or from the reference to the end, in place of the chips.
+    property bool measuring: false
+    // "62.4 %"
+    function percentText(share) {
+        return qsTr("%1 %").arg((share * 100).toFixed(1))
+    }
+    // A state's row: "true 62.4 % of the time · 14 changes", or each state's
+    // share, the largest first.
+    function sharesText(stats) {
+        if (!stats || !stats.shares || stats.shares.length === 0)
+            return qsTr("No readings in this range")
+        const changes = stats.changes === 1 ? qsTr("1 change") : qsTr("%L1 changes").arg(stats.changes)
+        if (stats.shares.length <= 2 && stats.shares.some(s => s.name === "true")) {
+            const yes = stats.shares.find(s => s.name === "true")
+            return qsTr("true %1 of the time · %2").arg(percentText(yes ? yes.share : 0)).arg(changes)
+        }
+        return stats.shares.slice(0, 4).map(s => s.name + " " + percentText(s.share)).join(" · ") + " · " + changes
+    }
+    // What the last drop, copy, save or find did, until the next one or ×.
+    property string notice: ""
+    Connections {
+        target: view
+        function onFindFailed(words) { plot.notice = words }
+    }
+    // The Plot as shown, onto the clipboard.
+    function copyPicture() {
+        plot.grabToImage(result => {
+            plot.notice = Clipboard.setImage(result.image) ? qsTr("Copied the picture.")
+                                                           : qsTr("The picture could not be copied.")
+        })
+    }
+    // The readings in view, for a spreadsheet: tabs, this PC's decimal sign.
+    function copyValues() {
+        const readings = view.readingsInRange()
+        Clipboard.setText(view.valuesText(false))
+        notice = qsTr("Copied %L1 readings of %L2 values.").arg(readings).arg(plotted.length)
+    }
+    // "plot 2026-11-15 12-04-31.csv"
+    function csvName() {
+        return "plot " + Qt.formatDateTime(new Date(), "yyyy-MM-dd HH-mm-ss") + ".csv"
+    }
+    function saveValuesTo(url) {
+        const readings = view.readingsInRange()
+        const why = view.saveValues(url)
+        const name = String(url).replace(/^.*[\\/]/, "")
+        notice = why.length > 0 ? why : qsTr("Saved %L1 readings of %L2 values to %3.").arg(readings).arg(plotted.length).arg(name)
+        return why.length === 0
+    }
+    FileDialog {
+        id: saveDialog
+        objectName: "plotSaveDialog"
+        title: qsTr("Save the values in view")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Comma-separated values (*.csv)")]
+        defaultSuffix: "csv"
+        onAccepted: plot.saveValuesTo(selectedFile)
+    }
+    // Puts dropped values on the Plot: a Watchlist drag's paths are its
+    // values; a Device tree drag's are Fields, Commands, Services or values
+    // inside a Field, added to the Watchlist and plotted value by value.
+    function dropPaths(payload) {
+        // Any list of paths: an array from a drop's JSON, or a host's list.
+        const dropped = payload && payload.paths ? Array.from(payload.paths) : []
+        if (!traces || dropped.length === 0)
+            return false
+        let values = dropped
+        if (payload.from === "device") {
+            if (!provider || typeof provider.addWatchPaths !== "function" || typeof provider.watchBindings !== "function") {
+                notice = qsTr("Add these to the Watchlist first; the Plot draws what the Watchlist reads.")
+                return false
+            }
+            provider.addWatchPaths(dropped)
+            // The Watchlist's values under what was dropped, as it names them.
+            values = []
+            for (const binding of provider.watchBindings()) {
+                const member = typeof binding.member === "string" ? binding.member : ""
+                const path = binding.group + "." + binding.name + (member.length === 0 ? "" : member.startsWith("[") ? member : "." + member)
+                if (dropped.some(at => path === at || path.startsWith(at + ".") || path.startsWith(at + "[")))
+                    values.push(path)
+            }
+        }
+        let added = 0, refusal = ""
+        for (const path of values) {
+            if (traces.isPlotted(path))
+                continue
+            refusal = traces.plot(path)
+            if (refusal.length > 0)
+                break
+            ++added
+        }
+        notice = refusal.length > 0 ? refusal
+               : values.length === 0 ? qsTr("Nothing here can be plotted: the Plot draws values the Watchlist reads.")
+               : added === 0 ? (values.length === 1 ? qsTr("%1 is on the Plot already.").arg(values[0])
+                                                    : qsTr("These %L1 values are on the Plot already.").arg(values.length))
+               : ""
+        return added > 0
+    }
     // The curves' colours, by palette place (WatchTraces.colorIndex).
     property var curveColors: ["#58a6ff", "#f3b562", "#56c8a0", "#d49bff", "#ff7e8f", "#62d4e6", "#d8ce67", "#a3b8cc",
                            "#9cc3ff", "#e98b55", "#a5d98c", "#ed9fce", "#b6a0ef", "#7ac7c4", "#cfaa85", "#c7cdd5"]
@@ -100,6 +202,17 @@ FocusScope {
     // "12:04:31.250": a time on this PC's clock, always to the millisecond.
     function clockText(ms) {
         return Qt.formatTime(new Date(ms), "HH:mm:ss.zzz")
+    }
+    // "17.911 s", "1:12.250", "1:02:03.500": the time since reading started.
+    function sinceText(ms) {
+        const sign = ms < 0 ? "−" : ""
+        const whole = Math.abs(ms) / 1000
+        if (whole < 60)
+            return qsTr("%1 s").arg(sign + whole.toFixed(3))
+        const h = Math.floor(whole / 3600)
+        const m = Math.floor(whole / 60) % 60
+        const s = (whole % 60).toFixed(3).padStart(6, "0")
+        return h > 0 ? sign + h + ":" + String(m).padStart(2, "0") + ":" + s : sign + m + ":" + s
     }
     // "1.250 s", "1:12.250": the time between the reference and the cursor.
     function spanText(ms) {
@@ -218,11 +331,238 @@ FocusScope {
                 shortcutText: qsTr("Plus")
                 onClicked: view.zoom(0.8)
             }
+            // Back to the view before the last move by hand: a zoom, a box, a
+            // pan, a preset.
+            IconToolButton {
+                objectName: "plotBack"
+                iconName: "undo"
+                text: qsTr("Go back to the previous view")
+                shortcutText: qsTr("Backspace")
+                enabled: view.canGoBack
+                disabledReason: qsTr("no earlier view")
+                onClicked: view.goBack()
+            }
             Item { Layout.fillWidth: true }
+            Basic.Button {
+                id: measureToggle
+                objectName: "plotMeasureToggle"
+                visible: plot.plotted.length > 0
+                text: qsTr("Measure")
+                checkable: true
+                checked: plot.measuring
+                flat: !checked
+                focusPolicy: Qt.TabFocus
+                font.pointSize: Type.caption
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
+                onToggled: plot.measuring = checked
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Measure every curve over the time in view, or from the reference to the end (M). Shift and a click pin the end.")
+            }
         }
 
+        // What the last drop did, said once, until the next one or ×.
+        RowLayout {
+            objectName: "plotNotice"
+            visible: plot.notice.length > 0
+            Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.spacing
+            Label {
+                objectName: "plotNoticeText"
+                Layout.fillWidth: true
+                text: plot.notice
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: Theme.textSecondary
+                font.pointSize: Type.caption
+                Accessible.role: Accessible.AlertMessage
+                Accessible.name: plot.notice
+            }
+            ToolButton {
+                objectName: "plotNoticeClose"
+                Layout.preferredWidth: Type.chipHeight
+                Layout.preferredHeight: Type.chipHeight
+                padding: 0
+                flat: true
+                focusPolicy: Qt.TabFocus
+                text: qsTr("×")
+                Accessible.name: qsTr("Dismiss")
+                onClicked: plot.notice = ""
+            }
+        }
         // A chip per plotted value: its colour, its path, its newest reading,
         // and × to take it off the Plot (its readings are kept).
+        // The measurements: what range, then a row per curve.
+        ColumnLayout {
+            id: measureTable
+            objectName: "plotMeasure"
+            visible: plot.measuring && plot.plotted.length > 0
+            Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: 0
+            readonly property var range: {
+                plot.shownTick
+                view.cursorShown
+                view.referenceShown
+                view.endShown
+                return measureTable.visible ? view.measureRange() : ({})
+            }
+            readonly property real cell: Math.max(valueCell.advanceWidth, headerCell.advanceWidth) + Type.spacing
+            readonly property bool narrow: width < 640
+            TextMetrics { id: valueCell; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "−0.000000" }
+            TextMetrics { id: headerCell; font.pointSize: Type.caption; text: qsTr("At cursor") }
+            Label {
+                objectName: "plotMeasureRange"
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: Theme.textSecondary
+                font.pointSize: Type.caption
+                text: !measureTable.range.toUtcMs ? ""
+                    : (measureTable.range.pinned ? qsTr("Reference to end") : qsTr("In view")) + " · "
+                      + plot.clockText(measureTable.range.fromUtcMs) + " – " + plot.clockText(measureTable.range.toUtcMs) + " · "
+                      + plot.spanText(measureTable.range.seconds * 1000) + " · "
+                      + qsTr("%L1 readings").arg(measureTable.range.readings)
+            }
+            // The column titles.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                Item { Layout.preferredWidth: Type.chipHeight }
+                Text { Layout.fillWidth: true; text: qsTr("Name"); color: Theme.textSecondary; font.pointSize: Type.caption }
+                Repeater {
+                    model: [view.cursorShown ? qsTr("At cursor") : qsTr("Newest"), "Δ", qsTr("Min"), qsTr("Max"),
+                            qsTr("Mean"), qsTr("Pk-pk"), qsTr("Std dev")].slice(0, measureTable.narrow ? 5 : 7)
+                    delegate: Text {
+                        required property string modelData
+                        Layout.preferredWidth: measureTable.cell
+                        horizontalAlignment: Text.AlignRight
+                        text: modelData
+                        color: Theme.textSecondary
+                        font.pointSize: Type.caption
+                    }
+                }
+                Item { Layout.preferredWidth: Type.chipHeight }
+            }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.outlineVariant }
+            Repeater {
+                model: plot.plotted
+                delegate: Rectangle {
+                    id: measureRow
+                    required property string modelData
+                    required property int index
+                    objectName: "plotMeasureRow"
+                    readonly property string path: modelData
+                    readonly property bool states: plot.traces ? plot.traces.categorical(path) : false
+                    readonly property var stats: {
+                        plot.shownTick
+                        measureTable.range
+                        return measureTable.visible ? view.statistics(path) : ({})
+                    }
+                    readonly property var current: {
+                        plot.shownTick
+                        view.cursorUtcMs
+                        return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
+                    }
+                    readonly property var reference: { view.referenceShown; return view.referenceValue(path) }
+                    function number(value) { return plot.valueText(value) }
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Type.rowHeight
+                    color: index % 2 ? Theme.surfaceAlternate : "transparent"
+                    RowLayout {
+                        anchors.fill: parent
+                        spacing: 0
+                        Item {
+                            Layout.preferredWidth: Type.chipHeight
+                            Layout.fillHeight: true
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: Type.iconSize
+                                height: 2
+                                color: { plot.traces ? plot.traces.appearanceRevision : 0; return view.curveColor(measureRow.path) }
+                            }
+                            TapHandler { onTapped: curveSettings.openFor(measureRow.path) }
+                        }
+                        Text {
+                            objectName: "plotMeasureName"
+                            Layout.fillWidth: true
+                            text: measureRow.path
+                            elide: Text.ElideMiddle
+                            color: Theme.textPrimary
+                            font.pointSize: Type.caption
+                            TapHandler { onTapped: view.focusedPath = view.focusedPath === measureRow.path ? "" : measureRow.path }
+                        }
+                        // A state: its share of the time and its changes, over
+                        // the statistics' columns.
+                        Text {
+                            objectName: "plotMeasureShares"
+                            visible: measureRow.states
+                            Layout.preferredWidth: measureTable.cell * (measureTable.narrow ? 5 : 7)
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                            text: plot.sharesText(measureRow.stats)
+                            color: Theme.textPrimary
+                            font.pointSize: Type.caption
+                        }
+                        Repeater {
+                            model: measureRow.states ? [] : [
+                                {key: "now", text: measureRow.number(measureRow.current)},
+                                {key: "delta", text: measureRow.reference === undefined || measureRow.current === undefined ? ""
+                                                     : plot.deltaText(measureRow.current - measureRow.reference)},
+                                {key: "min", text: measureRow.number(measureRow.stats.min), at: measureRow.stats.minUtcMs},
+                                {key: "max", text: measureRow.number(measureRow.stats.max), at: measureRow.stats.maxUtcMs},
+                                {key: "mean", text: measureRow.number(measureRow.stats.mean)},
+                                {key: "pkpk", text: measureRow.number(measureRow.stats.peakToPeak)},
+                                {key: "std", text: measureRow.number(measureRow.stats.deviation)}].slice(0, measureTable.narrow ? 5 : 7)
+                            delegate: Text {
+                                id: statCell
+                                required property var modelData
+                                objectName: "plotMeasure_" + modelData.key
+                                Layout.preferredWidth: measureTable.cell
+                                horizontalAlignment: Text.AlignRight
+                                text: modelData.text
+                                textFormat: Text.PlainText
+                                font.family: Type.fixedFamily
+                                font.pointSize: Type.caption
+                                font.underline: modelData.at !== undefined && extremeHover.hovered
+                                color: modelData.at !== undefined && extremeHover.hovered ? Theme.accent : Theme.textPrimary
+                                // Min and Max: a click puts the cursor on that reading.
+                                HoverHandler { id: extremeHover; enabled: statCell.modelData.at !== undefined }
+                                TapHandler {
+                                    enabled: statCell.modelData.at !== undefined
+                                    onTapped: view.putCursorAt(statCell.modelData.at)
+                                }
+                            }
+                        }
+                        ToolButton {
+                            Layout.preferredWidth: Type.chipHeight
+                            Layout.preferredHeight: Type.rowHeight
+                            padding: 0
+                            flat: true
+                            focusPolicy: Qt.TabFocus
+                            text: qsTr("×")
+                            Accessible.name: qsTr("Remove %1 from the Plot").arg(measureRow.path)
+                            onClicked: plot.traces.unplot(measureRow.path)
+                        }
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: chipMenu.openFor(measureRow.path)
+                    }
+                    Accessible.role: Accessible.Row
+                    Accessible.name: measureRow.states ? qsTr("%1, %2").arg(measureRow.path).arg(plot.sharesText(measureRow.stats))
+                        : qsTr("%1: minimum %2, maximum %3, mean %4, peak to peak %5, standard deviation %6")
+                            .arg(measureRow.path).arg(measureRow.number(measureRow.stats.min)).arg(measureRow.number(measureRow.stats.max))
+                            .arg(measureRow.number(measureRow.stats.mean)).arg(measureRow.number(measureRow.stats.peakToPeak))
+                            .arg(measureRow.number(measureRow.stats.deviation))
+                }
+            }
+        }
         Flow {
             id: legend
             objectName: "plotLegend"
@@ -230,7 +570,7 @@ FocusScope {
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.padding
             spacing: Type.spacing
-            visible: plot.plotted.length > 0
+            visible: plot.plotted.length > 0 && !plot.measuring
             Repeater {
                 model: plot.plotted
                 delegate: Rectangle {
@@ -455,6 +795,19 @@ FocusScope {
                 visible: plot.plotted.length > 0 && !plot.waiting
                 // The graph's menu from the keyboard.
                 Keys.onPressed: (event) => {
+                    if (event.key === Qt.Key_M && event.modifiers === Qt.NoModifier) {
+                        plot.measuring = !plot.measuring
+                        event.accepted = true
+                        return
+                    }
+                    if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
+                        if (event.modifiers & Qt.ShiftModifier)
+                            plot.copyValues()
+                        else
+                            plot.copyPicture()
+                        event.accepted = true
+                        return
+                    }
                     if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
                         graphMenu.at = -1
                         graphMenu.popup(view, view.plotArea.x + Type.padding, view.plotArea.y + Type.padding)
@@ -604,7 +957,10 @@ FocusScope {
                     font.pointSize: Type.caption
                     color: Theme.textPrimary
                     text: {
-                        const at = plot.clockText(view.cursorUtcMs)
+                        // From the start: the time since it, then the time of day.
+                        const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
+                                                                  .arg(plot.clockText(view.cursorUtcMs))
+                                                  : plot.clockText(view.cursorUtcMs)
                         if (view.referenceShown)
                             return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
                         if (view.following)
@@ -666,20 +1022,60 @@ FocusScope {
                     border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
                 }
             }
-            Label {
+            // The time axis: the time of day, or since reading started (LP-1h).
+            Basic.Button {
+                id: timeAxis
                 objectName: "plotTimeTitle"
                 visible: view.visible
                 anchors.right: parent.right
-                anchors.rightMargin: Type.padding
+                anchors.rightMargin: Type.tight
                 anchors.bottom: parent.bottom
-                color: Theme.textSecondary
+                flat: true
+                focusPolicy: Qt.TabFocus
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
                 font.pointSize: Type.caption
-                text: qsTr("Time of day")
-                HoverHandler { id: titleHover }
-                PlainToolTip {
-                    visible: titleHover.hovered
-                    text: qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
-                    delay: 700
+                text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                contentItem: Text {
+                    text: timeAxis.text
+                    font: timeAxis.font
+                    color: timeAxis.hovered || timeAxis.visualFocus ? Theme.textPrimary : Theme.textSecondary
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: timeAxis.down ? Theme.statePressed : timeAxis.hovered ? Theme.stateHover : "transparent"
+                    border.width: timeAxis.visualFocus ? 2 : 0
+                    border.color: Theme.focusRing
+                }
+                Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.delay: 700
+                ToolTip.text: view.fromStart
+                              ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
+                              : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
+                Menu {
+                    id: axisMenu
+                    objectName: "plotAxisMenu"
+                    ButtonGroup { id: axisModes }
+                    MenuItem {
+                        objectName: "plotAxisTimeOfDay"
+                        text: qsTr("Time of day")
+                        checkable: true
+                        checked: !view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = false
+                    }
+                    MenuItem {
+                        objectName: "plotAxisFromStart"
+                        text: qsTr("From the start of reading")
+                        checkable: true
+                        checked: view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = true
+                    }
                 }
             }
             // Plotted, nothing read yet.
@@ -738,6 +1134,12 @@ FocusScope {
             }
         }
         MenuItem {
+            objectName: "plotMenuBack"
+            text: qsTr("Go back") + "	" + qsTr("Backspace")
+            enabled: view.canGoBack
+            onTriggered: view.goBack()
+        }
+        MenuItem {
             objectName: "plotMenuPin"
             text: qsTr("Pin reference here") + "\t" + qsTr("Enter")
             enabled: plot.plotted.length > 0
@@ -747,6 +1149,26 @@ FocusScope {
                 else if (!view.cursorShown)
                     view.stepCursor(0)
                 view.pinReference()
+            }
+        }
+        MenuItem {
+            objectName: "plotMenuPinEnd"
+            text: qsTr("Pin end here") + "\t" + qsTr("Shift+Enter")
+            enabled: view.referenceShown
+            onTriggered: {
+                if (graphMenu.at >= view.plotArea.left)
+                    view.setCursorAt(graphMenu.at)
+                view.pinEnd()
+            }
+        }
+        MenuItem {
+            objectName: "plotMenuMeasure"
+            text: qsTr("Measure") + "\t" + qsTr("M")
+            checkable: true
+            checked: plot.measuring
+            onTriggered: {
+                plot.measuring = !plot.measuring
+                checked = Qt.binding(() => plot.measuring)
             }
         }
         MenuItem {
@@ -768,14 +1190,44 @@ FocusScope {
         }
         MenuSeparator {}
         MenuItem {
+            objectName: "plotMenuNextChange"
+            text: qsTr("Next change") + "\t" + qsTr("Ctrl+Right")
+            onTriggered: view.stepChange(1)
+        }
+        MenuItem {
+            objectName: "plotMenuPreviousChange"
+            text: qsTr("Previous change") + "\t" + qsTr("Ctrl+Left")
+            onTriggered: view.stepChange(-1)
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotMenuCopyPicture"
+            text: qsTr("Copy picture") + "\t" + qsTr("Ctrl+C")
+            enabled: plot.plotted.length > 0
+            onTriggered: plot.copyPicture()
+        }
+        MenuItem {
+            objectName: "plotMenuCopyValues"
+            text: qsTr("Copy values") + "\t" + qsTr("Ctrl+Shift+C")
+            enabled: plot.plotted.length > 0
+            onTriggered: plot.copyValues()
+        }
+        MenuItem {
+            objectName: "plotMenuSaveValues"
+            text: qsTr("Save values as CSV…")
+            enabled: plot.plotted.length > 0
+            onTriggered: {
+                saveDialog.selectedFile = saveDialog.currentFolder + "/" + plot.csvName()
+                saveDialog.open()
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
             objectName: "plotMenuRemoveAll"
             text: qsTr("Remove all curves")
             enabled: plot.plotted.length > 0
-            onTriggered: {
-                // Their readings are kept, as with each chip's ×.
-                for (const path of plot.plotted.slice())
-                    plot.traces.unplot(path)
-            }
+            // One step to undo; their readings are kept, as with each chip's ×.
+            onTriggered: plot.traces.unplotMany(plot.plotted.slice())
         }
     }
 
@@ -822,6 +1274,27 @@ FocusScope {
             checked: chipMenu.points === 2
             ButtonGroup.group: pointModes
             onTriggered: plot.traces.setPoints(chipMenu.path, 2)
+        }
+        MenuSeparator {}
+        MenuItem {
+            objectName: "plotChipMinimum"
+            text: qsTr("Go to minimum")
+            enabled: plot.traces !== null && !plot.traces.categorical(chipMenu.path)
+            onTriggered: {
+                const stats = view.statistics(chipMenu.path)
+                if (stats.minUtcMs !== undefined)
+                    view.putCursorAt(stats.minUtcMs)
+            }
+        }
+        MenuItem {
+            objectName: "plotChipMaximum"
+            text: qsTr("Go to maximum")
+            enabled: plot.traces !== null && !plot.traces.categorical(chipMenu.path)
+            onTriggered: {
+                const stats = view.statistics(chipMenu.path)
+                if (stats.maxUtcMs !== undefined)
+                    view.putCursorAt(stats.maxUtcMs)
+            }
         }
         MenuSeparator {}
         MenuItem {
@@ -990,6 +1463,48 @@ FocusScope {
                 text: qsTr("Cancel")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
                 onClicked: curveSettings.close()
+            }
+        }
+    }
+
+    // Rows dragged from the Watchlist or the Device tree (LP-1g3): a frame and
+    // what a drop will do.
+    DropArea {
+        id: plotDrop
+        objectName: "plotDrop"
+        anchors.fill: parent
+        keys: ["application/x-telemetry-paths"]
+        property string words: ""
+        onEntered: (drag) => {
+            let payload = null
+            try { payload = JSON.parse(drag.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            const paths = payload && Array.isArray(payload.paths) ? payload.paths : []
+            if (!plot.traces || paths.length === 0) {
+                drag.accepted = false
+                return
+            }
+            words = paths.length === 1 ? qsTr("Drop to plot %1").arg(paths[0]) : qsTr("Drop to plot %L1 values").arg(paths.length)
+        }
+        onExited: words = ""
+        onDropped: (drop) => {
+            let payload = null
+            try { payload = JSON.parse(drop.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            words = ""
+            if (plot.dropPaths(payload))
+                drop.acceptProposedAction()
+        }
+        Rectangle {
+            anchors.fill: parent
+            visible: plotDrop.containsDrag
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focusRing
+            Label {
+                anchors.centerIn: parent
+                text: plotDrop.words
+                color: Theme.textPrimary
+                padding: Type.padding
+                background: Rectangle { color: Theme.surface; radius: Type.radius; border.color: Theme.outline }
             }
         }
     }

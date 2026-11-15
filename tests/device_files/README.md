@@ -136,6 +136,12 @@ over localhost TCP to the SDK's native server. No board.
     Save through a temporary file, the text, table and codec read again; a copy
     elsewhere; Discard; Reload dropping the edits; `OpenFiles` naming what is
     not saved, saving or discarding it all.
+  - The file's own history (UR-1): every edit kind held to
+    `tests/helpers/UndoKinds.hpp` - done, undone and redone the same, across
+    a disconnect and a device with another descriptor; the steps' words with
+    the file's name ("Overwrite 2 bytes in values.bin"); typing merged where
+    it stopped within two seconds, apart after a pause, elsewhere and after a
+    save; no step left after Discard or Reload.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.

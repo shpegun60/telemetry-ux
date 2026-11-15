@@ -14,6 +14,29 @@ Pane {
     property var selectionHandler: null
     // Evaluate the provider's O(1) current-index projection once per panel,
     // rather than querying it separately for every visible delegate.
+    // What a row's drag carries (LP-1g3): an endpoint's path, or every
+    // endpoint's under a group or a category, in the tree's order.
+    function dragPaths(index) {
+        const model = provider.endpoints
+        if (!model || typeof model.pathOf !== "function" || !index || !index.valid)
+            return []
+        const out = []
+        const walk = (at, depth) => {
+            const path = model.pathOf(at)
+            // An endpoint, or a value inside one, goes whole; a group or a
+            // category gives its endpoints.
+            if (path.length > 0 && !model.isGroup(at)) {
+                out.push(path)
+                return
+            }
+            if (depth > 6)
+                return
+            for (let r = 0; r < model.rowCount(at); ++r)
+                walk(model.index(r, 0, at), depth + 1)
+        }
+        walk(index, 0)
+        return out
+    }
     readonly property var selectedEndpointIndex: provider.selectedEndpointIndex
     readonly property var searchSource: provider.endpoints
     property var searchResults: []
@@ -33,9 +56,9 @@ Pane {
     readonly property bool bulkWatchAvailable: provider &&
         typeof provider.addWatchMany === "function" &&
         typeof provider.watchCandidate === "function"
-    // A provider with watch boxes (watchState, setWatchMany, undoWatch): a
-    // box means watched, at once, on Fields and on groups alike. Without them
-    // the boxes mark Fields for "Add N", as before.
+    // A provider with watch boxes (watchState, setWatchMany): a box means
+    // watched, at once, on Fields and on groups alike. Without them the boxes
+    // mark Fields for "Add N", as before.
     readonly property bool watchApi: provider &&
         typeof provider.watchState === "function" &&
         typeof provider.setWatchMany === "function"
@@ -47,7 +70,11 @@ Pane {
                                         provider.watchChangesWhilePolling !== true
     // The revision the status line spoke at: another change clears it.
     property int statusRevision: -1
-    property bool statusUndo: false
+    // The provider's history (UR-1), and the step the status line spoke of:
+    // its Undo shows while that step is the one Undo would take. Until UX-B
+    // gives the window one router, this link calls the history itself.
+    readonly property var history: provider && provider.history ? provider.history : null
+    property int statusSerial: 0
     // The status line is short; this is the whole sentence, for its tooltip
     // and for a screen reader.
     property string watchStatusFull: ""
@@ -315,12 +342,13 @@ Pane {
                 qsTr("Could not change the Watchlist: %1.").arg(result.status), false)
             return false
         }
+        const serial = typeof result.serial === "number" ? result.serial : 0
         if (!group && result.changed === 0)
             say("", "", false)
         else if (!group && watched)
-            say(qsTr("Added %1").arg(label), qsTr("Added %1 to the Watchlist.").arg(label), true)
+            say(qsTr("Added %1").arg(label), qsTr("Added %1 to the Watchlist.").arg(label), serial)
         else if (!group)
-            say(qsTr("Removed %1").arg(label), qsTr("Removed %1 from the Watchlist.").arg(label), true)
+            say(qsTr("Removed %1").arg(label), qsTr("Removed %1 from the Watchlist.").arg(label), serial)
         else if (result.changed === 0)
             say(watched ? qsTr("Already watched") : qsTr("Nothing watched"),
                 watched ? qsTr("Everything in %1 is already watched.").arg(label)
@@ -328,28 +356,37 @@ Pane {
         else if (watched)
             say(qsTr("Added %L1").arg(result.changed),
                 qsTr("Added %1 from %2 to the Watchlist.")
-                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), true)
+                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), serial)
         else
             say(qsTr("Removed %L1").arg(result.changed),
                 qsTr("Removed %1 of %2 from the Watchlist.")
-                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), true)
+                    .arg(values ? valuesText(result.changed) : fieldsText(result.changed)).arg(label), serial)
         return result.changed > 0
     }
-    function undoWatch() {
-        if (!watchApi || typeof provider.undoWatch !== "function")
+    // The step the status line spoke of can be taken back from here.
+    readonly property bool canUndoStatus: statusSerial > 0 && history !== null && history.canUndo
+                                          && history.undoSerial === statusSerial
+    function undoStatusStep() {
+        if (!canUndoStatus)
             return false
-        const result = provider.undoWatch()
-        const done = result && result.status === "ok"
-        say(done ? qsTr("Undone") : qsTr("Nothing to undo"),
-            done ? qsTr("The last change to the Watchlist is undone.") : qsTr("There is nothing to undo."), false)
+        const text = history.undoText
+        let said = ""
+        const heard = (serial, step, undone, note, outcome) => { said = history.sentence(step, undone, note, outcome) }
+        history.done.connect(heard)
+        const done = history.undo()
+        history.done.disconnect(heard)
+        if (said.length === 0)
+            said = qsTr("Undone: %1").arg(text)
+        say(said, said, 0)
         return done
     }
     // Says what the last action did, at the revision it left: a short line,
-    // and the whole sentence for its tooltip.
-    function say(text, full, undoable) {
+    // and the whole sentence for its tooltip; serial is the step it recorded
+    // (0: none), which the line offers to undo.
+    function say(text, full, serial) {
         watchMarkStatus = text
         watchStatusFull = full
-        statusUndo = undoable
+        statusSerial = typeof serial === "number" ? serial : 0
         statusRevision = watchRevision
         // A status line is not read out by itself; the sentence is.
         if (full.length > 0)
@@ -359,7 +396,7 @@ Pane {
         if (statusRevision >= 0 && watchRevision !== statusRevision) {
             watchMarkStatus = ""
             watchStatusFull = ""
-            statusUndo = false
+            statusSerial = 0
             statusRevision = -1
         }
     }
@@ -369,7 +406,7 @@ Pane {
         watchMarks = []
         watchMarkStatus = ""
         watchStatusFull = ""
-        statusUndo = false
+        statusSerial = 0
         // The open menu holds a plain index too: it never outlives a change.
         if (endpointMenu.visible)
             endpointMenu.close()
@@ -988,6 +1025,9 @@ Pane {
                 function onRowHeightChanged() { Qt.callLater(function() { if (endpointTree) endpointTree.forceLayout() }) }
             }
             objectName: "endpointTree"
+            // A mouse drag takes a row to the Watchlist, the Plot or the Batch
+            // (LP-1g3); the wheel and the scroll bar scroll.
+            acceptedButtons: Qt.NoButton
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: searchInput.text.trim().length === 0
@@ -1072,6 +1112,23 @@ Pane {
             // reads its required roles, never model.display.
             delegate: EndpointTreeRow {
                 id: endpointDelegate
+                // Dragged: the endpoint's path, or a group's endpoints.
+                property var dragged: []
+                Drag.dragType: Drag.Automatic
+                Drag.supportedActions: Qt.CopyAction
+                Drag.active: endpointDrag.active
+                Drag.mimeData: ({"application/x-telemetry-paths": JSON.stringify({from: "device", paths: endpointDelegate.dragged}),
+                                "text/plain": endpointDelegate.dragged.join("\n")})
+                // The paths are taken at the press, before the drag starts.
+                PointHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: if (active) endpointDelegate.dragged = panel.dragPaths(sourceIndex)
+                }
+                DragHandler {
+                    id: endpointDrag
+                    target: null
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                }
                 tableMode: true
                 nameColumnWidth: endpointTree.width
                 valueColumnWidth: panel.valueColumn
@@ -1312,10 +1369,11 @@ Pane {
             LinkButton {
                 id: undoLink
                 objectName: "endpointWatchUndo"
-                visible: panel.statusUndo && panel.watchApi && panel.provider.canUndoWatch === true
+                visible: panel.watchApi && panel.canUndoStatus
                 text: qsTr("Undo")
+                Accessible.name: panel.history ? qsTr("Undo: %1").arg(panel.history.undoText) : text
                 font.pointSize: Type.caption
-                onClicked: panel.undoWatch()
+                onClicked: panel.undoStatusStep()
             }
             Item { Layout.fillWidth: true }
         }

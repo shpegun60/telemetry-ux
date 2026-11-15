@@ -62,6 +62,7 @@ PathAddRow {
             return {
                 notice: parts.join(" · "),
                 undoable: added > 0 || kept > 0,
+                serial: typeof result.serial === "number" ? result.serial : 0,
                 clear: added > 0 || kept > 0 || (result.already > 0 && parts.length === 1)
             }
         }

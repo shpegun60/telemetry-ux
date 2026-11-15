@@ -30,7 +30,7 @@ def sources():
              ROOT / 'tests/dynamic_qml_configurator/Fixture.hpp',
              ROOT / 'examples/inspector/DemoPeer.cpp', ROOT / 'examples/inspector/DemoPeer.hpp',
              ROOT / 'examples/inspector/TcpDemoServer.cpp', ROOT / 'examples/inspector/TcpDemoServer.hpp']
-    for directory in (HERE, ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch',
+    for directory in (HERE, ROOT / 'tests/helpers', ROOT / 'tests/dynamic_watchlist', ROOT / 'tests/dynamic_batch',
                       ROOT / 'tests/endpoint_previews', ROOT / 'tests/qml_layout',
                       ROOT / 'lib/qml/Telemetry/UX', ROOT / 'examples/qt_connection'):
         paths += [p for p in directory.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
