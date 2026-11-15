@@ -2234,7 +2234,12 @@ bool DynamicConfiguratorProvider::selectBatch(int row)
 bool DynamicConfiguratorProvider::executeBatch()
 {
 	auto p = d;
-	return p->batch.execute();
+	if (!p->batch.execute())
+		return false;
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The Batch was run on the device; Undo does not take back what it sent."));
+	return true;
 }
 
 void DynamicConfiguratorProvider::setBatchSource(BatchSource source)
@@ -3263,6 +3268,8 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto index = model->index(row, 0);
 	if (!model->data(index, WatchlistModel::WritableRole).toBool())
 		return false;
+	// The value as last read, as it is typed: what writing it again takes back.
+	const auto previous = model->data(index, WatchlistModel::EditorTextRole).toString();
 	p->watchWriteSession = p->writer->view.session();
 	// Hex is taken whatever the row shows: as the value's exact text.
 	auto typed = text.trimmed();
@@ -3325,6 +3332,11 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
 	p->watchWriteKind = QStringLiteral("writing");
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(
+		    previous.isEmpty() ? tr("The write to %1 is not undone.").arg(p->writeName)
+		                       : tr("The write to %1 is not undone; write %2 to go back.").arg(p->writeName, previous));
 	p->notify();
 	return true;
 }
@@ -3598,6 +3610,10 @@ bool DynamicConfiguratorProvider::apply()
 		p->binding->requestSubmitted();
 	p->write = p->status = QStringLiteral("Write pending");
 	p->writeAttention = false;
+	// Never a step: the first Ctrl+Z says so instead (UR-1).
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(
+		    tr("The write to %1 is not undone; apply the old value to go back.").arg(p->selection));
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -3633,6 +3649,8 @@ bool DynamicConfiguratorProvider::executeCommand()
 		p->binding->requestSubmitted();
 	p->command = p->status = QStringLiteral("Command pending");
 	p->commandAttention = false;
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The Command %1 was sent; Undo does not take it back.").arg(p->selection));
 	p->updating = true;
 	p->values.clear();
 	p->responses.clear();
@@ -3671,6 +3689,8 @@ bool DynamicConfiguratorProvider::callService()
 		p->binding->requestSubmitted();
 	p->service = p->status = QStringLiteral("Service pending");
 	p->serviceAttention = false;
+	if (p->undoHistory)
+		p->undoHistory->noteIrreversible(tr("The request to %1 was sent; Undo does not take it back.").arg(p->selection));
 	p->updating = true;
 	p->present(false);
 	p->values.clear();

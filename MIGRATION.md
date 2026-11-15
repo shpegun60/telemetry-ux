@@ -756,6 +756,8 @@ between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
 
+
+
 ## Details: the cell is the editor (BA-4·0a, November 2026)
 
 - **No Edit button.** `EndpointPanel` no longer shows Edit. A Field's values are
@@ -836,12 +838,7 @@ one for its workspace and gives it to its providers; a file keeps its own.
   Static's steps wait while it polls; its `blockedReason` says so.
 - **`DynamicWatchlist.restore(removed)` is replaced by `putBack(rows)`**, rows
   by place and path, which needs no device.
-- **The Watchlist asks before removing several values only when its provider
-  has no history**: with one, Undo brings them back, device or not. Clear still
-  asks; UX-B removes both questions.
-- Until UX-B, the panels call the history themselves: the Watchlist's Ctrl+Z,
-  the hex view's Ctrl+Z and Ctrl+Y while editing, the notices' "· Undo" and
-  `FileEditTools`' Undo and Redo. UX-B replaces them with one router per window.
+- The panels' own Ctrl+Z, notices and the two questions are UX-B's (below).
 
 ## The live Plot's changes as steps (UR-1, UX-D, November 2026)
 
@@ -890,6 +887,46 @@ The Batch records into the same history as the Watchlist and the Plot (README,
   answers `add(lines) -> {notice, undoable, serial, clear}` and the row emits
   `added(notice, undoable, serial)`; `BatchAddRow` and `WatchAddRow` give the
   step's serial, and the Batch's additions are undoable.
+
+## Ctrl+Z in a window: the router, scopes, notices and buttons (UR-1, UX-B, November 2026)
+
+The panels stop answering Ctrl+Z themselves; a window has one router (README,
+"Ctrl+Z in a window").
+
+1. **Panels no longer take Ctrl+Z: one `UndoRouter` per window**, its
+   `workspace` the host's `UndoHistory`, and `UndoScope.refusal` on areas that
+   act on the device - Details: `UndoScope.refusal: details.undoRefusal`, the
+   words `EndpointPanel.undoRefusal` holds. The Watchlist's
+   `Keys.onShortcutOverride`/`onPressed` for Ctrl+Z, its `undo()` and its
+   `recorded` property, and `HexView`'s Ctrl+Z and Ctrl+Y are gone. A
+   `FileViewer` is an `UndoScope` for its file's history, so Ctrl+Z in it takes
+   the file's step. `registerQmlTypes()` is needed for the router, as for
+   `HexView`.
+2. **`FileEditTools` has no Undo and Redo buttons: use `UndoButtons {
+   router }`.** Its Write to the device says "Undo changes only the copy on
+   this computer." in its tooltip; `IconToolButton.note` is new for such a
+   second clause.
+3. **The questions are gone**: `clearWatchDialog` and `removeWatchDialog`, with
+   `clearWatchConfirm`, `clearWatchCancel`, `removeWatchConfirm` and
+   `removeWatchCancel`. Clear the Watchlist (no ellipsis) and removing several
+   values act at once and say so with Undo ("Cleared 66 values · Undo");
+   `WatchlistPanel.removeAt(row, own)` loses its `confirmed` argument;
+   `clearAll()` is new.
+4. **One notice component, `UndoNotice`.** The Watchlist's notice line is one
+   (`watchNotice`, its link `undoNoticeLink`, the old `watchNoticeLine` and
+   `watchUndo` gone); so is the Device tree's status line
+   (`endpointWatchSelectionStatus`, its link `undoNoticeLink`;
+   `endpointWatchUndo`, `undoStatusStep()`, `canUndoStatus`, `statusSerial`,
+   `statusRevision` and the writable `watchStatusFull` gone; `watchMarkStatus`
+   is read-only). After an undo a notice says "Undone: ... · Redo".
+5. **`EndpointTreePanel.watchBoxes`** is new (default true): false offers no
+   watching at all, for a second device's tree.
+6. **`UndoHistory`**: `done` gains `kinds`; `redoBlockedReason`,
+   `markNoticed()` and `noticed()` are new; a step taken ends the irreversible
+   note. Both providers call `noteIrreversible` as Apply, Execute, Call and a
+   Watchlist row write are sent, and Dynamic's Execute Batch; Static's
+   `apply()`, `executeCommand()` and `callService()` too. `FileContent.writing`
+   is new: while the host writes the copy to the device, the file's steps wait.
 
 ## The live Plot's time axis from the start of reading (LP-1h, November 2026)
 

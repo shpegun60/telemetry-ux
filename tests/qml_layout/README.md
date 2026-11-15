@@ -51,3 +51,23 @@ putting the last value back, Escape the value it had when opened, Tab and
 Shift+Tab asking for the next and previous cell, a bool's and an enum's choice
 as wide as its items with "Enter code…", a float's Encoded caption, and a locked
 or read-only cell that never opens (`value-cell-*.png`).
+
+`UndoKeys.cpp` holds the central Undo's keys to one press, one step (UR-1): a
+window with the real Configurator over a disconnected Session, Details as a host
+holds them (`UndoScope.refusal`), a file in a `FileViewer`, a plain button and
+text field, an inert area, a menu and a modal dialog, one `UndoRouter`. With the
+keys on every place the Tab key reaches and every list, two steps are recorded
+and Ctrl+Z pressed once: exactly one step is taken and said once, a text field
+keeps the keys, the inert area does nothing and Details only say why. Then the
+irreversible note said by the first press, Ctrl+Y and Ctrl+Shift+Z, the Edit
+menu acting from Details, a notice that speaks for a step (`noticed`) and one
+hidden, a blocked step's words on `UndoButtons`, the toolbar never taking the
+keys, a long path cut for a menu, the file's history taken once the keys are in
+its Viewer and the workspace's once it records later, the file's steps waiting
+while it is written, a menu or a modal dialog taking no step and leaving
+`active` as it was, and a dock floated out of the window (a window it owns)
+where Ctrl+Z still takes a step and an inert area in it does nothing. `WatchTree.cpp` and `Bulk.cpp` record into a real
+`UndoHistory` through `ScriptSteps.hpp` (the fixture's JavaScript as a step's
+target) with a router in their windows, and check the notices' `undoNoticeLink`
+(Undo, then Redo), Clear and removal with no question, and a tree with
+`watchBoxes: false` offering no watching.

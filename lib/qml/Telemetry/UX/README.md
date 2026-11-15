@@ -506,29 +506,109 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
 - **Actions on the device are never steps.** Apply, a Watchlist row write,
   Execute, Call, Execute Batch and Write to the device push nothing and clear
   nothing. `noteIrreversible(words)` keeps their words in `irreversibleNote`
-  until the next step or `acknowledgeIrreversible()`, for whatever answers
-  Ctrl+Z to say first.
+  until the next step, a step taken or `acknowledgeIrreversible()`, for the
+  window's `UndoRouter` to say at the next Ctrl+Z instead of undoing. Both
+  providers note them as they send: "The write to device.Config.Gain is not
+  undone; write 1.5 to go back." (a row's write, with the value as last read),
+  "The write to device.Config is not undone; apply the old value to go back."
+  (Apply), "The Command control.Reset was sent; Undo does not take it back.",
+  "The request to control.Ping was sent; Undo does not take it back." and
+  "The Batch was run on the device; Undo does not take back what it sent."
+  (Dynamic's Execute Batch). Their buttons' tooltips and accessible
+  descriptions say it too: Apply "Write once, then read the device again. Undo
+  does not take a write back.", Execute "Send the Command once. Undo does not
+  take it back.", Call "Send one request. Undo does not take it back.", Execute
+  Batch "Run every item on the device in order. Undo does not take back what it
+  sends.", `FileEditTools`' Write to the device "... Undo changes only the copy
+  on this computer.", and the Watchlist's row editor.
 - **The API.** Properties `canUndo`, `canRedo`, `undoText`, `redoText`,
   `undoSerial` and `redoSerial` (the step undo or redo would take, 0 when
-  none), `blockedReason`, `irreversibleNote`, `limit` (100; setting it drops
-  every step), `clean`, `count`. Methods `undo()`, `redo()`, `clear()`,
-  `setClean()`, `noteIrreversible(words)`, `acknowledgeIrreversible()` and
-  `sentence(text, undone, note, outcome)`, the words after an undo or a redo;
+  none), `blockedReason` and `redoBlockedReason`, `irreversibleNote`, `limit`
+  (100; setting it drops every step), `clean`, `count`. Methods `undo()`,
+  `redo()`, `clear()`, `setClean()`, `noteIrreversible(words)`,
+  `acknowledgeIrreversible()`, `markNoticed()` (a notice that showed what the
+  undo or redo under way did says so from its `done` handler; `noticed()`
+  answers for the last one taken) and `sentence(text, undone, note, outcome)`,
+  the words after an undo or a redo;
   for C++ `record(text, parts, mergeKey, mergeWindowMs)` (2000 unless said; 0
   merges for as long as the key stays the same, the caller ending it by
   changing the key, as an editor does when its cell is left), `refresh()` and
   `stack()`. Signals
   `changed()`, `recorded(serial)` and `done(serial, text, undone, note,
-  outcome)`, outcome `done`, `partial` or `skipped`. Never persisted.
+  outcome, kinds)`, outcome `done`, `partial` or `skipped`, kinds the step's.
+  Never persisted.
 - **Files.** `FileContent.history` is the file's own: 1000 steps, emptied by a
-  read, Reload and Discard, clean at Save.
-- **The panels, until UX-B.** The Watchlist's and the Device tree's notices
-  offer "· Undo" while their step is the one Undo would take (`undoSerial`), and
-  say "Undone: ..." after it. Ctrl+Z in the Watchlist, and Ctrl+Z and Ctrl+Y in
-  the hex view while editing, call the history; `FileEditTools`' Undo and Redo
-  call `content.history`. The Watchlist asks before Clear, and before removing
-  several values when its provider has no history. UX-B gives a window one
-  router for Ctrl+Z, a notice and Undo/Redo buttons of its own, and these go.
+  read, Reload and Discard, clean at Save. While the host writes the copy to
+  the device it sets `FileContent.writing`, and the file's steps wait: "Wait
+  for values.bin to finish writing to the device."
+
+### Ctrl+Z in a window: UndoRouter, UndoScope, UndoNotice, UndoButtons
+
+Panels take none of Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z: a window has one
+`UndoRouter`, and it is the only thing that answers them.
+
+```qml
+UndoHistory { id: workspace }
+UndoRouter { id: router; workspace: workspace }
+// Details: what is sent is not undone.
+EndpointPanel { id: details; provider: device; UndoScope.refusal: details.undoRefusal }
+// A second device's tree: no watching, and Ctrl+Z does nothing there.
+EndpointTreePanel { provider: compareDevice; watchBoxes: false; UndoScope.inert: true }
+UndoButtons { router: router }
+```
+
+- **`UndoRouter`** (an item anywhere in the window; `registerQmlTypes()`
+  keeps it linked). `workspace` is the host's history. A window that the
+  router's window owns - a dock floated out of it, whose transient parent it
+  is - counts as part of it. What a press does depends on where the keys are:
+  - a text field takes back its own typing (Qt's), never falling through;
+  - an area whose `UndoScope.inert` is set, a modal dialog and an open menu do
+    nothing;
+  - an area whose `UndoScope.refusal` is set says those words and undoes
+    nothing;
+  - anywhere else it takes one step of `active`: the history last focused (an
+    area's `UndoScope.history`, else the workspace's) or last recorded into,
+    whichever came later. A focus moving into a menu, a dialog or a palette
+    leaves `active` as it was, so they act on what came before them.
+
+  After an action on the device the active history's `irreversibleNote` is
+  said by the first Ctrl+Z, which undoes nothing; the next press goes on.
+  `undo()` and `redo()` are the Edit menu's, a toolbar's and a palette's: they
+  act on `active` from anywhere, Details included, since they name their step.
+  `canUndo`, `canRedo`, `undoText`, `redoText` follow `active` (a word longer
+  than 50 characters, a long path, cut in the middle; `shortened()` does it),
+  and `undoReason` / `redoReason` say why nothing would be taken: "Nothing to
+  undo.", or a blocked step's reason. Every press and every call says what it
+  did once, in `announced(text, noticed)`: the router makes the screen
+  reader's announcement itself, and a host shows the words in its status line
+  unless a panel's notice shows them already (`noticed`).
+- **`UndoScope`** (attached): `history` (Ctrl+Z in the area takes that history's
+  step - `FileViewer` sets it to its file's), `refusal` (words said instead of
+  undoing - `EndpointPanel.undoRefusal` holds Details' own: "Undo does not take
+  back a write. To go back, apply the old value." or, for a Command or Service,
+  "Undo does not take back what is sent to the device.") and `inert` (nothing
+  at all). The nearest area up from the keys that sets any of them decides,
+  but an inert one anywhere up wins. A scope's history that records a step
+  becomes `active`, as focusing it does.
+- **`UndoNotice`**: a panel's line for what its last action did, with that
+  step's link: "Removed device.Config.Gain · Undo". `say(message, serial,
+  detail)`; the link offers Undo while the step is the one Undo would take,
+  Redo once it is undone; `recording(action)` answers the serial of the step
+  an action recorded. Taken anywhere, the line says how - "Undone: Remove
+  device.Config.Gain from the Watchlist · Redo", what could not be put back in
+  the warning colour - for its own step and for any step of its `kinds`
+  (`markNoticed`). `revision` clears it when what it said no longer holds;
+  `standIn` shows instead while set. The Watchlist's speaks for `watch.rows`
+  and `watch.format`, the Device tree's for its own steps.
+- **`UndoButtons`**: Undo and Redo pictograms over a `router`, never taking the
+  keys; tooltips "Undo: Remove 3 values from the Watchlist (Ctrl+Z)", "Undo
+  (Ctrl+Z)" with none, a waiting step greyed with its reason.
+- **No questions.** The Watchlist clears and removes at once, said with Undo
+  ("Cleared 66 values · Undo"); with no history there is no Undo, and no
+  question either.
+- **`EndpointTreePanel.watchBoxes`** (default true): false offers no watching
+  at all - no boxes, no Add bar, no Watch in its menu - for a second device's
+  tree beside the first.
 
 ## Theme and Type
 

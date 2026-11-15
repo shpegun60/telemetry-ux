@@ -12,6 +12,7 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
               HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
               ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
               JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml
+              UndoNotice.qml UndoButtons.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
@@ -20,7 +21,7 @@ target_sources(telemetry_ux_configurator PRIVATE PresentationOverlay.cpp Present
     Clipboard.cpp Clipboard.hpp JsonContent.cpp JsonContent.hpp TreeFilter.cpp TreeFilter.hpp ToolIcon.cpp ToolIcon.hpp
     DeviceBytes.cpp DeviceBytes.hpp WatchCoverage.cpp WatchCoverage.hpp EventLog.cpp EventLog.hpp WatchKey.hpp
     WatchRows.cpp WatchRows.hpp WatchTraces.cpp WatchTraces.hpp TraceView.cpp TraceView.hpp ValueWords.hpp
-    UndoStep.cpp UndoStep.hpp UndoHistory.cpp UndoHistory.hpp)
+    UndoStep.cpp UndoStep.hpp UndoHistory.cpp UndoHistory.hpp UndoScope.cpp UndoScope.hpp UndoRouter.cpp UndoRouter.hpp)
 target_compile_features(telemetry_ux_configurator PUBLIC cxx_std_17)
 target_include_directories(telemetry_ux_configurator PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>"
@@ -56,12 +57,13 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
     ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
     JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml
+    UndoNotice.qml UndoButtons.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")
 install(FILES StaticConfiguratorBinding.hpp StaticConfiguratorProvider.hpp PresentationOverlay.hpp TrendHistory.hpp FileContent.hpp FileTextModels.hpp HexView.hpp QmlTypes.hpp Clipboard.hpp
     WatchSample.hpp WatchFrame.hpp JsonContent.hpp TreeFilter.hpp ToolIcon.hpp DeviceBytes.hpp WatchCoverage.hpp EventLog.hpp WatchKey.hpp WatchRows.hpp WatchTraces.hpp TraceView.hpp
-    UndoStep.hpp UndoHistory.hpp
+    UndoStep.hpp UndoHistory.hpp UndoScope.hpp UndoRouter.hpp
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/Telemetry/UX")
 
 # Runtime providers are a separate optional export. Pure Qt/static consumers

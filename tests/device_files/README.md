@@ -141,7 +141,10 @@ over localhost TCP to the SDK's native server. No board.
     a disconnect and a device with another descriptor; the steps' words with
     the file's name ("Overwrite 2 bytes in values.bin"); typing merged where
     it stopped within two seconds, apart after a pause, elsewhere and after a
-    save; no step left after Discard or Reload.
+    save; no step left after Discard or Reload. The hex grid answers no Ctrl+Z
+    or Ctrl+Y of its own - the window's `UndoRouter` does (UX-B) - and while
+    the host writes the copy to the device (`writing`) the steps wait, in
+    words.
 - The checks wait on the event loop as a program does, never with a sleep: on
   Windows a 1 ms sleep costs a whole timer quantum (about 15.6 ms) per pass, and
   made the list above measure the loop instead of the session.
