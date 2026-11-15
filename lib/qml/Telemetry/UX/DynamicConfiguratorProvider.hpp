@@ -15,6 +15,9 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_OBJECT
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
 	Q_PROPERTY(bool previewsSupported READ previewsSupported NOTIFY stateChanged)
+	// The Device tree's previews (PV-2): how often a cycle reads the Fields in
+	// view, 1000 to 10000 ms. One value for every tree on this connection.
+	Q_PROPERTY(int previewIntervalMs READ previewIntervalMs WRITE setPreviewIntervalMs NOTIFY stateChanged)
 	Q_PROPERTY(QVariantMap selectionInfo READ selectionInfo NOTIFY stateChanged)
 	Q_PROPERTY(QAbstractItemModel* definitions READ definitions CONSTANT)
 	Q_PROPERTY(QModelIndex definitionRootIndex READ definitionRootIndex NOTIFY stateChanged)
@@ -107,6 +110,10 @@ public:
 	QAbstractItemModel* definitions() const;
 	QModelIndex definitionRootIndex() const;
 	bool previewsSupported() const;
+	int previewIntervalMs() const;
+	void setPreviewIntervalMs(int ms);
+	// Read the Fields in view now, without waiting for the interval.
+	Q_INVOKABLE void readPreviewsNow();
 	Q_INVOKABLE bool setPreviewDemand(QObject* view, const QVariantList& indexes);
 	Q_INVOKABLE void clearPreviewDemand(QObject* view);
 	QAbstractItemModel* values() const;

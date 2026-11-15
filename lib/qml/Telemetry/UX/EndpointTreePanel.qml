@@ -56,9 +56,31 @@ Pane {
     // Off until the user turns it on: a preview reads the device in the
     // background, which nobody asked for by opening the tree.
     property bool previewValues: false
+    // How often a cycle reads the Fields in view while previews are on (PV-2);
+    // turning them on from the menu picks 2 s. A host saves both with its project.
+    property int previewIntervalMs: 2000
+    // One of the intervals the Values menu offers.
+    component PreviewEvery: MenuItem {
+        required property int ms
+        objectName: "endpointPreviewEvery" + ms
+        text: qsTr("Every %1").arg(panel.previewIntervalText(ms))
+        checkable: true
+        checked: panel.previewValues && panel.previewIntervalMs === ms
+        onTriggered: {
+            panel.previewIntervalMs = ms
+            panel.previewValues = true
+        }
+    }
+    onPreviewIntervalMsChanged: if (previewValues && provider && typeof provider.previewIntervalMs === "number")
+                                    provider.previewIntervalMs = previewIntervalMs
+    onPreviewValuesChanged: if (previewValues && provider && typeof provider.previewIntervalMs === "number")
+                                provider.previewIntervalMs = previewIntervalMs
     // Said while the tree has no rows; a host words it for its state
     // ("Reconnect to see…" after a dropped connection).
     property string emptyText: qsTr("Connect to see the device's Fields, Commands and Services.")
+    function previewIntervalText(ms) {
+        return ms % 1000 === 0 ? qsTr("%L1 s").arg(ms / 1000) : qsTr("%L1 ms").arg(ms)
+    }
     readonly property bool previewsSupported: !!provider && typeof provider.previewsSupported === "boolean" && provider.previewsSupported &&
         typeof provider.setPreviewDemand === "function" && typeof provider.clearPreviewDemand === "function"
     readonly property bool previewDemandActive: previewsSupported && previewValues && visible && width > 0 && height > 0 &&
@@ -848,17 +870,46 @@ Pane {
                     Accessible.name: qsTr("Clear the search")
                 }
             }
-            CheckBox {
+            // Values: off | Every 1 s | Every 2 s | Every 5 s | Read now (PV-2).
+            Button {
                 id: previewToggle
                 objectName: "endpointPreviewValues"
                 visible: panel.previewsSupported
-                text: qsTr("Preview values")
-                checked: panel.previewValues
-                onToggled: panel.previewValues = checked
-                Accessible.name: qsTr("Preview values")
-                Accessible.description: qsTr("Read visible Fields slowly while this tree is shown. This does not change the Watchlist.")
+                flat: true
+                text: panel.previewValues ? qsTr("Values: every %1").arg(panel.previewIntervalText(panel.previewIntervalMs))
+                                          : qsTr("Values: off")
+                onClicked: previewMenu.open()
+                Accessible.role: Accessible.ButtonMenu
+                Accessible.name: text
+                Accessible.description: panel.previewValues
+                    ? qsTr("Reads the Fields in view together every %1, after the Watchlist and your own reads. Doesn't change the Watchlist.")
+                          .arg(panel.previewIntervalText(panel.previewIntervalMs))
+                    : qsTr("Fields in view show no values. Choose how often to read them together; the Watchlist is not changed.")
                 ToolTip.visible: hovered
-                ToolTip.text: previewToggle.Accessible.description
+                ToolTip.delay: 700
+                ToolTip.text: Accessible.description
+                Menu {
+                    id: previewMenu
+                    objectName: "endpointPreviewMenu"
+                    y: previewToggle.height
+                    MenuItem {
+                        objectName: "endpointPreviewOff"
+                        text: qsTr("Off")
+                        checkable: true
+                        checked: !panel.previewValues
+                        onTriggered: panel.previewValues = false
+                    }
+                    PreviewEvery { ms: 1000 }
+                    PreviewEvery { ms: 2000 }
+                    PreviewEvery { ms: 5000 }
+                    MenuSeparator {}
+                    MenuItem {
+                        objectName: "endpointPreviewReadNow"
+                        text: qsTr("Read now")
+                        enabled: panel.previewValues && typeof panel.provider.readPreviewsNow === "function"
+                        onTriggered: panel.provider.readPreviewsNow()
+                    }
+                }
             }
         }
         Label {

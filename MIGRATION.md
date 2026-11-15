@@ -437,3 +437,10 @@ intervals, at least 5 s, and a failed read keeps the last value, stale, with its
 reason. `EndpointPreviewSource` gains the optional `readMany`, `readBatch` and
 their budgets (the Qt connection binding supplies them), and `read_portions`
 gains `wholeReads`. `refreshMs` and `spacingMs` are gone.
+
+The Device tree's "Preview values" check box is now a menu button, "Values:
+off" or "Values: every 2 s", offering Off, Every 1 s, Every 2 s, Every 5 s and
+Read now. `EndpointTreePanel.previewValues` still turns previews on and off;
+`previewIntervalMs` (2000 by default) is new, and a host saves both with its
+project. The provider gains `previewIntervalMs` (one value for every tree on a
+connection) and `readPreviewsNow()`.

@@ -1151,6 +1151,26 @@ bool DynamicConfiguratorProvider::previewsSupported() const
 	return d->previews && d->previews->current();
 }
 
+int DynamicConfiguratorProvider::previewIntervalMs() const
+{
+	return d->previews ? d->previews->interval() : EndpointPreviews::intervalDefaultMs;
+}
+
+void DynamicConfiguratorProvider::setPreviewIntervalMs(int ms)
+{
+	if (!d->previews || d->previews->interval() == std::clamp(ms, int(EndpointPreviews::intervalMinimumMs),
+	                                                           int(EndpointPreviews::intervalMaximumMs)))
+		return;
+	d->previews->setInterval(ms);
+	d->notify();
+}
+
+void DynamicConfiguratorProvider::readPreviewsNow()
+{
+	if (d->previews)
+		d->previews->readNow();
+}
+
 void DynamicConfiguratorProvider::setEndpointPreviews(EndpointPreviews* previews)
 {
 	auto p = d;

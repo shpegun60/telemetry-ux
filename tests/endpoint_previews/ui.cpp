@@ -295,7 +295,21 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
                        host::ConnectionSession& session, inspector_qml::TcpDemoServer& peer) {
 	ui.page("tree", 480, 820);
-	CHECK(ui.treePanel->setProperty("previewValues", true));
+	// Values: off | Every 1 s | Every 2 s | Every 5 s | Read now (PV-2c).
+	auto* values = control(ui.treePanel, "endpointPreviewValues");
+	CHECK(values->property("text").toString() == QStringLiteral("Values: off"));
+	click(*ui.window, values);
+	// The menu is in the window's overlay, beside its content.
+	auto* every = ui.window->findChild<QQuickItem*>(QStringLiteral("endpointPreviewEvery5000"));
+	auto* readNow = ui.window->findChild<QQuickItem*>(QStringLiteral("endpointPreviewReadNow"));
+	CHECK(every && readNow && !readNow->isEnabled());
+	click(*ui.window, every);
+	CHECK(ui.treePanel->property("previewValues").toBool() && ui.treePanel->property("previewIntervalMs").toInt() == 5000 &&
+	      provider.previewIntervalMs() == 5000 && values->property("text").toString() == QStringLiteral("Values: every 5 s"));
+	CHECK(ui.treePanel->setProperty("previewValues", false));
+	CHECK(values->property("text").toString() == QStringLiteral("Values: off"));
+	CHECK(ui.treePanel->setProperty("previewIntervalMs", 2000));
+	CHECK(ui.treePanel->setProperty("previewValues", true) && provider.previewIntervalMs() == 2000);
 	// The normal writable fixture contains only one aggregate Field. Folded,
 	// it is read once for its one-line summary, as values.bin shows it.
 	auto* config = control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config"));
