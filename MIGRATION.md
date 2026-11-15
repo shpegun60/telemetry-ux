@@ -597,3 +597,14 @@ for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
 `TracePlot` opens a curve's settings from its chip's colour mark, tags a scaled
 chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
 Shift+F10).
+
+## Plotting from the Watchlist, and the graph's menu (LP-1g, November 2026)
+
+`WatchRows.plotValues(row)` gives the values the Plot takes for a row - every
+value under a node, or the selection's when the row is in it - as
+`{path, number}`, `number` false for a value of no number type read as text.
+`WatchlistPanel` uses it for Ctrl+P and its row menu ("Plot 3 values" on a
+selection or a node; every value on the Plot already takes them all off) and
+refuses text in words. `TracePlot`'s graph menu gains Follow, Pin reference
+here, Remove reference and Remove all curves; Delete on a chip's settings
+button takes that curve off.

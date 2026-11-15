@@ -149,6 +149,12 @@ public:
 	Q_INVOKABLE QVariantList selectedSourceRows() const;
 	// lines() over the selection, each value once.
 	Q_INVOKABLE QString selectedLines(bool paths) const;
+	// What the Plot (LP-1) is given for row: the values at and under it, or
+	// the selection's when row is in it, each once and in the order shown,
+	// as {path, number}. number is false for a value of no number type read as
+	// something the Plot cannot draw (text, bytes), and true for a bool, an
+	// enum, a number type or a value not read yet.
+	Q_INVOKABLE QVariantList plotValues(int row) const;
 
 	// Holds the rows back while one call changes many source rows - a
 	// scattered removal comes as a signal for every run of rows - and brings
