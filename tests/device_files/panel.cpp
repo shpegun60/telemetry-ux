@@ -678,6 +678,61 @@ void toolIcons()
 	const auto redo = drawn(QStringLiteral("redo"));
 	CHECK(ink(undo, 5, 9) && !ink(undo, 19, 9) && ink(redo, 19, 9) && !ink(redo, 5, 9));
 }
+
+// A pictogram that cannot act says why (FL-1a): its reason in brackets after
+// its name in the tooltip, which shows on hover though it is disabled, and as
+// its accessible description; enabled again, its name and shortcut only.
+void toolReasons()
+{
+	QQmlApplicationEngine engine;
+	engine.loadData(QByteArrayLiteral(R"(
+import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+Window {
+    width: 200; height: 120; visible: true
+    property alias tool: tool
+    IconToolButton {
+        id: tool
+        objectName: "reasonTool"
+        x: 40; y: 40
+        iconName: "refresh"
+        text: "Refresh the device's file list"
+        shortcutText: "Ctrl+R"
+        enabled: false
+        disabledReason: "not connected"
+        // Off screen the platform asks for no hover effects; a desktop does.
+        hoverEnabled: true
+    }
+}
+)"));
+	CHECK(engine.rootObjects().size() == 1);
+	auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+	auto* tool = window ? window->findChild<QQuickItem*>(QStringLiteral("reasonTool")) : nullptr;
+	CHECK(window && tool);
+	const auto value = [&](const char* source) {
+		QQmlExpression code(qmlContext(tool), tool, QString::fromLatin1(source));
+		return code.evaluate();
+	};
+	CHECK(value("ToolTip.text").toString() == QStringLiteral("Refresh the device's file list (not connected)"));
+	CHECK(value("Accessible.description").toString() == QStringLiteral("not connected"));
+	CHECK(value("Accessible.name").toString() == QStringLiteral("Refresh the device's file list"));
+	CHECK(QTest::qWaitForWindowExposed(window));
+	QTest::mouseMove(window, QPoint(5, 5));
+	QTest::mouseMove(window, tool->mapToScene(QPointF(tool->width() / 2, tool->height() / 2)).toPoint());
+	CHECK(await([&] { return tool->property("hovered").toBool(); }, 3000));
+	CHECK(await([&] { return value("ToolTip.toolTip.visible").toBool(); }, 3000));
+	tool->setProperty("enabled", true);
+	CHECK(value("ToolTip.text").toString() == QStringLiteral("Refresh the device's file list (Ctrl+R)"));
+	CHECK(value("Accessible.description").toString().isEmpty() && !tool->property("reasonShown").toBool());
+	// Disabled without a reason: the name alone, nothing invented.
+	tool->setProperty("disabledReason", QString());
+	tool->setProperty("enabled", false);
+	CHECK(value("ToolTip.text").toString() == QStringLiteral("Refresh the device's file list (Ctrl+R)"));
+	CHECK(value("Accessible.description").toString().isEmpty());
+	QTest::mouseMove(window, QPoint(195, 115));
+	CHECK(await([&] { return !tool->property("hovered").toBool(); }, 3000));
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -700,6 +755,7 @@ int main(int argc, char** argv)
 	hexEditing(folder.path());
 	hexReplacing(folder.path());
 	toolIcons();
+	toolReasons();
 
 	Peer peer;
 	qt::ConnectionSession session;

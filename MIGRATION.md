@@ -557,3 +557,14 @@ shows its value at the cursor and its difference from the reference. New on
 `referenceColor`, `dotRingColor`, `bottomInset`, `setCursorAt()`,
 `hideCursor()`, `stepCursor()`, `pinReference()`, `clearReference()`,
 `valueAt(path)`, `referenceValue(path)`.
+
+## A pictogram says why it cannot act (FL-1a, November 2026)
+
+`IconToolButton` gains `disabledReason`, a few words on why the action cannot
+run now ("not connected", "select a file first"). While the button is disabled
+the reason follows its name in brackets in the tooltip, in place of the
+shortcut ("Show the project folder (no project open)"), and is its
+`Accessible.description`; enabled, nothing changes. A disabled control still
+gets hover in Qt 6, so the tooltip shows on a disabled button; it is no longer
+drawn with the hover fill, which looked as if it could be pressed. Callers that
+set no reason see no difference.

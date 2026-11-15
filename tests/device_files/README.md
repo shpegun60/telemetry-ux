@@ -143,6 +143,10 @@ over localhost TCP to the SDK's native server. No board.
     outcome (done, partial, refused) given apart from its words.
   - **The pictograms** (`ToolIcon`): each name draws, undo's arrow on the left
     and redo's on the right; an unknown name draws nothing.
+  - **A pictogram that cannot act** (`IconToolButton.disabledReason`): its
+    reason in brackets after its name in the tooltip, which shows on hover while
+    it is disabled, and as its accessible description; enabled, the name and
+    the shortcut only.
 
   The panel itself:
   - the not-connected words, the tree once connected, the column headings;
