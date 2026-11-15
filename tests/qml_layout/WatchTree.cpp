@@ -652,10 +652,65 @@ int main(int argc, char** argv)
 			model.setData(model.index(3, 0), QStringLiteral("1.25"), Text);  // Gain read meanwhile
 			settle();
 			CHECK(gain->property("editing").toBool());
+			// Edited while polling (WL-5): the live reading beside the name.
+			auto* fixture = panel->property("provider").value<QObject*>();
+			CHECK(!named(gain, "watchRowNow"));
+			fixture->setProperty("watchActive", true);
+			settle();
+			CHECK(textOf(gain, "watchRowNow") == QStringLiteral("Now 1.25"));
+			fixture->setProperty("watchActive", false);
+			settle();
+			CHECK(!named(gain, "watchRowNow") && gain->property("editing").toBool());
 			CHECK(rowAt(list, 4) == gain);
 			CHECK(textOf(gain, "watchValueEditor") == QStringLiteral("2"));
 			key(window, Qt::Key_Return);
 			CHECK(calls.writes == 1 && calls.writeRow == 3 && calls.writeText == QStringLiteral("2"));
+			// WL-5: a write the device confirmed reads quietly; one it reads
+			// back otherwise stands out.
+			fixture->setProperty("watchWriteOutcome", QStringLiteral("Wrote device.Config.Gain = 2 · read back 2."));
+			fixture->setProperty("watchWriteKind", QStringLiteral("confirmed"));
+			settle();
+			auto* outcome = shown(content, "watchWriteOutcome");
+			const auto quiet = outcome->property("color").value<QColor>();
+			fixture->setProperty("watchWriteKind", QStringLiteral("differs"));
+			settle();
+			CHECK(outcome->property("color").value<QColor>() != quiet);
+			fixture->setProperty("watchWriteKind", QStringLiteral("unconfirmed"));
+			settle();
+			CHECK(outcome->property("color").value<QColor>() != quiet);
+			fixture->setProperty("watchWriteOutcome", QString{});
+			fixture->setProperty("watchWriteKind", QString{});
+			settle();
+			// F2 on a value that can't be written says why: read only; or
+			// changes are off, with Allow changes beside it.
+			const auto rowNamed = [list](const QString& name) {
+				for (int at = 0; at < list->property("count").toInt(); ++at)
+					if (auto* row = rowAt(list, at); row && row->property("name").toString() == name)
+						return at;
+				return -1;
+			};
+			const auto voltage = rowNamed(QStringLiteral("device.Voltage"));
+			CHECK(voltage >= 0);
+			list->setProperty("currentIndex", voltage);
+			list->forceActiveFocus();
+			key(window, Qt::Key_F2);
+			CHECK(textOf(content, "watchWriteOutcome") == QStringLiteral("device.Voltage is read only.") &&
+			      !named(content, "watchAllowChanges"));
+			fixture->setProperty("canWriteWatch", false);
+			fixture->setProperty("allowMutations", false);
+			settle();
+			const auto gainRow = rowNamed(QStringLiteral("device.Config.Gain"));
+			CHECK(gainRow >= 0);
+			list->setProperty("currentIndex", gainRow);
+			list->forceActiveFocus();
+			key(window, Qt::Key_F2);
+			CHECK(textOf(content, "watchWriteOutcome") ==
+			      QStringLiteral("Changes are off. Allow changes to write device.Config.Gain."));
+			click(window, shown(content, "watchAllowChanges"));
+			CHECK(fixture->property("allowMutations").toBool() && !named(content, "watchAllowChanges") &&
+			      !named(content, "watchWriteOutcome"));
+			fixture->setProperty("canWriteWatch", true);
+			settle();
 
 			// × on a node and Delete on a group remove all their values at once;
 			// Delete on a value removes it alone.

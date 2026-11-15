@@ -296,7 +296,7 @@ struct DynamicConfiguratorProvider::Impl {
 	// moves the Details selection or touches its draft.
 	std::shared_ptr<DynamicViewState> writer;
 	quint32 writeId = 0, watchWriteSession = 0;
-	QString writeText, writeName, watchWrite;
+	QString writeText, writeName, watchWrite, watchWriteKind;
 	// The written row's type, to say why a text is not a value of it.
 	WatchValueType writeType;
 	// A value inside a struct or array Field: where it is, so the write walks
@@ -660,21 +660,27 @@ struct DynamicConfiguratorProvider::Impl {
 			const auto words = [](const char* text) {
 				return QCoreApplication::translate("DynamicConfiguratorProvider", text);
 			};
-			if (written && !back.isEmpty())
+			if (written && !back.isEmpty()) {
 				watchWrite = (back == writeIntended ? words("Wrote %1 = %2 · read back %3.")
 				                                    : words("Wrote %1 = %2; the device reads back %3."))
 				                 .arg(writeName, writeIntended, back);
-			else if (written)
+				watchWriteKind = back == writeIntended ? QStringLiteral("confirmed") : QStringLiteral("differs");
+			} else if (written) {
 				watchWrite = words("Wrote %1 = %2; it could not be read back.").arg(writeName, writeIntended);
-			else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
-			                       result.write.status == cl::Status::BufferTooSmall))
+				watchWriteKind = QStringLiteral("unconfirmed");
+			} else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
+			                         result.write.status == cl::Status::BufferTooSmall)) {
 				watchWrite = words("%1 is larger than one write, so a value in it can't be written on its own.")
 				                 .arg(endpoints.fieldPath(writeId));
-			else
+				watchWriteKind = QStringLiteral("refused");
+			} else {
 				watchWrite = writeName + (result.write.status == cl::Status::OutcomeUnknown
 				                              ? QStringLiteral(": ")
 				                              : QStringLiteral(" not written: ")) +
 				             operationText(result.write);
+				watchWriteKind = result.write.status == cl::Status::OutcomeUnknown ? QStringLiteral("unconfirmed")
+				                                                                   : QStringLiteral("refused");
+			}
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
 		if (state) {
@@ -861,6 +867,7 @@ struct DynamicConfiguratorProvider::Impl {
 		if (writer && writer->view.editing())
 			writer->view.cancelEdit();
 		watchWrite = std::move(text);
+		watchWriteKind = QStringLiteral("refused");
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive)
@@ -915,6 +922,7 @@ struct DynamicConfiguratorProvider::Impl {
 		writer->sequence = submitted.handle.sequence;
 		writer->eventReported = false;
 		watchWrite = QStringLiteral("Writing ") + writeName;
+		watchWriteKind = QStringLiteral("writing");
 		watchWroteLast = true;
 		if (binding)
 			binding->mutationAccepted(writer);
@@ -2689,6 +2697,12 @@ bool DynamicConfiguratorProvider::watchWriting() const
 	return d->writer && d->writer->action != DynamicViewState::Action::None;
 }
 
+QString DynamicConfiguratorProvider::watchWriteKind() const
+{
+	// Said only while its words are: an outcome of an earlier session is gone.
+	return watchWriteOutcome().isEmpty() ? QString{} : d->watchWriteKind;
+}
+
 QString DynamicConfiguratorProvider::watchWriteOutcome() const
 {
 	return d->history(d->watchWrite, d->watchWriteSession);
@@ -2712,6 +2726,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		if (!parsed.error.isEmpty()) {
 			p->watchWrite = model->data(index, WatchlistModel::NameRole).toString() + QStringLiteral(" not written: ") +
 			                parsed.error;
+			p->watchWriteKind = QStringLiteral("refused");
 			p->notify();
 			return false;
 		}
@@ -2722,6 +2737,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	std::optional<WatchLeaves::Leaf> leaf;
 	if (!watch_key::isWhole(key) && !(leaf = p->watch.leaf(key))) {
 		p->watchWrite = QStringLiteral("Write refused: the Field is not available");
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2731,6 +2747,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto field = view.bindField(id);
 	if (!field || view.selectField(field.endpoint) != cl::Status::Ok) {
 		p->watchWrite = QStringLiteral("Write refused: the Field is not available");
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2742,6 +2759,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	if (!submitted) {
 		p->watchWrite =
 		    QStringLiteral("Write refused: %1").arg(static_cast<unsigned>(submitted.status));
+		p->watchWriteKind = QStringLiteral("refused");
 		p->notify();
 		return false;
 	}
@@ -2758,6 +2776,7 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
 	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
+	p->watchWriteKind = QStringLiteral("writing");
 	p->notify();
 	return true;
 }

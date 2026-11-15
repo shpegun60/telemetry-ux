@@ -444,3 +444,14 @@ Read now. `EndpointTreePanel.previewValues` still turns previews on and off;
 `previewIntervalMs` (2000 by default) is new, and a host saves both with its
 project. The provider gains `previewIntervalMs` (one value for every tree on a
 connection) and `readPreviewsNow()`.
+
+## The Watchlist's row editor says more (WL-5, November 2026)
+
+While a row is edited and the Watchlist polls, the live reading stands beside
+the name ("Now 1.48"; a failing read its status word, in the warning colour).
+`DynamicConfiguratorProvider::watchWriteKind` says what the last write's
+outcome is - `writing`, `confirmed`, `differs`, `unconfirmed`, `refused` - and
+the panel shows a confirmed write quietly and the others in the primary text
+colour. F2, or a double-click, on a value that can't be written says why: read
+only, not connected, changes off (with Allow changes beside it), a write in
+progress, or the provider's own reason.

@@ -929,7 +929,8 @@ void memberRowWrite()
 	CHECK(provider->writeWatch(0, QStringLiteral("2.0")));
 	CHECK(await([&] { return finished.count() == 1; }));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2."));
+	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2.") &&
+	      provider->watchWriteKind() == QStringLiteral("confirmed"));
 	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));
 	CHECK(text(1) == "18446744073709551615" && text(2) == "3");
 	// The element of a nested array, the same way.
@@ -944,7 +945,8 @@ void memberRowWrite()
 	CHECK(await([&] { return finished.count() == 3; }));
 	// Said in words: what the text is not, for the row's type (WL-3b).
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
-	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32."));
+	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32.") &&
+	      provider->watchWriteKind() == QStringLiteral("refused"));
 	connection.disconnect();
 }
 
@@ -1355,7 +1357,8 @@ void watchRowWriteUnknown()
 	CHECK(await([&] { return finished.count() == 1 && !provider->watchWriting(); }));
 	CHECK(!finished.last().at(0).toBool());
 	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")));
-	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")));
+	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")) &&
+	      provider->watchWriteKind() == QStringLiteral("unconfirmed"));
 	CHECK(!provider->watchWriting() && connection.recoveryRequired());
 	const auto writes = peer.nativeWrites();
 	connect(connection, peer);
