@@ -195,6 +195,8 @@ def main():
               'Relocated installed Trend did not bind its host source')
         check('Installed UndoHistory made in QML passed' in trend_output,
               'The relocated module did not make an UndoHistory from QML')
+        check('Installed UndoRouter, UndoButtons, UndoNotice and UndoScope made in QML passed' in trend_output,
+              'The relocated module did not make the Undo router, buttons, notice and scope from QML')
         report['trend_binary_sha256'] = digest(trend_binary)
         # A real local HTTP counter proves that the unsafe Qt AutoText control
         # loads an image, while the installed Configurator treats every role as data.

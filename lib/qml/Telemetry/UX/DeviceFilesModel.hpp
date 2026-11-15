@@ -40,6 +40,11 @@ class DeviceFilesModel final : public QAbstractItemModel {
 	Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
 	Q_PROPERTY(qulonglong selectedBytes READ selectedBytes NOTIFY selectionChanged)
 	Q_PROPERTY(int selectedReadable READ selectedReadable NOTIFY selectionChanged)
+	// The folder that holds the project's copies of this device's files - the
+	// device's folder, DeviceFileTransfers::localPathFor() inside it - or
+	// empty: each file's row then says whether its copy differs from the
+	// device's bytes as read (CopyDiffersRole). Nothing is made there.
+	Q_PROPERTY(QString copyFolder READ copyFolder WRITE setCopyFolder NOTIFY copyFolderChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -71,7 +76,13 @@ public:
 		// that can be written only) - "rws", "rw-", "-ws", "-w-", "r--",
 		// "---"; "···" while not known, "?" when Stat failed.
 		AccessMarkRole,
-		AccessWordsRole // the same in words: "read and write, kept across a restart"
+		AccessWordsRole, // the same in words: "read and write, kept across a restart"
+		// A file whose copy in copyFolder is saved differently from the
+		// device's bytes as read: how many bytes (a difference in length
+		// counted too); 0 without a copy, without a record, or the same.
+		CopyDiffersRole,
+		// When those device's bytes were read; invalid when not known.
+		CopyReadAtRole
 	};
 	Q_ENUM(Role)
 
@@ -146,6 +157,13 @@ public:
 	using CodecLookup = std::function<QString(const QString& devicePath)>;
 	void setCodecLookup(CodecLookup lookup);
 
+	QString copyFolder() const { return copyFolder_; }
+	void setCopyFolder(const QString& folder);
+	// The copies may have changed - saved, read again, written to the device:
+	// every file's row is compared again (a copy that did not change costs a
+	// look at its size and time).
+	Q_INVOKABLE void refreshCopies();
+
 	// A size in the panel's words, for figures the panel composes itself.
 	Q_INVOKABLE QString formatSize(qulonglong bytes) const;
 	// The same size as a screen reader should say it: "4.2 kibibytes".
@@ -167,6 +185,7 @@ public:
 Q_SIGNALS:
 	void stateChanged();
 	void selectionChanged();
+	void copyFolderChanged();
 
 private:
 	struct Node;
@@ -196,8 +215,12 @@ private:
 	Kind findKind(const Node* at) const;
 	QString markOf(const Node* at) const;
 
+	// Every file's row hears that roles changed.
+	void announceFiles(const QList<int>& roles);
+
 	QPointer<integration::qt::ConnectionSession> session_;
 	CodecLookup codecLookup_;
+	QString copyFolder_;
 	// Expires with the model; a queued completion checks it before touching this.
 	std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 	std::unique_ptr<Node> root_;

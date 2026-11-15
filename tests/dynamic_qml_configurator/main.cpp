@@ -894,8 +894,9 @@ static void plotUndoKinds()
 		traces->setPoints(gain, 2);
 	});
 	add("plot.points", "show the points", [&] { traces->setShowPoints(true); });
+	add("plot.stack", "stack the numbers", [&] { traces->setStacked(true); });
 	const auto report = undo_kinds::run(QStringLiteral("dynamic_qml_configurator"), cases);
-	CHECK(report.cases == 7 && report.disconnects == 7 && report.descriptors == 7);
+	CHECK(report.cases == 8 && report.disconnects == 8 && report.descriptors == 8);
 
 	// The words, and a curve back in its place with its colour.
 	start();
@@ -923,10 +924,15 @@ static void plotUndoKinds()
 	CHECK(history.undoText() == QStringLiteral("Show measurement points"));
 	traces->setShowPoints(false);
 	CHECK(history.undoText() == QStringLiteral("Hide measurement points"));
-	// A project's Plot put back records nothing.
+	traces->setStacked(true);
+	CHECK(history.undoText() == QStringLiteral("Stack the numbers in lanes"));
+	traces->setStacked(false);
+	CHECK(history.undoText() == QStringLiteral("Put the numbers on one axis"));
+	// A project's Plot put back records nothing, its stacking included.
 	const auto steps = history.count();
-	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}, {QStringLiteral("showPoints"), true}}) &&
-	      history.count() == steps);
+	CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{serial}}, {QStringLiteral("showPoints"), true},
+	                       {QStringLiteral("stacked"), true}}) &&
+	      history.count() == steps && traces->stacked() && traces->capture().value(QStringLiteral("stacked")).toBool());
 	// A curve taken off since: its plot's undo finds nothing and goes.
 	history.clear();
 	CHECK(traces->plot(gain).isEmpty());
@@ -1006,6 +1012,8 @@ static void undoHistoryCore()
 	      history.undoSerial() == first && done.last().at(0).toInt() == second && done.last().at(2).toBool() &&
 	      done.last().at(4).toString() == QStringLiteral("done"));
 	CHECK(history.sentence(done.last().at(1).toString(), true, {}, QStringLiteral("done")) == QStringLiteral("Undone: Set b"));
+	// The step's kinds, for the panel whose notice speaks for them (UR-1).
+	CHECK(done.last().at(5).toStringList() == QStringList{QStringLiteral("watch.rows")});
 	CHECK(history.redo() && held.value(QStringLiteral("b")) == 2 && !done.last().at(2).toBool() &&
 	      history.sentence(QStringLiteral("Set b"), false, {}, QStringLiteral("done")) == QStringLiteral("Redone: Set b"));
 	// A step that changes nothing is not kept; neither is a kind not declared,
@@ -1065,6 +1073,25 @@ static void undoHistoryCore()
 	history.noteIrreversible(QStringLiteral("Undo does not take back what is sent to the device."));
 	now += 5000;
 	CHECK(set(QStringLiteral("f"), 1) > 0 && history.irreversibleNote().isEmpty());
+	// A step taken ends it too: the user is past the action on the device.
+	history.noteIrreversible(QStringLiteral("The Command device.Reset was sent; Undo does not take it back."));
+	CHECK(history.undo() && history.irreversibleNote().isEmpty() && history.redo());
+	// A notice that shows what an undo did says so from done(); the next
+	// undo or redo starts unnoticed.
+	{
+		const auto noticing = QObject::connect(&history, &UndoHistory::done, &history, [&history] { history.markNoticed(); });
+		CHECK(history.undo() && history.noticed());
+		QObject::disconnect(noticing);
+		CHECK(history.redo() && !history.noticed());
+	}
+	// A redo that waits says why, as an undo does.
+	CHECK(history.undo());
+	blocked = QStringLiteral("Wait for the Batch to finish.");
+	history.refresh();
+	CHECK(!history.canRedo() && history.redoText() == QStringLiteral("Set f") && history.redoBlockedReason() == blocked);
+	blocked.clear();
+	history.refresh();
+	CHECK(history.canRedo() && history.redoBlockedReason().isEmpty() && history.redo());
 	// Clean: what was saved; an undo past it is no longer.
 	history.setClean();
 	CHECK(history.clean() && history.undo() && !history.clean() && history.redo() && history.clean());

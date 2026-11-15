@@ -53,8 +53,10 @@ EncodedBackend and Encoded dispatcher with a deterministic owner clock. Coverage
   recorded once its change is made, undo and redo putting states back, steps
   of one merge key within two seconds merging (and going when back where they
   started), a merge window of the caller's own and 0 (merged while the key
-  stays the same), a blocked step keeping its words, a skipped step and a dead
-  target's step going, the limit, the irreversible note, `clean`, a kind not
+  stays the same), a blocked step keeping its words (an undo's and a redo's),
+  a skipped step and a dead target's step going, the limit, the irreversible
+  note ended by a step recorded or taken, a notice's `markNoticed`, the kinds
+  `done` names, `clean`, a kind not
   declared or a target that is not one refused with a warning, a host's own
   kind declared; a provider's `history` assigned and announced once.
 - The live Plot's steps (UR-1) on a provider's own traces, every `plot.*` kind

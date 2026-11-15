@@ -31,6 +31,7 @@ inline const std::map<QString, QStringList>& coverage()
 	    {QStringLiteral("plot.curves"), {QStringLiteral("dynamic_qml_configurator")}},
 	    {QStringLiteral("plot.look"), {QStringLiteral("dynamic_qml_configurator")}},
 	    {QStringLiteral("plot.points"), {QStringLiteral("dynamic_qml_configurator")}},
+	    {QStringLiteral("plot.stack"), {QStringLiteral("dynamic_qml_configurator")}},
 	    {QStringLiteral("watch.format"), {QStringLiteral("qt_connection")}},
 	    {QStringLiteral("watch.rows"), {QStringLiteral("qt_connection"), QStringLiteral("static_qml_configurator")}},
 	};

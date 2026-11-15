@@ -27,7 +27,7 @@ class ToolIcon : public QQuickPaintedItem {
 	QML_ELEMENT
 	// "edit", "save", "download", "upload", "refresh", "undo", "redo",
 	// "warning", "error", "info", "copy", "clear", "lock"; for a plot "zoomIn",
-	// "zoomOut" and "fit"; for Device files "folder", "file", "fileCodec",
+	// "zoomOut", "fit" and "follow"; for Device files "folder", "file", "fileCodec",
 	// "fileText", "fileTable", "fileJson", "fileDescriptor", "fileValues",
 	// "fileIdentity", "fileSession" and "fileCapability".
 	Q_PROPERTY(QString name READ name WRITE setName NOTIFY changed)

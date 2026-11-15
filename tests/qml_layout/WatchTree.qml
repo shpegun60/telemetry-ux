@@ -8,36 +8,10 @@ ApplicationWindow {
     height: 420
     visible: true
     color: Theme.surfaceWindow
-    // A stand-in for a host's UndoHistory (UR-1): steps with their words and
-    // serials, the last taken back first - what the panel's notice and its
-    // Ctrl+Z read and call.
-    QtObject {
-        id: fakeHistory
-        objectName: "fakeHistory"
-        property var steps: []
-        property int serial: 0
-        readonly property bool canUndo: steps.length > 0
-        readonly property string undoText: steps.length > 0 ? steps[steps.length - 1].text : ""
-        readonly property int undoSerial: steps.length > 0 ? steps[steps.length - 1].serial : 0
-        signal recorded(int serial)
-        signal done(int serial, string text, bool undone, string note, string outcome)
-        function record(text, undo) {
-            serial += 1
-            steps = steps.concat([{ text: text, serial: serial, undo: undo }])
-            recorded(serial)
-            return serial
-        }
-        function undo() {
-            if (steps.length === 0)
-                return false
-            const step = steps[steps.length - 1]
-            steps = steps.slice(0, steps.length - 1)
-            step.undo()
-            done(step.serial, step.text, true, "", "done")
-            return true
-        }
-        function sentence(text, undone, note, outcome) { return (undone ? "Undone: " : "Redone: ") + text }
-    }
+    // The host's history (UR-1) and the window's one Ctrl+Z: the fixture
+    // records its changes there with the JavaScript that takes them back.
+    UndoHistory { id: workspaceHistory; objectName: "workspaceHistory" }
+    UndoRouter { objectName: "undoRouter"; workspace: workspaceHistory }
     QtObject {
         id: fixtureProvider
         readonly property var watchlist: watchTreeModel
@@ -61,8 +35,8 @@ ApplicationWindow {
         property string watchWriteKind: ""
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         // Its changes go to the history as steps; null, nothing is recorded.
-        property var history: fakeHistory
-        function record(text, undo) { return history ? history.record(text, undo) : 0 }
+        property var history: workspaceHistory
+        function record(text, undo) { return history ? scriptSteps.record(history, text, undo) : 0 }
         property string watchFormat: "original"
         // As the provider's: moves with every change of the rows or a format.
         property int watchRevision: 0

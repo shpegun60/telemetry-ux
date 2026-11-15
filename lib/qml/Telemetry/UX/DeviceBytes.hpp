@@ -76,6 +76,29 @@ public:
 	// Removes the record of localFile, if it has one: its copy was written
 	// again without one being kept, so the old one would no longer be true.
 	static void forget(const QString& localFile);
+	// The device's path localFile's record names, or empty without one: a
+	// copy in the project opened from its tree is the same document as the
+	// device's file it was read from.
+	static QString devicePathOf(const QString& localFile);
+	// The project's copy at localFile against the device's bytes as read,
+	// for the marks of the Files trees and the questions before a read:
+	// whether the copy exists, whether its record is kept and checks (known),
+	// how many bytes of the copy as saved are not the device's (a difference
+	// in length counted too; 0 when not known), when the copy was last
+	// written (savedAt), when the device's bytes were read (readAt) and
+	// whether they were read back after a write. A record of another device
+	// path than devicePath, when one is given, is none. Kept until the copy,
+	// or any record, changes: a tree asks again for every row it shows.
+	struct Comparison {
+		bool exists = false, known = false, written = false;
+		qint64 differs = 0;
+		QDateTime savedAt, readAt;
+	};
+	static Comparison compare(const QString& localFile, const QString& devicePath = {});
+	// A copy was written by this program - saved, read from the device,
+	// copied: every comparison is made again, even of a copy written twice
+	// within the time its file system tells apart.
+	static void changed();
 	// reference(), as OpenFiles takes it.
 	static FileContent::ReferenceLookup lookup();
 };

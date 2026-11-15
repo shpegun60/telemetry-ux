@@ -184,6 +184,10 @@ public:
 	// A host asks when the copy exists and differs, or its device's bytes are
 	// not known; a copy the same as the device's bytes is replaced quietly.
 	Q_INVOKABLE static QVariantMap copyState(const QString& localFile, const QString& devicePath);
+	// The device's path the project's copy at localFile was read from, as its
+	// record says (DeviceBytes), or empty: a host opens a copy from its
+	// project tree as that device's file, the same document as from the device.
+	Q_INVOKABLE static QString devicePathOf(const QString& localFile);
 	// The connected device's folder under root, made when missing; empty when
 	// it cannot be. "<name> [<id>]" from the device's identity file, or the id
 	// alone for a device without a name; a folder of the same id under an
@@ -197,6 +201,23 @@ public:
 	Q_INVOKABLE QString deviceFolderName() const;
 	Q_INVOKABLE QString deviceFolder(const QString& root, const QString& fallbackLabel,
 	                                 QObject* viewer = nullptr) const;
+	// The connected device's folder under root as deviceFolder() would give
+	// it - its name now, or an earlier name of the same id - when it exists;
+	// empty otherwise. Nothing is made or renamed: for marks and checks that
+	// must not leave a folder behind.
+	Q_INVOKABLE QString deviceFolderFound(const QString& root, const QString& fallbackLabel) const;
+	// FL-1f: the project's copy of the descriptor in deviceFolder against the
+	// descriptor the connected device gave at connect. When their
+	// fingerprints differ - the device's firmware changed - the copy is kept
+	// as a device version: copied with its record to the same path under
+	// versionFolder (a folder of deviceFolder, such as "device versions/<time>"),
+	// unless one with that fingerprint is already kept in a folder beside
+	// versionFolder. The copy itself is left as it is: reading the device's
+	// file replaces it, as ever. Returns {copy, connected} - the two
+	// fingerprints ("0x3F2A…") - with `version`, the kept copy's path, and
+	// `kept`, true when it was copied now; empty when they agree, or there
+	// is no copy, no connected descriptor or no folder.
+	Q_INVOKABLE QVariantMap keepOtherDescriptor(const QString& deviceFolder, const QString& versionFolder) const;
 	// The destination a row writes, as download() was given it. Different
 	// jobs may share it; use idAt() for stable job identity when rows move.
 	Q_INVOKABLE QString localFileAt(int row) const;
@@ -231,6 +252,10 @@ public:
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 	QHash<int, QByteArray> roleNames() const override;
 
+	// A descriptor downloaded to localFile from path against the bytes of the
+	// descriptor read at connect: empty when their fingerprints agree, or for
+	// another file; otherwise the note the row ends with. Public for the tests.
+	static QString descriptorNote(const QString& path, const QString& localFile, const QByteArray& connected);
 	// Figures in the designer's words; public for the tests.
 	static QString figures(quint64 received, quint64 size, double rate, double secondsLeft,
 	                       bool rateTrusted);
@@ -263,6 +288,8 @@ private:
 	bool publish(int row);
 	bool complete(int row);
 	QString readProblem(const Job& job) const;
+	// The same against the connected session's descriptor.
+	QString descriptorNote(const QString& path, const QString& localFile) const;
 
 	QPointer<integration::qt::ConnectionSession> session_;
 	std::vector<std::unique_ptr<Job>> jobs_;

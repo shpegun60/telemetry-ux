@@ -76,20 +76,15 @@ std::optional<Bounds> boundsOf(const WatchValueType& type, ScalarCode code)
 	return out;
 }
 
-// "“65536” is out of range for u16: enter 0 to 65535 (0x0000 to 0xFFFF)." -
-// whole sentences, so a translation can order them as it needs.
-QString outOfRangeText(const QString& typed, const WatchValueType& type, ScalarCode code)
+// "“65536” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to
+// 0xFFFF)." - in the row's form: a row shown in hex says the hex range first.
+// Whole sentences, so a translation can order them as it needs.
+QString outOfRangeText(const QString& typed, const WatchValueType& type, ScalarCode code, WatchNumberFormat form)
 {
 	const auto bounds = boundsOf(type, code);
 	if (!bounds)
 		return tr("“%1” is out of range for %2.").arg(typed, typeName(type));
-	const auto low = detail::scalarEditorBits(bounds->low, code);
-	const auto high = detail::scalarEditorBits(bounds->high, code);
-	return bounds->isSigned
-	           ? tr("“%1” is out of range for %2: enter %3 to %4, or %5 to %6 as bits.")
-	                 .arg(typed, typeName(type), low, high, hexAt(0, type.width), hexAt(bounds->all, type.width))
-	           : tr("“%1” is out of range for %2: enter %3 to %4 (%5 to %6).")
-	                 .arg(typed, typeName(type), low, high, hexAt(0, type.width), hexAt(bounds->all, type.width));
+	return tr("“%1” is out of range for %2. Enter a number from %3.").arg(typed, typeName(type), range(type, form));
 }
 
 bool asciiDigits(QStringView text)
@@ -152,7 +147,7 @@ QString text(const WatchValueBits& value, WatchNumberFormat format, const QHash<
 				const auto found = names ? names->constFind(bits) : QHash<quint64, QString>::const_iterator{};
 				if (names && found != names->cend())
 					return found.value();
-				return digits.isEmpty() ? QString{} : digits + QStringLiteral(" (unknown)");
+				return digits.isEmpty() ? QString{} : tr("Unknown (%1)").arg(digits);
 			}
 			return detail::scalarEditorBits(bits, *code);
 	}
@@ -165,7 +160,7 @@ bool isHex(QStringView text)
 	return trimmed.size() >= 2 && trimmed.at(0) == u'0' && (trimmed.at(1) == u'x' || trimmed.at(1) == u'X');
 }
 
-Parsed fromHex(QStringView text, const WatchValueType& type)
+Parsed fromHex(QStringView text, const WatchValueType& type, WatchNumberFormat form)
 {
 	Parsed parsed;
 	const auto code = codeOf(type.scalar);
@@ -199,7 +194,7 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 	if (digits.size() > width) {
 		parsed.error = isFloat(*code) || *code == ScalarCode::Bool
 		    ? tr("“%1”: %2 takes at most %3 hex digits.").arg(trimmed.toString(), typeName(type)).arg(width)
-		    : outOfRangeText(trimmed.toString(), type, *code);
+		    : outOfRangeText(trimmed.toString(), type, *code, form);
 		return parsed;
 	}
 	bool ok = false;
@@ -234,7 +229,7 @@ Parsed fromHex(QStringView text, const WatchValueType& type)
 }
 
 
-QString range(const WatchValueType& type)
+QString range(const WatchValueType& type, WatchNumberFormat form)
 {
 	const auto code = codeOf(type.scalar);
 	const auto bounds = type.valid() && code ? boundsOf(type, *code) : std::nullopt;
@@ -242,11 +237,15 @@ QString range(const WatchValueType& type)
 		return {};
 	const auto low = detail::scalarEditorBits(bounds->low, *code);
 	const auto high = detail::scalarEditorBits(bounds->high, *code);
-	return bounds->isSigned ? tr("%1 to %2, or %3 to %4 as bits").arg(low, high, hexAt(0, type.width), hexAt(bounds->all, type.width))
-	                        : tr("%1 to %2 (%3 to %4)").arg(low, high, hexAt(0, type.width), hexAt(bounds->all, type.width));
+	const auto hexLow = hexAt(0, type.width), hexHigh = hexAt(bounds->all, type.width);
+	if (form == WatchNumberFormat::Hex)
+		return bounds->isSigned ? tr("%1 to %2 as bits, or %3 to %4").arg(hexLow, hexHigh, low, high)
+		                        : tr("%1 to %2 (%3 to %4)").arg(hexLow, hexHigh, low, high);
+	return bounds->isSigned ? tr("%1 to %2, or %3 to %4 as bits").arg(low, high, hexLow, hexHigh)
+	                        : tr("%1 to %2 (%3 to %4)").arg(low, high, hexLow, hexHigh);
 }
 
-Encoded encode(QStringView text, const WatchValueType& type)
+Encoded encode(QStringView text, const WatchValueType& type, WatchNumberFormat form)
 {
 	Encoded out;
 	const auto code = codeOf(type.scalar);
@@ -259,7 +258,7 @@ Encoded encode(QStringView text, const WatchValueType& type)
 	}
 	auto typed = trimmed;
 	if (isHex(trimmed)) {
-		const auto parsed = fromHex(trimmed, type);
+		const auto parsed = fromHex(trimmed, type, form);
 		if (!parsed.error.isEmpty()) {
 			out.error = parsed.error;
 			return out;
@@ -308,7 +307,7 @@ Encoded encode(QStringView text, const WatchValueType& type)
 			out.error = detail::parseScalar(typed, asDouble) ? tr("“%1” is out of range for %2.").arg(trimmed, typeName(type))
 			                                                 : tr("“%1” is not a number for %2.").arg(trimmed, typeName(type));
 		else if (asciiDigits(digits))
-			out.error = outOfRangeText(trimmed, type, *code);
+			out.error = outOfRangeText(trimmed, type, *code, form);
 		else if (detail::parseScalar(typed, asDouble))
 			out.error = tr("“%1”: %2 takes whole numbers only.").arg(trimmed, typeName(type));
 		else

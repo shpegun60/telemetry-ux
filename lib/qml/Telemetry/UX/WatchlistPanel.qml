@@ -14,26 +14,15 @@ import QtQuick.Templates as T
 Pane {
     id: panel
     required property var provider
-    // The provider's history (UR-1): where its changes go as steps.
+    // The provider's history (UR-1): where its changes go as steps. Ctrl+Z
+    // is the window's UndoRouter's; the notice under the toolbar offers the
+    // Undo of what the panel just did, and says what an undo of a Watchlist
+    // step did, wherever it was taken.
     readonly property var history: provider && provider.history ? provider.history : null
-    // Ctrl+Z takes back the history's last step wherever in the panel the
-    // keys are - the list, a toolbar button, the ⋯ button after its menu - but
-    // in a text field, which takes back its own typing first. Until UX-B
-    // gives the window one router, the panel calls the history itself.
-    Keys.onShortcutOverride: event => {
-        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier && history !== null && history.canUndo)
-            event.accepted = true
-    }
-    Keys.onPressed: event => {
-        if (event.key === Qt.Key_Z && event.modifiers === Qt.ControlModifier)
-            event.accepted = panel.undo()
-    }
-    // The serial of the step the history last recorded: an action of this
-    // panel's that recorded one offers its Undo with its notice.
-    property int recorded: 0
     Connections {
         target: panel.history
-        function onRecorded(serial) { panel.recorded = serial }
+        // A format undone or redone may make the Value column wider.
+        function onDone() { panel.forgetMeasured() }
     }
     // Optional host workflow (for example, prepare a project recording before
     // starting). Without handlers the existing provider is called directly.
@@ -313,14 +302,17 @@ Pane {
             return
         const many = onSelection(row)
         const sources = sourcesAt(row)
-        recorded = 0
-        if (sources.length === 0 || !provider.setWatchRowFormat(sources, name))
+        if (sources.length === 0)
+            return
+        let set = false
+        const serial = notice.recording(() => { set = provider.setWatchRowFormat(sources, name) })
+        if (!set)
             return
         forgetMeasured()
         if (many)
             say(name.length === 0 ? qsTr("%Ln values shown like the Watchlist (%1)", "", sources.length).arg(formatWord(format))
                                   : qsTr("%Ln values shown in %1", "", sources.length).arg(formatWord(name)),
-                recorded)
+                serial)
     }
     // The selection (WL-2c), kept by the rows by path; the current row is
     // the keyboard's cursor. An action takes the selection when the current
@@ -418,43 +410,22 @@ Pane {
         if (row >= 0)
             watchList.positionViewAtIndex(row, ListView.Contain)
     }
-    // Removing many with no Undo to bring them back (a host that gave the
-    // provider no history) asks first; the rows asked about wait here.
-    property var removalAsked: []
     // The last thing done, in a line under the toolbar: "Removed
-    // device.Config.Gain · Undo". Like the Device tree's, it goes once
-    // anything changes the Watchlist, the tree or a format - here, in the
-    // Device tree, or by a project loaded. Its Undo shows while the step it
-    // speaks of is the one Undo would take.
-    property string noticeText: ""
-    // The step the notice speaks of, or 0.
-    property int noticeSerial: 0
+    // device.Config.Gain · Undo" (an UndoNotice). Like the Device tree's, it
+    // goes once anything changes the Watchlist, the tree or a format - here,
+    // in the Device tree, or by a project loaded. Its Undo shows while the
+    // step it speaks of is the one Undo would take.
     readonly property int revision: typeof provider.watchRevision === "number" ? provider.watchRevision : -1
-    property int noticeRevision: -1
     function say(text, serial) {
-        noticeText = text
-        noticeSerial = typeof serial === "number" ? serial : 0
-        noticeRevision = revision
+        notice.say(text, serial)
         // The notice is what is said, not the selection it left.
         selectionAnnounce.stop()
         announcedCount = selectedCount
-        if (text.length > 0)
-            panel.Accessible.announce(text)
     }
-    onRevisionChanged: {
-        if (noticeText.length > 0 && revision !== noticeRevision)
-            say("", 0)
-        if (removeDialog.visible) {
-            removalAsked = []
-            removeDialog.close()
-            panel.Accessible.announce(qsTr("The Watchlist changed; nothing was removed"))
-        }
-    }
-    readonly property bool canUndo: noticeSerial > 0 && history !== null && history.canUndo
-                                    && history.undoSerial === noticeSerial
     // Stops watching what row shows: a value, or every value under a node, as
-    // one change where the provider takes several, said with Undo.
-    function removeAt(row, confirmed, own) {
+    // one change where the provider takes several, said with Undo. Never
+    // asked first: Undo brings the rows back, device or not.
+    function removeAt(row, own) {
         const many = own !== true && onSelection(row)
         const sources = many ? sourcesAt(row) : rows ? rows.sourceRows(row) : [row]
         if (sources.length === 0 || changeLocked)
@@ -462,13 +433,7 @@ Pane {
         // A selection is named by its count: its rows may be out of view.
         const item = many ? null : watchList.itemAtIndex(row)
         const label = item ? item.name : ""
-        const oneByOne = typeof provider.removeWatchRows !== "function"
-        if (sources.length > 1 && confirmed !== true && (oneByOne || history === null)) {
-            removalAsked = sources
-            removeDialog.open()
-            return
-        }
-        if (oneByOne) {
+        if (typeof provider.removeWatchRows !== "function") {
             sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
             selectCurrent()
             return
@@ -483,45 +448,20 @@ Pane {
             : qsTr("Removed %L1 values of %2").arg(result.changed).arg(label),
             typeof result.serial === "number" ? result.serial : 0)
     }
-    function removeAsked() {
-        const sources = removalAsked
-        removalAsked = []
-        if (sources.length === 0 || changeLocked)
+    // Clear the Watchlist: every value, one step, never asked first.
+    function clearAll() {
+        if (count === 0 || changeLocked)
             return
-        if (typeof provider.removeWatchRows !== "function") {
-            sources.slice().sort((a, b) => b - a).forEach(source => provider.removeWatch(source))
-            say(qsTr("Removed %Ln values", "", sources.length), 0)
-            selectCurrent()
-            return
-        }
-        const result = provider.removeWatchRows(sources)
-        if (result && result.status === "ok" && result.changed > 0) {
-            say(qsTr("Removed %Ln values", "", result.changed), typeof result.serial === "number" ? result.serial : 0)
-            selectCurrent()
-        }
+        const cleared = count
+        const serial = notice.recording(() => provider.clearWatch())
+        if (count === 0)
+            say(qsTr("Cleared %Ln values", "", cleared), serial)
     }
     // After a removal the row the cursor moved to is the one selected.
     function selectCurrent() {
         if (selectable && watchList.currentIndex >= 0)
             rows.select(watchList.currentIndex)
         announcedCount = selectedCount
-    }
-    // Takes back the history's last step and says what it did: "Undone:
-    // Remove device.Config.Gain from the Watchlist", with what could not be
-    // put back.
-    function undo() {
-        if (history === null || !history.canUndo)
-            return false
-        const text = history.undoText
-        let said = ""
-        const heard = (serial, step, undone, note, outcome) => { said = history.sentence(step, undone, note, outcome) }
-        history.done.connect(heard)
-        const done = history.undo()
-        history.done.disconnect(heard)
-        if (done)
-            forgetMeasured()
-        say(said.length > 0 ? said : done ? qsTr("Undone: %1").arg(text) : "", 0)
-        return done
     }
     // Copies what row shows: "path = value" lines (Ctrl+C), the paths
     // alone (Alt+Shift+C), or the value alone.
@@ -567,7 +507,8 @@ Pane {
             return false
         const result = provider.addWatchPaths(payload.paths || [])
         const added = result && typeof result.added === "number" ? result.added : 0
-        say(added === 1 ? qsTr("Added 1 value to the Watchlist") : qsTr("Added %L1 values to the Watchlist").arg(added), false)
+        say(added === 1 ? qsTr("Added 1 value to the Watchlist") : qsTr("Added %L1 values to the Watchlist").arg(added),
+            added > 0 && typeof result.serial === "number" ? result.serial : 0)
         return added > 0
     }
     // The live Plot (LP-1), when the provider has one.
@@ -582,15 +523,16 @@ Pane {
         if (values.length === 0)
             return false
         const numbers = values.filter(value => value.number)
-        recorded = 0
+        const paths = numbers.map(value => value.path)
         if (numbers.length > 0 && numbers.every(value => plotTraces.isPlotted(value.path))) {
-            plotTraces.unplotMany(numbers.map(value => value.path))
+            const off = notice.recording(() => plotTraces.unplotMany(paths))
             say(numbers.length === 1 ? qsTr("%1 is off the Plot; its readings are kept").arg(numbers[0].path)
                                      : qsTr("%L1 values are off the Plot; their readings are kept").arg(numbers.length),
-                recorded)
+                off)
             return true
         }
-        const plotted = plotTraces.plotMany(numbers.map(value => value.path))
+        let plotted = null
+        const recorded = notice.recording(() => { plotted = plotTraces.plotMany(paths) })
         const added = plotted.added
         const last = plotted.last
         const refusal = plotted.refusal
@@ -1345,9 +1287,9 @@ Pane {
             MenuItem {
                 objectName: "clearWatchItem"
                 leftPadding: moreMenu.checkColumn
-                text: qsTr("Clear the Watchlist…")
+                text: qsTr("Clear the Watchlist")
                 enabled: panel.count > 0 && !panel.changeLocked
-                onTriggered: clearDialog.open()
+                onTriggered: panel.clearAll()
             }
         }
 
@@ -1414,42 +1356,18 @@ Pane {
         }
         // Qt Quick has no clipboard API; a hidden editor copies its text.
         TextEdit { id: clipboardHelper; visible: false; textFormat: TextEdit.PlainText }
-        // What the last removal or copy did, as the Device tree says it:
-        // "Removed 3 values of device.Config · Undo", Undo while nothing else
-        // changed; "Copied device.Config.Gain".
-        RowLayout {
-            objectName: "watchNoticeLine"
-            visible: panel.open && panel.noticeText.length > 0
+        // What the last removal, copy or format did, as the Device tree says
+        // it: "Removed 3 values of device.Config · Undo", Undo while that step
+        // is the one Undo would take; "Copied device.Config.Gain". It speaks
+        // for the Watchlist's steps undone or redone anywhere.
+        UndoNotice {
+            id: notice
+            objectName: "watchNotice"
             Layout.fillWidth: true
-            spacing: Type.spacing
-            Label {
-                objectName: "watchNotice"
-                // As wide as its words, cut only when the line is too narrow.
-                Layout.minimumWidth: 0
-                textFormat: Text.PlainText
-                text: panel.noticeText
-                color: Theme.textSecondary
-                font.pointSize: Type.caption
-                elide: Text.ElideRight
-            }
-            Label {
-                id: removedDot
-                visible: removedUndo.visible
-                text: "·"
-                color: Theme.textMuted
-                font.pointSize: Type.caption
-                Accessible.ignored: true
-            }
-            LinkButton {
-                id: removedUndo
-                objectName: "watchUndo"
-                visible: panel.canUndo
-                text: qsTr("Undo")
-                Accessible.name: panel.history ? qsTr("Undo: %1").arg(panel.history.undoText) : text
-                font.pointSize: Type.caption
-                onClicked: panel.undo()
-            }
-            Item { Layout.fillWidth: true }
+            active: panel.open
+            history: panel.history
+            kinds: ["watch.rows", "watch.format"]
+            revision: panel.revision
         }
         // Column titles over the one-line rows; they stay while the rows scroll.
         RowLayout {
@@ -1921,7 +1839,7 @@ Pane {
                 // quiet without them, so it stays visible.
                 readonly property bool marked: panel.selectable ? model.selected === true
                                                                 : ListView.isCurrentItem && watchList.activeFocus
-                readonly property bool active: marked && (watchList.activeFocus || rowMenu.visible || removeDialog.visible)
+                readonly property bool active: marked && (watchList.activeFocus || rowMenu.visible)
                 // Muted text steps up on the quiet fill, to stay readable.
                 readonly property color muted: marked && !active ? Theme.textSecondary : Theme.textMuted
                 readonly property bool removeShown: compact || rowHover.hovered || current
@@ -2278,8 +2196,8 @@ Pane {
                                     }
                                     Accessible.name: qsTr("New value for %1").arg(watchRow.name)
                                     Accessible.description: currentIndex < 0
-                                        ? qsTr("Choose a value, then Write or press Enter. Escape cancels.")
-                                        : qsTr("%1. Choose a value, then Write or press Enter. Escape cancels.").arg(currentText)
+                                        ? qsTr("Choose a value, then Write or press Enter to send it to the device; Undo does not take it back. Escape cancels.")
+                                        : qsTr("%1. Choose a value, then Write or press Enter to send it to the device; Undo does not take it back. Escape cancels.").arg(currentText)
                                     PlainToolTip {
                                         objectName: "watchValueChoiceToolTip"
                                         visible: (valueChoice.hovered || valueChoice.visualFocus) && !valueChoice.popup.visible
@@ -2328,9 +2246,9 @@ Pane {
                                     Keys.onEscapePressed: watchRow.finishEdit()
                                     Accessible.name: qsTr("New value for %1").arg(watchRow.name)
                                     Accessible.description: (watchRow.writeScope
-                                        ? qsTr("%1. %2 %3 Write all or press Enter to send it once. Escape cancels.")
+                                        ? qsTr("%1. %2 %3 Write all or press Enter to send it once; Undo does not take it back. Escape cancels.")
                                             .arg(watchRow.draftText).arg(watchRow.scopeText).arg(watchRow.overwriteText)
-                                        : qsTr("%1. Write or press Enter to send this value once. Escape cancels.").arg(watchRow.draftText))
+                                        : qsTr("%1. Write or press Enter to send this value once; Undo does not take it back. Escape cancels.").arg(watchRow.draftText))
                                         + (editPreview.text.length > 0 ? " " + editPreview.text : "")
                                     PlainToolTip {
                                         objectName: "watchValueEditorToolTip"
@@ -2592,7 +2510,7 @@ Pane {
                                 radius: Type.radius
                                 color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
                             }
-                            onClicked: panel.removeAt(watchRow.index, false, true)
+                            onClicked: panel.removeAt(watchRow.index, true)
                             readonly property string what: watchRow.isValue ? qsTr("Remove %1").arg(watchRow.name)
                                 : watchRow.leaves === 1 ? qsTr("Remove the 1 value of %1").arg(watchRow.name)
                                 : qsTr("Remove the %Ln values of %1", "", watchRow.leaves).arg(watchRow.name)
@@ -2791,113 +2709,12 @@ Pane {
         MenuSeparator {}
         MenuItem {
             objectName: "watchRowRemove"
-            text: (rowMenu.many === 0 ? qsTr("Remove")
-                   : panel.history === null || typeof panel.provider.removeWatchRows !== "function"
-                     ? qsTr("Remove %Ln values…", "", rowMenu.many) : qsTr("Remove %Ln values", "", rowMenu.many))
+            text: (rowMenu.many === 0 ? qsTr("Remove") : qsTr("Remove %Ln values", "", rowMenu.many))
                   + "\t" + qsTr("Delete")
             enabled: !panel.changeLocked
             onTriggered: panel.removeAt(panel.menuRow)
         }
     }
-
-    // Clearing asks first. Cancel has the focus, so Enter keeps the list;
-    // Remove all is drawn in the danger colour, not the accent.
-    Dialog {
-        id: clearDialog
-        objectName: "clearWatchDialog"
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        // A width of its own: sized from its title and buttons, a dialog and
-        // its button row would each wait for the other.
-        width: Math.min(Type.bodyPixels * 30, parent ? parent.width - 2 * Type.groupSpacing : Type.bodyPixels * 30)
-        modal: true
-        palette.window: Theme.surface
-        palette.windowText: Theme.textPrimary
-        palette.base: Theme.surface
-        palette.text: Theme.textPrimary
-        palette.button: Theme.buttonFill
-        palette.buttonText: Theme.textPrimary
-        palette.highlight: Theme.stateSelected
-        palette.highlightedText: Theme.selectedForeground
-        title: panel.count === 1 ? qsTr("Remove the one value from the Watchlist?")
-                                 : qsTr("Remove all %L1 values from the Watchlist?").arg(panel.count)
-        // No body: the question is the title, the answer the buttons.
-        topPadding: 0
-        bottomPadding: 0
-        footer: DialogButtonBox {
-            Button {
-                objectName: "clearWatchConfirm"
-                text: panel.count === 1 ? qsTr("Remove") : qsTr("Remove all")
-                palette.buttonText: Theme.error
-                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
-            }
-            Button {
-                id: clearCancel
-                objectName: "clearWatchCancel"
-                text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-            }
-            onDiscarded: {
-                clearDialog.close()
-                panel.provider.clearWatch()
-            }
-        }
-        onOpened: clearCancel.forceActiveFocus(Qt.TabFocusReason)
-    }
-    // Many values removed with no history to put them back: no Undo, so the
-    // panel asks first, as Clear does. UX-B removes both questions.
-    Dialog {
-        id: removeDialog
-        objectName: "removeWatchDialog"
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(Type.bodyPixels * 30, parent ? parent.width - 2 * Type.groupSpacing : Type.bodyPixels * 30)
-        modal: true
-        palette.window: Theme.surface
-        palette.windowText: Theme.textPrimary
-        palette.base: Theme.surface
-        palette.text: Theme.textPrimary
-        palette.button: Theme.buttonFill
-        palette.buttonText: Theme.textPrimary
-        palette.highlight: Theme.stateSelected
-        palette.highlightedText: Theme.selectedForeground
-        title: qsTr("Remove %Ln values from the Watchlist?", "", panel.removalAsked.length)
-        // In a layout, as in HexPane and UnsavedChangesDialog: a wrapped label
-        // straight in a dialog loops its implicit height through the popup's
-        // content size once the window is narrower than the dialog.
-        ColumnLayout {
-            width: parent.width
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                text: qsTr("Undo cannot bring them back.")
-                color: Theme.textSecondary
-            }
-        }
-        footer: DialogButtonBox {
-            Button {
-                objectName: "removeWatchConfirm"
-                text: qsTr("Remove")
-                palette.buttonText: Theme.error
-                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
-            }
-            Button {
-                id: removeCancel
-                objectName: "removeWatchCancel"
-                text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-            }
-            onDiscarded: {
-                panel.removeAsked()
-                removeDialog.close()
-            }
-        }
-        onOpened: removeCancel.forceActiveFocus(Qt.TabFocusReason)
-        // Cancel or Escape: the rows asked about are forgotten. (Not on close:
-        // a Remove closes the dialog before its own signal comes.)
-        onRejected: panel.removalAsked = []
-    }
-
     // Values dropped from the Device tree join the Watchlist (LP-1g3). Over
     // the list itself: a second child of the Pane would change its size.
     DropArea {
