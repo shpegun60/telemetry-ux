@@ -127,6 +127,17 @@ def main():
         if not theme_match or int(theme_match[1]) < 9:
             raise RuntimeError('missing Theme and Type contract')
         report['theme'] = dict(checks=int(theme_match[1]), executable_sha256=digest(theme_binary))
+        # The Watchlist's tree and row editor and the Batch's "+" row, built
+        # since WL-2 and BA-1 but not run here until LP-1; and the live Plot.
+        for name, binary_name, pattern, least in (
+                ('watch-tree', 'telemetry_qml_watch_tree', r'Watch tree checks=(\d+) warnings=0', 240),
+                ('batch-add', 'telemetry_qml_batch_add', r'Batch add checks=(\d+) warnings=0', 45),
+                ('trace-plot', 'telemetry_qml_trace_plot', r'Trace plot checks=(\d+) warnings=0', 40)):
+            binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
+            found = re.search(pattern, run(name, [binary, output]))
+            if not found or int(found[1]) < least:
+                raise RuntimeError('missing ' + name + ' UI contract')
+            report[name.replace('-', '_')] = dict(checks=int(found[1]), executable_sha256=digest(binary))
         report['screenshots'] = {p.name: digest(p) for p in sorted(output.glob('*.png'))}
         report['passed'] = True
     except Exception as error:
