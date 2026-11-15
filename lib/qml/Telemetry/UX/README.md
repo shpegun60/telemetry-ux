@@ -533,8 +533,9 @@ UndoButtons { router: router }
 ```
 
 - **`UndoRouter`** (an item anywhere in the window; `registerQmlTypes()`
-  keeps it linked). `workspace` is the host's history. What a press does
-  depends on where the keys are:
+  keeps it linked). `workspace` is the host's history. A window that the
+  router's window owns - a dock floated out of it, whose transient parent it
+  is - counts as part of it. What a press does depends on where the keys are:
   - a text field takes back its own typing (Qt's), never falling through;
   - an area whose `UndoScope.inert` is set, a modal dialog and an open menu do
     nothing;

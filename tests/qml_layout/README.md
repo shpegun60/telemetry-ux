@@ -55,8 +55,9 @@ menu acting from Details, a notice that speaks for a step (`noticed`) and one
 hidden, a blocked step's words on `UndoButtons`, the toolbar never taking the
 keys, a long path cut for a menu, the file's history taken once the keys are in
 its Viewer and the workspace's once it records later, the file's steps waiting
-while it is written, and a menu or a modal dialog taking no step and leaving
-`active` as it was. `WatchTree.cpp` and `Bulk.cpp` record into a real
+while it is written, a menu or a modal dialog taking no step and leaving
+`active` as it was, and a dock floated out of the window (a window it owns)
+where Ctrl+Z still takes a step and an inert area in it does nothing. `WatchTree.cpp` and `Bulk.cpp` record into a real
 `UndoHistory` through `ScriptSteps.hpp` (the fixture's JavaScript as a step's
 target) with a router in their windows, and check the notices' `undoNoticeLink`
 (Undo, then Redo), Clear and removal with no question, and a tree with

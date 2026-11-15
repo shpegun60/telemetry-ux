@@ -363,6 +363,31 @@ int main(int argc, char** argv)
 		settle();
 		CHECK(!dialog->property("visible").toBool());
 
+		// A dock floated out of the window is a window it owns: the keys there
+		// are the router's, and an inert area in it does nothing.
+		auto* floating = window->findChild<QQuickWindow*>(QStringLiteral("floatingDock"));
+		CHECK(floating && floating->transientParent() == window);
+		floating->show();
+		floating->requestActivate();
+		CHECK(QTest::qWaitForWindowActive(floating));
+		auto* floatingButton = shown(floating->contentItem(), "floatingButton");
+		floatingButton->forceActiveFocus(Qt::TabFocusReason);
+		settle();
+		CHECK(router->active() == workspace);
+		workspace->clear();
+		undone = 0;
+		steps.record(workspace, QStringLiteral("Add device.First to the Watchlist"), [&] { ++undone; });
+		QTest::keyClick(floating, Qt::Key_Z, Qt::ControlModifier);
+		settle();
+		CHECK(undone == 1 && announced.last().at(0).toString() == QStringLiteral("Undone: Add device.First to the Watchlist"));
+		steps.record(workspace, QStringLiteral("Add device.Second to the Watchlist"), [&] { ++undone; });
+		shown(floating->contentItem(), "floatingInertButton")->forceActiveFocus(Qt::TabFocusReason);
+		settle();
+		const int heardFloating = int(announced.size());
+		QTest::keyClick(floating, Qt::Key_Z, Qt::ControlModifier);
+		settle();
+		CHECK(undone == 1 && int(announced.size()) == heardFloating);
+		floating->close();
 		window->close();
 		settle();
 		CHECK(warnings == 0);

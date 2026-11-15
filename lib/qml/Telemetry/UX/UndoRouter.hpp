@@ -16,7 +16,9 @@ QT_END_NAMESPACE
 namespace telemetry::ux {
 // One per window, anywhere in it: `UndoRouter { workspace: history }`. It is
 // the only thing that answers Ctrl+Z (undo), Ctrl+Y and Ctrl+Shift+Z (redo);
-// panels take none of them.
+// panels take none of them. A window that the router's window owns (its
+// transient parent: a dock floated out of it) counts as part of it: the keys
+// there are the router's as well.
 //
 // What a press does depends on where the keys are:
 //   - a text field takes back its own typing (Qt's), never falling through;
@@ -103,11 +105,12 @@ private:
 	void focusMoved();
 	void activate(UndoHistory* history);
 	void watchWindow(QQuickWindow* window);
+	[[nodiscard]] QQuickItem* keysItem() const;
 
 	QPointer<UndoHistory> workspace_;
 	QPointer<UndoHistory> active_;
 	QPointer<QQuickWindow> window_;
-	QMetaObject::Connection focus_, activeChanged_, activeGone_, workspaceRecorded_;
+	QMetaObject::Connection focus_, appFocus_, activeChanged_, activeGone_, workspaceRecorded_;
 };
 } // namespace telemetry::ux
 #endif

@@ -80,6 +80,22 @@ Window {
         objectName: "testMenu"
         MenuItem { objectName: "testMenuItem"; text: "One" }
     }
+    // A dock floated out of the window: a window it owns.
+    Window {
+        objectName: "floatingDock"
+        transientParent: host
+        width: 300
+        height: 120
+        color: Theme.surfaceWindow
+        RowLayout {
+            anchors.fill: parent
+            Button { objectName: "floatingButton"; text: "Floating" }
+            Pane {
+                UndoScope.inert: true
+                Button { objectName: "floatingInertButton"; text: "Second device" }
+            }
+        }
+    }
     Dialog {
         objectName: "modalDialog"
         modal: true

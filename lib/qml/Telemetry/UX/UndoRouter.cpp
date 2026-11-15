@@ -5,6 +5,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QVariantList>
 #include <QtGui/QAccessible>
+#include <QtGui/QGuiApplication>
 #include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlEngine>
@@ -184,7 +185,7 @@ void UndoRouter::keyRedo()
 
 void UndoRouter::press(bool undo)
 {
-	const auto* scope = UndoScope::of(window_ ? window_->activeFocusItem() : nullptr);
+	const auto* scope = UndoScope::of(keysItem());
 	if (scope && scope->inert())
 		return;
 	if (scope && !scope->refusal().isEmpty()) {
@@ -227,7 +228,7 @@ void UndoRouter::say(const QString& text, bool noticed)
 		return;
 #if QT_CONFIG(accessibility)
 	if (QAccessible::isActive()) {
-		QObject* speaker = window_ && window_->activeFocusItem() ? window_->activeFocusItem() : this;
+		QObject* speaker = keysItem() ? static_cast<QObject*>(keysItem()) : this;
 		QAccessibleAnnouncementEvent event(speaker, text);
 		QAccessible::updateAccessibility(&event);
 	}
@@ -237,7 +238,7 @@ void UndoRouter::say(const QString& text, bool noticed)
 
 void UndoRouter::focusMoved()
 {
-	const auto* item = window_ ? window_->activeFocusItem() : nullptr;
+	const auto* item = keysItem();
 	// The window lost the keys, or a menu, a dialog or the palette has them:
 	// what it acts on is what came before.
 	if (!item || inPopup(item))
@@ -263,13 +264,31 @@ void UndoRouter::activate(UndoHistory* history)
 	Q_EMIT changed();
 }
 
+QQuickItem* UndoRouter::keysItem() const
+{
+	if (!window_)
+		return nullptr;
+	// The item with the keys when it is in this window or one it owns - a
+	// floating dock is a window of its own whose shortcuts are this one's.
+	if (auto* item = qobject_cast<QQuickItem*>(QGuiApplication::focusObject())) {
+		for (const QWindow* owner = item->window(); owner; owner = owner->transientParent())
+			if (owner == window_)
+				return item;
+	}
+	return window_->activeFocusItem();
+}
+
 void UndoRouter::watchWindow(QQuickWindow* window)
 {
 	if (window_ == window)
 		return;
 	QObject::disconnect(focus_);
+	QObject::disconnect(appFocus_);
 	window_ = window;
-	if (window)
+	if (window) {
 		focus_ = connect(window, &QQuickWindow::activeFocusItemChanged, this, &UndoRouter::focusMoved);
+		// The keys in a window this one owns - a dock floated out of it.
+		appFocus_ = connect(qGuiApp, &QGuiApplication::focusObjectChanged, this, &UndoRouter::focusMoved);
+	}
 }
 } // namespace telemetry::ux
