@@ -598,6 +598,17 @@ for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
 chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
 Shift+F10).
 
+## Batch polish (BA-3, November 2026)
+
+`BatchPanel` makes the item just added the current one, highlighted and in
+view, while the keys stay in the "+" row; a click makes an item current. An
+item's name cut short shows whole on hover, and each item row has the
+accessible name "Item 4, service control.Scale value=2 factor=3, Ready".
+Beside the add row's notice, "Fill in Details" (tooltip "Fill in Details
+(Ctrl+Enter)") does by pointer what Ctrl+Enter does: it selects the Command or
+Service the line names in the Device tree with the values typed there; it
+takes no focus and shows only while the line names one.
+
 ## The Watchlist holds 8192 values, the Plot's rings 256 MB (WL-7, November 2026)
 
 `watchlistRowLimit` is 8192 (it was 1024) in both providers, for whole Fields

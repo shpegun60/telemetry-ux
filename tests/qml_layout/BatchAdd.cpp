@@ -34,6 +34,8 @@ public:
 	QList<QStringList> added;
 	QStringList selected;
 	int count = 0;
+	// The Batch's items as the panel lists them, when given.
+	QStandardItemModel* items = nullptr;
 	Q_INVOKABLE QVariantMap check(const QString& text) const
 	{
 		const auto typed = text.trimmed();
@@ -123,8 +125,18 @@ public:
 				return {{"status", "refused"}, {"added", 0},
 				        {"message", QStringLiteral("Nothing added: line %1, Nope: Nothing on this device is named Nope.").arg(at + 1)}};
 		QVariantList items;
-		for (const auto& line : lines)
+		for (const auto& line : lines) {
 			items.append(QVariantMap{{"path", line}, {"what", "a read of " + line}});
+			if (this->items) {
+				auto* row = new QStandardItem;
+				row->setData(line, Qt::UserRole + 1);
+				row->setData(QStringLiteral("read"), Qt::UserRole + 2);
+				row->setData(QStringLiteral("Ready"), Qt::UserRole + 3);
+				row->setData(false, Qt::UserRole + 4);
+				row->setData(false, Qt::UserRole + 5);
+				this->items->appendRow(row);
+			}
+		}
 		const int first = count + 1;
 		count += int(lines.size());
 		return {{"status", "ok"}, {"added", int(lines.size())}, {"items", items}, {"first", first}};
@@ -202,6 +214,9 @@ int main(int argc, char** argv)
 			QStandardItemModel items, responses;
 			Calls calls;
 			QQmlApplicationEngine engine;
+			items.setItemRoleNames({{Qt::UserRole + 1, "name"}, {Qt::UserRole + 2, "operation"}, {Qt::UserRole + 3, "status"},
+			                        {Qt::UserRole + 4, "hasValue"}, {Qt::UserRole + 5, "historical"}});
+			calls.items = &items;
 			engine.rootContext()->setContextProperty(QStringLiteral("batchAddItems"), &items);
 			engine.rootContext()->setContextProperty(QStringLiteral("batchAddResponses"), &responses);
 			engine.rootContext()->setContextProperty(QStringLiteral("batchAddCalls"), &calls);
@@ -310,7 +325,19 @@ int main(int argc, char** argv)
 			CHECK(calls.selected.last() == QStringLiteral("control.Scale value=2") && calls.added.size() == 2);
 			CHECK(textOf(content, "batchAddNotice") ==
 			      QStringLiteral("Selected control.Scale with the values typed here: finish it in Details, then Add selected draft."));
+			// BA-3. The same by pointer: "Fill in Details", the keys left in the row.
+			auto* fill = shown(content, "batchAddFillDetails");
+			CHECK(fill->property("text").toString() == QStringLiteral("Fill in Details"));
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, fill->mapToScene(QPointF(fill->width() / 2, fill->height() / 2)).toPoint());
+			settle();
+			CHECK(calls.selected.size() >= 2 && calls.selected.last() == QStringLiteral("control.Scale value=2") &&
+			      field->hasActiveFocus());
 			clearField(window);
+			CHECK(!named(content, "batchAddFillDetails"));
+			// The item just added is the current one, its row saying it.
+			auto* list = shown(content, "batchList");
+			CHECK(list->property("count").toInt() == calls.count &&
+			      list->property("currentIndex").toInt() == list->property("count").toInt() - 1);
 
 			// A refusal in the error colour; Enter adds nothing.
 			typeText(window, "Nope");
