@@ -974,6 +974,74 @@ int main(int argc, char** argv)
 			window->setWidth(760);
 			settle(250);
 			CHECK(step() == 0 && following());
+
+			// A host's words that change as it works, in the trailing slot: near
+			// the width where the spans fold, the header folds at once when the
+			// words grow and stays folded when they shrink - it no longer folds
+			// and unfolds on every change. A change of the Plot's own width
+			// still takes the step afresh, both ways.
+			{
+				QQmlComponent tagComponent(&engine);
+				tagComponent.setData("import QtQuick; import QtQuick.Controls; Label { text: \"Rec\" }", QUrl());
+				std::unique_ptr<QQuickItem> tag(qobject_cast<QQuickItem*>(tagComponent.create()));
+				auto* trailingSlot = plotRoot->findChild<QQuickItem*>(QStringLiteral("plotTrailing"));
+				CHECK(tag && trailingSlot);
+				tag->setParentItem(trailingSlot);
+				const QString shortWords = QStringLiteral("Rec");
+				const QString longWords = QStringLiteral("12,345 reads not saved yet");
+				const auto spansShown = [&] { return named(content, "plotPresets") != nullptr; };
+				int threshold = 0, shortStep = 0, longStep = 0;
+				for (int width = 760; width >= 240; width -= 4) {
+					tag->setProperty("text", shortWords);
+					window->setWidth(width);
+					settle(40);
+					shortStep = step();
+					tag->setProperty("text", longWords);
+					settle(40);
+					longStep = step();
+					CHECK(longStep >= shortStep);
+					if (shortStep <= 1 && longStep >= 2) {
+						threshold = width;
+						break;
+					}
+				}
+				CHECK(threshold > 0 && !spansShown());
+				// Short and long, over and over: the step never comes down, the
+				// spans stay folded, the header keeps its controls whole.
+				for (int i = 0; i < 12; ++i) {
+					tag->setProperty("text", i % 2 == 0 ? shortWords : longWords);
+					settle(40);
+					CHECK(step() == longStep && !spansShown());
+				}
+				tag->setProperty("text", shortWords);
+				settle(40);
+				CHECK(step() == longStep && plotRoot->property("narrowNeed").toInt() == shortStep);
+				// The Plot's own width takes the step afresh: a pixel wider, the
+				// step the short words need and the spans back; the long words
+				// fold them again, and narrower still takes what it needs.
+				const auto need = [&] { return plotRoot->property("narrowNeed").toInt(); };
+				window->setWidth(threshold + 1);
+				settle(80);
+				CHECK(step() == need() && step() <= 1 && spansShown());
+				window->setWidth(threshold);
+				settle(80);
+				CHECK(step() == need() && step() == shortStep && spansShown());
+				tag->setProperty("text", longWords);
+				settle(40);
+				CHECK(step() >= 2 && !spansShown());
+				window->setWidth(threshold - 120);
+				settle(80);
+				CHECK(step() == need() && step() >= longStep && !spansShown());
+				window->setWidth(760);
+				settle(80);
+				CHECK(step() == 0 && spansShown());
+				tag.reset();
+				window->setWidth(700);
+				settle(80);
+				window->setWidth(760);
+				settle(150);
+				CHECK(step() == 0 && following());
+			}
 		}
 
 		// Analysis: Ctrl and a drag draw a box, and its release zooms the time

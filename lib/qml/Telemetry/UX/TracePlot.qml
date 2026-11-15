@@ -308,7 +308,8 @@ FocusScope {
     readonly property real headerMinimum: headerNeeds(followIcon.implicitWidth, spanButton.implicitWidth, false, false)
     // With Follow's icon, the trailing controls still there.
     readonly property real headerCompact: headerNeeds(followIcon.implicitWidth, spanButton.implicitWidth, false, true)
-    readonly property int narrowStep: {
+    // The step the controls need now; narrowStep is the step shown.
+    readonly property int narrowNeed: {
         if (headerRoom >= headerNeeds(follow.implicitWidth, presets.implicitWidth, true, true))
             return 0
         if (headerRoom >= headerNeeds(follow.implicitWidth, presets.implicitWidth, false, true))
@@ -324,7 +325,38 @@ FocusScope {
     }
     // The trailing controls give way once Follow is an icon and they no
     // longer fit beside it.
-    readonly property bool trailingGivesWay: narrowStep >= 3 && headerRoom < headerCompact
+    readonly property bool trailingNeedsToGo: narrowNeed >= 3 && headerRoom < headerCompact
+    // What is shown folds at once when the controls no longer fit, but
+    // unfolds only when the Plot's own width changes. A host's words that
+    // change as it works ("5 reads not saved"), or Follow coming and going,
+    // would otherwise fold and unfold the spans on every change near a
+    // threshold, and the header row and the chips under it would jump.
+    // Ordered as one scale: step 3 with the trailing controls, step 3
+    // without them, step 4.
+    property int narrowStep: 0
+    property bool trailingGivesWay: false
+    function takeNarrowStep(always) {
+        const need = 2 * narrowNeed + (trailingNeedsToGo ? 1 : 0)
+        if (always || need > 2 * narrowStep + (trailingGivesWay ? 1 : 0)) {
+            narrowStep = narrowNeed
+            trailingGivesWay = trailingNeedsToGo
+        }
+    }
+    function retakeNarrowStep() {
+        takeNarrowStep(true)
+    }
+    onNarrowNeedChanged: takeNarrowStep(false)
+    onTrailingNeedsToGoChanged: takeNarrowStep(false)
+    // After the bindings that hang on the width have settled.
+    onHeaderRoomChanged: Qt.callLater(retakeNarrowStep)
+    Component.onCompleted: retakeNarrowStep()
+    // Once more as the start-up settles: fonts, styles and the host's slots
+    // arrive after completion.
+    Timer {
+        interval: 300
+        running: true
+        onTriggered: plot.retakeNarrowStep()
+    }
     readonly property real axisSaving: {
         void axisMetrics.font
         const width = words => Math.max(...words.map(word => axisMetrics.advanceWidth(word + " ▾")))
