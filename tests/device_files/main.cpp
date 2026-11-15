@@ -2623,6 +2623,73 @@ void descriptorWords(const QString& folder)
 	CHECK(asked == 1 && qobject_cast<ValuesContent*>(connected.contentFor(values)->decoded())->valid());
 }
 
+// A file the host keeps read-only (FL-1c): its reason, no editing, no
+// overwrite; a broken copy goes back to the device's bytes by Restore and is
+// saved like any edit, then reads again. Another device path, and the same
+// bytes opened from disk, stay editable; a path that becomes read-only ends
+// editing.
+void readOnlyFiles(const QString& folder)
+{
+	using telemetry::ux::FileContent;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	const auto readBack = [](const QString& path) {
+		QFile file(path);
+		return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+	};
+	const auto deviceBytes = descriptorBytes();
+	auto changed = deviceBytes;
+	changed[changed.size() - 1] = static_cast<char>(changed[changed.size() - 1] ^ 0x5A);
+	const auto copy = write(QStringLiteral("read-only/telemetry/descriptor.bin"), changed);
+	const auto other = write(QStringLiteral("read-only/config/settings.csv"), QByteArray("a,b\n1,2\n"));
+	const auto reason = QStringLiteral("Read-only: the device's firmware makes descriptor.bin. To change its bytes, "
+	                                   "save a copy outside the device's folder.");
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	open.setReadOnlyLookup([&](const QString& devicePath) {
+		return devicePath == QStringLiteral("/telemetry/descriptor.bin") ? reason : QString{};
+	});
+	open.setReferenceLookup([&](const QString&, const QString& devicePath) -> std::optional<FileContent::Reference> {
+		if (devicePath != QStringLiteral("/telemetry/descriptor.bin"))
+			return std::nullopt;
+		return FileContent::Reference{deviceBytes, QStringLiteral("the device's bytes as read at 12:04"), false};
+	});
+	open.open(copy, QStringLiteral("/telemetry/descriptor.bin"));
+	auto* content = open.contentFor(copy);
+	CHECK(content && content->loaded() && content->readOnlyReason() == reason);
+	content->setEditing(true);
+	CHECK(!content->editing() && !content->overwrite(0, QByteArray("X")) && !content->modified());
+	// Broken: the codec says why; Restore, then Save, and it reads.
+	CHECK(!content->decoded() && content->codecError().contains(QStringLiteral("fingerprint")));
+	CHECK(content->hasReference() && content->referenceDiffers() == 1);
+	CHECK(content->restoreReference().isEmpty() && content->modified() && !content->editing());
+	CHECK(content->save().isEmpty() && !content->modified() && readBack(copy) == deviceBytes);
+	CHECK(content->codecName() == QStringLiteral("Descriptor") && content->decoded() && content->codecError().isEmpty());
+	CHECK(content->readOnlyReason() == reason);
+	// Another device path: editable.
+	open.open(other, QStringLiteral("/config/settings.csv"));
+	auto* editable = open.contentFor(other);
+	editable->setEditing(true);
+	CHECK(editable->readOnlyReason().isEmpty() && editable->editing());
+	// Its path becoming one the host keeps read-only ends editing.
+	editable->setDevicePath(QStringLiteral("/telemetry/descriptor.bin"));
+	CHECK(!editable->editing() && editable->readOnlyReason() == reason);
+	// The changed bytes from disk, outside any device: editable, and the
+	// failing parse only warns.
+	const auto loose = write(QStringLiteral("read-only-loose/descriptor-copy.bin"), changed);
+	open.open(loose);
+	auto* fromDisk = open.contentFor(loose);
+	fromDisk->setEditing(true);
+	CHECK(fromDisk->readOnlyReason().isEmpty() && fromDisk->editing() && !fromDisk->decoded() &&
+	      !fromDisk->codecError().isEmpty());
+	CHECK(fromDisk->overwrite(0, QByteArray("T")) && fromDisk->editing());
+}
+
 // How values read, as the designer set them: a 64-bit number whole (and as
 // text in JSON, where a number would lose digits), an enum by name with its
 // code (the code in JSON), a struct summarised on its row, an array on its
@@ -3784,6 +3851,7 @@ int main(int argc, char** argv)
 	descriptorCodec(folder.path());
 	valuesCodec(folder.path());
 	descriptorWords(folder.path());
+	readOnlyFiles(folder.path());
 	valuesFormatting();
 	lazyValues();
 	lazyDescriptor();

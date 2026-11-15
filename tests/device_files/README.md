@@ -102,6 +102,11 @@ over localhost TCP to the SDK's native server. No board.
     fingerprint (the connected device's), the good one beside it still first;
     with none it says "values.bin cannot be decoded: telemetry/descriptor.bin
     beside it cannot be read."
+  - A file the host keeps read-only (`OpenFiles::setReadOnlyLookup`,
+    `FileContent::readOnlyReason`): its reason, editing and overwriting
+    refused; a broken copy put back to the device's bytes by Restore and saved,
+    after which it reads; another device path, and the same bytes from disk,
+    editable; a path that becomes read-only ends editing.
   - The read-many and batch capability records (TRM1, TBM1), written by the
     SDK's own `writeCapability`: every field in words, the descriptor they
     bind to (the connected device's, or another in the warning colour), their
@@ -154,6 +159,11 @@ over localhost TCP to the SDK's native server. No board.
     outcome (done, partial, refused) given apart from its words.
   - **The pictograms** (`ToolIcon`): each name draws, undo's arrow on the left
     and redo's on the right; an unknown name draws nothing.
+  - **A read-only file** in the viewer: Edit off with the reason in its tooltip,
+    editing refused however asked, the state line saying Read-only; a copy its
+    codec cannot read shows the reason, then Restore the device's version
+    (which opens its question) and Read again from the device while the host
+    can read it.
   - **A pictogram that cannot act** (`IconToolButton.disabledReason`): its
     reason in brackets after its name in the tooltip, which shows on hover while
     it is disabled, and as its accessible description; enabled, the name and

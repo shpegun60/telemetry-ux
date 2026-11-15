@@ -290,9 +290,16 @@ FileContent::FileContent(QObject* parent) : QObject(parent), hex_(this), table_(
 	connect(&undo_, &QUndoStack::canRedoChanged, this, &FileContent::editChanged);
 }
 
+QString FileContent::readOnlyReason() const
+{
+	if (devicePath_.isEmpty() || !readOnlyLookup_ || !*readOnlyLookup_)
+		return {};
+	return (*readOnlyLookup_)(devicePath_);
+}
+
 void FileContent::setEditing(bool editing)
 {
-	editing = editing && loaded_ && !loading_;
+	editing = editing && loaded_ && !loading_ && readOnlyReason().isEmpty();
 	if (editing == editing_)
 		return;
 	editing_ = editing;
@@ -555,6 +562,11 @@ void FileContent::setDevicePath(const QString& path)
 	// The device's name may say CSV where the local copy's does not.
 	if (textual_ && !tabular_ && devicePath_.toLower().endsWith(QStringLiteral(".csv")))
 		tabular_ = table_.setText(text_);
+	// A path the host does not let be edited ends editing; edits stay.
+	if (editing_ && !readOnlyReason().isEmpty()) {
+		editing_ = false;
+		Q_EMIT editChanged();
+	}
 	Q_EMIT changed();
 }
 
@@ -839,6 +851,7 @@ int OpenFiles::append()
 	file->setCodecs(&codecs_, &context_, &problems_);
 	file->setLiveFactory(&liveFactory_);
 	file->setReferenceLookup(&referenceLookup_);
+	file->setReadOnlyLookup(&readOnlyLookup_);
 	const auto row = static_cast<int>(files_.size());
 	QPointer<OpenFiles> alive(this);
 	QPointer<FileContent> added(file.get());

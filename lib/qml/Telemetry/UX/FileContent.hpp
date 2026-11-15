@@ -181,6 +181,13 @@ class FileContent final : public QObject {
 	Q_PROPERTY(QString referenceLabel READ referenceLabel NOTIFY editChanged)
 	Q_PROPERTY(qint64 referenceDiffers READ referenceDiffers NOTIFY editChanged)
 	Q_PROPERTY(bool referenceWritten READ referenceWritten NOTIFY editChanged)
+	// Why this copy's bytes are not edited here, in a sentence, or empty:
+	// what the host's lookup says of the device's path - a file the
+	// connection itself makes or uses, such as the descriptor. A file from
+	// disk is never read-only here. While it is set Edit, Paste and Replace
+	// are off; Restore the device's version, Save, Undo and a saved copy
+	// elsewhere are not.
+	Q_PROPERTY(QString readOnlyReason READ readOnlyReason NOTIFY changed)
 public:
 	// Larger files are not read whole; their first bytes are not a substitute.
 	static constexpr qint64 maxBytes = 64 * 1024 * 1024;
@@ -252,6 +259,10 @@ public:
 	using ReferenceLookup =
 	    std::function<std::optional<Reference>(const QString& localFile, const QString& devicePath)>;
 	void setReferenceLookup(const ReferenceLookup* lookup) noexcept { referenceLookup_ = lookup; }
+	// Says, for a device's path, why its copy is not edited here; empty when it may be.
+	using ReadOnlyLookup = std::function<QString(const QString& devicePath)>;
+	void setReadOnlyLookup(const ReadOnlyLookup* lookup) noexcept { readOnlyLookup_ = lookup; }
+	QString readOnlyReason() const;
 	// The device file's live reader, made on first use and kept with this
 	// content: null for a file from disk, or when the host reads no device.
 	// It offers `running`, `periodMs`, `problem` and the signal
@@ -379,6 +390,7 @@ private:
 	const QHash<QString, QString>* problems_ = nullptr;
 	const LiveFactory* liveFactory_ = nullptr;
 	const ReferenceLookup* referenceLookup_ = nullptr;
+	const ReadOnlyLookup* readOnlyLookup_ = nullptr;
 	QByteArray reference_;
 	QString referenceLabel_;
 	bool hasReference_ = false, referenceWritten_ = false;
@@ -425,6 +437,8 @@ public:
 	void setLiveFactory(FileContent::LiveFactory factory) { liveFactory_ = std::move(factory); }
 	// How a copy finds what it is compared against (DeviceBytes::lookup()).
 	void setReferenceLookup(FileContent::ReferenceLookup lookup) { referenceLookup_ = std::move(lookup); }
+	// Which device files are not edited here, and why (FileContent::readOnlyReason).
+	void setReadOnlyLookup(FileContent::ReadOnlyLookup lookup) { readOnlyLookup_ = std::move(lookup); }
 	// Opens a local copy of devicePath (empty for a file from disk), or reads
 	// it again when that copy is already open - not one with edits not saved;
 	// returns its row.
@@ -467,6 +481,7 @@ private:
 	QHash<QString, QString> problems_;
 	FileContent::LiveFactory liveFactory_;
 	FileContent::ReferenceLookup referenceLookup_;
+	FileContent::ReadOnlyLookup readOnlyLookup_;
 	std::vector<std::unique_ptr<FileContent>> files_;
 };
 } // namespace telemetry::ux

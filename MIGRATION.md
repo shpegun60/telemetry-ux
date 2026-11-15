@@ -595,3 +595,22 @@ of its fingerprint (the connected device's first); with none it waits as before
 and `ValuesContent::besideProblem` says "values.bin cannot be decoded:
 telemetry/descriptor.bin beside it cannot be read.", which `ValuesView` shows
 in place of "No descriptor with this fingerprint was found".
+
+## Files a host keeps read-only; a broken copy's way back (FL-1c, November 2026)
+
+`OpenFiles::setReadOnlyLookup(lookup)` takes, for a device's path, why its copy
+is not edited in the Viewer (a sentence), or empty. `FileContent` gains
+`readOnlyReason` from it - never for a file opened from disk - and
+`setEditing(true)` does nothing while it is set; a path that becomes read-only
+ends editing, keeping any edits. Restore the device's version, Save, Undo and
+a saved copy elsewhere still work: they are how a broken copy is mended. The
+library sets no lookup itself: the host says which files and in which words.
+
+`FileEditTools`' Edit is off with the reason as its `disabledReason`;
+`HexPane`'s Edit bytes, Paste over the bytes and Replace… say "(read-only)",
+Ctrl+H opens Find with the reason, and the state line says "Read-only" with the
+reason on hover. When a codec cannot read the file, `FileViewer` follows the
+reason with two links - Restore the device's version (when the device's bytes
+are known and differ) and Read again from the device (when `reloadable`) -
+in `fileViewerCodecProblemBar`; the reason keeps its `fileViewerCodecProblem`
+label. New on `FileViewer`: `codecFailed`.

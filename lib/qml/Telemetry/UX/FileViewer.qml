@@ -57,6 +57,8 @@ Pane {
     readonly property bool ready: !!content && content.loaded
     readonly property bool reading: !!content && content.loading
     readonly property string problem: content ? content.error : ""
+    // A codec took the file for its own and could not read it (codecError says why).
+    readonly property bool codecFailed: ready && !!content.codecError && content.codecError.length > 0
     // Nothing is shown until the file has been read.
     readonly property string shownMode: !ready ? "" : offers(mode) ? mode
         : content.decoded ? "decoded" : content.tabular ? "table" : content.textual ? "text" : "hex"
@@ -83,7 +85,7 @@ Pane {
     function openMenu() { moreMenu.popup(moreButton, 0, moreButton.height) }
     // Editing, from the row, a toolbar or a menu. Edit shows the bytes first.
     function startEditing() {
-        if (!viewer.ready || viewer.content.size === 0)
+        if (!viewer.ready || viewer.content.size === 0 || viewer.content.readOnlyReason.length > 0)
             return
         viewer.mode = "hex"
         hexPane.startEditing()
@@ -409,17 +411,43 @@ Pane {
         }
 
         // A codec took the file for its own but could not read it: the file is
-        // shown as text or hex, and this says why.
-        Label {
-            objectName: "fileViewerCodecProblem"
-            visible: viewer.ready && !!viewer.content.codecError && viewer.content.codecError.length > 0
+        // shown as text or hex, and this says why - then the ways back to a
+        // copy that reads: the device's bytes as read, or the device's file now.
+        ColumnLayout {
+            objectName: "fileViewerCodecProblemBar"
+            visible: viewer.codecFailed
             Layout.fillWidth: true
             Layout.leftMargin: Type.padding
             Layout.rightMargin: Type.padding
             Layout.bottomMargin: Type.tight
-            wrapMode: Text.Wrap
-            color: Theme.warning
-            text: visible ? viewer.content.codecError : ""
+            spacing: Type.tight
+            Label {
+                id: codecProblem
+                objectName: "fileViewerCodecProblem"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.warning
+                text: viewer.codecFailed ? viewer.content.codecError : ""
+            }
+            Flow {
+                visible: viewer.restorable || viewer.reloadable
+                Layout.fillWidth: true
+                spacing: Type.groupSpacing
+                LinkButton {
+                    id: restoreLink
+                    objectName: "fileViewerCodecRestore"
+                    visible: viewer.restorable
+                    text: qsTr("Restore the device's version")
+                    onClicked: viewer.askRestore()
+                }
+                LinkButton {
+                    id: readAgainLink
+                    objectName: "fileViewerCodecReadAgain"
+                    visible: viewer.reloadable
+                    text: qsTr("Read again from the device")
+                    onClicked: viewer.askReload()
+                }
+            }
         }
 
         StackLayout {

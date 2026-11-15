@@ -1256,6 +1256,74 @@ int main(int argc, char** argv)
 	      editTool->property("switchedOn").toBool());
 	CHECK(QMetaObject::invokeMethod(editTool, "clicked"));
 	CHECK(!viewerContent.editing() && !viewerContent.modified());
+	// A file the host keeps read-only (FL-1c): Edit off with the reason in its
+	// tooltip, editing refused however asked, the state line saying Read-only.
+	const auto readOnlyText = QStringLiteral("Read-only: viewer.csv is one of the connection's own files.");
+	const telemetry::ux::FileContent::ReadOnlyLookup readOnly = [&](const QString& path) {
+		return path == QStringLiteral("/config/viewer.csv") ? readOnlyText : QString{};
+	};
+	viewerContent.setReadOnlyLookup(&readOnly);
+	CHECK(viewerContent.reload());
+	CHECK(await([&] { return !editTool->property("enabled").toBool(); }));
+	CHECK(editTool->property("disabledReason").toString() == readOnlyText);
+	{
+		QQmlExpression tip(qmlContext(editTool), editTool, QStringLiteral("ToolTip.text"));
+		CHECK(tip.evaluate().toString().endsWith(QStringLiteral("(%1)").arg(readOnlyText)));
+	}
+	CHECK(QMetaObject::invokeMethod(viewer, "startEditing"));
+	CHECK(!viewerContent.editing());
+	CHECK(child(root, "hexEditState")->property("text").toString() == QStringLiteral("Read-only"));
+	viewerContent.setReadOnlyLookup(nullptr);
+	CHECK(viewerContent.reload());
+	CHECK(await([&] { return editTool->property("enabled").toBool(); }));
+	// A copy its codec cannot read: the reason, then the ways back - Restore
+	// the device's version (the device's bytes known and different) and Read
+	// again from the device (the host can).
+	const std::vector<telemetry::ux::FileCodec> failingCodecs{telemetry::ux::FileCodec{
+	    QStringLiteral("Demo"),
+	    [](const telemetry::ux::FileIdentity& identity) {
+		    return identity.devicePath == QStringLiteral("/config/viewer.csv") ? telemetry::ux::FileMatch::Path
+		                                                                        : telemetry::ux::FileMatch::No;
+	    },
+	    [](const QByteArray&, const telemetry::ux::FileCodecContext&, QString& error) -> std::unique_ptr<QObject> {
+		    error = QStringLiteral("not a demo");
+		    return nullptr;
+	    },
+	    {}}};
+	const telemetry::ux::FileCodecContext noContext;
+	QByteArray deviceCsv;
+	{
+		QFile file(csvPath);
+		CHECK(file.open(QIODevice::ReadOnly));
+		deviceCsv = file.readAll();
+		deviceCsv[0] = deviceCsv[0] == 'x' ? 'y' : 'x';
+	}
+	const telemetry::ux::FileContent::ReferenceLookup reference =
+	    [&](const QString&, const QString&) -> std::optional<telemetry::ux::FileContent::Reference> {
+		return telemetry::ux::FileContent::Reference{deviceCsv, QStringLiteral("the device's bytes as read at 12:04"),
+		                                             false};
+	};
+	viewerContent.setCodecs(&failingCodecs, &noContext);
+	viewerContent.setReferenceLookup(&reference);
+	viewer->setProperty("reloadable", true);
+	CHECK(viewerContent.reload());
+	CHECK(await([&] { return child(root, "fileViewerCodecProblem")->property("visible").toBool(); }));
+	CHECK(child(root, "fileViewerCodecProblem")->property("text").toString() ==
+	      QStringLiteral("Not a valid Demo file: not a demo"));
+	auto* restoreLink = child(root, "fileViewerCodecRestore");
+	auto* readAgainLink = child(root, "fileViewerCodecReadAgain");
+	CHECK(restoreLink && restoreLink->property("visible").toBool() && readAgainLink &&
+	      readAgainLink->property("visible").toBool());
+	CHECK(QMetaObject::invokeMethod(restoreLink, "clicked"));
+	CHECK(await([&] { return child(root, "restoreDeviceDialog")->property("visible").toBool(); }));
+	CHECK(QMetaObject::invokeMethod(child(root, "restoreDeviceDialog"), "reject"));
+	CHECK(await([&] { return !child(root, "restoreDeviceDialog")->property("visible").toBool(); }));
+	viewer->setProperty("reloadable", false);
+	CHECK(!readAgainLink->property("visible").toBool());
+	viewerContent.setCodecs(nullptr, nullptr);
+	viewerContent.setReferenceLookup(nullptr);
+	CHECK(viewerContent.reload());
+	CHECK(await([&] { return !child(root, "fileViewerCodecProblem")->property("visible").toBool(); }));
 	// The file's actions are in its ⋯ menu: Save as hands the host the local
 	// copy, Copy path the device's path.
 	CHECK(child(root, "fileViewerMore") && !child(root, "fileViewerMore")->property("text").toString().isEmpty());
