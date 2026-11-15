@@ -125,8 +125,9 @@ int main(int argc, char** argv) {
             QTest::keyClick(window,Qt::Key_Home); QTest::keyClick(window,Qt::Key_Return); settle();
             CHECK(writes.count == 0 && row->property("draftText").toString() == "false");
             CHECK(row->property("editing").toBool());
-            click(window,outside);
-            CHECK(!row->property("editing").toBool() && writes.count == 0 && outside->hasActiveFocus());
+            // Escape cancels: the value chosen is not written.
+            QTest::keyClick(window,Qt::Key_Escape); settle();
+            CHECK(!row->property("editing").toBool() && writes.count == 0);
             row = edit(0);
             click(window,named(row,"watchValueWrite"));
             CHECK(writes.count == 1 && writes.row == 0 && writes.text == "true");
@@ -185,6 +186,7 @@ int main(int argc, char** argv) {
             }
             CHECK(writes.count == 6);
             for (const int width : {480,320}) {
+                const int base = writes.count;
                 model.setData(model.index(1,0),QStringLiteral("-123"),EditorText);
                 window->setWidth(width); settle(); row = edit(1); choice = named(row,"watchValueChoice");
                 CHECK(choice->property("currentText").toString() == "Unknown (-123)");
@@ -192,7 +194,7 @@ int main(int argc, char** argv) {
                 CHECK(choiceTip && choiceTip->property("text").toString().contains(QStringLiteral("Unknown (-123)")));
                 QTest::keyClick(window,Qt::Key_Space); settle();
                 auto* popup = choice->property("popup").value<QObject*>();
-                CHECK(popup && popup->property("visible").toBool() && writes.count == 6);
+                CHECK(popup && popup->property("visible").toBool() && writes.count == base);
                 const auto fill = QQmlProperty(choice,QStringLiteral("background.color")).read().value<QColor>();
                 const auto ink = QQmlProperty(choice,QStringLiteral("contentItem.color")).read().value<QColor>();
                 CHECK(fill.isValid() && ink.isValid());
@@ -202,7 +204,7 @@ int main(int argc, char** argv) {
                     CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(
                         QStringLiteral("watch-enum-popup-%1.png").arg(width))));
                 QTest::keyClick(window,Qt::Key_Escape); settle();
-                CHECK(!popup->property("visible").toBool() && writes.count == 6);
+                CHECK(!popup->property("visible").toBool() && writes.count == base);
                 // Closing the list never commits a mutation; Escape also leaves
                 // the row editor once the list has relinquished the key.
                 if (row->property("editing").toBool()) { QTest::keyClick(window,Qt::Key_Escape); settle(); }
@@ -213,15 +215,66 @@ int main(int argc, char** argv) {
                 input = named(row,"watchValueEditor");
                 CHECK(input && input->isVisible() && input->hasActiveFocus());
                 QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"-9223372036854775808");
-                CHECK(input->property("text").toString() == "-9223372036854775808" && writes.count == 6);
+                CHECK(input->property("text").toString() == "-9223372036854775808" && writes.count == base);
                 auto* inputTip = row->findChild<QObject*>(QStringLiteral("watchValueEditorToolTip"));
                 CHECK(inputTip && inputTip->property("text").toString().contains(QStringLiteral("-9223372036854775808")));
                 if (argc > 1)
                     CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(
                         QStringLiteral("watch-enum-manual-%1.png").arg(width))));
+                // A click away commits, as Enter does.
                 click(window,outside);
-                CHECK(!row->property("editing").toBool() && writes.count == 6);
+                CHECK(!row->property("editing").toBool() && outside->hasActiveFocus());
+                CHECK(writes.count == base + 1 && writes.row == 1 && writes.text == "-9223372036854775808");
             }
+            // One commit rule for the row editor: Enter, a click on another
+            // row or Tab commits; Escape cancels; the same text writes
+            // nothing; text that is no value is not written, and the status
+            // line says why in Enter's words.
+            window->setWidth(480); settle();
+            auto* outcome = named(window->contentItem(),"watchWriteOutcome");
+            CHECK(outcome);
+            const auto otherRow = [&]() { return named(rowAt(list,0),"watchRowName"); };
+            int base = writes.count;
+            row = edit(2);
+            QTest::keyClick(window,Qt::Key_Return); settle();
+            CHECK(!row->property("editing").toBool() && writes.count == base);
+            row = edit(2);
+            click(window,otherRow());
+            CHECK(!row->property("editing").toBool() && writes.count == base && list->property("currentIndex").toInt() == 0);
+            row = edit(2); input = named(row,"watchValueEditor");
+            QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"42");
+            click(window,otherRow());
+            CHECK(!row->property("editing").toBool() && writes.count == base + 1 && writes.row == 2 && writes.text == "42");
+            // Tab goes through the editor's own buttons (Write), then out of
+            // it, and leaving commits.
+            row = edit(2);
+            QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"43");
+            QTest::keyClick(window,Qt::Key_Tab); settle();
+            CHECK(row->property("editing").toBool() && named(row,"watchValueWrite")->hasActiveFocus() && writes.count == base + 1);
+            for (int tabs = 0; tabs < 4 && row->property("editing").toBool(); ++tabs) {
+                QTest::keyClick(window,Qt::Key_Tab); settle();
+            }
+            CHECK(!row->property("editing").toBool() && writes.count == base + 2 && writes.text == "43");
+            row = edit(2);
+            QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"44");
+            QTest::keyClick(window,Qt::Key_Return); settle();
+            CHECK(!row->property("editing").toBool() && writes.count == base + 3 && writes.text == "44");
+            row = edit(2); input = named(row,"watchValueEditor");
+            QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"45");
+            QTest::keyClick(window,Qt::Key_Escape); settle();
+            CHECK(!row->property("editing").toBool() && writes.count == base + 3);
+            row = edit(2); input = named(row,"watchValueEditor");
+            QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier); type(window,"4x"); settle();
+            QTest::keyClick(window,Qt::Key_Return); settle();
+            auto* refusal = named(row,"watchValueErrorText");
+            CHECK(row->property("editing").toBool() && writes.count == base + 3);
+            CHECK(refusal && refusal->isVisible() && refusal->property("text").toString() == "Enter a whole number.");
+            click(window,otherRow());
+            CHECK(!row->property("editing").toBool() && writes.count == base + 3);
+            CHECK(outcome->isVisible() && outcome->property("text").toString() == "Not changed: Enter a whole number.");
+            if (argc > 1)
+                CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(
+                    QStringLiteral("watch-left-refused.png"))));
             window->close();
         }
         settle();

@@ -34,6 +34,9 @@ Pane {
     property string writeRefusalText: ""
     // The refusal is that changes are off: Allow changes stands beside it.
     property bool writeRefusalChanges: false
+    // The refusal says why a row editor left by a click or Tab wrote nothing:
+    // it outlives the click's own change of row, until the next edit starts.
+    property bool writeRefusalLeft: false
     // Why a row's value can't be written now (WL-5), in words: F2 or a
     // double-click on such a row says it.
     function whyNotWritable(item) {
@@ -1444,6 +1447,8 @@ Pane {
             id: watchList
             Accessible.role: panel.treeView ? Accessible.Tree : Accessible.List
             onCurrentIndexChanged: {
+                if (panel.writeRefusalLeft)
+                    return
                 panel.writeRefusalText = ""
                 panel.writeRefusalChanges = false
             }
@@ -1739,6 +1744,7 @@ Pane {
                         panel.rows.select(index)
                     panel.writeRefusalText = ""
                     panel.writeRefusalChanges = false
+                    panel.writeRefusalLeft = false
                     manualCode = false
                     // New providers own the exact typed text, including enum codes.
                     // Keep the legacy fallback only when the role is absent.
@@ -1747,11 +1753,51 @@ Pane {
                             ? (model.sampleValue === 0 && 1 / model.sampleValue < 0 ? "-0" : String(model.sampleValue))
                             : watchRow.text
                     valueEditor.text = draftText
+                    startText = draftText
                     editing = true
                     if (choices) valueChoice.forceActiveFocus()
                     else { valueEditor.forceActiveFocus(); valueEditor.selectAll() }
                 }
-                function commitEdit() {
+                // The text the editor opened with: left unchanged, nothing is
+                // written.
+                property string startText: ""
+                // Focus gone elsewhere (a click, Tab) commits as Enter does: a
+                // changed value is written under the same Allow changes rule.
+                // Text that is no value is not written, and the status line
+                // says why in Enter's words; the same text writes nothing.
+                function leaveEdit() {
+                    if (!editing)
+                        return
+                    if (draftText === startText) {
+                        finishEdit(false)
+                        return
+                    }
+                    if (!writable) {
+                        finishEdit(false)
+                        panel.sayNotWritable(watchRow)
+                        panel.writeRefusalLeft = true
+                        return
+                    }
+                    const refusal = editPreview.error.length > 0 ? editPreview.error
+                        : draftText.length === 0 ? qsTr("Enter a value.") : ""
+                    if (refusal.length > 0) {
+                        finishEdit(false)
+                        panel.writeRefusalText = qsTr("Not changed: %1").arg(refusal)
+                        panel.writeRefusalChanges = false
+                        panel.writeRefusalLeft = true
+                        return
+                    }
+                    const value = draftText
+                    finishEdit(false)
+                    panel.provider.writeWatch(watchRow.sourceRow, value)
+                }
+                // Enter (byKey) with the text the editor opened with writes
+                // nothing and closes it; the Write button sends it once again.
+                function commitEdit(byKey = false) {
+                    if (byKey && editing && draftText === startText) {
+                        finishEdit()
+                        return
+                    }
                     if (!editing || !writable || draftText.length === 0)
                         return
                     if (editPreview.error.length > 0) {
@@ -2140,7 +2186,7 @@ Pane {
                             id: cancelEdit
                             interval: 0
                             onTriggered: if (watchRow.editing && !editorScope.activeFocus && !valueChoice.popup.visible)
-                                watchRow.finishEdit(false)
+                                watchRow.leaveEdit()
                         }
                         Timer {
                             id: manualFocus
@@ -2216,11 +2262,11 @@ Pane {
                                     }
                                     Keys.onReturnPressed: event => {
                                         if (popup.visible) event.accepted = false
-                                        else watchRow.commitEdit()
+                                        else watchRow.commitEdit(true)
                                     }
                                     Keys.onEnterPressed: event => {
                                         if (popup.visible) event.accepted = false
-                                        else watchRow.commitEdit()
+                                        else watchRow.commitEdit(true)
                                     }
                                     Keys.onEscapePressed: watchRow.finishEdit()
                                     Connections {
@@ -2241,8 +2287,8 @@ Pane {
                                     topPadding: Type.tight
                                     bottomPadding: Type.tight
                                     onTextEdited: watchRow.draftText = text
-                                    Keys.onReturnPressed: watchRow.commitEdit()
-                                    Keys.onEnterPressed: watchRow.commitEdit()
+                                    Keys.onReturnPressed: watchRow.commitEdit(true)
+                                    Keys.onEnterPressed: watchRow.commitEdit(true)
                                     Keys.onEscapePressed: watchRow.finishEdit()
                                     Accessible.name: qsTr("New value for %1").arg(watchRow.name)
                                     Accessible.description: (watchRow.writeScope
