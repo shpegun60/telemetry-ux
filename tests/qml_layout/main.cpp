@@ -215,21 +215,18 @@ int main(int argc, char** argv)
 			settle();
 			auto* footer = item(view, QStringLiteral("customFooter"));
 			auto* batch = item(view, QStringLiteral("batchPane"));
-			auto* response = item(view, QStringLiteral("batchResponseTree"));
-			CHECK(footer && batch && response);
+			// The right pane is Details over the selected item (BA-4a).
+			auto* pane = item(view, QStringLiteral("batchItemPane"));
+			CHECK(footer && batch && pane);
 			CHECK(footer->height() >= 34);
 			CHECK(rectangle(footer).bottom() <= rectangle(view).bottom() + 1);
 			CHECK(rectangle(batch).bottom() <= rectangle(footer).top());
-			CHECK(response->height() >= 100);
-			CHECK(rectangle(response).top() >= rectangle(batch).top());
-			CHECK(rectangle(response).bottom() <= rectangle(batch).bottom());
-			auto* heading = item(view, QStringLiteral("batchResponseHeading"));
-			auto* empty = item(view, QStringLiteral("batchResponseEmpty"));
-			CHECK(heading && empty);
-			std::printf("heading y=%.1f h=%.1f empty y=%.1f h=%.1f response h=%.1f\n",
-			            rectangle(heading).y(), heading->height(), rectangle(empty).y(),
-			            empty->height(), response->height());
-			CHECK(rectangle(heading).bottom() <= rectangle(empty).top());
+			CHECK(pane->height() >= 100);
+			CHECK(rectangle(pane).top() >= rectangle(batch).top());
+			CHECK(rectangle(pane).bottom() <= rectangle(batch).bottom());
+			auto* empty = item(pane, QStringLiteral("emptyEndpointLabel"));
+			CHECK(empty && empty->property("text").toString() == QStringLiteral("Choose an item to see its values here."));
+			CHECK(rectangle(empty).top() >= rectangle(pane).top() && rectangle(empty).bottom() <= rectangle(pane).bottom() + 1);
 			// Expanded controls stay reachable and interactive after scrolling.
 			flick->setProperty("contentY", std::max(qreal(0), maximum - 80));
 			settle();

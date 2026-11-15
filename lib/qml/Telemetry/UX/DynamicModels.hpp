@@ -188,6 +188,10 @@ public:
 	void resetSnapshot(const WorkbenchView& view);
 	// Read-only projection of a caller-owned, admission-guarded value snapshot.
 	void resetSnapshot(const telemetry::integration::inspector::SnapshotStore& snapshot);
+	// An editable projection of a caller-owned request editor's draft (the
+	// Batch's item, BA-4a): every scalar row takes text; the owner writes it
+	// through the editor and updateScalar() shows it.
+	void resetDraft(const telemetry::integration::workbench::RequestEditor& editor);
 	void resetServiceResponse(const WorkbenchView& view);
 	[[nodiscard]] telemetry::integration::inspector::NodeResult
 	node(const QModelIndex& index) const;
@@ -240,7 +244,8 @@ private:
 	std::unique_ptr<Impl> impl_;
 	void resetSource(const Inspector* inspector, const Workbench* workbench, bool response = false,
 	                 const WorkbenchView* view = nullptr,
-	                 const telemetry::integration::inspector::SnapshotStore* snapshot = nullptr);
+	                 const telemetry::integration::inspector::SnapshotStore* snapshot = nullptr,
+	                 const telemetry::integration::workbench::RequestEditor* draft = nullptr);
 };
 
 } // namespace telemetry::ux

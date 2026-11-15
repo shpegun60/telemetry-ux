@@ -10,7 +10,7 @@ namespace {
 // The library's own kinds; a host adds its own with declareKind().
 QStringList& declared()
 {
-	static QStringList kinds{QStringLiteral("batch.items"), QStringLiteral("file.bytes"),
+	static QStringList kinds{QStringLiteral("batch.items"), QStringLiteral("batch.request"), QStringLiteral("file.bytes"),
 	                         QStringLiteral("plot.curves"), QStringLiteral("plot.look"),
 	                         QStringLiteral("plot.points"), QStringLiteral("watch.format"),
 	                         QStringLiteral("watch.rows")};

@@ -16,11 +16,27 @@ ApplicationWindow {
         readonly property bool canExecuteBatch: batchCount > 0
         readonly property string batchStatus: ""
         readonly property bool batchSupported: true
-        readonly property string batchResponseEndpoint: ""
         readonly property bool busy: false
         readonly property bool allowMutations: true
         readonly property var batchItems: batchAddItems
-        readonly property var batchResponses: batchAddResponses
+        // The selected item as Details shows it: nothing selected here.
+        readonly property QtObject batchItem: QtObject {
+            readonly property string selection: ""
+            readonly property int item: 0
+            readonly property string operation: ""
+            readonly property bool connected: true
+            readonly property bool busy: false
+            readonly property bool commandSelected: false
+            readonly property bool serviceSelected: false
+            readonly property bool historical: false
+            readonly property bool switchable: false
+            readonly property bool allowMutations: true
+            readonly property string serviceResponseEndpoint: ""
+            readonly property var values: batchAddResponses
+            readonly property var responses: batchAddResponses
+            signal stateChanged()
+            signal readFinished(bool published)
+        }
         function canAddBatch(operation) { return false }
         function addBatch(operation) { return false }
         function executeBatch() { return false }

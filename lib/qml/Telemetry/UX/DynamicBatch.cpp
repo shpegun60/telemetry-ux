@@ -1,7 +1,10 @@
 // One explicit ordered request; Qt owns presentation, the Session owns execution. MIT.
 #include "DynamicBatch.hpp"
+#include "ScalarEditor.hpp"
+#include "SchemaText.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPointer>
+#include <QtCore/QTime>
 #include <algorithm>
 #include <initializer_list>
 #include <utility>
@@ -92,6 +95,14 @@ QVariant BatchListModel::data(const QModelIndex& index, int role) const
 			return row.historical;
 		case ResultRole:
 			return row.result;
+		case LineRole:
+			return row.line;
+		case ChangedRole:
+			return !row.sent.isNull() && row.sent != row.request;
+		case AtRole:
+			return row.at;
+		case UidRole:
+			return QString::number(row.uid);
 		default:
 			return {};
 	}
@@ -101,7 +112,8 @@ QHash<int, QByteArray> BatchListModel::roleNames() const
 {
 	return {{NameRole, "name"},     {OperationRole, "operation"}, {EndpointIdRole, "endpointId"},
 	        {StatusRole, "status"}, {HasValueRole, "hasValue"},   {HistoricalRole, "historical"},
-	        {ResultRole, "result"}};
+	        {ResultRole, "result"},  {LineRole, "line"},           {ChangedRole, "changed"},
+	        {AtRole, "at"},          {UidRole, "uid"}};
 }
 
 bool BatchListModel::changing() const noexcept
@@ -122,6 +134,17 @@ void BatchListModel::replace(std::vector<BatchRow> rows)
 	beginResetModel();
 	rows_ = std::move(rows);
 	endResetModel();
+	changing_ = false;
+}
+
+void BatchListModel::update(int row, BatchRow value)
+{
+	if (changing_ || row < 0 || row >= int(rows_.size()))
+		return;
+	changing_ = true;
+	rows_[std::size_t(row)] = std::move(value);
+	const auto at = index(row, 0);
+	Q_EMIT dataChanged(at, at);
 	changing_ = false;
 }
 
@@ -157,12 +180,24 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 	bool publishing = false, invalidationPending = false, pendingHistorical = false,
 	     invalidationQueued = false, retired = true;
 	QString status = QStringLiteral("Add ordered operations; Execute sends one Batch");
+	// The selected item's request (BA-4a): its bytes as a store, an editor's
+	// draft over them, and its values as Details shows them. A value's steps
+	// merge while its cell stays open: editSerial moves when it is left.
+	std::array<std::byte, 4096> requestMemory{}, draftMemory{}, commitMemory{};
+	integration::inspector::SnapshotStore requestStore;
+	integration::workbench::RequestEditor editor{draftMemory, commitMemory};
+	ValueModel values;
+	int editSerial = 0;
 
 	Impl()
 	    : snapshot(responseMemory, {this, +[](const void* p) noexcept {
 		                                const auto& state = *static_cast<const Impl*>(p);
 		                                return state.current() && !state.invalidationPending;
-	                                }})
+	                                }}),
+	      requestStore(requestMemory, {this, +[](const void* p) noexcept {
+		                               const auto& state = *static_cast<const Impl*>(p);
+		                               return state.current() && !state.invalidationPending;
+	                               }})
 	{
 		model.setValueGuard([this] {
 			return current() && !invalidationPending;
@@ -179,7 +214,7 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		// A busy session (another panel's request, a polling Watchlist) is no
 		// reason to refuse: the FIFO orders requests and reports QueueFull.
 		return current() && !request && !publishing && !invalidationPending && !model.changing() &&
-		       !responses.changing() && (!blocked || !blocked());
+		       !responses.changing() && !values.changing() && (!blocked || !blocked());
 	}
 
 	bool permitted() const
@@ -231,12 +266,78 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		       {}, std::move(after));
 	}
 
+	// A row's request changed in place (BA-4a): the line follows, and with
+	// words one "batch.request" step, merged by mergeKey while it stays.
+	bool putRequest(int at, const QByteArray& bytes, const QString& words, const QString& mergeKey)
+	{
+		if (!rowEditable(at) || !source.schema)
+			return false;
+		auto row = model.rows()[std::size_t(at)];
+		if (row.request == bytes)
+			return true;
+		const auto schema = source.schema();
+		if (row.requestType != 0 &&
+		    !schema.view(row.requestType, runtime::Input{reinterpret_cast<const std::byte*>(bytes.constData()),
+		                                                 std::size_t(bytes.size())}))
+			return false;
+		const auto before = row.request;
+		row.request = bytes;
+		row.line = DynamicBatch::lineOf(schema, row.requestType, bytes);
+		const auto uid = key(row);
+		publishing = true;
+		model.update(at, std::move(row));
+		finishPublication();
+		if (!words.isEmpty() && history && target) {
+			QVector<UndoPart> parts;
+			parts.push_back(UndoPart{target.get(), QStringLiteral("batch.request"),
+			                         {{uid, QVariantMap{{QStringLiteral("request"), before}}}},
+			                         {{uid, QVariantMap{{QStringLiteral("request"), bytes}}}}});
+			lastSerial = history->record(words, std::move(parts), mergeKey, 0);
+		}
+		signal();
+		return true;
+	}
+
+	// A "batch.request" step's requests back by uid; the item is selected.
+	UndoOutcome applyRequest(const QVariantMap& state, const QStringList& keys)
+	{
+		if (!undoBlocked().isEmpty())
+			return {UndoOutcome::Kind::Blocked, {}};
+		int applied = 0;
+		QStringList notes;
+		for (const auto& uid : keys) {
+			const auto& rows = model.rows();
+			const auto found = std::find_if(rows.begin(), rows.end(), [&uid](const BatchRow& row) { return key(row) == uid; });
+			if (found == rows.end()) {
+				notes << QCoreApplication::translate("DynamicBatch", "the item is no longer in the Batch");
+				continue;
+			}
+			const auto at = int(found - rows.begin());
+			if (!rowEditable(at)) {
+				notes << QCoreApplication::translate("DynamicBatch", "the item is from an earlier connection");
+				continue;
+			}
+			if (!putRequest(at, state.value(uid).toMap().value(QStringLiteral("request")).toByteArray(), {}, {}))
+				continue;
+			selected = at;
+			++applied;
+		}
+		if (applied > 0) {
+			showItem();
+			signal();
+		}
+		const auto note = notes.join(QStringLiteral("; "));
+		if (applied == 0)
+			return {UndoOutcome::Kind::Skipped, note};
+		return {note.isEmpty() ? UndoOutcome::Kind::Done : UndoOutcome::Kind::Partial, note};
+	}
+
 	// Why a step on the Batch waits now: a Batch request is in flight.
 	QString undoBlocked() const
 	{
 		if (request)
 			return QCoreApplication::translate("DynamicBatch", "Wait for the Batch to finish.");
-		if (publishing || model.changing() || responses.changing())
+		if (publishing || model.changing() || responses.changing() || values.changing())
 			return QCoreApplication::translate("DynamicBatch", "The Batch is changing; try again in a moment.");
 		return {};
 	}
@@ -270,8 +371,15 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 			const auto fragment = state.value(uid).toMap();
 			auto row = fragment.value(QStringLiteral("row")).value<BatchRow>();
 			if (held != rows.end()) {
-				// Held: moved, with what it holds now.
+				// Held: moved, with what it holds now - unless the step made it
+				// another operation (Read | Write), which puts the row back whole.
+				const auto stepped = std::move(row);
 				row = *held;
+				if (stepped.operation != row.operation) {
+					const bool historical = row.historical;
+					row = stepped;
+					row.historical = historical;
+				}
 				rows.erase(held);
 			} else {
 				const bool session = current() && source.session && row.session == source.session();
@@ -295,6 +403,7 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 			publishing = true;
 			selected = -1;
 			responses.clear();
+			clearItem();
 			snapshot.invalidate();
 			model.replace(std::move(rows));
 			finishPublication();
@@ -339,6 +448,106 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		return DynamicBatch::Refusal::None;
 	}
 
+	void clearItem()
+	{
+		values.clear();
+		editor.clear();
+		requestStore.invalidate();
+	}
+
+	// An item that may change now: not while the Batch runs, never one of an
+	// earlier connection.
+	bool rowEditable(int at) const
+	{
+		return !publishing && rowChangeable(at);
+	}
+
+	// The same, while a publication of the Batch's own is under way.
+	bool rowChangeable(int at) const
+	{
+		if (!current() || request || invalidationPending || at < 0 || at >= int(model.rows().size()))
+			return false;
+		const auto& row = model.rows()[std::size_t(at)];
+		return !row.historical && source.session && row.session == source.session();
+	}
+
+	static descriptor::Category categoryOf(const BatchRow& row)
+	{
+		return row.operation == client::Operation::Command   ? descriptor::Category::Command
+		       : row.operation == client::Operation::Service ? descriptor::Category::Service
+		                                                     : descriptor::Category::Field;
+	}
+
+	// The selected item as Details shows it: a request's values (editable
+	// while the item may change), the value a read returned, and a Service's
+	// response.
+	void showItem()
+	{
+		clearItem();
+		showResponse();
+		if (invalidationPending || !current() || selected < 0 || selected >= int(model.rows().size()))
+			return;
+		const auto& row = model.rows()[std::size_t(selected)];
+		if (row.historical || !source.session || row.session != source.session() || !source.schema)
+			return;
+		const auto schema = source.schema();
+		values.setSchemaMetadata(schema);
+		if (row.operation == client::Operation::FieldRead) {
+			// The value read is the item's values; it has no response.
+			if (row.hasValue && snapshot.isCurrent()) {
+				responses.clear();
+				values.resetSnapshot(snapshot);
+			}
+			return;
+		}
+		if (row.requestType == 0 || std::size_t(row.request.size()) > requestMemory.size())
+			return;
+		if (requestStore.admit(schema, row.session) != integration::inspector::ModelStatus::Ok ||
+		    requestStore.selectEndpoint(row.id, row.requestType, categoryOf(row)) !=
+		        integration::inspector::ModelStatus::Ok)
+			return;
+		const auto identity = requestStore.snapshotInfo();
+		const client::Input bytes{reinterpret_cast<const std::byte*>(row.request.constData()),
+		                          std::size_t(row.request.size())};
+		if (requestStore.publish(bytes, identity.admission, identity.revision) !=
+		    integration::inspector::ModelStatus::Ok)
+			return;
+		if (rowChangeable(selected) && editor.begin(requestStore) == runtime::Status::Ok)
+			values.resetDraft(editor);
+		else
+			values.resetSnapshot(requestStore);
+		// What was sent last, for the unsent marks.
+		if (!row.sent.isNull())
+			values.setBaseline(sentTexts(schema, row));
+	}
+
+	// The sent request's values by path, as the values model writes them.
+	QHash<QString, QString> sentTexts(const runtime::RuntimeSchema& schema, const BatchRow& row)
+	{
+		QHash<QString, QString> texts;
+		std::array<std::byte, 4096> memory{};
+		integration::inspector::SnapshotStore store{memory};
+		if (std::size_t(row.sent.size()) > memory.size() || store.admit(schema, row.session) != integration::inspector::ModelStatus::Ok ||
+		    store.selectEndpoint(row.id, row.requestType, categoryOf(row)) != integration::inspector::ModelStatus::Ok)
+			return texts;
+		const auto identity = store.snapshotInfo();
+		const client::Input bytes{reinterpret_cast<const std::byte*>(row.sent.constData()), std::size_t(row.sent.size())};
+		if (store.publish(bytes, identity.admission, identity.revision) != integration::inspector::ModelStatus::Ok)
+			return texts;
+		ValueModel sentValues;
+		sentValues.resetSnapshot(store);
+		// Every row a person may have opened: the first 128 of each level.
+		QVector<QModelIndex> stack{QModelIndex{}};
+		while (!stack.isEmpty()) {
+			const auto parent = stack.takeLast();
+			if (parent.isValid() && sentValues.canFetchMore(parent))
+				sentValues.fetchMore(parent);
+			for (int at = 0, count = sentValues.rowCount(parent); at < count; ++at)
+				stack.push_back(sentValues.index(at, 0, parent));
+		}
+		return sentValues.texts();
+	}
+
 	void showResponse()
 	{
 		responses.clear();
@@ -378,7 +587,7 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		    [weak] {
 			    if (const auto p = weak.lock()) {
 				    p->invalidationQueued = false;
-				    if (p->publishing || p->model.changing() || p->responses.changing()) {
+				    if (p->publishing || p->model.changing() || p->responses.changing() || p->values.changing()) {
 					    p->deferInvalidation();
 					    return;
 				    }
@@ -397,7 +606,7 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 
 	void invalidate(bool historical)
 	{
-		if (publishing || model.changing() || responses.changing()) {
+		if (publishing || model.changing() || responses.changing() || values.changing()) {
 			invalidationPending = true;
 			pendingHistorical |= historical;
 			deferInvalidation();
@@ -415,6 +624,7 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 			row.historical |= historical;
 		}
 		responses.clear();
+		clearItem();
 		snapshot.invalidate();
 		model.replace(std::move(rows));
 		finishPublication();
@@ -426,9 +636,11 @@ DynamicBatch::DynamicBatch() : d(std::make_shared<Impl>())
 {
 	const std::weak_ptr<Impl> weak = d;
 	d->target = std::make_unique<UndoFunctions>(
-	    [weak](const QString&, const QVariantMap& state, const QStringList& keys) {
+	    [weak](const QString& kind, const QVariantMap& state, const QStringList& keys) {
 		    const auto p = weak.lock();
-		    return p ? p->apply(state, keys) : UndoOutcome{UndoOutcome::Kind::Skipped, {}};
+		    if (!p)
+			    return UndoOutcome{UndoOutcome::Kind::Skipped, {}};
+		    return kind == QStringLiteral("batch.request") ? p->applyRequest(state, keys) : p->apply(state, keys);
 	    },
 	    [weak] {
 		    const auto p = weak.lock();
@@ -503,7 +715,7 @@ bool DynamicBatch::pending() const
 
 bool DynamicBatch::active() const
 {
-	return pending() || d->publishing || d->model.changing() || d->responses.changing();
+	return pending() || d->publishing || d->model.changing() || d->responses.changing() || d->values.changing();
 }
 
 bool DynamicBatch::canAdd(const BatchRow& row) const
@@ -518,6 +730,8 @@ bool DynamicBatch::add(BatchRow row)
 		return false;
 	const bool fieldDraft = row.operation == client::Operation::FieldWrite;
 	row.request = QByteArray(row.request.constData(), row.request.size());
+	if (row.line.isEmpty())
+		row.line = lineOf(schema(), row.requestType, row.request);
 	row.uid = p->nextUid++;
 	p->lastSerial = 0;
 	p->publishing = true;
@@ -526,8 +740,10 @@ bool DynamicBatch::add(BatchRow row)
 	rows.push_back(std::move(row));
 	p->selected = int(rows.size()) - 1;
 	p->responses.clear();
+	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
+	p->showItem();
 	p->status =
 	    fieldDraft
 	        ? QStringLiteral(
@@ -577,13 +793,17 @@ bool DynamicBatch::add(std::vector<BatchRow> rows)
 	const auto first = all.size();
 	for (auto& row : rows) {
 		row.request = QByteArray(row.request.constData(), row.request.size());
+		if (row.line.isEmpty())
+			row.line = lineOf(schema(), row.requestType, row.request);
 		row.uid = p->nextUid++;
 		all.push_back(std::move(row));
 	}
 	p->selected = int(all.size()) - 1;
 	p->responses.clear();
+	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(all));
+	p->showItem();
 	p->status = QStringLiteral("Draft - Execute sends one ordered Batch");
 	p->finishPublication();
 	p->recordAdded(first);
@@ -603,6 +823,7 @@ bool DynamicBatch::remove(int row)
 	rows.erase(rows.begin() + row);
 	p->selected = -1;
 	p->responses.clear();
+	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
 	p->finishPublication();
@@ -641,7 +862,7 @@ bool DynamicBatch::move(int row, int delta)
 bool DynamicBatch::clear()
 {
 	auto p = d;
-	if (p->request || p->publishing || p->model.changing() || p->responses.changing() ||
+	if (p->request || p->publishing || p->model.changing() || p->responses.changing() || p->values.changing() ||
 	    (p->blocked && p->blocked()))
 		return false;
 	p->lastSerial = 0;
@@ -652,6 +873,7 @@ bool DynamicBatch::clear()
 	p->publishing = true;
 	p->selected = -1;
 	p->responses.clear();
+	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace({});
 	p->status = QStringLiteral("Add ordered operations; Execute sends one Batch");
@@ -665,12 +887,12 @@ bool DynamicBatch::clear()
 bool DynamicBatch::select(int row)
 {
 	auto p = d;
-	if (p->request || p->publishing || p->model.changing() || p->responses.changing() || row < 0 ||
+	if (p->request || p->publishing || p->model.changing() || p->responses.changing() || p->values.changing() || row < 0 ||
 	    row >= count())
 		return false;
 	p->publishing = true;
 	p->selected = row;
-	p->showResponse();
+	p->showItem();
 	p->finishPublication();
 	p->signal();
 	return true;
@@ -716,6 +938,11 @@ bool DynamicBatch::execute()
 		p->signal();
 		return false;
 	}
+	const auto at = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+	for (auto& row : request->rows) {
+		row.sent = row.request.isNull() ? QByteArray("") : row.request;
+		row.at = at;
+	}
 	auto rows = request->rows;
 	for (auto& row : rows) {
 		row.status = QStringLiteral("Pending");
@@ -724,6 +951,7 @@ bool DynamicBatch::execute()
 		row.hasValue = false;
 	}
 	p->responses.clear();
+	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
 	p->status = QStringLiteral("Pending - one ordered Batch request");
@@ -735,7 +963,7 @@ bool DynamicBatch::execute()
 void DynamicBatch::poll()
 {
 	auto p = d;
-	if (p->publishing || p->model.changing() || p->responses.changing())
+	if (p->publishing || p->model.changing() || p->responses.changing() || p->values.changing())
 		return;
 	if (!p->request || !p->request->completion)
 		return;
@@ -776,7 +1004,7 @@ void DynamicBatch::poll()
 	}
 	p->model.replace(std::move(rows));
 	p->request.reset();
-	p->showResponse();
+	p->showItem();
 	p->status = completion.status == client::Status::Ok && completion.succeeded
 	                ? completion.valueStatus == QStringLiteral("InvalidPayload") ||
 	                          completion.valueStatus == QStringLiteral("TypeMismatch")
@@ -820,5 +1048,114 @@ BatchListModel* DynamicBatch::model() const
 ValueModel* DynamicBatch::responses() const
 {
 	return &d->responses;
+}
+
+ValueModel* DynamicBatch::values() const
+{
+	return &d->values;
+}
+
+const BatchRow* DynamicBatch::selectedRow() const
+{
+	return d->selected >= 0 && d->selected < count() ? &d->model.rows()[std::size_t(d->selected)] : nullptr;
+}
+
+bool DynamicBatch::canEdit() const
+{
+	return d->rowEditable(d->selected) && d->editor.current();
+}
+
+bool DynamicBatch::setScalarText(const QModelIndex& index, const QString& text)
+{
+	auto p = d;
+	if (!canEdit())
+		return false;
+	const auto node = p->values.node(index);
+	if (!node)
+		return false;
+	const auto info = p->editor.info(node.value);
+	if (!info)
+		return false;
+	bool parsed = false;
+	const auto status = detail::setScalarText(p->editor, node.value, info.value.code, text, parsed);
+	if (!parsed || status != runtime::Status::Ok)
+		return false;
+	std::array<std::byte, 4096> out{};
+	const auto copied = p->editor.copyDraft(out);
+	if (!copied)
+		return false;
+	const QByteArray bytes(reinterpret_cast<const char*>(out.data()), qsizetype(copied.value));
+	p->values.updateScalar(index);
+	const auto at = p->selected;
+	const auto uid = p->model.rows()[std::size_t(at)].uid;
+	const auto name = p->values.data(index, ValueModel::NameRole).toString();
+	return p->putRequest(at, bytes,
+	                     QCoreApplication::translate("DynamicBatch", "Set %1 of item %L2").arg(name).arg(at + 1),
+	                     QStringLiteral("batch.request/%1/%2/%3").arg(uid).arg(index.internalId()).arg(p->editSerial));
+}
+
+void DynamicBatch::closeValue()
+{
+	++d->editSerial;
+}
+
+bool DynamicBatch::setRequest(int row, const QByteArray& bytes)
+{
+	auto p = d;
+	if (!p->rowEditable(row))
+		return false;
+	const auto uid = p->model.rows()[std::size_t(row)].uid;
+	if (!p->putRequest(row, bytes,
+	                   QCoreApplication::translate("DynamicBatch", "Set the values of item %L1").arg(row + 1),
+	                   QStringLiteral("batch.request/%1/all/%2").arg(uid).arg(++p->editSerial)))
+		return false;
+	if (p->selected == row)
+		p->showItem();
+	p->signal();
+	return true;
+}
+
+bool DynamicBatch::replace(int row, BatchRow value, const QString& words)
+{
+	auto p = d;
+	if (!p->rowEditable(row))
+		return false;
+	const auto before = p->model.rows()[std::size_t(row)];
+	value.uid = before.uid;
+	value.request = QByteArray(value.request.constData(), value.request.size());
+	value.line = lineOf(schema(), value.requestType, value.request);
+	p->publishing = true;
+	p->model.update(row, value);
+	p->selected = row;
+	p->showItem();
+	p->finishPublication();
+	p->record(words, {{Impl::key(before), Impl::fragment(row, before)}}, {{Impl::key(value), Impl::fragment(row, value)}});
+	p->signal();
+	return true;
+}
+
+QString DynamicBatch::lineOf(const runtime::RuntimeSchema& schema, TypeId type, const QByteArray& bytes)
+{
+	if (type == 0 || bytes.isEmpty() || !schema.valid())
+		return {};
+	const auto view = schema.view(type, runtime::Input{reinterpret_cast<const std::byte*>(bytes.constData()),
+	                                                   std::size_t(bytes.size())});
+	if (!view)
+		return {};
+	const auto one = [&schema](const runtime::DynamicValueView& value) {
+		const auto* shown = schema.type(value.typeId());
+		if (shown && (shown->kind == TypeKind::Scalar || shown->kind == TypeKind::Enum))
+			return schema_text::valueText(schema, value).text;
+		return schema_text::summaryText(schema, value);
+	};
+	const auto* root = schema.type(type);
+	if (!root || root->kind != TypeKind::Struct)
+		return one(view.value);
+	QStringList parts;
+	const auto members = schema.members(type);
+	for (std::uint32_t at = 0; at < members.size(); ++at)
+		if (const auto member = view.value.member(at))
+			parts << schema_text::text(members[at].name) + QLatin1Char('=') + one(member.value);
+	return parts.join(QLatin1Char(' '));
 }
 } // namespace telemetry::ux

@@ -87,6 +87,8 @@ Pane {
                     highlight: Rectangle { color: Theme.stateSelectedInactive; radius: Type.radius }
                     highlightMoveDuration: 0
                     highlightResizeDuration: 0
+                    onCurrentIndexChanged: if (currentIndex >= 0 && currentIndex !== panel.provider.batchSelection)
+                        panel.provider.selectBatch(currentIndex)
                     // Down from the last item, or Insert, goes to the "+" row.
                     Keys.onDownPressed: event => {
                         if (batchAdd.visible && items.currentIndex >= items.count - 1) {
@@ -111,11 +113,20 @@ Pane {
                         required property string status
                         required property bool hasValue
                         required property bool historical
+                        required property var model
+                        // A host's own list may lack these roles.
+                        readonly property string line: typeof model.line === "string" ? model.line : ""
+                        readonly property bool changed: model.changed === true
                         width: items.width
                         height: 64
                         Accessible.role: Accessible.ListItem
                         Accessible.name: qsTr("Item %1, %2 %3, %4").arg(item.index + 1).arg(item.operation).arg(item.name).arg(item.status)
-                        TapHandler { onTapped: items.currentIndex = item.index }
+                        TapHandler {
+                            onTapped: {
+                                items.currentIndex = item.index
+                                panel.provider.selectBatch(item.index)
+                            }
+                        }
                         RowLayout {
                             anchors.fill: parent
                             ColumnLayout {
@@ -124,7 +135,10 @@ Pane {
                                     id: itemName
                                     objectName: "batchRowName"
                                     textFormat: Text.PlainText
+                                    // The values follow the path: "control.Scale value=2 factor=0.1".
                                     text: (item.index + 1) + ". " + item.operation + " - " + item.name
+                                        + (item.line.length === 0 ? "" : item.operation === "write" && item.line.indexOf("=") < 0
+                                           ? " = " + item.line : " " + item.line)
                                     Layout.fillWidth: true
                                     elide: Text.ElideMiddle
                                     // Cut short: the whole of it on hover.
@@ -135,14 +149,12 @@ Pane {
                                         delay: 700
                                     }
                                 }
-                                Label { textFormat: Text.PlainText; text: item.status + (item.historical ? " - previous session" : ""); color: "#99abbf"; Layout.fillWidth: true; elide: Text.ElideRight }
-                            }
-                            Button {
-                                objectName: "selectBatchButton"
-                                property int batchRowIndex: item.index
-                                text: item.hasValue ? "View result" : "Select"
-                                enabled: !panel.provider.batchPending
-                                onClicked: panel.provider.selectBatch(item.index)
+                                Label {
+                                    textFormat: Text.PlainText
+                                    text: item.status + (item.historical ? " - previous session" : "")
+                                        + (item.changed ? qsTr(", changed since") : "")
+                                    color: Theme.textSecondary; Layout.fillWidth: true; elide: Text.ElideRight
+                                }
                             }
                             Button {
                                 objectName: "moveBatchUpButton"
@@ -236,61 +248,60 @@ Pane {
                     }
                 }
             }
-            ColumnLayout {
+            EndpointPanel {
+                id: itemPane
+                objectName: "batchItemPane"
                 SplitView.preferredWidth: 400
                 SplitView.minimumWidth: 220
-                Label {
-                    objectName: "batchResponseHeading"
-                    textFormat: Text.PlainText
-                    text: panel.provider.batchResponseEndpoint.length ? "Result - " + panel.provider.batchResponseEndpoint : "Select an item to inspect its result"
-                    Layout.fillWidth: true
-                    elide: Text.ElideMiddle
-                }
-                Item {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    TreeView {
-                        id: responseTree
-                        // A zoom changes the row height: the rows already laid out follow it.
-                        Connections {
-                            target: Type
-                            function onRowHeightChanged() { Qt.callLater(function() { if (responseTree) responseTree.forceLayout() }) }
+                framed: false
+                readonly property var item: panel.provider.batchItem
+                provider: item
+                infoPrefix: item && item.item > 0 ? qsTr("Item %L1 \u00b7 ").arg(item.item) : ""
+                emptyResponseText: qsTr("Execute the Batch to see the response.")
+                emptyText: qsTr("Choose an item to see its values here.")
+                contextHelp: item && item.serviceSelected
+                    ? qsTr("Request values start at zero, not at device defaults. Execute Batch calls it with the other items, in order.")
+                    : item && item.commandSelected
+                    ? qsTr("Arguments start at zero, not at device defaults. Execute Batch runs it with the other items, in order.")
+                    : qsTr("Execute the Batch to read it.")
+                // A read refuses nothing while changes are off; a write, a
+                // Command and a Service say why their values stay values.
+                refusalText: !item || item.item === 0 || item.historical || item.allowMutations
+                    || item.operation === "read" ? ""
+                    : item.operation === "write" ? qsTr("Changes are off. Allow changes to write %1.").arg(item.selection)
+                    : qsTr("Changes are off. Allow changes to execute the Batch with %1.").arg(item.selection)
+                // Read | Write for a Field that can be both.
+                actionsComponent: item && item.switchable ? readWrite : null
+                Component {
+                    id: readWrite
+                    RowLayout {
+                        objectName: "batchReadWrite"
+                        spacing: 0
+                        Button {
+                            objectName: "batchReadButton"
+                            text: qsTr("Read")
+                            checkable: true
+                            checked: itemPane.item.operation === "read"
+                            enabled: !itemPane.item.busy
+                            onClicked: { itemPane.item.setOperation("read"); checked = Qt.binding(function() { return itemPane.item.operation === "read" }) }
+                            ToolTip.visible: hovered; ToolTip.delay: 700
+                            ToolTip.text: qsTr("Read %1").arg(itemPane.item.selection)
+                            Accessible.name: qsTr("Read %1").arg(itemPane.item.selection)
                         }
-                        objectName: "batchResponseTree"
-                        anchors.fill: parent
-                        clip: true
-                        model: panel.provider.batchResponses
-                        columnWidthProvider: function() { return Math.max(1, responseTree.width) }
-                        onWidthChanged: Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
-                        delegate: TreeViewDelegate {
-                            id: response
-                            indentation: Type.indent
-                            indicator: TreeChevron { row: response }
-                            objectName: "batchResponseRow"
-                            required property string name
-                            required property string detail
-                            required property string value
-                            required property bool isAggregate
-                            required property int childCount
-                            required property int loadedCount
-                            implicitWidth: responseTree.width
-                            implicitHeight: Type.rowHeight
-                            text: name
-                            PlainToolTip { text: response.detail; visible: response.hovered && text.length > 0 }
-                            contentItem: RowLayout {
-                                Label { textFormat: Text.PlainText; text: response.name; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label { textFormat: Text.PlainText; text: response.value; font.family: "monospace"; color: "#83e1ce" }
-                                Button {
-                                    text: "Load next 128"
-                                    visible: response.isAggregate && response.childCount > 128
-                                    enabled: response.loadedCount < response.childCount
-                                    onClicked: panel.provider.batchResponses.fetchMore(responseTree.modelIndex(Qt.point(0, response.row)))
-                                }
-                            }
+                        Button {
+                            objectName: "batchWriteButton"
+                            text: qsTr("Write")
+                            checkable: true
+                            checked: itemPane.item.operation === "write"
+                            enabled: !itemPane.item.busy && itemPane.item.allowMutations
+                            onClicked: { itemPane.item.setOperation("write"); checked = Qt.binding(function() { return itemPane.item.operation === "write" }) }
+                            ToolTip.visible: hovered; ToolTip.delay: 700
+                            ToolTip.text: itemPane.item.allowMutations
+                                ? qsTr("Write %1: starts from the last value read").arg(itemPane.item.selection)
+                                : qsTr("Changes are off: allow changes to write %1.").arg(itemPane.item.selection)
+                            Accessible.name: qsTr("Write %1").arg(itemPane.item.selection)
                         }
-                        ScrollBar.vertical: ScrollBar {}
                     }
-                    Label { objectName: "batchResponseEmpty"; textFormat: Text.PlainText; anchors.centerIn: parent; visible: responseTree.rows === 0; text: "No current response value"; color: "#99abbf" }
                 }
             }
         }
@@ -302,12 +313,6 @@ Pane {
             // The Batch changed under the row: what Enter would do may too.
             if (batchAdd.editing)
                 batchAdd.recheck()
-        }
-    }
-    Connections {
-        target: panel.provider.batchResponses
-        function onModelReset() {
-            Qt.callLater(function() { if (responseTree) { responseTree.forceLayout(); responseTree.expand(0) } })
         }
     }
 }

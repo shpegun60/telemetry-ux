@@ -36,8 +36,10 @@ Pane {
     property string infoPrefix: ""
     // Replaces the header's own actions (Read, Cancel, Apply, Execute, Call).
     property Component actionsComponent: null
-    // What the response area says before the first call.
+    // What the response area says before the first call, and the panel with
+    // nothing selected.
     property string emptyResponseText: qsTr("Call to see the response.")
+    property string emptyText: qsTr("Select a Field, Command or Service in the Device tree.")
     readonly property int selectedCategory: provider.commandSelected ? 2 : provider.serviceSelected ? 3 : 1
     readonly property bool selectionMatches: categoryFilter === 0 || (provider.selection.length > 0 && selectedCategory === categoryFilter)
     readonly property bool disconnected: typeof provider.connected === "boolean" && !provider.connected
@@ -444,32 +446,32 @@ Pane {
                     Button {
                         objectName: "refreshButton"; text: qsTr("Read")
                         visible: !panel.provider.commandSelected && !panel.provider.serviceSelected && !panel.provider.editing
-                        enabled: panel.provider.canRefresh; onClicked: panel.provider.refresh()
+                        enabled: panel.provider.canRefresh === true; onClicked: panel.provider.refresh()
                         ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Read this Field from the device")
                     }
                     Button {
                         objectName: "cancelEditButton"; text: qsTr("Cancel")
-                        visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
+                        visible: panel.provider.editing === true && !panel.provider.commandSelected && !panel.provider.serviceSelected
                         enabled: !panel.provider.busy; onClicked: panel.provider.cancelEdit()
                         ToolTip.visible: hovered; ToolTip.delay: 700
                         ToolTip.text: qsTr("Put back the values read; nothing is written")
                     }
                     AccentButton {
                         objectName: "applyButton"; text: qsTr("Apply")
-                        visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                        enabled: panel.provider.canApply; onClicked: panel.provider.apply()
+                        visible: panel.provider.editing === true && !panel.provider.commandSelected && !panel.provider.serviceSelected
+                        enabled: panel.provider.canApply === true; onClicked: panel.provider.apply()
                         ToolTip.visible: hovered; ToolTip.delay: 700
                         ToolTip.text: qsTr("Write once, then read the device again (Ctrl+Enter)")
                     }
                     AccentButton {
                         objectName: "executeButton"; text: qsTr("Execute")
-                        visible: panel.provider.commandSelected; enabled: panel.provider.canExecute
+                        visible: panel.provider.commandSelected === true; enabled: panel.provider.canExecute === true
                         onClicked: panel.provider.executeCommand()
                         ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Execute once (Ctrl+Enter)")
                     }
                     AccentButton {
                         objectName: "callServiceButton"; text: qsTr("Call")
-                        visible: panel.provider.serviceSelected; enabled: panel.provider.canCallService
+                        visible: panel.provider.serviceSelected === true; enabled: panel.provider.canCallService === true
                         onClicked: panel.provider.callService()
                         ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Call once (Ctrl+Enter)")
                     }
@@ -760,7 +762,14 @@ Pane {
                                     panel.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, valueDelegate.row)))
                                 }
                                 onTabbed: function(forward) { panel.openNext(valueTree, valueDelegate.row, forward) }
-                                onFinished: function(byKey) { if (byKey) valueTree.forceActiveFocus() }
+                                onFinished: function(byKey) {
+                                    // A provider whose values are steps (the Batch's item)
+                                    // starts the next change of this value as a new one.
+                                    if (typeof panel.provider.closeValue === "function")
+                                        panel.provider.closeValue()
+                                    if (byKey)
+                                        valueTree.forceActiveFocus()
+                                }
                             }
                         }
                         ScrollBar.vertical: ScrollBar {}
@@ -884,7 +893,7 @@ Pane {
             Layout.minimumHeight: implicitHeight
             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             wrapMode: Text.Wrap; textFormat: Text.PlainText
-            text: qsTr("Select a Field, Command or Service in the Device tree.")
+            text: panel.emptyText
             color: Theme.textMuted
         }
         Item {

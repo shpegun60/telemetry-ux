@@ -997,3 +997,37 @@ button, the Measure table (M), copy picture (Ctrl+C), copy values
 (Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
 result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 `WatchTraces.categorical` is invokable from QML.
+
+## The Batch's items carry their values (BA-4a, November 2026)
+
+- **The right pane is Details.** `BatchPanel` shows the selected item in an
+  `EndpointPanel` over the new `provider.batchItem` (a `BatchItemDetails`):
+  a Command's arguments, a Service's request and response, a write's value, a
+  read's value read, under the item's path and "Item 3 · Service · …". Choosing
+  an item shows it at once: the Select button is gone, and the keys move the
+  selection too.
+- **Values are set on the item, live.** A cell's text goes into the item's
+  request as it is typed (`BatchItemDetails::setScalarText`), the row's line
+  follows ("value=2 factor=0.1"), and each value is one step of the central
+  Undo ("Set factor of item 3", kind `batch.request`, merged until the cell is
+  left: `closeValue()`). Items of an earlier connection keep their values and
+  are not edited; their steps are skipped.
+- **Read | Write.** A Field that can be read and written has a Read | Write
+  switch in the pane's header; a write starts from the value last read, else
+  from the type's initial value; the change is one `batch.items` step that
+  keeps the item's uid ("Make item 2 a write").
+- **`BatchRow`** gains `sent` (the request as Execute last sent it), `line` and
+  `at`; `BatchListModel` the roles `line`, `changed` (the request differs from
+  what was sent), `at` and `uid`, and `update(row, value)`.
+- **`DynamicBatch`** gains `values()`, `selectedRow()`, `canEdit()`,
+  `setScalarText()`, `closeValue()`, `setRequest()`, `replace()` and
+  `lineOf()`. A read's value is now in `values()`, not `responses()`, which
+  holds a Service's response only.
+- **`ValueModel::resetDraft(RequestEditor)`**: an editable projection of a
+  request editor's draft.
+- **Removed:** `DynamicConfiguratorProvider::batchResponses` and
+  `batchResponseEndpoint`, and the Batch panel's response tree
+  (`batchResponseTree`, `batchResponseHeading`, `batchResponseEmpty`). Read
+  the selected item's values and response from `batchItem`.
+- `EndpointPanel` takes `emptyText`, what it says with nothing selected, and
+  asks a provider with `closeValue()` to close a value when its cell closes.

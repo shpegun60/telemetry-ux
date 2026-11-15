@@ -468,6 +468,8 @@ struct DynamicConfiguratorProvider::Impl {
 			model->setFormat(format);
 	}
 	DynamicBatch batch;
+	// The selected Batch item as Details shows it; a child of q.
+	BatchItemDetails* item = nullptr;
 	QString selection, responseEndpoint, status = QStringLiteral("Not connected"), write, command,
 	                                     service;
 	bool writeAttention = false, commandAttention = false, serviceAttention = false;
@@ -1377,6 +1379,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
                                                          QObject* parent)
     : QObject(parent), d(std::make_shared<Impl>(this))
 {
+	d->item = new BatchItemDetails(this);
 	d->definitions.setSourceModel(&d->endpoints);
 	std::weak_ptr<Impl> weak = d;
 	d->watchTarget = std::make_unique<UndoFunctions>(
@@ -1701,9 +1704,9 @@ QAbstractItemModel* DynamicConfiguratorProvider::batchItems() const
 	return d->batch.model();
 }
 
-QAbstractItemModel* DynamicConfiguratorProvider::batchResponses() const
+QObject* DynamicConfiguratorProvider::batchItem() const
 {
-	return d->batch.responses();
+	return d->item;
 }
 
 bool DynamicConfiguratorProvider::batchSupported() const
@@ -1734,11 +1737,6 @@ int DynamicConfiguratorProvider::batchSelection() const
 QString DynamicConfiguratorProvider::batchStatus() const
 {
 	return d->batch.status();
-}
-
-QString DynamicConfiguratorProvider::batchResponseEndpoint() const
-{
-	return d->batch.responseEndpoint();
 }
 
 bool DynamicConfiguratorProvider::canAddBatch(const QString& operation) const
@@ -3901,5 +3899,236 @@ bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const 
 	                  : QStringLiteral("Invalid exact scalar value - draft unchanged");
 	p->notify();
 	return valid;
+}
+
+BatchItemDetails::BatchItemDetails(DynamicConfiguratorProvider* provider)
+    : QObject(provider), provider_(provider)
+{
+	connect(provider, &DynamicConfiguratorProvider::stateChanged, this, &BatchItemDetails::stateChanged);
+	connect(provider, &DynamicConfiguratorProvider::batchFinished, this, [this] { Q_EMIT readFinished(true); });
+}
+
+QString BatchItemDetails::selection() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row ? row->name : QString{};
+}
+
+int BatchItemDetails::item() const
+{
+	return provider_->d->batch.selectedRow() ? provider_->d->batch.selection() + 1 : 0;
+}
+
+QString BatchItemDetails::operation() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	if (!row)
+		return {};
+	switch (row->operation) {
+		case cl::Operation::FieldRead:
+			return QStringLiteral("read");
+		case cl::Operation::FieldWrite:
+			return QStringLiteral("write");
+		case cl::Operation::Command:
+			return QStringLiteral("command");
+		case cl::Operation::Service:
+			return QStringLiteral("service");
+		default:
+			return {};
+	}
+}
+
+QString BatchItemDetails::line() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row ? row->line : QString{};
+}
+
+QVariantMap BatchItemDetails::selectionInfo() const
+{
+	const auto& p = *provider_->d;
+	const auto* row = p.batch.selectedRow();
+	if (!row)
+		return {};
+	const int category = row->operation == cl::Operation::Command ? 2 : row->operation == cl::Operation::Service ? 3 : 1;
+	auto info = p.current() && !row->historical ? p.endpoints.endpoint(p.endpoints.endpointIndex(category, row->id))
+	                                            : QVariantMap{};
+	// A read is not a change: its pane offers no edit, and changes off do not refuse it.
+	info.insert(QStringLiteral("writable"), row->operation == cl::Operation::FieldWrite);
+	if (!info.contains(QStringLiteral("detail")))
+		info.insert(QStringLiteral("detail"), operation());
+	return info;
+}
+
+QAbstractItemModel* BatchItemDetails::values() const
+{
+	return provider_->d->batch.values();
+}
+
+QAbstractItemModel* BatchItemDetails::responses() const
+{
+	return provider_->d->batch.responses();
+}
+
+QString BatchItemDetails::serviceResponseEndpoint() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row && row->operation == cl::Operation::Service && row->hasValue ? row->name : QString{};
+}
+
+bool BatchItemDetails::connected() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return provider_->d->current() && (!row || !row->historical);
+}
+
+bool BatchItemDetails::historical() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row && row->historical;
+}
+
+bool BatchItemDetails::busy() const
+{
+	return provider_->d->batch.pending();
+}
+
+bool BatchItemDetails::commandSelected() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row && row->operation == cl::Operation::Command;
+}
+
+bool BatchItemDetails::serviceSelected() const
+{
+	const auto* row = provider_->d->batch.selectedRow();
+	return row && row->operation == cl::Operation::Service;
+}
+
+bool BatchItemDetails::allowMutations() const
+{
+	return provider_->allowMutations();
+}
+
+void BatchItemDetails::setAllowMutations(bool allowed)
+{
+	provider_->setAllowMutations(allowed);
+}
+
+bool BatchItemDetails::switchable() const
+{
+	const auto& p = *provider_->d;
+	const auto* row = p.batch.selectedRow();
+	if (!row || row->historical || !p.current() ||
+	    (row->operation != cl::Operation::FieldRead && row->operation != cl::Operation::FieldWrite))
+		return false;
+	const auto info = p.endpoints.endpoint(p.endpoints.endpointIndex(1, row->id));
+	return info.value(QStringLiteral("readable")).toBool() && info.value(QStringLiteral("writable")).toBool();
+}
+
+bool BatchItemDetails::canEdit() const
+{
+	return provider_->d->batch.canEdit() && provider_->allowMutations();
+}
+
+QVariantMap BatchItemDetails::detailsStatus() const
+{
+	const auto& p = *provider_->d;
+	const auto* row = p.batch.selectedRow();
+	if (!row)
+		return {};
+	const auto line = [](const QString& text, bool failed = false, const QString& tip = {}) {
+		return QVariantMap{{QStringLiteral("text"), text}, {QStringLiteral("failed"), failed},
+		                   {QStringLiteral("tip"), tip}};
+	};
+	if (row->historical)
+		return line(said("From an earlier connection; never sent again."));
+	if (p.batch.pending())
+		return line(said("Sending\u2026"));
+	const bool read = row->operation == cl::Operation::FieldRead;
+	if (row->sent.isNull())
+		return line(read ? said("Not read yet. Execute the Batch to read it.")
+		                 : said("Not run yet. Execute the Batch to run it."));
+	const bool changed = row->sent != row->request;
+	const auto since = changed ? said(" \u00b7 changed since") : QString{};
+	const auto& status = row->status;
+	if (status.startsWith(QStringLiteral("Accepted")))
+		return line(said("Executed %1 \u00b7 accepted").arg(row->at) + since, false,
+		            said("Accepted means the device took the Command, not that it finished."));
+	if (status.startsWith(QStringLiteral("Executed")))
+		return line(said("Executed %1").arg(row->at) + since);
+	if (status.startsWith(QStringLiteral("Applied")))
+		return line(said("Written %1").arg(row->at) + since);
+	if (status.startsWith(QStringLiteral("Completed")) || status.startsWith(QStringLiteral("Ok")))
+		return line((read ? said("Read %1") : row->operation == cl::Operation::Service ? said("Called %1")
+		                                                                                  : said("Done %1"))
+		                .arg(row->at) +
+		            since);
+	return line(said("Couldn't run at %1: %2.").arg(row->at, status) + since, true);
+}
+
+bool BatchItemDetails::setScalarText(const QModelIndex& index, const QString& text)
+{
+	auto p = provider_->d;
+	if (!canEdit())
+		return false;
+	const bool done = p->batch.setScalarText(index, text);
+	p->notify();
+	return done;
+}
+
+void BatchItemDetails::closeValue()
+{
+	provider_->d->batch.closeValue();
+}
+
+bool BatchItemDetails::setOperation(const QString& operation)
+{
+	auto p = provider_->d;
+	const auto* row = p->batch.selectedRow();
+	if (!row || !p->current() || !p->state || !switchable())
+		return false;
+	const bool write = operation == QStringLiteral("write");
+	if (!write && operation != QStringLiteral("read"))
+		return false;
+	if (write == (row->operation == cl::Operation::FieldWrite))
+		return true;
+	// A write is a change: only while changes are allowed.
+	if (write && !provider_->allowMutations())
+		return false;
+	const auto bound = p->state->view.bindField(row->id);
+	if (!bound)
+		return false;
+	BatchRow next;
+	next.id = row->id;
+	next.session = row->session;
+	next.name = row->name;
+	const auto type = bound.endpoint.responseType();
+	const auto bytes = bound.endpoint.responseBytes();
+	if (write) {
+		next.operation = cl::Operation::FieldWrite;
+		next.requestType = type;
+		// From the value last read, else from the type's initial value.
+		if (row->hasValue && std::size_t(row->response.size()) == bytes) {
+			next.request = row->response;
+		} else {
+			next.request = QByteArray(qsizetype(bytes), '\0');
+			const auto schema = p->batch.schema();
+			if (wb::RequestEditor::initialize(schema, type,
+			                                  std::span{reinterpret_cast<std::byte*>(next.request.data()),
+			                                            std::size_t(next.request.size())}) != rt::Status::Ok)
+				return false;
+		}
+	} else {
+		next.operation = cl::Operation::FieldRead;
+		next.responseType = type;
+		next.responseBytes = bytes;
+	}
+	const auto at = p->batch.selection();
+	const bool done = p->batch.replace(at, std::move(next),
+	                                   write ? said("Make item %L1 a write").arg(at + 1)
+	                                         : said("Make item %L1 a read").arg(at + 1));
+	p->notify();
+	return done;
 }
 } // namespace telemetry::ux

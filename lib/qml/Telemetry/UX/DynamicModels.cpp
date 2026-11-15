@@ -259,6 +259,8 @@ struct Reader {
 	bool response = false;
 	const WorkbenchView* view = nullptr;
 	const ins::SnapshotStore* snapshot = nullptr;
+	// A request editor's draft, read and written by its owner.
+	const telemetry::integration::workbench::RequestEditor* draft = nullptr;
 
 	template<class F>
 	decltype(auto) edit(F&& read) const
@@ -270,6 +272,8 @@ struct Reader {
 
 	bool requestEditor() const
 	{
+		if (draft)
+			return true;
 		return editor && (workbench || view) && edit([](const auto& model) {
 			       return model.commandSelected() || model.serviceSelected();
 		       });
@@ -277,7 +281,7 @@ struct Reader {
 
 	explicit operator bool() const noexcept
 	{
-		return inspector || workbench || view || snapshot;
+		return inspector || workbench || view || snapshot || draft;
 	}
 
 	template<class F>
@@ -292,6 +296,8 @@ struct Reader {
 
 	bool isCurrent() const
 	{
+		if (draft)
+			return draft->current();
 		if (snapshot)
 			return snapshot->isCurrent();
 		return *this && visit([](const auto& model) {
@@ -301,6 +307,8 @@ struct Reader {
 
 	auto snapshotInfo() const
 	{
+		if (draft)
+			return draft->snapshotInfo();
 		if (snapshot)
 			return snapshot->snapshotInfo();
 		if (response && (workbench || view))
@@ -318,6 +326,8 @@ struct Reader {
 
 	auto info(const ins::NodeHandle& node) const
 	{
+		if (draft)
+			return draft->info(node);
 		if (snapshot)
 			return snapshot->info(node);
 		if (response && (workbench || view))
@@ -335,6 +345,8 @@ struct Reader {
 
 	auto child(const ins::NodeHandle& node, std::uint32_t index) const
 	{
+		if (draft)
+			return draft->child(node, index);
 		if (snapshot)
 			return snapshot->child(node, index);
 		if (response && (workbench || view))
@@ -352,6 +364,8 @@ struct Reader {
 
 	auto root() const
 	{
+		if (draft)
+			return draft->root();
 		if (snapshot)
 			return snapshot->root();
 		if (response && (workbench || view))
@@ -383,6 +397,8 @@ struct Reader {
 
 	bool editing() const
 	{
+		if (draft)
+			return true;
 		return !response && (workbench || view) && edit([](const auto& model) {
 			return model.editing() &&
 			       model.phase() != telemetry::integration::workbench::Phase::Executing;
@@ -401,6 +417,8 @@ struct Reader {
 
 	ins::Result<ins::ScalarValue> scalar(const ins::NodeHandle& node) const
 	{
+		if (draft)
+			return draft->scalar(node);
 		if (snapshot)
 			return snapshot->scalar(node);
 		if (response && (workbench || view))
@@ -1233,6 +1251,9 @@ struct ValueModel::Impl {
 
 	bool metadataCurrent() const
 	{
+		// A draft's owner sets the schema's metadata before each draft it shows.
+		if (inspector.draft)
+			return inspector.isCurrent();
 		if (!inspector || inspector.snapshot || !inspector.isCurrent())
 			return false;
 		detail::ScalarEditorMetadata::EndpointIdentity identity{};
@@ -1337,13 +1358,19 @@ void ValueModel::resetSnapshot(const ins::SnapshotStore& snapshot)
 	resetSource(nullptr, nullptr, false, nullptr, &snapshot);
 }
 
+void ValueModel::resetDraft(const telemetry::integration::workbench::RequestEditor& editor)
+{
+	resetSource(nullptr, nullptr, false, nullptr, nullptr, &editor);
+}
+
 void ValueModel::resetServiceResponse(const WorkbenchView& view)
 {
 	resetSource(nullptr, nullptr, true, &view);
 }
 
 void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbench, bool response,
-                             const WorkbenchView* view, const ins::SnapshotStore* snapshotSource)
+                             const WorkbenchView* view, const ins::SnapshotStore* snapshotSource,
+                             const telemetry::integration::workbench::RequestEditor* draft)
 {
 	if (changing())
 		return;
@@ -1354,7 +1381,7 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 	impl_->baseline.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
-	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource};
+	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource, draft};
 	const auto snapshot = impl_->inspector.snapshotInfo();
 	impl_->admission = snapshot.admission;
 	impl_->revision = snapshot.revision;

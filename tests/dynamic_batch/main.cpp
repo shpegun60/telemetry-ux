@@ -173,12 +173,13 @@ void orderedOwnedResults()
 	           .toMap()
 	           .value(QStringLiteral("executed"))
 	           .toBool());
-	CHECK(batch.select(0) && batch.responses()->rowCount() == 1);
-	CHECK(batch.responses()
-	          ->data(batch.responses()->index(0, 0), ux::ValueModel::ValueRole)
+	// A read's value is the item's values (BA-4a); it has no response.
+	CHECK(batch.select(0) && batch.values()->rowCount() == 1 && batch.responses()->rowCount() == 0);
+	CHECK(batch.values()
+	          ->data(batch.values()->index(0, 0), ux::ValueModel::ValueRole)
 	          .toString() == QStringLiteral("18446744073709551615"));
-	CHECK(!batch.responses()
-	           ->data(batch.responses()->index(0, 0), ux::ValueModel::EditableRole)
+	CHECK(!batch.values()
+	           ->data(batch.values()->index(0, 0), ux::ValueModel::EditableRole)
 	           .toBool());
 	const auto facts = role(batch, 2, ux::BatchListModel::ResultRole).toMap();
 	peer.refusal = cl::Status::QueueFull;
@@ -195,7 +196,7 @@ void orderedOwnedResults()
 	batch.poll();
 	CHECK(!role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
 	CHECK(!role(batch, 0, ux::BatchListModel::ResultRole).toMap().isEmpty());
-	CHECK(batch.responses()->rowCount() == 0);
+	CHECK(batch.values()->rowCount() == 0);
 }
 
 void boundedAdmissionAndHistory()
@@ -242,7 +243,7 @@ void boundedAdmissionAndHistory()
 	          .toMap()
 	          .value(QStringLiteral("succeeded"))
 	          .toBool());
-	CHECK(batch.responses()->rowCount() == 0);
+	CHECK(batch.values()->rowCount() == 0);
 }
 
 void reentrantDetach()
@@ -282,7 +283,7 @@ void reentrantInvalidation()
 		CHECK(role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
 		QObject context;
 		bool invalidated = false;
-		QObject::connect(batch.responses(), &QAbstractItemModel::modelAboutToBeReset, &context,
+		QObject::connect(batch.values(), &QAbstractItemModel::modelAboutToBeReset, &context,
 		                 [&] {
 			                 if (!std::exchange(invalidated, true)) {
 				                 if (retire)
@@ -293,7 +294,7 @@ void reentrantInvalidation()
 		                 });
 		CHECK(batch.select(0));
 		CHECK(invalidated && !role(batch, 0, ux::BatchListModel::HasValueRole).toBool());
-		CHECK(batch.responses()->rowCount() == 0);
+		CHECK(batch.values()->rowCount() == 0);
 		CHECK(role(batch, 0, ux::BatchListModel::HistoricalRole).toBool() == retire);
 		CHECK(!role(batch, 0, ux::BatchListModel::ResultRole).toMap().isEmpty());
 	}
@@ -309,7 +310,7 @@ void externalModelInvalidation()
 	CHECK(batch.add(row) && batch.execute());
 	peer.finish();
 	batch.poll();
-	auto* values = batch.responses();
+	auto* values = batch.values();
 	const auto root = values->index(0, 0);
 	CHECK(root.isValid() && values->canFetchMore(root));
 	QObject context;
@@ -497,6 +498,116 @@ void requestArguments()
 // back with no device, or after a reconnect, come back historical; moves of
 // one item within two seconds are one step; Execute is never a step, and a
 // step waits while a Batch is in flight.
+// A Service item of device.Inspect, its request at its initial values.
+ux::BatchRow serviceRow(Peer& peer)
+{
+	const auto* inspect = peer.storage->schema.findService("device.Inspect");
+	CHECK(inspect);
+	const auto bound = peer.storage->owner.bindService(inspect->id);
+	CHECK(bound);
+	ux::BatchRow row;
+	row.operation = cl::Operation::Service;
+	row.id = inspect->id;
+	row.session = peer.session;
+	row.name = QStringLiteral("device.Inspect");
+	row.requestType = bound.endpoint.requestType();
+	row.responseType = bound.endpoint.responseType();
+	row.responseBytes = bound.endpoint.responseBytes();
+	row.request = QByteArray(qsizetype(bound.endpoint.requestBytes()), '\0');
+	return row;
+}
+
+// The selected item's value of that name, its values loaded.
+QModelIndex itemValue(ux::DynamicBatch& batch, const QString& name)
+{
+	auto* values = batch.values();
+	const auto root = values->index(0, 0);
+	if (values->canFetchMore(root))
+		values->fetchMore(root);
+	for (int at = 0; at < values->rowCount(root); ++at) {
+		const auto index = values->index(at, 0, root);
+		if (values->data(index, ux::ValueModel::NameRole).toString() == name)
+			return index;
+	}
+	return {};
+}
+
+// BA-4a: the selected item as Details shows it - its request's values,
+// edited live into the item as one step per value, the line from its bytes,
+// what Execute sent and what changed since, and Read | Write as one step.
+void itemValues()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	ux::UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	batch.setHistory(&history);
+	const auto line = [&batch](int row) { return role(batch, row, ux::BatchListModel::LineRole).toString(); };
+	CHECK(batch.add(serviceRow(peer)));
+	// A new item is shown at once, its line made from its bytes.
+	CHECK(batch.selection() == 0 && batch.selectedRow() && line(0) == QStringLiteral("multiplier=0"));
+	auto multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(multiplier.isValid() && batch.canEdit() &&
+	      batch.values()->data(multiplier, ux::ValueModel::EditableRole).toBool());
+	// Live: a value is in the item as it is typed; its keystrokes are one step.
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("7")) && line(0) == QStringLiteral("multiplier=7"));
+	CHECK(history.undoText() == QStringLiteral("Set multiplier of item 1"));
+	const auto steps = history.count();
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("70")) && history.count() == steps);
+	CHECK(batch.values()->data(multiplier, ux::ValueModel::EditorTextRole).toString() == QStringLiteral("70"));
+	// Text that is no value leaves the item as it was.
+	CHECK(!batch.setScalarText(multiplier, QStringLiteral("abc")) && line(0) == QStringLiteral("multiplier=70"));
+	// The cell left, the next change is a step of its own.
+	batch.closeValue();
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("71")) && history.count() == steps + 1);
+	CHECK(history.undo() && line(0) == QStringLiteral("multiplier=70"));
+	CHECK(history.undo() && line(0) == QStringLiteral("multiplier=0") && batch.selection() == 0);
+	CHECK(history.redo() && line(0) == QStringLiteral("multiplier=70"));
+	// Bytes of another shape are refused; the right ones go in whole.
+	CHECK(!batch.setRequest(0, QByteArray("\x01", 1)) && line(0) == QStringLiteral("multiplier=70"));
+	CHECK(batch.setRequest(0, QByteArray::fromHex("05000000")) && line(0) == QStringLiteral("multiplier=5"));
+	// Before a run nothing is "changed since".
+	CHECK(!role(batch, 0, ux::BatchListModel::ChangedRole).toBool());
+	// Execute sends each item as it stands, and keeps what it sent.
+	CHECK(batch.execute() && peer.submitted.size() == 1 && peer.submitted[0].request.toHex() == "05000000");
+	CHECK(!batch.canEdit());
+	multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(!batch.setScalarText(multiplier, QStringLiteral("6")) && !batch.setRequest(0, QByteArray::fromHex("06000000")));
+	peer.finish();
+	batch.poll();
+	f::events();
+	CHECK(!role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      !role(batch, 0, ux::BatchListModel::AtRole).toString().isEmpty());
+	// A change after the run: changed since, and the value is marked unsent.
+	CHECK(batch.select(0));
+	multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("6")));
+	CHECK(role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("5")) && !role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
+	      !batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
+	// A read made a write and back: one step each, the same uid, undone whole.
+	CHECK(batch.add(readRow(peer)) && batch.selection() == 1 && line(1).isEmpty());
+	const auto uid = batch.model()->rows()[1].uid;
+	auto write = readRow(peer);
+	write.operation = cl::Operation::FieldWrite;
+	write.requestType = write.responseType;
+	write.request = QByteArray(qsizetype(write.responseBytes), '\0');
+	CHECK(batch.replace(1, write, QStringLiteral("Make item 2 a write")));
+	CHECK(batch.model()->rows()[1].uid == uid && batch.model()->rows()[1].operation == cl::Operation::FieldWrite &&
+	      history.undoText() == QStringLiteral("Make item 2 a write") && batch.canEdit());
+	CHECK(history.undo() && batch.model()->rows()[1].operation == cl::Operation::FieldRead &&
+	      batch.model()->rows()[1].uid == uid);
+	CHECK(history.redo() && batch.model()->rows()[1].operation == cl::Operation::FieldWrite);
+	// Items of an earlier connection keep their values: nothing to edit.
+	++peer.session;
+	batch.setSource(peer.source());
+	CHECK(batch.select(0) && !batch.canEdit() && batch.values()->rowCount() == 0 &&
+	      !batch.setRequest(0, QByteArray::fromHex("01000000")));
+}
+
 void batchUndoKinds()
 {
 	Peer peer;
@@ -555,8 +666,31 @@ void batchUndoKinds()
 		CHECK(batch.move(1, 1));
 	});
 	add("clear", [&] { CHECK(batch.clear()); });
+	// A value set in an item (BA-4a): the request comes back. An item of an
+	// earlier connection is never changed again: its step is skipped.
+	const auto startRequest = [&] {
+		if (!peer.current)
+			back();
+		CHECK(batch.clear());
+		CHECK(batch.add(serviceRow(peer)));
+		history.clear();
+		now += 10000;
+	};
+	const auto requests = [&batch] {
+		QStringList all;
+		for (const auto& row : batch.model()->rows())
+			all << QStringLiteral("%1:%2:%3").arg(row.uid).arg(QString::fromLatin1(row.request.toHex())).arg(row.line);
+		return QVariant(all);
+	};
+	cases.push_back({QStringLiteral("batch.request"), QStringLiteral("set a value"), &history, startRequest,
+	                 [&] { CHECK(batch.setScalarText(itemValue(batch, QStringLiteral("multiplier")), QStringLiteral("9"))); },
+	                 requests, {}, {}, otherSession,
+	                 [](const QString& outcome, const QString& note) {
+		                 return outcome == QStringLiteral("skipped") &&
+		                        note == QStringLiteral("the item is from an earlier connection");
+	                 }});
 	const auto report = undo_kinds::run(QStringLiteral("dynamic_batch"), cases);
-	CHECK(report.cases == 5 && report.disconnects == 5 && report.descriptors == 5);
+	CHECK(report.cases == 6 && report.disconnects == 5 && report.descriptors == 6);
 
 	// The words, each with its serial.
 	start();
@@ -598,6 +732,7 @@ int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
 	requestArguments();
+	itemValues();
 	orderedOwnedResults();
 	boundedAdmissionAndHistory();
 	reentrantDetach();
