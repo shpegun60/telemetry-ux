@@ -1088,6 +1088,41 @@ static void undoHistoryCore()
 	const QVariantMap o1{{QStringLiteral("o"), 1}};
 	CHECK(history.record(QStringLiteral("Own"), parts(&target, "check.kind", {}, o1)) > 0);
 
+	// A window of 0: merged for as long as the key stays the same, however
+	// long apart - an edited cell until it is left; a window of the caller's
+	// own, its length.
+	{
+		UndoHistory cells;
+		qint64 at = 0;
+		cells.setClock([&at] { return at; });
+		const auto put = [&](const QString& key, const QVariant& value, const QString& merge, qint64 window) {
+			QVariantMap before, after{{key, value}};
+			if (held.contains(key))
+				before.insert(key, held.value(key));
+			held.insert(key, value);
+			return cells.record(QStringLiteral("Edit %1").arg(key), parts(&target, "watch.rows", before, after), merge,
+			                    window);
+		};
+		held.remove(QStringLiteral("cell"));
+		const int cell = put(QStringLiteral("cell"), 1, QStringLiteral("cell/1"), 0);
+		at += 60000;
+		CHECK(put(QStringLiteral("cell"), 2, QStringLiteral("cell/1"), 0) > cell && cells.count() == 1);
+		at += 600000;
+		CHECK(put(QStringLiteral("cell"), 3, QStringLiteral("cell/1"), 0) > 0 && cells.count() == 1);
+		// Left and edited again: another key, another step.
+		at += 100;
+		CHECK(put(QStringLiteral("cell"), 4, QStringLiteral("cell/2"), 0) > 0 && cells.count() == 2);
+		CHECK(cells.undo() && held.value(QStringLiteral("cell")) == 3 && cells.undo() &&
+		      !held.contains(QStringLiteral("cell")) && cells.redo() && held.value(QStringLiteral("cell")) == 3);
+		CHECK(cells.redo() && held.value(QStringLiteral("cell")) == 4);
+		at += 100;
+		CHECK(put(QStringLiteral("w"), 1, QStringLiteral("w"), 10000) > 0 && cells.count() == 3);
+		at += 9000;
+		CHECK(put(QStringLiteral("w"), 2, QStringLiteral("w"), 10000) > 0 && cells.count() == 3);
+		at += 11000;
+		CHECK(put(QStringLiteral("w"), 3, QStringLiteral("w"), 10000) > 0 && cells.count() == 4);
+	}
+
 	// A provider takes a history and says so; without a Watchlist source it
 	// has nothing to record.
 	Harness h;

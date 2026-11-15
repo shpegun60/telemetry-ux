@@ -782,6 +782,10 @@ one for its workspace and gives it to its providers; a file keeps its own.
   descriptor, where what it lacks comes back as rows that say so. Format
   choices within two seconds merge into one step. Restores stay out of the
   history: `restoreWatchBindings` no longer drops anything, it adds nothing.
+- **Merging by key.** `UndoHistory::record(text, parts, mergeKey,
+  mergeWindowMs)`: steps of one key merge within two seconds unless the caller
+  says otherwise; `0` merges for as long as the key stays the same, and the
+  caller ends it by changing the key (an editor, when its cell is left).
 - **Results carry the step.** `setWatchMany`, `addWatchMany`, `removeWatchRows`,
   `addWatchPaths` and `resetWatchFormats` add `serial` to their map: the step's,
   0 when none was recorded. A notice that offers Undo shows it while
