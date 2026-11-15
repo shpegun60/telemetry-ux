@@ -86,14 +86,18 @@ public:
 	Q_INVOKABLE QString sentence(const QString& text, bool undone, const QString& note,
 	                             const QString& outcome) const;
 
-	// Records a step whose change is already made: its words, its parts and
-	// the key it merges by (empty: never). The serial of the step that now
+	// Records a step whose change is already made: its words, its parts, the
+	// key it merges by (empty: never) and how long after the step before it
+	// it still merges into that one - two seconds unless said, 0 for as long
+	// as the key stays the same (the caller ends it by changing the key, as an
+	// editor does when its cell is left). The serial of the step that now
 	// holds the change - this one, or the one it merged into - or 0 when
 	// nothing is kept: no part changes anything, a merge came back to where it
 	// started, a part's kind is not one of kinds() or its target is not an
 	// UndoTarget, or an undo or redo is under way. A new step ends the
 	// irreversible note.
-	int record(const QString& text, QVector<UndoPart> parts, const QString& mergeKey = {});
+	int record(const QString& text, QVector<UndoPart> parts, const QString& mergeKey = {},
+	           qint64 mergeWindowMs = UndoStep::mergeWindowMs);
 	// A target's state changed: whether the steps can be taken now may have.
 	void refresh();
 	// The stack itself, to read, for C++.

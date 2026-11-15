@@ -77,10 +77,12 @@ struct UndoPart {
 class UndoStep final : public QUndoCommand {
 public:
 	// Steps with the same mergeKey within this long of each other merge into
-	// one: the earliest before with the latest after.
+	// one: the earliest before with the latest after - unless the step that
+	// comes asks for another window (0: as long as the key stays the same).
 	static constexpr qint64 mergeWindowMs = 2000;
 
-	UndoStep(QString text, QVector<UndoPart> parts, int serial, QString mergeKey, qint64 atMs);
+	UndoStep(QString text, QVector<UndoPart> parts, int serial, QString mergeKey, qint64 atMs,
+	         qint64 windowMs = mergeWindowMs);
 	int id() const override;
 	bool mergeWith(const QUndoCommand* other) override;
 	void undo() override;
@@ -90,6 +92,9 @@ public:
 	[[nodiscard]] int serial() const noexcept { return serial_; }
 	[[nodiscard]] QString mergeKey() const { return mergeKey_; }
 	[[nodiscard]] qint64 at() const noexcept { return at_; }
+	// How long after the step before it this one still merges into it; 0
+	// for as long as the key stays the same.
+	[[nodiscard]] qint64 window() const noexcept { return window_; }
 	// What the last undo or redo did; Done before either.
 	[[nodiscard]] UndoOutcome outcome() const { return outcome_; }
 	// Why a target of this step cannot change now, the first said; empty when
@@ -108,6 +113,7 @@ private:
 	int serial_ = 0;
 	QString mergeKey_;
 	qint64 at_ = 0;
+	qint64 window_ = mergeWindowMs;
 	bool taken_ = false;
 	UndoOutcome outcome_;
 	std::function<void(const UndoOutcome&)> report_;
