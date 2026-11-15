@@ -747,6 +747,30 @@ int main(int argc, char** argv)
 			settle(150);
 		}
 
+		// LP-1h. The time axis from the start of reading: labels in time since
+		// the end of the last stop, the cursor chip with both times; its menu
+		// brings the time of day back.
+		{
+			const auto clockLabels = view->property("timeLabels").toStringList();
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
+			view->setProperty("fromStart", true);
+			settle(200);
+			const auto since = view->property("timeLabels").toStringList();
+			bool elapsed = !since.isEmpty();
+			for (const auto& label : since)
+				elapsed = elapsed && (label.endsWith(QStringLiteral(" s")) || label.count(QLatin1Char(':')) == 1);
+			CHECK(elapsed && since != clockLabels && view->property("originUtcMs").toDouble() > 0 &&
+			      view->property("originUtcMs").toDouble() <= view->property("rightUtcMs").toDouble());
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("From start")));
+			shot(window, argc, argv, QStringLiteral("trace-plot-from-start-760"));
+			click(window, shown(content, "plotTimeTitle"));
+			settle(300);
+			click(window, shown(content, "plotAxisTimeOfDay"));
+			settle(200);
+			CHECK(!view->property("fromStart").toBool() &&
+			      shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);

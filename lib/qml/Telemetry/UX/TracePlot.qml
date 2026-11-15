@@ -26,6 +26,51 @@ FocusScope {
     id: plot
     // A provider's WatchTraces (provider.watchTraces); null shows nothing.
     property var traces: null
+    // The provider, optional: with it, values dropped from the Device tree
+    // join the Watchlist first, so they are read and plotted (LP-1g3).
+    property var provider: null
+    // What the last drop or plotting did, until the next one or ×.
+    property string notice: ""
+    // Puts dropped values on the Plot: a Watchlist drag's paths are its
+    // values; a Device tree drag's are Fields, Commands, Services or values
+    // inside a Field, added to the Watchlist and plotted value by value.
+    function dropPaths(payload) {
+        // Any list of paths: an array from a drop's JSON, or a host's list.
+        const dropped = payload && payload.paths ? Array.from(payload.paths) : []
+        if (!traces || dropped.length === 0)
+            return false
+        let values = dropped
+        if (payload.from === "device") {
+            if (!provider || typeof provider.addWatchPaths !== "function" || typeof provider.watchBindings !== "function") {
+                notice = qsTr("Add these to the Watchlist first; the Plot draws what the Watchlist reads.")
+                return false
+            }
+            provider.addWatchPaths(dropped)
+            // The Watchlist's values under what was dropped, as it names them.
+            values = []
+            for (const binding of provider.watchBindings()) {
+                const member = typeof binding.member === "string" ? binding.member : ""
+                const path = binding.group + "." + binding.name + (member.length === 0 ? "" : member.startsWith("[") ? member : "." + member)
+                if (dropped.some(at => path === at || path.startsWith(at + ".") || path.startsWith(at + "[")))
+                    values.push(path)
+            }
+        }
+        let added = 0, refusal = ""
+        for (const path of values) {
+            if (traces.isPlotted(path))
+                continue
+            refusal = traces.plot(path)
+            if (refusal.length > 0)
+                break
+            ++added
+        }
+        notice = refusal.length > 0 ? refusal
+               : values.length === 0 ? qsTr("Nothing here can be plotted: the Plot draws values the Watchlist reads.")
+               : added === 0 ? (values.length === 1 ? qsTr("%1 is on the Plot already.").arg(values[0])
+                                                    : qsTr("These %L1 values are on the Plot already.").arg(values.length))
+               : ""
+        return added > 0
+    }
     // The curves' colours, by palette place (WatchTraces.colorIndex).
     property var curveColors: ["#58a6ff", "#f3b562", "#56c8a0", "#d49bff", "#ff7e8f", "#62d4e6", "#d8ce67", "#a3b8cc",
                            "#9cc3ff", "#e98b55", "#a5d98c", "#ed9fce", "#b6a0ef", "#7ac7c4", "#cfaa85", "#c7cdd5"]
@@ -100,6 +145,17 @@ FocusScope {
     // "12:04:31.250": a time on this PC's clock, always to the millisecond.
     function clockText(ms) {
         return Qt.formatTime(new Date(ms), "HH:mm:ss.zzz")
+    }
+    // "17.911 s", "1:12.250", "1:02:03.500": the time since reading started.
+    function sinceText(ms) {
+        const sign = ms < 0 ? "−" : ""
+        const whole = Math.abs(ms) / 1000
+        if (whole < 60)
+            return qsTr("%1 s").arg(sign + whole.toFixed(3))
+        const h = Math.floor(whole / 3600)
+        const m = Math.floor(whole / 60) % 60
+        const s = (whole % 60).toFixed(3).padStart(6, "0")
+        return h > 0 ? sign + h + ":" + String(m).padStart(2, "0") + ":" + s : sign + m + ":" + s
     }
     // "1.250 s", "1:12.250": the time between the reference and the cursor.
     function spanText(ms) {
@@ -221,6 +277,37 @@ FocusScope {
             Item { Layout.fillWidth: true }
         }
 
+        // What the last drop did, said once, until the next one or ×.
+        RowLayout {
+            objectName: "plotNotice"
+            visible: plot.notice.length > 0
+            Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: Type.padding
+            spacing: Type.spacing
+            Label {
+                objectName: "plotNoticeText"
+                Layout.fillWidth: true
+                text: plot.notice
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: Theme.textSecondary
+                font.pointSize: Type.caption
+                Accessible.role: Accessible.AlertMessage
+                Accessible.name: plot.notice
+            }
+            ToolButton {
+                objectName: "plotNoticeClose"
+                Layout.preferredWidth: Type.chipHeight
+                Layout.preferredHeight: Type.chipHeight
+                padding: 0
+                flat: true
+                focusPolicy: Qt.TabFocus
+                text: qsTr("×")
+                Accessible.name: qsTr("Dismiss")
+                onClicked: plot.notice = ""
+            }
+        }
         // A chip per plotted value: its colour, its path, its newest reading,
         // and × to take it off the Plot (its readings are kept).
         Flow {
@@ -604,7 +691,10 @@ FocusScope {
                     font.pointSize: Type.caption
                     color: Theme.textPrimary
                     text: {
-                        const at = plot.clockText(view.cursorUtcMs)
+                        // From the start: the time since it, then the time of day.
+                        const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
+                                                                  .arg(plot.clockText(view.cursorUtcMs))
+                                                  : plot.clockText(view.cursorUtcMs)
                         if (view.referenceShown)
                             return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
                         if (view.following)
@@ -666,20 +756,60 @@ FocusScope {
                     border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
                 }
             }
-            Label {
+            // The time axis: the time of day, or since reading started (LP-1h).
+            Basic.Button {
+                id: timeAxis
                 objectName: "plotTimeTitle"
                 visible: view.visible
                 anchors.right: parent.right
-                anchors.rightMargin: Type.padding
+                anchors.rightMargin: Type.tight
                 anchors.bottom: parent.bottom
-                color: Theme.textSecondary
+                flat: true
+                focusPolicy: Qt.TabFocus
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
                 font.pointSize: Type.caption
-                text: qsTr("Time of day")
-                HoverHandler { id: titleHover }
-                PlainToolTip {
-                    visible: titleHover.hovered
-                    text: qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
-                    delay: 700
+                text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                contentItem: Text {
+                    text: timeAxis.text
+                    font: timeAxis.font
+                    color: timeAxis.hovered || timeAxis.visualFocus ? Theme.textPrimary : Theme.textSecondary
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: timeAxis.down ? Theme.statePressed : timeAxis.hovered ? Theme.stateHover : "transparent"
+                    border.width: timeAxis.visualFocus ? 2 : 0
+                    border.color: Theme.focusRing
+                }
+                Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.delay: 700
+                ToolTip.text: view.fromStart
+                              ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
+                              : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
+                Menu {
+                    id: axisMenu
+                    objectName: "plotAxisMenu"
+                    ButtonGroup { id: axisModes }
+                    MenuItem {
+                        objectName: "plotAxisTimeOfDay"
+                        text: qsTr("Time of day")
+                        checkable: true
+                        checked: !view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = false
+                    }
+                    MenuItem {
+                        objectName: "plotAxisFromStart"
+                        text: qsTr("From the start of reading")
+                        checkable: true
+                        checked: view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = true
+                    }
                 }
             }
             // Plotted, nothing read yet.
@@ -987,6 +1117,48 @@ FocusScope {
                 text: qsTr("Cancel")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
                 onClicked: curveSettings.close()
+            }
+        }
+    }
+
+    // Rows dragged from the Watchlist or the Device tree (LP-1g3): a frame and
+    // what a drop will do.
+    DropArea {
+        id: plotDrop
+        objectName: "plotDrop"
+        anchors.fill: parent
+        keys: ["application/x-telemetry-paths"]
+        property string words: ""
+        onEntered: (drag) => {
+            let payload = null
+            try { payload = JSON.parse(drag.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            const paths = payload && Array.isArray(payload.paths) ? payload.paths : []
+            if (!plot.traces || paths.length === 0) {
+                drag.accepted = false
+                return
+            }
+            words = paths.length === 1 ? qsTr("Drop to plot %1").arg(paths[0]) : qsTr("Drop to plot %L1 values").arg(paths.length)
+        }
+        onExited: words = ""
+        onDropped: (drop) => {
+            let payload = null
+            try { payload = JSON.parse(drop.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            words = ""
+            if (plot.dropPaths(payload))
+                drop.acceptProposedAction()
+        }
+        Rectangle {
+            anchors.fill: parent
+            visible: plotDrop.containsDrag
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focusRing
+            Label {
+                anchors.centerIn: parent
+                text: plotDrop.words
+                color: Theme.textPrimary
+                padding: Type.padding
+                background: Rectangle { color: Theme.surface; radius: Type.radius; border.color: Theme.outline }
             }
         }
     }

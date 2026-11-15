@@ -492,6 +492,25 @@ Pane {
         return true
     }
 
+    // What a row's drag carries (LP-1g3): its values' paths - every value under
+    // a node, the selection's when the row is in it - for the Plot, the Batch
+    // or another Watchlist.
+    function dragPaths(row) {
+        if (!rows || row < 0)
+            return []
+        const text = onSelection(row) ? rows.selectedLines(true) : rows.lines(row, true)
+        return text.length > 0 ? text.split("\n") : []
+    }
+    // A drop of paths from the Device tree adds them, as the "+" row would.
+    function dropPaths(payload) {
+        if (!payload || payload.from === "watchlist" || typeof provider.addWatchPaths !== "function")
+            return false
+        const result = provider.addWatchPaths(payload.paths || [])
+        const added = result && typeof result.added === "number" ? result.added : 0
+        say(added === 1 ? qsTr("Added 1 value to the Watchlist") : qsTr("Added %L1 values to the Watchlist").arg(added),
+            added > 0 && typeof result.serial === "number" ? result.serial : 0)
+        return added > 0
+    }
     // The live Plot (LP-1), when the provider has one.
     readonly property var plotTraces: provider && provider.watchTraces ? provider.watchTraces : null
     // Puts row's values - the selection's, when row is in it, or every value
@@ -1430,6 +1449,10 @@ Pane {
             }
             objectName: "watchlistView"
             Layout.fillWidth: true
+            // A mouse drag takes rows onto the Plot or elsewhere (LP-1g3), as
+            // in a file manager; the wheel, a touchpad and the scroll bar
+            // scroll, and a touch screen still flicks.
+            acceptedButtons: Qt.NoButton
             // With the "+" row the list is as tall as its rows, the row right
             // under the last one; past the room it scrolls. It fills, up to its
             // rows: a layout keeps an item that does not fill at its preferred
@@ -1612,6 +1635,25 @@ Pane {
                 // through the model object, so other providers need not have them.
                 required property var model
                 width: watchList.width
+                // Dragged by the mouse past the threshold: its values' paths go
+                // with it, to whatever accepts them.
+                property var dragged: []
+                Drag.dragType: Drag.Automatic
+                Drag.supportedActions: Qt.CopyAction
+                Drag.active: rowDrag.active
+                Drag.mimeData: ({"application/x-telemetry-paths": JSON.stringify({from: "watchlist", paths: watchRow.dragged}),
+                                "text/plain": watchRow.dragged.join("\n")})
+                // The paths are taken at the press, before the drag starts.
+                PointHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: if (active) watchRow.dragged = panel.dragPaths(watchRow.index)
+                }
+                DragHandler {
+                    id: rowDrag
+                    target: null
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    enabled: !watchRow.editing
+                }
                 // A writable Field is changed in its own row, as in Live
                 // Expressions: double-click the value (or the pencil, or F2),
                 // Enter writes, Esc or clicking elsewhere cancels.
@@ -2671,6 +2713,49 @@ Pane {
                   + "\t" + qsTr("Delete")
             enabled: !panel.changeLocked
             onTriggered: panel.removeAt(panel.menuRow)
+        }
+    }
+    // Values dropped from the Device tree join the Watchlist (LP-1g3). Over
+    // the list itself: a second child of the Pane would change its size.
+    DropArea {
+        id: watchDrop
+        objectName: "watchlistDrop"
+        parent: watchList
+        anchors.fill: parent
+        keys: ["application/x-telemetry-paths"]
+        property int count: 0
+        onEntered: (drag) => {
+            let payload = null
+            try { payload = JSON.parse(drag.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            if (!payload || payload.from === "watchlist" || typeof panel.provider.addWatchPaths !== "function") {
+                drag.accepted = false
+                return
+            }
+            count = (payload.paths || []).length
+        }
+        onExited: count = 0
+        onDropped: (drop) => {
+            let payload = null
+            try { payload = JSON.parse(drop.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            count = 0
+            if (panel.dropPaths(payload))
+                drop.acceptProposedAction()
+        }
+        Rectangle {
+            anchors.fill: parent
+            visible: watchDrop.containsDrag
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focusRing
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Type.padding
+                text: watchDrop.count === 1 ? qsTr("Drop to add to the Watchlist") : qsTr("Drop to add %L1 to the Watchlist").arg(watchDrop.count)
+                color: Theme.textPrimary
+                padding: Type.tight
+                background: Rectangle { color: Theme.surface; radius: Type.radius }
+            }
         }
     }
 }

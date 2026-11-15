@@ -49,6 +49,28 @@ QString clockText(qint64 localMs, qint64 step)
 	return text;
 }
 
+// Time since the start, to the step's precision: "12 s", "12.5 s", "1:30",
+// "1:02:00", "-0:12".
+QString elapsedText(qint64 ms, qint64 step)
+{
+	const QString sign = ms < 0 ? QStringLiteral("\u2212") : QString();
+	const qint64 whole = ms < 0 ? -ms : ms;
+	const int decimals = step >= 1000 ? 0 : step >= 100 ? 1 : step >= 10 ? 2 : 3;
+	const auto fraction = [&](qint64 msPart) {
+		if (!decimals)
+			return QString();
+		return QLatin1Char('.') + QString::number(msPart).rightJustified(3, QLatin1Char('0')).left(decimals);
+	};
+	if (whole < 60000)
+		return sign + QString::number(whole / 1000) + fraction(whole % 1000) + QStringLiteral(" s");
+	const qint64 seconds = whole / 1000, minutes = seconds / 60, hours = minutes / 60;
+	const QString ss = QString::number(seconds % 60).rightJustified(2, QLatin1Char('0')) + fraction(whole % 1000);
+	if (hours == 0)
+		return sign + QString::number(minutes) + QLatin1Char(':') + ss;
+	return sign + QString::number(hours) + QLatin1Char(':') + QString::number(minutes % 60).rightJustified(2, QLatin1Char('0')) +
+	       QLatin1Char(':') + ss;
+}
+
 // 1, 2 or 5 times a power of ten, at least raw.
 double niceStep(double raw)
 {
@@ -486,6 +508,15 @@ void TraceView::toOldest()
 	hold(oldest + spanNs());
 }
 
+void TraceView::setFromStart(bool fromStart)
+{
+	if (fromStart == fromStart_)
+		return;
+	fromStart_ = fromStart;
+	Q_EMIT viewChanged();
+	update();
+}
+
 void TraceView::setGapColor(const QColor& color)
 {
 	if (color == gapColor_)
@@ -920,7 +951,32 @@ void TraceView::paint(QPainter* painter)
 			break;
 		}
 	QStringList timeLabels;
-	if (anchor.monotonicNs) {
+	// Since reading last started: the end of the last stop or disconnect up
+	// to the right edge, else the first reading.
+	qint64 originNs = anchor.monotonicNs;
+	if (traces_)
+		for (auto pause = traces_->pauses().crbegin(); pause != traces_->pauses().crend(); ++pause)
+			if (pause->toNs && pause->toNs <= right) {
+				originNs = pause->toNs;
+				break;
+			}
+	originUtcMs_ = anchor.monotonicNs ? qreal(utcOf(originNs)) : 0;
+	if (anchor.monotonicNs && fromStart_) {
+		const double leftMs = double(left - originNs) / double(msNs), rightMs = double(right - originNs) / double(msNs);
+		for (qint64 at = qint64(std::ceil(leftMs / double(timeStep))) * timeStep; double(at) <= rightMs; at += timeStep) {
+			const qreal x = std::round(area.left() + (double(at) - leftMs) * pxPerMs) + 0.5;
+			painter->setPen(grid);
+			painter->drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
+			const auto text = elapsedText(at, timeStep);
+			timeLabels.push_back(text);
+			painter->setPen(labelColor_);
+			const qreal w = metrics.horizontalAdvance(text) + pad;
+			painter->drawText(QRectF(x - w / 2, area.bottom() + pad / 2, w, metrics.height() * 2),
+			                  Qt::AlignHCenter | Qt::AlignTop, text);
+			if (timeLabels.size() > 400)
+				break;
+		}
+	} else if (anchor.monotonicNs) {
 		const double leftLocal = utcOf(left) + double(offsetMs), rightLocal = utcOf(right) + double(offsetMs);
 		qint64 previousDay = std::numeric_limits<qint64>::min();
 		for (qint64 local = qint64(std::ceil(leftLocal / double(timeStep))) * timeStep; double(local) <= rightLocal; local += timeStep) {
