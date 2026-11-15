@@ -605,6 +605,17 @@ QVariant TraceView::valueAt(const QString& path) const
 	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
 }
 
+QVariant TraceView::valueAtRight(const QString& path) const
+{
+	if (!traces_)
+		return {};
+	// The edge in the readings' own time, never through a time of day: a
+	// double of milliseconds since the epoch cannot hold a nanosecond.
+	const auto* readings = traces_->readings(path);
+	const auto* at = readings ? atOrBefore(*readings, rightNs()) : nullptr;
+	return at && !std::isnan(at->value) ? QVariant(at->value) : QVariant();
+}
+
 QVariant TraceView::referenceValue(const QString& path) const
 {
 	const auto it = referenceValues_.constFind(path);
@@ -822,7 +833,11 @@ QString TraceView::saveValues(const QUrl& url) const
 
 void TraceView::zoomToBox(QPointF from, QPointF to)
 {
-	const QRectF box = QRectF(from, to).normalized().intersected(plotArea_);
+	// Clipped to the plot by hand: QRectF::intersected makes a box with no
+	// height (a level drag, which zooms the time only) an empty one.
+	const QRectF drawn = QRectF(from, to).normalized();
+	const QRectF box(QPointF(std::max(drawn.left(), plotArea_.left()), std::max(drawn.top(), plotArea_.top())),
+	                 QPointF(std::min(drawn.right(), plotArea_.right()), std::min(drawn.bottom(), plotArea_.bottom())));
 	if (box.width() < 4 || plotArea_.width() <= 0)
 		return;
 	remember();
@@ -1562,24 +1577,49 @@ void TraceView::paint(QPainter* painter)
 				painter->restore();
 			}
 		} else {
-			// Per pixel column: its first, lowest, highest and last.
+			// Per pixel column: from its lowest to its highest reading, joined
+			// to the last of the column before - a bar the pen's width, filled.
+			// It covers what a line through each column's first, lowest,
+			// highest and last covers, at a small part of the cost: stroking
+			// such a line, thousands of columns long, took a second a curve.
 			const int columns = std::max(1, int(std::ceil(area.width() * ratio)));
+			const qreal thick = pen.widthF();
 			int column = -1;
-			double first = 0, low = 0, high = 0, last = 0;
+			double low = 0, high = 0, last = 0;
+			std::optional<qreal> joined; // the column before's last, none after a break
+			QVector<QRectF> bars;
 			const auto emitColumn = [&] {
 				if (column < 0)
 					return;
 				const qreal x = area.left() + (column + 0.5) / ratio;
-				line.push_back(QPointF(x, yOf(drawn(first))));
-				line.push_back(QPointF(x, yOf(drawn(low))));
-				line.push_back(QPointF(x, yOf(drawn(high))));
-				line.push_back(QPointF(x, yOf(drawn(last))));
+				qreal top = yOf(drawn(high)), bottom = yOf(drawn(low));
+				if (top > bottom)
+					std::swap(top, bottom);
+				if (joined) {
+					top = std::min(top, *joined);
+					bottom = std::max(bottom, *joined);
+				}
+				bars.push_back(QRectF(x - thick / 2, top - thick / 2, thick, bottom - top + thick));
+				joined = yOf(drawn(last));
+				points += 4;
+			};
+			const auto flushBars = [&] {
+				if (!bars.isEmpty()) {
+					painter->save();
+					painter->setRenderHint(QPainter::Antialiasing, false);
+					painter->setPen(Qt::NoPen);
+					painter->setBrush(color);
+					painter->drawRects(bars.constData(), int(bars.size()));
+					painter->restore();
+					bars.clear();
+				}
+				joined.reset();
 			};
 			for (auto it = from; it != to; ++it) {
 				if (std::isnan(it->value)) {
 					emitColumn();
 					column = -1;
-					flush();
+					flushBars();
 					continue;
 				}
 				// Readings beyond either edge belong to no pixel in view.
@@ -1589,7 +1629,7 @@ void TraceView::paint(QPainter* painter)
 				if (at != column) {
 					emitColumn();
 					column = at;
-					first = low = high = last = it->value;
+					low = high = last = it->value;
 				} else {
 					low = std::min(low, it->value);
 					high = std::max(high, it->value);
@@ -1597,7 +1637,7 @@ void TraceView::paint(QPainter* painter)
 				}
 			}
 			emitColumn();
-			flush();
+			flushBars();
 		}
 		// A value no longer watched ends in an open circle at its last reading.
 		if (!traces_->watched(path)) {

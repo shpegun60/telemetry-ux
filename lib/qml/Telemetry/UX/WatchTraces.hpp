@@ -127,6 +127,10 @@ public:
 	// state value (a bool or an enum) is drawn in a lane, its names from
 	// setStates.
 	void setRecorded(const QString& path, std::vector<TraceReading> readings, bool states);
+	// More readings of a path setRecorded gave, as a run still being written
+	// brings them: in time order, after the path's own as a rule; one before
+	// the newest joins at its place. Nothing for a path it never gave.
+	void appendRecorded(const QString& path, const std::vector<TraceReading>& readings);
 	void setAnchor(const WatchTimestamp& anchor);
 
 	// A curve's look (LP-1f), kept for its path whether it is plotted or not:

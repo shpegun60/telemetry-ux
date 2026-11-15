@@ -228,6 +228,9 @@ public:
 	// path's reading at or before the end pin, likewise; undefined while no
 	// end is pinned.
 	Q_INVOKABLE QVariant endValue(const QString& path) const;
+	// path's reading at or before the right edge of the view: what a recorded
+	// run's chip gives with no cursor (TR-2). Undefined likewise.
+	Q_INVOKABLE QVariant valueAtRight(const QString& path) const;
 	QVariantList colors() const { return colors_; }
 	void setColors(const QVariantList& colors);
 	QColor gridColor() const { return gridColor_; }

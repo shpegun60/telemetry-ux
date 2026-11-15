@@ -15,7 +15,9 @@
 // Auto (A) fits them again. A chip's colour mark opens its settings - its
 // colour, and the multiplier and offset it is drawn with (Trend's words) - and
 // its menu (right-click) focuses it, shows its points or removes it; the
-// graph's menu shows every curve's points. Presentation only:
+// graph's menu shows every curve's points. The Trend (TR-2) draws a recorded
+// run with it: `recording` gives it the run's words and rules, and the host's
+// own controls take the ends of the header row. Presentation only:
 // WatchTraces keeps the readings and TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
@@ -33,6 +35,41 @@ FocusScope {
     // The measurements (analysis, M): a table of every curve over the time
     // in view, or from the reference to the end, in place of the chips.
     property bool measuring: false
+    // A recorded run (TR-2, the Trend) rather than what the Watchlist reads:
+    // its words say so - × leaves the recording as it is, the axis counts
+    // from the run's start - a chip with no cursor gives the reading at the
+    // right edge of the view, nothing is dropped on it, and Follow is offered
+    // only while the run is still being written. The header keeps to one row
+    // in a narrow dock, and the chips to one row in a short one.
+    property bool recording: false
+    property bool writing: false
+    readonly property bool followable: !recording || writing
+    // "today 22:26": the run, for the graph's name to a screen reader.
+    property string runName: ""
+    // The host's own controls at either end of the header row: the Trend's
+    // run and + Value before Follow, its tag after Measure.
+    property alias leading: leadingSlot.data
+    property alias trailing: trailingSlot.data
+    // What the graph says with nothing plotted, while the plotted values have
+    // no readings yet, and over the graph when the host has something to say
+    // ("No readings here").
+    property string emptyText: traces ? qsTr("Add a value from the Watchlist to plot it.")
+                                      : qsTr("Connect to a device to plot its values.")
+    property string emptyHint: qsTr("Right-click a row and choose Plot, press Ctrl+P, or drag rows here.")
+    property string waitingText: plotted.length === 1 ? qsTr("Waiting for the first reading of %1…").arg(plotted[0])
+                                                      : qsTr("Waiting for the first readings…")
+    property string message: ""
+    // A recorded run's narrow rules: below 520 px the spans become a list,
+    // below 440 px the zoom buttons and Measure leave the row (their keys
+    // stay); below 400 px of height the chips keep to one row and scroll.
+    readonly property bool narrowHeader: recording && width < 520
+    readonly property bool tightHeader: recording && width < 440
+    readonly property bool oneChipRow: recording && height < 400
+    // A time as the axis counts it: "17.911 s from run start", or the time of
+    // day.
+    function axisWords(ms) {
+        return view.fromStart ? qsTr("%1 from run start").arg(sinceText(ms - view.originUtcMs)) : clockText(ms)
+    }
     // "62.4 %"
     function percentText(share) {
         return qsTr("%1 %").arg((share * 100).toFixed(1))
@@ -338,9 +375,18 @@ FocusScope {
             Layout.rightMargin: Type.padding
             Layout.topMargin: Type.tight
             spacing: Type.groupSpacing
+            RowLayout {
+                id: leadingSlot
+                objectName: "plotLeading"
+                visible: children.length > 0
+                Layout.fillWidth: plot.recording
+                Layout.minimumWidth: 0
+                spacing: Type.spacing
+            }
             CheckBox {
                 id: follow
                 objectName: "plotFollow"
+                visible: plot.followable
                 text: qsTr("Follow")
                 checked: view.following
                 focusPolicy: Qt.TabFocus
@@ -356,6 +402,7 @@ FocusScope {
             Row {
                 id: presets
                 objectName: "plotPresets"
+                visible: !plot.narrowHeader
                 Accessible.role: Accessible.Grouping
                 Accessible.name: qsTr("Time span")
                 Layout.preferredHeight: Type.controlHeight
@@ -367,7 +414,7 @@ FocusScope {
                         { seconds: 10, text: qsTr("10 s"), name: qsTr("Last 10 seconds") },
                         { seconds: 60, text: qsTr("1 min"), name: qsTr("Last minute") },
                         { seconds: 600, text: qsTr("10 min"), name: qsTr("Last 10 minutes") },
-                        { seconds: 0, text: qsTr("All"), name: qsTr("Everything kept") }
+                        { seconds: 0, text: qsTr("All"), name: plot.recording ? qsTr("The whole run") : qsTr("Everything kept") }
                     ]
                     delegate: Button {
                         required property var modelData
@@ -403,8 +450,27 @@ FocusScope {
                     }
                 }
             }
+            // In a narrow dock the spans are a list: the same four, the same keys.
+            ComboBox {
+                id: presetChoice
+                objectName: "plotPresetChoice"
+                visible: plot.narrowHeader
+                readonly property var spans: [10, 60, 600, 0]
+                model: [qsTr("10 s"), qsTr("1 min"), qsTr("10 min"), qsTr("All")]
+                currentIndex: spans.indexOf(view.preset)
+                displayText: currentIndex >= 0 ? currentText : qsTr("Zoomed")
+                implicitContentWidthPolicy: ComboBox.WidestText
+                font.pointSize: Type.caption
+                focusPolicy: Qt.TabFocus
+                onActivated: (index) => view.choosePreset(spans[index])
+                Accessible.name: qsTr("Time span")
+                ToolTip.visible: hovered && !popup.visible
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Time span: keys 1 to 4")
+            }
             IconToolButton {
                 objectName: "plotZoomOut"
+                visible: !plot.tightHeader
                 iconName: "zoomOut"
                 text: qsTr("Zoom out")
                 shortcutText: qsTr("Minus")
@@ -412,6 +478,7 @@ FocusScope {
             }
             IconToolButton {
                 objectName: "plotZoomIn"
+                visible: !plot.tightHeader
                 iconName: "zoomIn"
                 text: qsTr("Zoom in")
                 shortcutText: qsTr("Plus")
@@ -433,7 +500,7 @@ FocusScope {
             Button {
                 id: measureToggle
                 objectName: "plotMeasureToggle"
-                visible: plot.plotted.length > 0
+                visible: plot.plotted.length > 0 && !plot.tightHeader
                 Layout.preferredHeight: Type.controlHeight
                 verticalPadding: 0
                 font.pointSize: Type.caption
@@ -446,6 +513,12 @@ FocusScope {
                 ToolTip.visible: hovered || visualFocus
                 ToolTip.delay: 700
                 ToolTip.text: qsTr("Measure every curve over the time in view, or from the reference to the end (M). Shift and a click pin the end.")
+            }
+            RowLayout {
+                id: trailingSlot
+                objectName: "plotTrailing"
+                visible: children.length > 0
+                spacing: Type.spacing
             }
         }
 
@@ -616,10 +689,12 @@ FocusScope {
                             plot.shownTick
                             view.cursorUtcMs
                             view.endUtcMs
+                            view.rightUtcMs
                             if (!plot.traces)
                                 return undefined
                             return plot.cursorInView ? view.valueAt(path)
-                                 : view.endShown ? view.endValue(path) : plot.traces.latest(path)
+                                 : view.endShown ? view.endValue(path)
+                                 : plot.recording ? view.valueAtRight(path) : plot.traces.latest(path)
                         }
                         readonly property var reference: {
                             view.referenceShown
@@ -779,7 +854,8 @@ FocusScope {
                                 flat: true
                                 focusPolicy: Qt.TabFocus
                                 text: qsTr("×")
-                                Accessible.name: qsTr("Remove %1 from the Plot").arg(measureRow.path)
+                                Accessible.name: plot.recording ? qsTr("Remove %1 from the Trend").arg(measureRow.path)
+                                                                : qsTr("Remove %1 from the Plot").arg(measureRow.path)
                                 onClicked: plot.traces.unplot(measureRow.path)
                             }
                         }
@@ -813,7 +889,8 @@ FocusScope {
                 Layout.fillWidth: true
                 Layout.leftMargin: Type.padding
                 Layout.rightMargin: Type.padding
-                Layout.preferredHeight: Math.min(legend.implicitHeight, 3 * Type.controlHeight + 2 * Type.spacing)
+                Layout.preferredHeight: Math.min(legend.implicitHeight, plot.oneChipRow ? Type.controlHeight
+                                                                                        : 3 * Type.controlHeight + 2 * Type.spacing)
                 readonly property bool scrolls: legend.implicitHeight > height + 0.5
                 contentWidth: width
                 contentHeight: legend.implicitHeight
@@ -851,14 +928,17 @@ FocusScope {
                             readonly property var current: {
                                 plot.shownTick
                                 view.cursorUtcMs
+                                view.rightUtcMs
                                 if (!plot.traces)
                                     return undefined
-                                return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
+                                return plot.cursorInView ? view.valueAt(path)
+                                     : plot.recording ? view.valueAtRight(path) : plot.traces.latest(path)
                             }
                             // Taken out of the Watchlist: its readings stay, none come.
                             readonly property bool gone: {
                                 plot.shownTick
-                                return plot.traces !== null && !plot.traces.watched(path)
+                                // A recorded run's values are all there is: never "not read".
+                                return !plot.recording && plot.traces !== null && !plot.traces.watched(path)
                             }
                             readonly property string goneText: {
                                 if (!gone || plot.cursorInView)
@@ -1008,10 +1088,12 @@ FocusScope {
                                     padding: 0
                                     focusPolicy: Qt.TabFocus
                                     text: qsTr("×")
-                                    Accessible.name: qsTr("Remove %1 from the Plot").arg(chip.path)
-                                    Accessible.description: qsTr("Its readings are kept.")
+                                    Accessible.name: plot.recording ? qsTr("Remove %1 from the Trend").arg(chip.path)
+                                                                    : qsTr("Remove %1 from the Plot").arg(chip.path)
+                                    Accessible.description: plot.recording ? qsTr("The recording is unchanged.") : qsTr("Its readings are kept.")
                                     ToolTip.visible: hovered || visualFocus
-                                    ToolTip.text: qsTr("Remove from the Plot; its readings are kept")
+                                    ToolTip.text: plot.recording ? qsTr("Remove from the Trend; the recording is unchanged")
+                                                                 : qsTr("Remove from the Plot; its readings are kept")
                                     onClicked: plot.traces.unplot(chip.path)
                                 }
                             }
@@ -1022,8 +1104,11 @@ FocusScope {
                             }
                             Accessible.role: Accessible.StaticText
                             Accessible.description: chip.drawnAs.length > 0 ? qsTr("Drawn %1; the value is the reading").arg(chip.drawnAs) : ""
-                            Accessible.name: plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
-                                                              : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
+                            Accessible.name: plot.recording
+                                             ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown)
+                                                   .arg(plot.axisWords(plot.cursorInView ? view.cursorUtcMs : view.rightUtcMs))
+                                             : plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
+                                                                 : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
                         }
                     }
                 }
@@ -1079,6 +1164,12 @@ FocusScope {
                     }
                     Accessible.role: Accessible.Graphic
                     Accessible.name: {
+                        if (plot.recording) {
+                            if (plot.runName.length === 0)
+                                return plot.plotted.length === 1 ? qsTr("Trend of 1 value") : qsTr("Trend of %1 values").arg(plot.plotted.length)
+                            return plot.plotted.length === 1 ? qsTr("Trend of 1 value, run of %1").arg(plot.runName)
+                                                             : qsTr("Trend of %1 values, run of %2").arg(plot.plotted.length).arg(plot.runName)
+                        }
                         const state = view.following ? qsTr("following")
                                                       : qsTr("%1 behind").arg(plot.behindWords(view.behindSeconds))
                         return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
@@ -1243,13 +1334,15 @@ FocusScope {
                         font.pointSize: Type.caption
                         color: Theme.textPrimary
                         text: {
-                            // From the start: the time since it, then the time of day.
-                            const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
-                                                                      .arg(plot.clockText(view.cursorUtcMs))
+                            // From the start: the time since it, then the time
+                            // of day; a recorded run on the time of day says both too.
+                            const since = plot.sinceText(view.cursorUtcMs - view.originUtcMs)
+                            const at = view.fromStart ? qsTr("%1 · %2").arg(since).arg(plot.clockText(view.cursorUtcMs))
+                                     : plot.recording ? qsTr("%1 · +%2").arg(plot.clockText(view.cursorUtcMs)).arg(since)
                                                       : plot.clockText(view.cursorUtcMs)
                             if (view.referenceShown)
                                 return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
-                            if (view.following)
+                            if (view.following && plot.followable)
                                 return qsTr("%1 · %2 ago").arg(at).arg(plot.agoText(view.cursorAgoSeconds))
                             return at
                         }
@@ -1258,6 +1351,9 @@ FocusScope {
                     Accessible.name: view.referenceShown
                                      ? qsTr("Cursor at %1, %2 from the reference").arg(plot.clockText(view.cursorUtcMs))
                                            .arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs))
+                                     : plot.recording ? qsTr("Cursor at %1 seconds from run start, %2")
+                                                            .arg(((view.cursorUtcMs - view.originUtcMs) / 1000).toFixed(3))
+                                                            .arg(plot.clockText(view.cursorUtcMs))
                                      : view.following ? qsTr("Cursor at %1, %2 seconds ago").arg(plot.clockText(view.cursorUtcMs))
                                                             .arg(view.cursorAgoSeconds.toFixed(1))
                                                       : qsTr("Cursor at %1").arg(plot.clockText(view.cursorUtcMs))
@@ -1266,7 +1362,7 @@ FocusScope {
                 Basic.Button {
                     id: behind
                     objectName: "plotBehind"
-                    visible: view.visible && !view.following
+                    visible: view.visible && !view.following && plot.followable
                     x: view.plotArea.right - width - Type.padding
                     y: view.plotArea.top + Type.padding
                     height: Type.chipHeight
@@ -1322,7 +1418,7 @@ FocusScope {
                     leftPadding: Type.padding
                     rightPadding: Type.padding
                     font.pointSize: Type.caption
-                    text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                    text: (view.fromStart ? (plot.recording ? qsTr("From run start (s)") : qsTr("From start")) : qsTr("Time of day")) + " \u25BE"
                     contentItem: Text {
                         text: timeAxis.text
                         font: timeAxis.font
@@ -1335,12 +1431,13 @@ FocusScope {
                         border.width: timeAxis.visualFocus ? 2 : 0
                         border.color: Theme.focusRing
                     }
-                    Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
+                    Accessible.name: !view.fromStart ? qsTr("Time axis: time of day")
+                                   : plot.recording ? qsTr("Time axis: from run start") : qsTr("Time axis: from the start of reading")
                     ToolTip.visible: hovered || visualFocus
                     ToolTip.delay: 700
-                    ToolTip.text: view.fromStart
-                                  ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
-                                  : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                    ToolTip.text: !view.fromStart ? qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                                : plot.recording ? qsTr("Time since the run started, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
+                                                 : qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
                     onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
                     Menu {
                         id: axisMenu
@@ -1356,7 +1453,7 @@ FocusScope {
                         }
                         MenuItem {
                             objectName: "plotAxisFromStart"
-                            text: qsTr("From the start of reading")
+                            text: plot.recording ? qsTr("From run start") : qsTr("From the start of reading")
                             checkable: true
                             checked: view.fromStart
                             ButtonGroup.group: axisModes
@@ -1373,8 +1470,22 @@ FocusScope {
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
                     color: Theme.textSecondary
-                    text: plot.plotted.length === 1 ? qsTr("Waiting for the first reading of %1…").arg(plot.plotted[0])
-                                                    : qsTr("Waiting for the first readings…")
+                    text: plot.waitingText
+                }
+                // The host's word over the graph: "No readings here. Press All…"
+                Label {
+                    objectName: "plotMessage"
+                    visible: view.visible && plot.message.length > 0
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 2 * Type.padding, 360)
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    color: Theme.textSecondary
+                    text: plot.message
+                    padding: Type.tight
+                    background: Rectangle { color: Theme.surfaceWindow; opacity: 0.85; radius: Type.radius }
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: plot.message
                 }
                 // Nothing plotted: how to plot something.
                 ColumnLayout {
@@ -1388,19 +1499,18 @@ FocusScope {
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.Wrap
                         color: Theme.textSecondary
-                        text: plot.traces ? qsTr("Add a value from the Watchlist to plot it.")
-                                          : qsTr("Connect to a device to plot its values.")
+                        text: plot.emptyText
                     }
                     // Rows have no grip: here a user learns that dragging works.
                     Label {
                         objectName: "plotEmptyHint"
                         Layout.fillWidth: true
-                        visible: plot.traces !== null
+                        visible: plot.traces !== null && plot.emptyHint.length > 0
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.Wrap
                         color: Theme.textMuted
                         font.pointSize: Type.caption
-                        text: qsTr("Right-click a row and choose Plot, press Ctrl+P, or drag rows here.")
+                        text: plot.emptyHint
                     }
                 }
             }
@@ -1414,6 +1524,8 @@ FocusScope {
         property real at: -1
         MenuItem {
             objectName: "plotMenuFollow"
+            visible: plot.followable
+            height: visible ? implicitHeight : 0
             text: qsTr("Follow") + "\t" + qsTr("End")
             checkable: true
             checked: view.following
@@ -1593,7 +1705,7 @@ FocusScope {
         }
         MenuItem {
             objectName: "plotChipRemoveItem"
-            text: qsTr("Remove from the Plot")
+            text: plot.recording ? qsTr("Remove from the Trend") : qsTr("Remove from the Plot")
             onTriggered: plot.traces.unplot(chipMenu.path)
         }
     }
@@ -1761,6 +1873,8 @@ FocusScope {
     DropArea {
         id: plotDrop
         objectName: "plotDrop"
+        // A recorded run draws what was recorded: nothing is dropped on it.
+        enabled: !plot.recording
         anchors.fill: parent
         keys: ["application/x-telemetry-paths"]
         property string words: ""

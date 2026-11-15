@@ -599,6 +599,27 @@ void WatchTraces::setRecorded(const QString& path, std::vector<TraceReading> rea
 	announce();
 }
 
+void WatchTraces::appendRecorded(const QString& path, const std::vector<TraceReading>& readings)
+{
+	const auto it = traces_.find(path);
+	if (it == traces_.end() || readings.empty())
+		return;
+	auto& kept = it->readings;
+	for (const auto& reading : readings) {
+		// No live caps: a recording keeps every reading it was given.
+		if (kept.empty() || kept.back().ns <= reading.ns)
+			kept.push_back(reading);
+		else
+			kept.insert(std::upper_bound(kept.begin(), kept.end(), reading.ns,
+			                             [](qint64 at, const TraceReading& r) { return at < r.ns; }),
+			            reading);
+	}
+	total_ += readings.size();
+	newestNs_ = std::max(newestNs_, kept.back().ns);
+	++revision_;
+	announce();
+}
+
 void WatchTraces::setAnchor(const WatchTimestamp& anchor)
 {
 	anchor_ = anchor;
