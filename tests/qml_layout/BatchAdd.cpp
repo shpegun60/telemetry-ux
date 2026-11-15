@@ -49,6 +49,9 @@ public:
 		if (typed == QStringLiteral("device.Voltage"))
 			return {{"status", "adds"}, {"message", "Adds a read of device.Voltage as item 1."},
 			        {"path", "device.Voltage"}, {"operation", "read"}};
+		if (typed == QStringLiteral("measure.Voltage"))
+			return {{"status", "adds"}, {"message", "Adds a read of measure.Voltage."},
+			        {"path", "measure.Voltage"}, {"operation", "read"}};
 		if (typed.compare(QStringLiteral("Ping"), Qt::CaseInsensitive) == 0)
 			return {{"status", "choose"}, {"message", "2 endpoints are named Ping. Down to choose."}, {"path", "Ping"}};
 		if (typed == QStringLiteral("command control.Ping"))
@@ -96,6 +99,10 @@ public:
 			        heading("Services", "service", 1, 1), entry("control.Ping", "service control.Ping", "Services", "() -> ()")};
 		if (typed == QStringLiteral("service Pi"))
 			return {heading("Services", "service", 1, 1), entry("control.Ping", "service control.Ping", "Services", "() -> ()")};
+		// A whole path that others start with: the longer one listed first.
+		if (typed == QStringLiteral("measure.Voltage"))
+			return {heading("Fields", "field", 2, 2), entry("measure.VoltageMax", "measure.VoltageMax", "Fields", "f32"),
+			        entry("measure.Voltage", "measure.Voltage", "Fields", "f32")};
 		// Empty: the first of each kind.
 		if (typed.isEmpty())
 			return {heading("Fields", "field", 120, 1), entry("device.Voltage", "device.Voltage", "Fields", "f32"),
@@ -240,32 +247,54 @@ int main(int argc, char** argv)
 			auto* field = shown(content, "batchAddField");
 			CHECK(field->hasActiveFocus());
 
-			// Half typed, Enter at once: the first suggestion, nothing added.
+			// Half typed, Enter at once: the first suggestion is added, never
+			// only written into the field.
+			QSignalSpy said(named(content, "batchAddRow"), SIGNAL(added(QString, bool, int)));
 			typeText(window, "device.Vo", false);
 			key(window, Qt::Key_Return);
-			CHECK(calls.added.isEmpty() && field->property("text").toString() == QStringLiteral("device.Voltage"));
-			// Said in the quiet colour; Enter adds it as the next item.
-			settle();
-			auto* line = shown(content, "batchAddCheck");
-			CHECK(line->property("text").toString() == QStringLiteral("Adds a read of device.Voltage as item 1."));
-			const auto quiet = line->property("color");
 			// The row says what it added, and the step it recorded (UR-1).
-			QSignalSpy said(named(content, "batchAddRow"), SIGNAL(added(QString, bool, int)));
-			key(window, Qt::Key_Return);
 			CHECK(calls.added.size() == 1 && calls.added.first() == QStringList({QStringLiteral("device.Voltage")}));
 			CHECK(said.count() == 1 && said.first().at(1).toBool() && said.first().at(2).toInt() == 101);
 			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added a read of device.Voltage as item 1."));
 			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus());
 			const auto noticeQuiet = shown(content, "batchAddNotice")->property("color");
 
-			// A name half typed: said quietly, Enter takes the first suggestion.
+			// A name half typed: said quietly, its best match highlighted, and
+			// Enter adds that one.
 			typeText(window, "Volt");
-			CHECK(textOf(content, "batchAddCheck") == QStringLiteral("Enter takes measure.Voltage."));
-			CHECK(shown(content, "batchAddCheck")->property("color") == quiet);
+			auto* line = shown(content, "batchAddCheck");
+			CHECK(line->property("text").toString() == QStringLiteral("Enter takes measure.Voltage."));
+			const auto quiet = line->property("color");
+			auto* popup = window->findChild<QObject*>(QStringLiteral("batchAddPopup"));
+			CHECK(popup && popup->property("visible").toBool() && row->property("highlighted").toInt() == 1);
 			key(window, Qt::Key_Return);
-			CHECK(field->property("text").toString() == QStringLiteral("measure.Voltage") && calls.added.size() == 1);
-			clearField(window);
+			CHECK(calls.added.size() == 2 && calls.added.last() == QStringList({QStringLiteral("measure.Voltage")}));
+			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus() && !popup->property("visible").toBool());
 			shot(window, argc, argv, QStringLiteral("batch-add-added-760"));
+			// A whole path, with the list open on longer ones: the path typed is
+			// added, not the first suggestion.
+			typeText(window, "measure.Voltage");
+			CHECK(popup->property("visible").toBool());
+			key(window, Qt::Key_Return);
+			CHECK(calls.added.size() == 3 && calls.added.last() == QStringList({QStringLiteral("measure.Voltage")}));
+			// With the list shut, and by the keypad's Enter.
+			typeText(window, "device.Voltage");
+			CHECK(!popup->property("visible").toBool());
+			key(window, Qt::Key_Enter);
+			CHECK(calls.added.size() == 4 && calls.added.last() == QStringList({QStringLiteral("device.Voltage")}));
+			// Right after an add, the keys elsewhere and the row begun again by
+			// a click: Enter still adds.
+			shown(content, "batchList")->forceActiveFocus();
+			settle();
+			CHECK(!field->hasActiveFocus());
+			auto* rest = shown(content, "batchAddRest");
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+			                  rest->mapToScene(QPointF(rest->width() / 2, rest->height() / 2)).toPoint());
+			settle();
+			CHECK(field->hasActiveFocus());
+			typeText(window, "device.Voltage");
+			key(window, Qt::Key_Return);
+			CHECK(calls.added.size() == 5 && calls.added.last() == QStringList({QStringLiteral("device.Voltage")}));
 
 			// A name two endpoints share: the suggestions under their kinds'
 			// headings, Enter takes the first one that is not a heading.
@@ -273,9 +302,9 @@ int main(int argc, char** argv)
 			CHECK(textOf(content, "batchAddCheck") == QStringLiteral("2 endpoints are named Ping. Down to choose."));
 			CHECK(shown(content, "batchAddCheck")->property("color") == quiet);
 			key(window, Qt::Key_Escape);  // the popup the suggestions opened
+			// Enter with the list shut shows the two to choose from.
 			key(window, Qt::Key_Return);
-			auto* popup = window->findChild<QObject*>(QStringLiteral("batchAddPopup"));
-			CHECK(popup && popup->property("visible").toBool());
+			CHECK(popup->property("visible").toBool() && calls.added.size() == 5);
 			CHECK(row->property("highlighted").toInt() == 1);
 			// The keys skip the headings: Down to the Service, Up back.
 			key(window, Qt::Key_Down);
@@ -285,15 +314,16 @@ int main(int argc, char** argv)
 			key(window, Qt::Key_Up);
 			CHECK(row->property("highlighted").toInt() == 1);
 			shot(window, argc, argv, QStringLiteral("batch-add-choose-760"));
+			// Enter adds the highlighted one.
 			key(window, Qt::Key_Return);
-			CHECK(field->property("text").toString() == QStringLiteral("command control.Ping") && calls.added.size() == 1);
-			clearField(window);
+			CHECK(calls.added.size() == 6 && calls.added.last() == QStringList({QStringLiteral("command control.Ping")}));
+			CHECK(field->property("text").toString().isEmpty());
 
 			// One that takes input is added at its initial values (BA-4b).
 			typeText(window, "control.Execute");
 			CHECK(textOf(content, "batchAddCheck").startsWith(QStringLiteral("Adds Command control.Execute as item 2, with ")));
 			key(window, Qt::Key_Return);
-			CHECK(calls.added.size() == 2 && calls.added.last() == QStringList({QStringLiteral("control.Execute")}));
+			CHECK(calls.added.size() == 7 && calls.added.last() == QStringList({QStringLiteral("control.Execute")}));
 			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus());
 
 			// Values typed after a path: refused in words, in the error colour.
@@ -302,11 +332,11 @@ int main(int argc, char** argv)
 			CHECK(line->property("text").toString() == QStringLiteral("Set values on the item, not here: remove \"value=2\"."));
 			CHECK(line->property("color") != quiet);
 			key(window, Qt::Key_Return);
-			CHECK(calls.added.size() == 2);
+			CHECK(calls.added.size() == 7);
 			// Ctrl+Enter is nothing more: no Details to fill.
 			QTest::keyClick(window, Qt::Key_Return, Qt::ControlModifier);
 			settle();
-			CHECK(calls.added.size() == 2);
+			CHECK(calls.added.size() == 7);
 			clearField(window);
 
 			// A heading's click writes its kind word before the text: that
@@ -320,8 +350,11 @@ int main(int argc, char** argv)
 			CHECK(field->property("text").toString() == QStringLiteral("service Pi") && popup->property("visible").toBool());
 			CHECK(row->property("candidates").toList().size() == 2);
 			shot(window, argc, argv, QStringLiteral("batch-add-headings-760"));
-			key(window, Qt::Key_Escape);
-			clearField(window);
+			// Enter after the click: that kind's best match is added.
+			CHECK(row->property("highlighted").toInt() == 1);
+			key(window, Qt::Key_Return);
+			CHECK(calls.added.size() == 8 && calls.added.last() == QStringList({QStringLiteral("service control.Ping")}));
+			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus());
 			// On an empty field, Down lists the first of each kind.
 			key(window, Qt::Key_Down);
 			CHECK(popup->property("visible").toBool() && row->property("highlighted").toInt() == 1);
@@ -338,15 +371,15 @@ int main(int argc, char** argv)
 			CHECK(line->property("text").toString() == QStringLiteral("Nothing on this device is named Nope."));
 			CHECK(line->property("color") != quiet);
 			key(window, Qt::Key_Return);
-			CHECK(calls.added.size() == 2);
+			CHECK(calls.added.size() == 8);
 			clearField(window);
 
 			// Pasted lines: one call, in order.
 			QGuiApplication::clipboard()->setText(QStringLiteral("device.Voltage\ncommand control.Ping\n"));
 			key(window, Qt::Key_V, Qt::ControlModifier);
-			CHECK(calls.added.size() == 3 &&
+			CHECK(calls.added.size() == 9 &&
 			      calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("command control.Ping")}));
-			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 3 to 4."));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 9 to 10."));
 			// A refused paste: nothing added, the line named, in the error colour.
 			QGuiApplication::clipboard()->setText(QStringLiteral("device.Voltage\nNope\n"));
 			key(window, Qt::Key_V, Qt::ControlModifier);
@@ -389,19 +422,19 @@ int main(int argc, char** argv)
 			                                                                      QStringLiteral("measure.Voltage")})))));
 			settle();
 			CHECK(dropped.toBool() && calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("measure.Voltage")}));
-			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 5 to 6."));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 11 to 12."));
 			settle();
 
 			// BA-4c. One line per item, Type.rowHeight tall: the number, the
 			// kind in its own column, the line and the outcome.
 			const int rowHeight = window->property("rowHeight").toInt();
-			CHECK(rowHeight > 0 && list->property("count").toInt() == 6);
+			CHECK(rowHeight > 0 && list->property("count").toInt() == 12);
 			QList<QQuickItem*> rows;
 			for (auto* child : list->property("contentItem").value<QQuickItem*>()->childItems())
 				if (child->objectName() == QLatin1String("batchRow") && child->isVisible())
 					rows.append(child);
 			std::sort(rows.begin(), rows.end(), [](QQuickItem* a, QQuickItem* b) { return a->y() < b->y(); });
-			CHECK(rows.size() == 6);
+			CHECK(rows.size() == 12);
 			qreal kindX = -1;
 			for (int at = 0; at < rows.size(); ++at) {
 				CHECK(qRound(rows[at]->height()) == rowHeight && qRound(rows[at]->y()) == at * rowHeight);

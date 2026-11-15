@@ -41,6 +41,15 @@ FocusScope {
     // The suggestions open by themselves on an empty field; without it, Down
     // opens them (the Batch's first of each kind).
     property bool openOnEmpty: true
+    // Enter adds at once (the Batch): the highlighted suggestion, else the
+    // best match, else what the line names - never only filling the field.
+    // Without it, Enter on a suggestion fills the field for a second Enter.
+    property bool enterAdds: false
+    // The best match is highlighted as the suggestions come (the Batch), so
+    // the row shows what Enter takes.
+    property bool highlightBest: false
+    // The highlight was moved by the keys: Enter takes it over the line.
+    property bool pickedByKeys: false
     // Says what an addition did, on the panel's notice line, and the step it
     // recorded (UR-1), 0 when none.
     signal added(string notice, bool undoable, int serial)
@@ -121,7 +130,10 @@ FocusScope {
     function refresh() {
         candidates = editing ? adapter.candidates(field.text) : []
         highlighted = -1
+        pickedByKeys = false
         const typed = field.text.trim()
+        if (highlightBest && editing && typed.length > 0)
+            highlighted = firstPick()
         const picks = candidates.filter(c => !isHeading(c))
         if (editing && picks.length > 0 && field.activeFocus && (openOnEmpty || typed.length > 0)
                 && !(picks.length === 1 && completionOf(picks[0]) === typed)) {
@@ -190,6 +202,43 @@ FocusScope {
             while (!path.startsWith(prefix))
                 prefix = prefix.substring(0, prefix.length - 1)
         return prefix.length > field.text.length ? prefix : field.text
+    }
+    // A suggestion taken by Enter: a heading narrows to its kind and a
+    // container is stepped into, as a click does; anything else is added.
+    function take(index) {
+        const c = candidates[index]
+        if (!c)
+            return false
+        if (isHeading(c) || c.container) {
+            choose(index)
+            return true
+        }
+        popup.close()
+        add([completionOf(c)])
+        return true
+    }
+    // Enter where it adds at once (enterAdds): a suggestion the keys moved
+    // to; else the endpoint the line names; else, for a half-typed name or
+    // one two endpoints share, the highlighted or first suggestion. A line
+    // that names nothing says why and adds nothing.
+    function enterAdd() {
+        const picked = popup.visible && highlighted >= 0 ? highlighted : -1
+        if (pickedByKeys && picked >= 0)
+            return take(picked)
+        const status = check.status
+        if (addStatuses.indexOf(status) >= 0) {
+            popup.close()
+            add([field.text])
+            return true
+        }
+        // Two endpoints share the name and the list is shut: show them first.
+        if (status === "choose" && !popup.visible)
+            return offer()
+        if (status === "partial" || status === "choose" || (status === "missing" && candidates.length > 0)) {
+            const at = highlighted >= 0 ? highlighted : firstPick()
+            return at >= 0 ? take(at) : false
+        }
+        return false
     }
     // The line as an adapter writes it; the suggestions follow it.
     function setText(value) {
@@ -292,15 +341,20 @@ FocusScope {
                         }
                         // The headings are skipped.
                         const next = addRow.pickFrom(addRow.highlighted + 1, 1)
-                        if (next >= 0)
+                        if (next >= 0) {
                             addRow.highlighted = next
+                            addRow.pickedByKeys = true
+                        }
                         event.accepted = true
                     } else if (event.key === Qt.Key_Up) {
                         const previous = addRow.highlighted > 0 ? addRow.pickFrom(addRow.highlighted - 1, -1) : -1
-                        if (previous >= 0)
+                        if (previous >= 0) {
                             addRow.highlighted = previous
-                        else if (addRow.highlighted >= 0)
+                            addRow.pickedByKeys = true
+                        } else if (addRow.highlighted >= 0) {
                             addRow.highlighted = -1
+                            addRow.pickedByKeys = false
+                        }
                         else {
                             popup.close()
                             addRow.leaveUp()
@@ -320,11 +374,17 @@ FocusScope {
                         // so Enter never decides on the text before.
                         if (settleTimer.running) {
                             settleTimer.stop()
-                            addRow.candidates = addRow.adapter.candidates(text)
-                            addRow.highlighted = -1
+                            if (addRow.enterAdds) {
+                                addRow.refresh()
+                            } else {
+                                addRow.candidates = addRow.adapter.candidates(text)
+                                addRow.highlighted = -1
+                            }
                         }
                         addRow.recheck()
-                        if (popup.visible && addRow.highlighted >= 0) {
+                        if (addRow.enterAdds) {
+                            addRow.enterAdd()
+                        } else if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
                         } else if (addRow.adapter.enter(text)) {
                             // the adapter did what Enter means for it
