@@ -306,7 +306,7 @@ Pane {
                 objectName: "batchItemPane"
                 SplitView.preferredWidth: 400
                 SplitView.minimumWidth: batchSplit.sideBySide ? 220 : 0
-                SplitView.preferredHeight: Type.rowHeight * 10
+                SplitView.preferredHeight: Type.rowHeight * 13
                 SplitView.minimumHeight: batchSplit.sideBySide ? 0 : Type.rowHeight * 6
                 framed: false
                 readonly property var item: panel.provider.batchItem
@@ -325,8 +325,13 @@ Pane {
                     || item.operation === "read" ? ""
                     : item.operation === "write" ? qsTr("Changes are off. Allow changes to write %1.").arg(item.selection)
                     : qsTr("Changes are off. Allow changes to execute the Batch with %1.").arg(item.selection)
-                // Read | Write for a Field that can be both.
-                actionsComponent: item && item.switchable ? readWrite : null
+                // Read | Write for a Field that can be both; no Read, Execute
+                // or Call of Details': Execute Batch runs the item.
+                actionsComponent: item && item.switchable ? readWrite : noActions
+                Component {
+                    id: noActions
+                    Item {}
+                }
                 Component {
                     id: readWrite
                     RowLayout {
