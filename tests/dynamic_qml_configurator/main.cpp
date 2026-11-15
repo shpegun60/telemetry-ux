@@ -476,6 +476,10 @@ static bool inside(QQuickItem& item, QQuickItem& scope)
 static void click(QQuickWindow& window, QQuickItem& item, QQuickItem* scope = nullptr)
 {
 	CHECK(item.isVisible() && item.isEnabled());
+	// A control that has just appeared (Apply, with the draft) is placed by its
+	// layouts' next polish; an offscreen window may not have drawn it yet.
+	for (auto* ancestor = &item; ancestor; ancestor = ancestor->parentItem())
+		ancestor->ensurePolished();
 	events();
 	CHECK(inside(item, *window.contentItem()));
 	auto* owner = scope ? scope : item.parentItem();
@@ -538,18 +542,22 @@ static void actualExampleInputJourney()
 	    config.allowMutations(), config.canEdit(), config.values()->rowCount(),
 	    value.values()->rowCount(), device.reads, qPrintable(config.statusText()));
 	CHECK(config.canEdit() && value.values()->rowCount() == 1);
-	click(*window, *control(configPanel, "editButton"), configPanel);
-	CHECK(config.editing() && !value.editing());
+	// No Edit button: the cell is the editor, and the draft opens with the
+	// first change (BA-4).
+	CHECK(!visibleItem(configPanel, QStringLiteral("editButton")) && !config.editing());
+	CHECK(!visibleItem(configPanel, QStringLiteral("applyButton")));
+	click(*window, *control(configPanel, "valueText", "limit"), configPanel);
 	auto* editor = control(configPanel, "scalarEditor", "limit");
-	click(*window, *editor, configPanel);
 	CHECK(until([&] {
 		return editor->hasActiveFocus();
 	}));
+	CHECK(!config.editing());
 	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 	QTest::keyClick(window, Qt::Key_Backspace);
 	for (const char letter : QByteArray{"101"})
 		QTest::keyClick(window, letter);
 	CHECK(editor->property("text").toString() == QStringLiteral("101"));
+	CHECK(config.editing() && !value.editing());
 	CHECK(editor->hasActiveFocus() && config.canApply()); // No Enter or signal invocation.
 	const auto packets = h.storage->packets, reads = device.reads, writes = device.writes;
 	QSignalSpy completion(&config, SIGNAL(applyFinished(bool)));

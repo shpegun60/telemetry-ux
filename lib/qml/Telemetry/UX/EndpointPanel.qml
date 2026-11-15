@@ -90,6 +90,78 @@ Pane {
         ? qsTr("You are editing a local draft. Apply writes it once, then reads the device again. Floating-point values show the exact encoded value below the input.")
         : qsTr("The type and structure come from the Descriptor. Refresh reads the Field; expanding its definition does not send requests.")
 
+    // The panel's one primary action: Apply, Execute or Call.
+    component AccentButton: Button {
+        font.weight: Type.headingWeight
+        palette.button: Theme.accent
+        palette.buttonText: Theme.accentForeground
+        palette.brightText: Theme.accentForeground
+        palette.disabled.button: Theme.surfaceDisabled
+        palette.disabled.buttonText: Theme.textDisabled
+    }
+    // Ctrl+Enter: Apply a draft, Execute a Command, Call a Service.
+    function primaryAction() {
+        if (!showSelection || !hasSelection)
+            return false
+        if (provider.commandSelected)
+            return provider.canExecute ? (provider.executeCommand(), true) : false
+        if (provider.serviceSelected)
+            return provider.canCallService ? (provider.callService(), true) : false
+        return provider.editing && provider.canApply ? (provider.apply(), true) : false
+    }
+    Keys.onPressed: function(event) {
+        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.ControlModifier))
+            event.accepted = panel.primaryAction()
+    }
+    // The cell after or before row that takes text, opened; false at the end.
+    function openNext(view, row, forward) {
+        for (let r = row + (forward ? 1 : -1); r >= 0 && r < view.rows; r += forward ? 1 : -1) {
+            view.positionViewAtRow(r, TableView.Contain)
+            const item = view.itemAtCell(Qt.point(0, r))
+            if (item && item.valueItem && item.valueItem.canOpen)
+                return item.valueItem.begin()
+        }
+        view.forceActiveFocus()
+        return false
+    }
+    // F2 or Enter opens the current row's cell.
+    function openCurrent(view, event) {
+        const editKey = event.key === Qt.Key_F2 || ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+            && !(event.modifiers & Qt.ControlModifier))
+        if (!editKey || view.currentRow < 0)
+            return
+        const item = view.itemAtCell(Qt.point(0, view.currentRow))
+        if (item && item.valueItem && item.valueItem.canOpen)
+            event.accepted = item.valueItem.begin()
+    }
+    // A Field picked while changes are allowed is read once, so its cells can
+    // be edited at once: one read per selection, none while another is pending
+    // and none for a Field already read.
+    // Anything the provider starts before the turn ends (a Read pressed, a
+    // host's own request) takes the read's place.
+    readonly property string selectedPath: hasSelection ? provider.selection : ""
+    property bool readArmed: false
+    onSelectedPathChanged: {
+        readArmed = selectedPath.length > 0
+        readTimer.restart()
+    }
+    readonly property bool providerBusy: provider.busy === true
+    onProviderBusyChanged: if (providerBusy) readArmed = false
+    Timer { id: readTimer; interval: 0; onTriggered: panel.readSelection() }
+    function readSelection() {
+        if (!readArmed)
+            return
+        readArmed = false
+        if (!showSelection || !hasSelection || selectedCategory !== 1 || disconnected
+            || provider.allowMutations !== true || selectionInfo.readable === false
+            || provider.busy || provider.editing || !provider.canRefresh)
+            return
+        const values = provider.values
+        if (values && typeof values.rowCount === "function" && values.rowCount() > 0)
+            return
+        provider.refresh()
+    }
+
     component TableHeading: Item {
         required property var view
         implicitHeight: Math.max(24, Type.rowHeight)
@@ -139,7 +211,7 @@ Pane {
         leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
         indicator: TreeChevron { row: cellRow; x: cellRow.nameIndent - Type.indent }
         implicitWidth: panel.tableWidth(treeView)
-        implicitHeight: Math.max(Type.rowHeight, valueCell.implicitHeight + Type.tight * 2)
+        implicitHeight: Math.max(Type.rowHeight, valueCell.implicitHeight)
         text: cellName
         highlighted: current
         Accessible.name: cellName
@@ -215,49 +287,44 @@ Pane {
                 Layout.fillWidth: selectionHeader.columns === 1
                 Layout.preferredWidth: selectionHeader.columns === 1 ? -1 : rowWidth
                 BusyIndicator { running: panel.provider.busy; visible: running; implicitWidth: Type.controlHeight; implicitHeight: Type.controlHeight }
+                // The cells are the editor: a draft exists from the first
+                // change, and only then are there Cancel and Apply.
                 Button {
-                    objectName: "editButton"; text: qsTr("Edit")
-                    visible: !panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
-                        && panel.selectionInfo.writable !== false
-                    enabled: panel.provider.canEdit; onClicked: panel.provider.beginEdit()
-                    ToolTip.visible: hovered; ToolTip.delay: 700
-                    ToolTip.text: panel.showMetadata ? qsTr("Read the Field before editing")
-                        : panel.provider.allowMutations === false ? qsTr("Enable writes to edit this Field") : qsTr("Edit a local draft")
+                    objectName: "refreshButton"; text: qsTr("Read")
+                    visible: !panel.provider.commandSelected && !panel.provider.serviceSelected && !panel.provider.editing
+                    enabled: panel.provider.canRefresh; onClicked: panel.provider.refresh()
+                    ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Read this Field from the device")
                 }
                 Button {
                     objectName: "cancelEditButton"; text: qsTr("Cancel")
                     visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
                     enabled: !panel.provider.busy; onClicked: panel.provider.cancelEdit()
+                    ToolTip.visible: hovered; ToolTip.delay: 700
+                    ToolTip.text: qsTr("Put back the values read; nothing is written")
                 }
-                Button {
+                AccentButton {
                     objectName: "applyButton"; text: qsTr("Apply")
                     visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
                     enabled: panel.provider.canApply; onClicked: panel.provider.apply()
                     ToolTip.visible: hovered; ToolTip.delay: 700
-                    ToolTip.text: qsTr("Write once, then read the device again. Undo does not take a write back.")
+                    ToolTip.text: qsTr("Write once, then read the device again (Ctrl+Enter). Undo does not take a write back.")
                     Accessible.description: ToolTip.text
                 }
-                Button {
+                AccentButton {
                     objectName: "executeButton"; text: qsTr("Execute")
                     visible: panel.provider.commandSelected; enabled: panel.provider.canExecute
                     onClicked: panel.provider.executeCommand()
                     ToolTip.visible: hovered; ToolTip.delay: 700
-                    ToolTip.text: qsTr("Send the Command once. Undo does not take it back.")
+                    ToolTip.text: qsTr("Send the Command once (Ctrl+Enter). Undo does not take it back.")
                     Accessible.description: ToolTip.text
                 }
-                Button {
+                AccentButton {
                     objectName: "callServiceButton"; text: qsTr("Call")
                     visible: panel.provider.serviceSelected; enabled: panel.provider.canCallService
                     onClicked: panel.provider.callService()
                     ToolTip.visible: hovered; ToolTip.delay: 700
-                    ToolTip.text: qsTr("Send one request. Undo does not take it back.")
+                    ToolTip.text: qsTr("Send one request (Ctrl+Enter). Undo does not take it back.")
                     Accessible.description: ToolTip.text
-                }
-                Button {
-                    objectName: "refreshButton"; text: qsTr("Read")
-                    visible: !panel.provider.commandSelected && !panel.provider.serviceSelected
-                    enabled: panel.provider.canRefresh; onClicked: panel.provider.refresh()
-                    ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Read this Field from the device")
                 }
             }
         }
@@ -417,6 +484,8 @@ Pane {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     clip: true; model: panel.provider.values; alternatingRows: false
                     activeFocusOnTab: true
+                    editTriggers: TableView.NoEditTriggers
+                    Keys.onPressed: function(event) { panel.openCurrent(valueTree, event) }
                     selectionModel: ItemSelectionModel { model: valueTree.model }
                     contentWidth: panel.tableWidth(valueTree)
                     Component.onCompleted: Qt.callLater(function() { if (valueTree) { valueTree.forceLayout(); valueTree.expand(0) } })
@@ -440,171 +509,37 @@ Pane {
                         readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
                         readonly property var editorChoices: model.editorChoices !== undefined ? model.editorChoices : []
                         readonly property bool choicesTruncated: model.editorChoicesTruncated === true
-                        readonly property bool floatEditor: editable && (typeText === "f32" || typeText === "f64") && canonicalText.length > 0
+                        readonly property string takes: typeof model.takes === "string" ? model.takes : ""
                         cellName: name; cellType: typeText; cellHint: detail; cellValue: value
-                        TableView.onReused: {
-                            if (valueItem && typeof valueItem.resetEditor === "function") valueItem.resetEditor()
-                        }
-                        valueComponent: ColumnLayout {
-                            function resetEditor() {
-                                scalarInput.inputValid = true
-                                scalarInput.inputDirty = false
-                                scalarEditorHost.manualCode = false
+                        TableView.onReused: if (valueItem && typeof valueItem.reset === "function") valueItem.reset()
+                        valueComponent: ValueCell {
+                            objectName: "valueCell"
+                            name: valueDelegate.name
+                            value: valueDelegate.value
+                            typeText: valueDelegate.typeText
+                            detail: valueDelegate.detail
+                            isAggregate: valueDelegate.isAggregate
+                            childCount: valueDelegate.childCount
+                            loadedCount: valueDelegate.loadedCount
+                            editable: valueDelegate.editable
+                            editorText: valueDelegate.editorText
+                            editorKind: valueDelegate.editorKind
+                            editorChoices: valueDelegate.editorChoices
+                            choicesTruncated: valueDelegate.choicesTruncated
+                            canonicalText: valueDelegate.canonicalText
+                            takes: valueDelegate.takes
+                            highlighted: valueDelegate.highlighted
+                            // Changes off: the value shows, nothing takes input,
+                            // and the strip above says why.
+                            locked: panel.changesOff || panel.provider.busy
+                            setText: function(text) {
+                                return panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
                             }
-                            spacing: Type.tight
-                            Label {
-                                id: scalarValueLabel
-                                visible: !valueDelegate.editable
-                                Layout.fillWidth: true; Layout.minimumWidth: 0
-                                textFormat: Text.PlainText; elide: Text.ElideRight
-                                text: valueDelegate.value
-                                color: valueDelegate.highlighted ? Theme.selectedForeground : valueDelegate.isAggregate ? Theme.textMuted : Theme.textPrimary
-                                font.family: valueDelegate.isAggregate ? Qt.application.font.family : Type.fixedFamily
-                                horizontalAlignment: panel.numericType(valueDelegate.typeText) ? Text.AlignRight : Text.AlignLeft
-                                HoverHandler { id: scalarValueHover }
-                                PlainToolTip { visible: scalarValueHover.hovered && scalarValueLabel.truncated; text: valueDelegate.value }
+                            loadMore: function() {
+                                panel.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, valueDelegate.row)))
                             }
-                            RowLayout {
-                                id: scalarEditorHost
-                                objectName: "valueEditor"
-                                visible: valueDelegate.editable
-                                // Changes off: the value shows, nothing takes input,
-                                // and the strip above says why.
-                                enabled: !panel.changesOff
-                                Layout.fillWidth: true
-                                spacing: Type.tight
-                                property bool manualCode: false
-                                readonly property bool choices: valueDelegate.editorKind === "bool" || valueDelegate.editorKind === "enum"
-                                readonly property var options: {
-                                    const rows = []
-                                    for (let i = 0; i < valueDelegate.editorChoices.length; ++i) {
-                                        const item = valueDelegate.editorChoices[i]
-                                        if (item && typeof item.label === "string" && typeof item.text === "string")
-                                            rows.push({ label: item.label, text: item.text, manual: false })
-                                    }
-                                    if (valueDelegate.editorKind === "enum" && !rows.some(function(item) { return item.text === valueDelegate.editorText }))
-                                        rows.unshift({ label: (valueDelegate.choicesTruncated ? qsTr("Code (%1)") : qsTr("Unknown (%1)"))
-                                            .arg(valueDelegate.editorText), text: valueDelegate.editorText, manual: false })
-                                    if (valueDelegate.editorKind === "enum")
-                                        rows.push({ label: qsTr("Enter code…"), text: "", manual: true })
-                                    return rows
-                                }
-                                readonly property int optionIndex: {
-                                    for (let i = 0; i < options.length; ++i)
-                                        if (!options[i].manual && options[i].text === valueDelegate.editorText)
-                                            return i
-                                    return -1
-                                }
-                                ComboBox {
-                                    id: valueChoice
-                                    objectName: "valueChoice"
-                                    palette.light: Theme.stateSelected
-                                    palette.midlight: Theme.stateHover
-                                    palette.mid: Theme.buttonFillPressed
-                                    palette.dark: Theme.textSecondary
-                                    palette.text: Theme.textPrimary
-                                    palette.buttonText: Theme.textPrimary
-                                    palette.highlight: Theme.stateSelected
-                                    palette.highlightedText: Theme.selectedForeground
-                                    visible: scalarEditorHost.choices && !scalarEditorHost.manualCode
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    textRole: "label"
-                                    valueRole: "text"
-                                    model: scalarEditorHost.options
-                                    currentIndex: scalarEditorHost.optionIndex
-                                    Accessible.name: qsTr("Value for %1").arg(valueDelegate.name)
-                                    Accessible.description: valueDelegate.choicesTruncated
-                                        ? qsTr("The list is limited. Choose Enter code to use another numeric code.")
-                                        : valueDelegate.detail
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: valueChoice.Accessible.description
-                                    onActivated: function(index) {
-                                        const item = scalarEditorHost.options[index]
-                                        if (!item) return
-                                        if (item.manual) {
-                                            scalarEditorHost.manualCode = true
-                                            codeFocusTimer.restart()
-                                            return
-                                        }
-                                        scalarInput.inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), item.text)
-                                        if (scalarInput.inputValid)
-                                            scalarInput.inputDirty = false
-                                        currentIndex = Qt.binding(function() { return scalarEditorHost.optionIndex })
-                                    }
-                                }
-                                TextField {
-                                    id: scalarInput
-                                    objectName: "scalarEditor"
-                                    property string scalarName: valueDelegate.name
-                                    property bool inputValid: true
-                                    property bool inputDirty: false
-                                    visible: !scalarEditorHost.choices || scalarEditorHost.manualCode
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    Layout.preferredHeight: Math.max(Type.controlHeight, implicitHeight)
-                                    Binding on text {
-                                        value: valueDelegate.editorText
-                                        when: !scalarInput.activeFocus && !scalarInput.inputDirty
-                                        restoreMode: Binding.RestoreNone
-                                    }
-                                    placeholderText: scalarEditorHost.manualCode ? qsTr("Numeric code") : ""
-                                    font.family: Type.fixedFamily
-                                    selectByMouse: true
-                                    Accessible.name: qsTr("Value for %1").arg(valueDelegate.name)
-                                    Accessible.description: valueDelegate.detail
-                                    onTextEdited: {
-                                        inputDirty = true
-                                        inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
-                                    }
-                                    onEditingFinished: if (visible && inputDirty)
-                                        inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), text)
-                                }
-                                ToolButton {
-                                    id: choiceReturn
-                                    objectName: "valueChoiceReturn"
-                                    visible: scalarEditorHost.manualCode
-                                    text: "⌄"
-                                    Accessible.name: qsTr("Choose a named value for %1").arg(valueDelegate.name)
-                                    Accessible.description: qsTr("Discard the entered code and choose a named value.")
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: choiceReturn.Accessible.description
-                                    onClicked: {
-                                        scalarInput.inputValid = panel.provider.setScalarText(valueTree.modelIndex(Qt.point(0, valueDelegate.row)), valueDelegate.editorText)
-                                        if (!scalarInput.inputValid) return
-                                        scalarEditorHost.manualCode = false
-                                        scalarInput.inputDirty = false
-                                        valueChoice.forceActiveFocus()
-                                        valueChoice.popup.open()
-                                    }
-                                }
-                                Timer {
-                                    id: codeFocusTimer
-                                    interval: 0
-                                    onTriggered: if (scalarEditorHost.manualCode && scalarInput.visible) {
-                                        scalarInput.forceActiveFocus()
-                                        scalarInput.selectAll()
-                                    }
-                                }
-                            }
-                            Label {
-                                objectName: "valueEncodedCaption"
-                                visible: valueDelegate.editable && !panel.changesOff && (!scalarInput.inputValid ||
-                                    (valueDelegate.floatEditor && scalarInput.inputDirty && scalarInput.text !== valueDelegate.canonicalText))
-                                Layout.fillWidth: true; Layout.minimumWidth: 0
-                                textFormat: Text.PlainText; wrapMode: Text.Wrap
-                                font.pointSize: Type.caption
-                                color: scalarInput.inputValid ? Theme.textSecondary : Theme.error
-                                text: scalarInput.inputValid
-                                    ? qsTr("Encoded: %1 (%2)").arg(valueDelegate.canonicalText).arg(valueDelegate.typeText)
-                                    : qsTr("Enter a valid value.")
-                            }
-                            Button {
-                                visible: valueDelegate.isAggregate && valueDelegate.childCount > 128
-                                enabled: valueDelegate.loadedCount < valueDelegate.childCount
-                                text: qsTr("Load next 128 \u00b7 %1/%2").arg(valueDelegate.loadedCount).arg(valueDelegate.childCount)
-                                onClicked: panel.provider.values.fetchMore(valueTree.modelIndex(Qt.point(0, valueDelegate.row)))
-                            }
+                            onTabbed: function(forward) { panel.openNext(valueTree, valueDelegate.row, forward) }
+                            onFinished: function(byKey) { if (byKey) valueTree.forceActiveFocus() }
                         }
                     }
                     ScrollBar.vertical: ScrollBar {}
@@ -679,23 +614,18 @@ Pane {
                         required property int loadedCount
                         readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                         cellName: name; cellType: typeText; cellHint: detail; cellValue: value
-                        valueComponent: ColumnLayout {
-                            spacing: Type.tight
-                            Label {
-                                id: responseValueLabel
-                                textFormat: Text.PlainText; text: responseDelegate.value; elide: Text.ElideRight
-                                Layout.fillWidth: true; Layout.minimumWidth: 0
-                                color: responseDelegate.highlighted ? Theme.selectedForeground : responseDelegate.isAggregate ? Theme.textMuted : Theme.textPrimary
-                                font.family: responseDelegate.isAggregate ? Qt.application.font.family : Type.fixedFamily
-                                horizontalAlignment: panel.numericType(responseDelegate.typeText) ? Text.AlignRight : Text.AlignLeft
-                                HoverHandler { id: responseValueHover }
-                                PlainToolTip { visible: responseValueHover.hovered && responseValueLabel.truncated; text: responseDelegate.value }
-                            }
-                            Button {
-                                visible: responseDelegate.isAggregate && responseDelegate.childCount > 128
-                                enabled: responseDelegate.loadedCount < responseDelegate.childCount
-                                text: qsTr("Load next 128 \u00b7 %1/%2").arg(responseDelegate.loadedCount).arg(responseDelegate.childCount)
-                                onClicked: panel.provider.responses.fetchMore(responseTree.modelIndex(Qt.point(0, responseDelegate.row)))
+                        valueComponent: ValueCell {
+                            objectName: "responseCell"
+                            name: responseDelegate.name
+                            value: responseDelegate.value
+                            typeText: responseDelegate.typeText
+                            detail: responseDelegate.detail
+                            isAggregate: responseDelegate.isAggregate
+                            childCount: responseDelegate.childCount
+                            loadedCount: responseDelegate.loadedCount
+                            highlighted: responseDelegate.highlighted
+                            loadMore: function() {
+                                panel.provider.responses.fetchMore(responseTree.modelIndex(Qt.point(0, responseDelegate.row)))
                             }
                         }
                     }

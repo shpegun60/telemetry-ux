@@ -138,8 +138,9 @@ void click(QQuickWindow& window, QQuickItem& item)
 
 void type(QQuickWindow& window, const QString& name, const QByteArray& text)
 {
+	// The cell is a value until it is opened; a click opens its editor (BA-4).
+	click(window, *control(window, QStringLiteral("valueText"), name));
 	auto* editor = control(window, QStringLiteral("scalarEditor"), name);
-	click(window, *editor);
 	CHECK(await([&] {
 		return editor->hasActiveFocus();
 	}));
@@ -326,9 +327,10 @@ int main(int argc, char** argv)
 	CHECK(value(values, QStringLiteral("Gain")) == QStringLiteral("1"));
 	QSignalSpy applied{&controller, &ui::InspectorController::applyFinished};
 
-	click(*window, *control(*window, QStringLiteral("editButton")));
-	CHECK(controller.editing());
+	// No Edit button: the first change opens the draft (BA-4).
+	CHECK(!visual(window->contentItem(), QStringLiteral("editButton"), {}) && !controller.editing());
 	type(*window, QStringLiteral("Gain"), QByteArrayLiteral("12"));
+	CHECK(controller.editing());
 	auto* apply = control(*window, QStringLiteral("applyButton"));
 	std::fprintf(stderr, "QML physical input first Apply: enabled=%d canApply=%d writes=%llu\n",
 	             int(apply->isEnabled()), int(controller.canApply()),
@@ -353,19 +355,21 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	click(*window, *control(*window, QStringLiteral("editButton")));
-	CHECK(controller.editing());
 	type(*window, QStringLiteral("Gain"), QByteArrayLiteral("4.25"));
+	CHECK(controller.editing());
 	type(*window, QStringLiteral("Counter"), QByteArrayLiteral("18446744073709551616"));
 	CHECK(!controller.canApply() && !control(*window, QStringLiteral("applyButton"))->isEnabled());
 	CHECK(controller.demoWriteCount() == 1 && applied.count() == 1);
-	// Blurring an invalid editor must retain its raw input and keep Apply
-	// disabled, instead of restoring a formatted role and silently clearing it.
-	click(*window, *control(*window, QStringLiteral("scalarEditor"), QStringLiteral("Gain")));
-	CHECK(control(*window, QStringLiteral("scalarEditor"), QStringLiteral("Counter"))
+	// Leaving text that is no value puts back the cell's last value (BA-4):
+	// the draft is whole again and nothing was written.
+	click(*window, *control(*window, QStringLiteral("valueText"), QStringLiteral("Gain")));
+	CHECK(await([&] {
+		return visual(window->contentItem(), QStringLiteral("valueText"), QStringLiteral("Counter")) != nullptr;
+	}));
+	CHECK(visual(window->contentItem(), QStringLiteral("valueText"), QStringLiteral("Counter"))
 	          ->property("text")
-	          .toString() == QStringLiteral("18446744073709551616"));
-	CHECK(!controller.canApply() && controller.demoWriteCount() == 1 && applied.count() == 1);
+	          .toString() != QStringLiteral("18446744073709551616"));
+	CHECK(controller.canApply() && controller.demoWriteCount() == 1 && applied.count() == 1);
 	// Gain is already dirty. A final different leaf must also reach the Write
 	// when Apply is clicked while that editor still owns keyboard focus.
 	type(*window, QStringLiteral("Counter"), QByteArrayLiteral("18446744073709551614"));

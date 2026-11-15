@@ -756,6 +756,49 @@ between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
 
+
+
+## Details: the cell is the editor (BA-4·0a, November 2026)
+
+- **No Edit button.** `EndpointPanel` no longer shows Edit. A Field's values are
+  editable in place while it has been read, is writable and changes are
+  allowed; the first valid change opens the draft and a draft that is equal to
+  the value read again, with no invalid text left, closes itself. Cancel and
+  the accent Apply show only while a draft exists, and Read hides meanwhile.
+  Execute and Call are the accent action of a Command and a Service. A check
+  that clicked `editButton` opens a cell instead: click its `valueText` (it
+  carries `scalarName`), or call the cell's `begin()`.
+- **`setScalarText` opens and closes the draft.** The Dynamic and Static
+  providers and the Inspector example accept text for a Field that has no
+  draft yet when it may be edited (`canEdit`), and open the draft then.
+  `beginEdit()` is unchanged for hosts that open a draft themselves. A host's
+  own provider for `EndpointPanel` either does the same or opens a draft in
+  `beginEdit()` before the panel's first `setScalarText`; the panel calls only
+  `setScalarText`.
+- **`ValueModel::setEditOffer(bool)`** makes a Field's scalar rows `editable`
+  before a draft exists. The Dynamic provider and the Inspector example keep it
+  up to date; a host with its own `ValueModel` owner calls it when its Field may
+  be edited. New role `takes` (Dynamic and Static): what a cell says while its
+  text is no value, "Enter a number from 0 to 255.". The Static `ValueTree`'s
+  `editable` role is true for a read, writable Field while changes are allowed.
+- **`ValueCell.qml`**, new in the module: the value cell Details uses for its
+  values and its response, and the Batch will use. It is a value until opened
+  (a click, or F2 or Enter on its row), then a text field or a choice one row
+  tall; edits are live; Enter keeps, Tab and Shift+Tab keep and move on, Escape
+  puts back the value it had when opened, and leaving with text that is no
+  value puts back the last value. Ctrl+Enter applies, executes or calls. The
+  editor is a `QtQuick.Controls.Basic` TextField in every host style.
+- **Changed behaviour for checks:** blurring a cell with invalid text no longer
+  keeps the raw text; the last value comes back. "Enter a valid value." is gone:
+  the words name the type's range. Bool choices read "false" and "true" (their
+  codes stay in `editorChoices`). Integers take hex as the value's bits at its
+  width (`detail::parseScalar`), as the Watchlist does.
+- **Details reads a picked Field once while changes are allowed**, so its
+  cells can be edited at once: one FieldRead per selection that has no value
+  yet, none while another request is pending, none with changes off. A check
+  that counts reads after selecting a Field with changes allowed counts one
+  more; one that wants the unread definition turns changes off first.
+
 ## One history for Undo and Redo: the core, the Watchlist and files (UR-1, UX-A, November 2026)
 
 The Watchlist's single Undo slot and the hex editor's own undo stack give way
@@ -895,6 +938,15 @@ day is `originUtcMs`. Labels read "12 s", "1:30", "1:02:00" or "−0:12".
 start ▾", with a two-item menu; with the axis from the start, the cursor chip
 reads "17.911 s · 22:27:02.379".
 
+## A recorded run on the Plot's view (TR-2, November 2026)
+
+`WatchTraces::setRecorded(path, readings, states)` and `setAnchor(anchor)`
+let a host show a recording with the same TracePlot: a path's readings, one
+run's, in time order and NaN for a gap, with the anchor that gives them a
+time of day. The live rules do not apply to them (no ten minutes, no cap per
+path) and the path counts as watched. `TraceView` fits its values afresh when
+its `traces` change or a curve is plotted or removed.
+
 ## Dragging rows onto the Plot and the Watchlist (LP-1g3, November 2026)
 
 The Watchlist's list and the Device tree no longer scroll by a mouse drag
@@ -910,3 +962,28 @@ group or a category every endpoint under it
 its values; a Device tree drag joins the Watchlist first and plots the values
 under what was dropped. `WatchlistPanel.dropPaths(payload)` adds a Device tree
 drag. Both show a frame and what a drop will do while a drag is over them.
+
+## A recorded run on the Plot's view (TR-2, November 2026)
+
+`WatchTraces::setRecorded(path, readings, states)` and `setAnchor(anchor)`
+let a host show a recording with the same TracePlot: a path's readings, one
+run's, in time order and NaN for a gap, with the anchor that gives them a
+time of day. The live rules do not apply to them (no ten minutes, no cap per
+path) and the path counts as watched. `TraceView` fits its values afresh when
+its `traces` change or a curve is plotted or removed.
+
+## Analysis on the Plot: box zoom, Back, copy and save, Measure, find (November 2026)
+
+`TraceView` gains, from the designer's analysis audit: a box drawn with Ctrl
+and a drag (`zoomToBox`, `boxShown`) and a way back through every view moved
+by hand (`goBack`, `canGoBack`; Backspace, Alt+Left); the readings of the
+range as text and CSV (`valuesText`, `readingsInRange`, `saveValues`); an end
+pin beside the reference (`endShown`, `endUtcMs`, `endX`, `pinEnd`,
+`clearEnd`; Shift and a click, Shift+Enter) making the range measured,
+copied and saved (`measureRange`); per-curve statistics over it
+(`statistics(path)`); `putCursorAt(utcMs)`; and `stepChange(direction)` with
+`findFailed(words)` (Ctrl+Right, Ctrl+Left). `TracePlot` adds the Back
+button, the Measure table (M), copy picture (Ctrl+C), copy values
+(Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
+result in its notice line. `Clipboard.setImage` and `hasImage` are new;
+`WatchTraces.categorical` is invokable from QML.

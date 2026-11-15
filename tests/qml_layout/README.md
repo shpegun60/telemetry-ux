@@ -43,6 +43,15 @@ the Menu key and Shift+F10, the actions refused while polling, and `find()` with
 Enter (a Field is watched, a Command opens its details) and the arrow keys
 between the search field and its results.
 
+`ValueCell.cpp` drives the value cell Details and the Batch share (BA-4) alone,
+over fake rows: a value until clicked, hovered with its pencil in the gap after
+it, one row tall open or not, live text, the type's words only for text that is
+no value (and the row a caption taller then), Enter and leaving with no value
+putting the last value back, Escape the value it had when opened, Tab and
+Shift+Tab asking for the next and previous cell, a bool's and an enum's choice
+as wide as its items with "Enter code…", a float's Encoded caption, and a locked
+or read-only cell that never opens (`value-cell-*.png`).
+
 `UndoKeys.cpp` holds the central Undo's keys to one press, one step (UR-1): a
 window with the real Configurator over a disconnected Session, Details as a host
 holds them (`UndoScope.refusal`), a file in a `FileViewer`, a plain button and

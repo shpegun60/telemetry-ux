@@ -909,8 +909,17 @@ struct DynamicConfiguratorProvider::Impl {
 		return q && previewRevision == revision;
 	}
 
+	// A Field's cells take text while it may be edited: read, writable and
+	// changes allowed. The first change opens the draft (setScalarText).
+	bool editOffered() const
+	{
+		return current() && category == 1 && allowed && binding->mutationsAllowed() &&
+		       !state->staleData && (state->view.editing() || state->view.canEdit());
+	}
+
 	void notify()
 	{
+		values.setEditOffer(editOffered());
 		definitions.setSelection(current() ? QModelIndex(selectedIndex) : QModelIndex{});
 		const bool now = current() && !updating && !endpoints.changing() && watch.canTellHoldable();
 		if (now != available) {
@@ -3697,7 +3706,10 @@ bool DynamicConfiguratorProvider::callService()
 bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const QString& value)
 {
 	auto p = d;
-	if (!p->mutate() || (!editing() && !commandSelected() && !serviceSelected()))
+	const bool request = commandSelected() || serviceSelected();
+	// A Field's draft is implicit: the first change opens it, and a draft that
+	// no longer differs from the value read closes itself.
+	if (!p->mutate() || (!request && !editing() && !(p->category == 1 && canEdit())))
 		return false;
 	const auto node = p->values.node(index);
 	if (!node)
@@ -3707,9 +3719,10 @@ bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const 
 		p->notify();
 		return true;
 	}
-	const auto info = commandSelected() || serviceSelected() ? p->state->view.editorInfo(node.value)
-	                                                         : p->state->view.info(node.value);
+	const auto info = request ? p->state->view.editorInfo(node.value) : p->state->view.info(node.value);
 	if (!info)
+		return false;
+	if (!request && !editing() && p->state->view.beginEdit() != rt::Status::Ok)
 		return false;
 	bool parsed = false;
 	const auto status =
@@ -3722,6 +3735,8 @@ bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const 
 		p->updating = false;
 	} else
 		p->invalid.insert(index.internalId());
+	if (!request && p->state->view.editing() && !p->state->view.dirty() && p->invalid.isEmpty())
+		p->state->view.cancelEdit();
 	p->status = valid ? QStringLiteral("Local draft updated")
 	                  : QStringLiteral("Invalid exact scalar value - draft unchanged");
 	p->notify();

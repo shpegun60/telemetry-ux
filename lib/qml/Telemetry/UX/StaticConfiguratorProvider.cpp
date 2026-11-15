@@ -1,6 +1,7 @@
 // Shared Qt presentation for generated APIs; no client or wire codec. MIT.
 #include "StaticConfiguratorProvider.hpp"
 #include "PresentationOverlay.hpp"
+#include "ValueWords.hpp"
 #include "WatchSample.hpp"
 #include "WatchCoverage.hpp"
 #include "WatchRows.hpp"
@@ -215,7 +216,9 @@ public:
 		ChildCount,
 		LoadedCount,
 		Editable,
-		EditorText
+		EditorText,
+		// What the cell says while its text is not a value of its type.
+		Takes
 	};
 
 	struct Node {
@@ -243,7 +246,8 @@ public:
 		        {ChildCount, "childCount"},
 		        {LoadedCount, "loadedCount"},
 		        {Editable, "editable"},
-		        {EditorText, "editorText"}};
+		        {EditorText, "editorText"},
+		        {Takes, "takes"}};
 	}
 
 	const Node* node(const QModelIndex& index) const
@@ -333,6 +337,15 @@ public:
 				                          : scalarText(*type, atPath(root.value, n->path), true);
 				return root.editable ? text_(n->path, fallback) : fallback;
 			}
+			case Takes: {
+				const auto* scalar = type->kind == StaticTypeKind::Enum ? typeAt(binding_, type->underlyingTypeId) : type;
+				if (aggregate(*type) || !scalar || scalar->kind != StaticTypeKind::Scalar)
+					return QString();
+				QStringList names;
+				for (const auto& entry : type->entries)
+					names << entry.name;
+				return value_words::takes(scalar->scalarCode, type->kind == StaticTypeKind::Enum, names);
+			}
 			default:
 				return {};
 		}
@@ -412,7 +425,27 @@ public:
 
 	void textChanged(const QModelIndex& index)
 	{
-		Q_EMIT dataChanged(index, index, {EditorText});
+		Q_EMIT dataChanged(index, index, {Value, EditorText});
+	}
+
+	// A Field's draft opened or closed by an edit: its cells show and take the
+	// same values, so no reset; every row says it once.
+	void editableChanged()
+	{
+		QVector<QModelIndex> indices;
+		for (auto it = nodes_.cbegin(); it != nodes_.cend(); ++it) {
+			if (it.key() == 0)
+				continue;
+			const auto parent = nodes_.constFind(it->parent);
+			if (parent != nodes_.cend())
+				indices.append(createIndex(static_cast<int>(parent->children.indexOf(it.key())), 0, it.key()));
+		}
+		QPointer<ValueTree> alive(this);
+		for (const auto& index : indices) {
+			if (!alive)
+				return;
+			Q_EMIT dataChanged(index, index, {Value, Editable, EditorText});
+		}
 	}
 
 private:
@@ -1290,7 +1323,33 @@ struct StaticConfiguratorProvider::Impl {
 		if (e->category != 1 || retired || !e->cachedValid || !e->cachedValid(binding.api) ||
 		    !e->cached)
 			return {};
-		return {e->valueType, e->cached(binding.api), true, false};
+		// A writable Field's cells take text while changes are allowed: the
+		// first change opens the draft (setScalarText).
+		return {e->valueType, e->cached(binding.api), true, editOffered()};
+	}
+
+	bool editOffered() const
+	{
+		const auto* e = endpoint();
+		// Not editable(): a publication in progress must not turn the cells off.
+		return e && e->category == 1 && e->writable && !draftActive && owner() && !pending && ready() &&
+		       !watchCycle && allowed && !blocked && e->cachedPayload && e->cachedValid &&
+		       e->cachedValid(binding.api);
+	}
+
+	// Opens a Field's draft from the value read, without publishing.
+	bool openDraft()
+	{
+		const auto* e = endpoint();
+		quint64 nodes = 65536;
+		if (!e || !e->cachedPayload || !e->cached || !typeBudget(e->valueType, nodes))
+			return false;
+		seed = e->cachedPayload(binding.api);
+		draft = e->cached(binding.api);
+		draftActive = true;
+		texts.clear();
+		errors.clear();
+		return true;
 	}
 
 	bool typeBudget(quint32 id, quint64& nodes, int depth = 0) const
@@ -2277,7 +2336,9 @@ void StaticConfiguratorProvider::callService()
 
 bool StaticConfiguratorProvider::setScalarText(const QModelIndex& index, const QString& text)
 {
-	if (!d->editable() || !d->draftActive)
+	// A Field's draft is implicit: the first change opens it, and a draft that
+	// no longer differs from the value read closes itself.
+	if (!d->editable() || (!d->draftActive && !canEdit()))
 		return false;
 	const auto* node = d->valueModel.node(index);
 	if (!node)
@@ -2286,6 +2347,14 @@ bool StaticConfiguratorProvider::setScalarText(const QModelIndex& index, const Q
 	const auto* endpoint = d->endpoint();
 	if (!type || aggregate(*type) || !endpoint || !endpoint->validate)
 		return false;
+	const bool opened = !d->draftActive;
+	if (opened) {
+		// Leaving a cell unchanged is no edit.
+		if (text == d->valueModel.data(index, ValueTree::EditorText).toString())
+			return true;
+		if (!d->openDraft())
+			return false;
+	}
 	const Path path = node->path;
 	const auto key = pathKey(path);
 	QVariant value, candidate = d->draft;
@@ -2299,9 +2368,16 @@ bool StaticConfiguratorProvider::setScalarText(const QModelIndex& index, const Q
 		d->errors.remove(key);
 	} else
 		d->errors.insert(key);
+	const bool field = endpoint->category == 1;
+	const bool closed = field && d->errors.isEmpty() && endpoint->cached && d->draft == endpoint->cached(d->binding.api);
+	if (closed)
+		d->clearDraft();
 	QPointer<StaticConfiguratorProvider> alive(this);
 	d->publishing = true;
-	d->valueModel.textChanged(index);
+	if (field && (opened || closed))
+		d->valueModel.editableChanged();
+	else
+		d->valueModel.textChanged(index);
 	if (!alive)
 		return valid;
 	d->publishing = false;
