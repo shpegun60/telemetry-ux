@@ -1172,6 +1172,25 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
   (`batchProgress`) under the header shows a run. The panel's background is
   `Theme.surfaceWindow`, with no card or radius.
 
+## The Batch's "+": Enter adds at once (November 2026)
+
+- **Enter adds.** A half-typed name ("Volt", "Enter takes measure.Voltage.")
+  used to only write the first suggestion into the field, and so did Enter on
+  a suggestion reached by the arrow keys or after a heading's click: Enter
+  seemed to do nothing until it was pressed again. Now Enter, or the keypad's
+  Enter, adds at once: the suggestion the keys moved to; else the endpoint the
+  whole line names (a whole path is added as typed, even when longer paths are
+  listed above it); else the highlighted or first suggestion. A name two
+  endpoints share, with the list shut, opens the list first; a heading or a
+  container is still narrowed to or stepped into. A line that names nothing
+  adds nothing and says why, as before.
+- **`PathAddRow.enterAdds`** (default false) turns this on, and
+  **`PathAddRow.highlightBest`** (default false) highlights the best match as
+  the suggestions come, so the row shows what Enter takes. `BatchAddRow` sets
+  both; the Watchlist's row keeps its own behaviour. `PathAddRow.take(index)`
+  is what Enter does with a suggestion, and `pickedByKeys` says whether the
+  highlight was moved by the arrow keys.
+
 ## The designer's fixes to the Plot's analysis tools (November 2026)
 
 From the design review of the analysis tools. **Behaviour changes:** "From
