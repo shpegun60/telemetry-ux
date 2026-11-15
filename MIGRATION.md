@@ -755,3 +755,13 @@ read again 1000-1047 ms after it landed, the session publishing nothing in
 between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
+
+## The live Plot's time axis from the start of reading (LP-1h, November 2026)
+
+`TraceView.fromStart` switches the time axis between the time of day (the
+default) and the time since reading last started: the end of the last stop
+or disconnect up to the right edge, else the first reading, whose time of
+day is `originUtcMs`. Labels read "12 s", "1:30", "1:02:00" or "−0:12".
+`TracePlot`'s axis caption is now a flat button, "Time of day ▾" or "From
+start ▾", with a two-item menu; with the axis from the start, the cursor chip
+reads "17.911 s · 22:27:02.379".

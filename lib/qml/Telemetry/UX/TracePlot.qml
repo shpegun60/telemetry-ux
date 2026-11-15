@@ -101,6 +101,17 @@ FocusScope {
     function clockText(ms) {
         return Qt.formatTime(new Date(ms), "HH:mm:ss.zzz")
     }
+    // "17.911 s", "1:12.250", "1:02:03.500": the time since reading started.
+    function sinceText(ms) {
+        const sign = ms < 0 ? "−" : ""
+        const whole = Math.abs(ms) / 1000
+        if (whole < 60)
+            return qsTr("%1 s").arg(sign + whole.toFixed(3))
+        const h = Math.floor(whole / 3600)
+        const m = Math.floor(whole / 60) % 60
+        const s = (whole % 60).toFixed(3).padStart(6, "0")
+        return h > 0 ? sign + h + ":" + String(m).padStart(2, "0") + ":" + s : sign + m + ":" + s
+    }
     // "1.250 s", "1:12.250": the time between the reference and the cursor.
     function spanText(ms) {
         const sign = ms < 0 ? "−" : ""
@@ -604,7 +615,10 @@ FocusScope {
                     font.pointSize: Type.caption
                     color: Theme.textPrimary
                     text: {
-                        const at = plot.clockText(view.cursorUtcMs)
+                        // From the start: the time since it, then the time of day.
+                        const at = view.fromStart ? qsTr("%1 · %2").arg(plot.sinceText(view.cursorUtcMs - view.originUtcMs))
+                                                                  .arg(plot.clockText(view.cursorUtcMs))
+                                                  : plot.clockText(view.cursorUtcMs)
                         if (view.referenceShown)
                             return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
                         if (view.following)
@@ -666,20 +680,60 @@ FocusScope {
                     border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
                 }
             }
-            Label {
+            // The time axis: the time of day, or since reading started (LP-1h).
+            Basic.Button {
+                id: timeAxis
                 objectName: "plotTimeTitle"
                 visible: view.visible
                 anchors.right: parent.right
-                anchors.rightMargin: Type.padding
+                anchors.rightMargin: Type.tight
                 anchors.bottom: parent.bottom
-                color: Theme.textSecondary
+                flat: true
+                focusPolicy: Qt.TabFocus
+                padding: Type.tight
+                leftPadding: Type.padding
+                rightPadding: Type.padding
                 font.pointSize: Type.caption
-                text: qsTr("Time of day")
-                HoverHandler { id: titleHover }
-                PlainToolTip {
-                    visible: titleHover.hovered
-                    text: qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
-                    delay: 700
+                text: (view.fromStart ? qsTr("From start") : qsTr("Time of day")) + " \u25BE"
+                contentItem: Text {
+                    text: timeAxis.text
+                    font: timeAxis.font
+                    color: timeAxis.hovered || timeAxis.visualFocus ? Theme.textPrimary : Theme.textSecondary
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: timeAxis.down ? Theme.statePressed : timeAxis.hovered ? Theme.stateHover : "transparent"
+                    border.width: timeAxis.visualFocus ? 2 : 0
+                    border.color: Theme.focusRing
+                }
+                Accessible.name: view.fromStart ? qsTr("Time axis: from the start of reading") : qsTr("Time axis: time of day")
+                ToolTip.visible: hovered || visualFocus
+                ToolTip.delay: 700
+                ToolTip.text: view.fromStart
+                              ? qsTr("Time since the Watchlist started reading, at %1 on this PC's clock").arg(plot.clockText(view.originUtcMs))
+                              : qsTr("Time this PC received each reading (local time, %1)").arg(plot.utcOffset())
+                onClicked: axisMenu.popup(timeAxis, 0, -axisMenu.implicitHeight)
+                Menu {
+                    id: axisMenu
+                    objectName: "plotAxisMenu"
+                    ButtonGroup { id: axisModes }
+                    MenuItem {
+                        objectName: "plotAxisTimeOfDay"
+                        text: qsTr("Time of day")
+                        checkable: true
+                        checked: !view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = false
+                    }
+                    MenuItem {
+                        objectName: "plotAxisFromStart"
+                        text: qsTr("From the start of reading")
+                        checkable: true
+                        checked: view.fromStart
+                        ButtonGroup.group: axisModes
+                        onTriggered: view.fromStart = true
+                    }
                 }
             }
             // Plotted, nothing read yet.
