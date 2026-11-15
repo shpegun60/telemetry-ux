@@ -3,8 +3,8 @@
 // ones it has. Hex edits the bytes once Edit is on; Reload asks first when
 // edits are not saved. MIT.
 //
-// Editing's actions - Edit, Save, Undo, Redo, as pictograms (FileEditTools) -
-// are on the viewer's top row; a host with a toolbar of its own sets
+// Editing's actions - Edit, Save, Write to the device, as pictograms
+// (FileEditTools) - are on the viewer's top row; a host with a toolbar of its own sets
 // editToolsShown to false and puts a FileEditTools there for the viewer in
 // front, as an editor's toolbar acts on the editor in front. Either calls
 // startEditing(), stopEditing(), save(); askDiscard() and saveEditedCopy()
@@ -18,6 +18,11 @@
 // it is being read, openExternallyRequested, showInFolderRequested and
 // saveAsRequested with the local file, closeRequested. The file's actions are
 // in its `⋯` menu (and the host's tab menu), not in a row of buttons.
+//
+// The viewer is an UndoScope for its file's history (UR-1): Ctrl+Z anywhere
+// in it takes back the bytes' last step through the window's UndoRouter, and
+// the router's Undo acts on this file once the keys have been here; a host's
+// UndoButtons and Edit menu follow.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -27,6 +32,7 @@ Pane {
     id: viewer
     objectName: "fileViewer"
     padding: 0
+    UndoScope.history: content ? content.history : null
 
     required property var content
     property bool retiring: false

@@ -756,6 +756,8 @@ between. A download the device holds back was published 0 times in 6 s before;
 now it is published 5-6 times in about 3 s, the rate and then "waiting for the
 device…" shown on time, while the session publishes nothing.
 
+
+
 ## Details: the cell is the editor (BA-4·0a, November 2026)
 
 - **No Edit button.** `EndpointPanel` no longer shows Edit. A Field's values are
@@ -883,12 +885,7 @@ one for its workspace and gives it to its providers; a file keeps its own.
   Static's steps wait while it polls; its `blockedReason` says so.
 - **`DynamicWatchlist.restore(removed)` is replaced by `putBack(rows)`**, rows
   by place and path, which needs no device.
-- **The Watchlist asks before removing several values only when its provider
-  has no history**: with one, Undo brings them back, device or not. Clear still
-  asks; UX-B removes both questions.
-- Until UX-B, the panels call the history themselves: the Watchlist's Ctrl+Z,
-  the hex view's Ctrl+Z and Ctrl+Y while editing, the notices' "· Undo" and
-  `FileEditTools`' Undo and Redo. UX-B replaces them with one router per window.
+- The panels' own Ctrl+Z, notices and the two questions are UX-B's (below).
 
 ## The live Plot's changes as steps (UR-1, UX-D, November 2026)
 
@@ -937,6 +934,46 @@ The Batch records into the same history as the Watchlist and the Plot (README,
   answers `add(lines) -> {notice, undoable, serial, clear}` and the row emits
   `added(notice, undoable, serial)`; `BatchAddRow` and `WatchAddRow` give the
   step's serial, and the Batch's additions are undoable.
+
+## Ctrl+Z in a window: the router, scopes, notices and buttons (UR-1, UX-B, November 2026)
+
+The panels stop answering Ctrl+Z themselves; a window has one router (README,
+"Ctrl+Z in a window").
+
+1. **Panels no longer take Ctrl+Z: one `UndoRouter` per window**, its
+   `workspace` the host's `UndoHistory`, and `UndoScope.refusal` on areas that
+   act on the device - Details: `UndoScope.refusal: details.undoRefusal`, the
+   words `EndpointPanel.undoRefusal` holds. The Watchlist's
+   `Keys.onShortcutOverride`/`onPressed` for Ctrl+Z, its `undo()` and its
+   `recorded` property, and `HexView`'s Ctrl+Z and Ctrl+Y are gone. A
+   `FileViewer` is an `UndoScope` for its file's history, so Ctrl+Z in it takes
+   the file's step. `registerQmlTypes()` is needed for the router, as for
+   `HexView`.
+2. **`FileEditTools` has no Undo and Redo buttons: use `UndoButtons {
+   router }`.** Its Write to the device says "Undo changes only the copy on
+   this computer." in its tooltip; `IconToolButton.note` is new for such a
+   second clause.
+3. **The questions are gone**: `clearWatchDialog` and `removeWatchDialog`, with
+   `clearWatchConfirm`, `clearWatchCancel`, `removeWatchConfirm` and
+   `removeWatchCancel`. Clear the Watchlist (no ellipsis) and removing several
+   values act at once and say so with Undo ("Cleared 66 values · Undo");
+   `WatchlistPanel.removeAt(row, own)` loses its `confirmed` argument;
+   `clearAll()` is new.
+4. **One notice component, `UndoNotice`.** The Watchlist's notice line is one
+   (`watchNotice`, its link `undoNoticeLink`, the old `watchNoticeLine` and
+   `watchUndo` gone); so is the Device tree's status line
+   (`endpointWatchSelectionStatus`, its link `undoNoticeLink`;
+   `endpointWatchUndo`, `undoStatusStep()`, `canUndoStatus`, `statusSerial`,
+   `statusRevision` and the writable `watchStatusFull` gone; `watchMarkStatus`
+   is read-only). After an undo a notice says "Undone: ... · Redo".
+5. **`EndpointTreePanel.watchBoxes`** is new (default true): false offers no
+   watching at all, for a second device's tree.
+6. **`UndoHistory`**: `done` gains `kinds`; `redoBlockedReason`,
+   `markNoticed()` and `noticed()` are new; a step taken ends the irreversible
+   note. Both providers call `noteIrreversible` as Apply, Execute, Call and a
+   Watchlist row write are sent, and Dynamic's Execute Batch; Static's
+   `apply()`, `executeCommand()` and `callService()` too. `FileContent.writing`
+   is new: while the host writes the copy to the device, the file's steps wait.
 
 ## The live Plot's time axis from the start of reading (LP-1h, November 2026)
 
@@ -997,3 +1034,27 @@ button, the Measure table (M), copy picture (Ctrl+C), copy values
 (Ctrl+Shift+C), save as CSV, the graph and chip menu entries, and says each
 result in its notice line. `Clipboard.setImage` and `hasImage` are new;
 `WatchTraces.categorical` is invokable from QML.
+
+## The designer's fixes to the Plot's analysis tools (November 2026)
+
+From the design review of the analysis tools. **Behaviour changes:** "From
+start" counts from one fixed moment, the anchor (the first reading of this
+run, or a recording's start), no longer from the end of the last stop before
+the right edge, and the CSV's and Copy values' "Seconds from start" count
+from the same moment, so a row matches the axis and the cursor's chip; a time
+label the edge would cut is left out (its grid line stays); a dropped
+selection passes text values over and plots the rest as one step of the
+history (`plotMany`), stopping only at the sixteen-curve limit. `TraceView`
+gains `endValue(path)` (the reading at the
+end pin), `chipColor` and `chipHeight` (the box's size is drawn on a chip),
+`changeFound()` (emitted when `stepChange` finds its change), and, for checks,
+`timeLabelRects` and `boxCaptionRect`; `WatchTraces.refusal(path)` is
+invokable from QML. `TracePlot`'s Measure table says "At cursor", "At end" or
+"Newest" over its first column and gives a state's reading there; it keeps a
+Name column of nine body characters and shows seven, five or three figures,
+the rest in the row's tooltip; its rows, like the chips, stop at a height and
+scroll. Mean and Std dev show one decimal more than Min and Max. The end pin
+has its own chip (`plotEndChip`). Copy picture takes the table or chips and
+the graph (`plotPicture`) without the cursor. `notice` gains `noticeKind`
+and `tell(words, kind)`: "Copied …", "Saved …" and a failed find leave after
+5 s, refusals stay until ×. `dropWords(payload)` gives what a drop will do.

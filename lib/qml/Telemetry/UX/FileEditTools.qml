@@ -1,6 +1,8 @@
 // Editing a file's bytes as pictograms: Edit (a switch), Save, Write to the
-// device, Undo, Redo. A file the host keeps read-only (FileContent's
-// readOnlyReason) has Edit off, its reason in the tooltip.
+// device. A file the host keeps read-only (FileContent's readOnlyReason) has
+// Edit off, its reason in the tooltip. Undo and Redo are the window's
+// (UndoButtons over its UndoRouter), which act on the file once the keys have
+// been in its Viewer.
 // On the Viewer's own row, or on a host's toolbar acting on whichever Viewer
 // is in front, as an editor's toolbar acts on the editor in front. MIT.
 //
@@ -66,30 +68,8 @@ RowLayout {
             : !tools.onDevice ? qsTr("Only a copy of a device's file can be written to the device")
             : tools.writeBlocked.length > 0 ? tools.writeBlocked
             : qsTr("Write %1 to the device…").arg(tools.fileName)
+        // Never undone: Undo takes back edits of the copy only.
+        note: tools.onDevice ? qsTr("Undo changes only the copy on this computer.") : ""
         onClicked: tools.writeRequested()
-    }
-    ToolSeparator {}
-    // The file's own history (content.history). UX-B replaces this pair with
-    // UndoButtons over the window's router.
-    readonly property var history: content ? content.history : null
-    IconToolButton {
-        objectName: "hexUndo"
-        iconName: "undo"
-        enabled: !!tools.history && tools.history.canUndo && !tools.writing
-        text: !tools.history ? qsTr("Undo")
-            : tools.history.undoText.length > 0 ? qsTr("Undo: %1").arg(tools.history.undoText)
-            : qsTr("Undo in %1").arg(tools.fileName)
-        shortcutText: qsTr("Ctrl+Z in the bytes")
-        onClicked: tools.history.undo()
-    }
-    IconToolButton {
-        objectName: "hexRedo"
-        iconName: "redo"
-        enabled: !!tools.history && tools.history.canRedo && !tools.writing
-        text: !tools.history ? qsTr("Redo")
-            : tools.history.redoText.length > 0 ? qsTr("Redo: %1").arg(tools.history.redoText)
-            : qsTr("Redo in %1").arg(tools.fileName)
-        shortcutText: qsTr("Ctrl+Y in the bytes")
-        onClicked: tools.history.redo()
     }
 }

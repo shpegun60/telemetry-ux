@@ -24,6 +24,13 @@ Pane {
     // padding follows.
     property bool framed: true
     padding: framed ? Type.groupSpacing : Type.padding
+    // What Details sends is never undone (UR-1). A host with an UndoRouter
+    // gives these words to the area that holds the panel -
+    // `UndoScope.refusal: details.undoRefusal` - so Ctrl+Z there outside a
+    // field takes back nothing and says why; the Edit menu still names its step.
+    readonly property string undoRefusal: provider.commandSelected || provider.serviceSelected
+                                          ? qsTr("Undo does not take back what is sent to the device.")
+                                          : qsTr("Undo does not take back a write. To go back, apply the old value.")
     readonly property bool hasSelection: provider.selection.length > 0
     required property var provider
     property int categoryFilter: 0
@@ -459,19 +466,24 @@ Pane {
                         visible: panel.provider.editing && !panel.provider.commandSelected && !panel.provider.serviceSelected
                         enabled: panel.provider.canApply; onClicked: panel.provider.apply()
                         ToolTip.visible: hovered; ToolTip.delay: 700
-                        ToolTip.text: qsTr("Write once, then read the device again (Ctrl+Enter)")
+                        ToolTip.text: qsTr("Write once, then read the device again (Ctrl+Enter). Undo does not take a write back.")
+                        Accessible.description: ToolTip.text
                     }
                     AccentButton {
                         objectName: "executeButton"; text: qsTr("Execute")
                         visible: panel.provider.commandSelected; enabled: panel.provider.canExecute
                         onClicked: panel.provider.executeCommand()
-                        ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Execute once (Ctrl+Enter)")
+                        ToolTip.visible: hovered; ToolTip.delay: 700
+                        ToolTip.text: qsTr("Send the Command once (Ctrl+Enter). Undo does not take it back.")
+                        Accessible.description: ToolTip.text
                     }
                     AccentButton {
                         objectName: "callServiceButton"; text: qsTr("Call")
                         visible: panel.provider.serviceSelected; enabled: panel.provider.canCallService
                         onClicked: panel.provider.callService()
-                        ToolTip.visible: hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Call once (Ctrl+Enter)")
+                        ToolTip.visible: hovered; ToolTip.delay: 700
+                        ToolTip.text: qsTr("Send one request (Ctrl+Enter). Undo does not take it back.")
+                        Accessible.description: ToolTip.text
                     }
                 }
             }

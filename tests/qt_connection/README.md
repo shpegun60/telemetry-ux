@@ -41,7 +41,12 @@ device with another descriptor - then steps one after another, rows removed
 and put back with no device and found again on reconnect, the words said after
 an undo (a partial one, a skipped one), Undo and Redo while the Watchlist
 polls, a restore that records nothing, and format choices merging on a clock of
-the check's own.
+the check's own. Apply, Execute, Call and a Watchlist row's write over the same
+session are never steps: each leaves the steps as they were and keeps its words
+for the first Ctrl+Z - a row's write names the value as read, to write again -
+until a step is taken or the next one recorded. The
+Plot from the Watchlist runs in a window with the window's `UndoRouter`: Ctrl+Z
+takes the step its notice offers.
 
 The same gate also executes `tests/dynamic_watchlist`: controlled ticks and
 completion slots check 65-row chunking, smaller capability budgets, explicit

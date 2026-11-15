@@ -1444,6 +1444,91 @@ void siblingWriteKeepsPolling()
 // read, exact draft, write, confirming read. The Details selection stays; a
 // read-only row, a missing permission, an invalid text and a device refusal
 // are each refused in words; a write while polling keeps polling going.
+// Never a step (UR-1): Apply, Execute, Call and a Watchlist row's write leave
+// the history's steps as they were, and keep their words for the first
+// Ctrl+Z - the old value to write again when the row had one - until the next
+// step, or one taken.
+void deviceActionsNotUndone()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	ux::UndoHistory history;
+	provider->setHistory(&history);
+	const auto settled = [&] {
+		CHECK(await([&] {
+			return !connection.busy() && !provider->busy() && !provider->watchPending() && !provider->watchActive() &&
+			       !provider->watchWriting();
+		}));
+	};
+	// A step to keep: a value on the Watchlist, read once.
+	provider->setWatchIndividual(true);
+	const auto setpoint = endpoint(provider->endpoints(), QStringLiteral("Setpoint"));
+	CHECK(provider->addWatchMany({QVariant::fromValue(setpoint)}).value("added").toInt() == 1);
+	provider->refreshWatch();
+	settled();
+	const auto steps = history.count();
+	const auto kept = history.undoText();
+	CHECK(steps == 1 && kept.startsWith(QStringLiteral("Add ")) && history.irreversibleNote().isEmpty());
+	const auto unchanged = [&] { return history.count() == steps && history.undoText() == kept && history.canUndo(); };
+	// Apply.
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Config"))));
+	CHECK(provider->refresh());
+	settled();
+	CHECK(provider->beginEdit());
+	CHECK(provider->setScalarText(member(provider->values(), QStringLiteral("Gain")), QStringLiteral("2.5")));
+	QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+	CHECK(provider->apply());
+	CHECK(unchanged() && history.irreversibleNote() ==
+	                         QStringLiteral("The write to %1 is not undone; apply the old value to go back.")
+	                             .arg(provider->selection()));
+	CHECK(await([&] { return applied.count() == 1 && !provider->busy(); }));
+	history.acknowledgeIrreversible();
+	// Execute.
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Execute"))));
+	const auto commands = peer.executedCommands();
+	CHECK(provider->executeCommand());
+	CHECK(unchanged() && history.irreversibleNote() ==
+	                         QStringLiteral("The Command %1 was sent; Undo does not take it back.").arg(provider->selection()));
+	CHECK(await([&] { return !provider->busy() && peer.executedCommands() == commands + 1; }));
+	// Call.
+	CHECK(provider->selectEndpoint(endpoint(provider->endpoints(), QStringLiteral("Ping"), {}, 3)));
+	QSignalSpy serviced(provider, &ux::DynamicConfiguratorProvider::serviceFinished);
+	CHECK(provider->callService());
+	CHECK(unchanged() && history.irreversibleNote() ==
+	                         QStringLiteral("The request to %1 was sent; Undo does not take it back.").arg(provider->selection()));
+	CHECK(await([&] { return serviced.count() == 1 && !provider->busy(); }));
+	// A row's write: the value as read, to write again.
+	settled();
+	auto* rows = provider->watchlist();
+	const auto name = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
+	const auto before = rows->data(rows->index(0, 0), ux::WatchlistModel::EditorTextRole).toString();
+	CHECK(!before.isEmpty() && provider->canWriteWatch());
+	QSignalSpy wrote(provider, &ux::DynamicConfiguratorProvider::watchWriteFinished);
+	CHECK(provider->writeWatch(0, QStringLiteral("321")));
+	CHECK(unchanged() && history.irreversibleNote() ==
+	                         QStringLiteral("The write to %1 is not undone; write %2 to go back.").arg(name, before));
+	CHECK(await([&] { return wrote.count() == 1; }));
+	// A step taken ends the words; so does the next one recorded.
+	CHECK(history.undo() && history.irreversibleNote().isEmpty() && provider->watchCount() == 0);
+	CHECK(provider->writeWatch(0, QStringLiteral("1")) == false);
+	CHECK(history.redo() && provider->watchCount() == 1);
+	settled();
+	CHECK(provider->canWriteWatch() && provider->writeWatch(0, QStringLiteral("322")) && !history.irreversibleNote().isEmpty());
+	CHECK(await([&] { return wrote.count() == 2; }));
+	settled();
+	const auto value0 = endpoint(provider->endpoints(), QStringLiteral("Value_0"));
+	CHECK(provider->addWatchMany({QVariant::fromValue(value0)}).value("added").toInt() == 1);
+	CHECK(history.irreversibleNote().isEmpty() && history.count() == steps + 1);
+	connection.disconnect();
+}
+
 void watchRowWrite()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -1828,7 +1913,9 @@ void watchRowsToPlot()
 
 	QQmlApplicationEngine engine;
 	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	engine.rootContext()->setContextProperty(QStringLiteral("testHistory"), &history);
 	QQmlComponent component(&engine);
+	// The window's one Ctrl+Z (UR-1): the router over the provider's history.
 	component.setData(R"qml(
 import QtQuick
 import QtQuick.Controls
@@ -1836,6 +1923,7 @@ import Telemetry.UX
 ApplicationWindow {
     width: 840; height: 480; visible: true
     WatchlistPanel { anchors.fill: parent; provider: testProvider; collapsible: false }
+    UndoRouter { workspace: testHistory }
 }
 )qml", QUrl(QStringLiteral("rows-to-plot.qml")));
 	CHECK(component.isReady());
@@ -1873,7 +1961,7 @@ ApplicationWindow {
 	// One press, one step: the notice offers its Undo, and Ctrl+Z puts every
 	// curve back in its place.
 	CHECK(history.undoText() == QStringLiteral("Remove all curves from the Plot"));
-	CHECK(control(window->contentItem(), QStringLiteral("watchUndo")));
+	CHECK(control(window->contentItem(), QStringLiteral("undoNoticeLink")));
 	QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
 	CHECK(await([&] { return traces->plotted() == three; }));
 	QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
@@ -2605,8 +2693,9 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
-	// TraceView, a C++ type of the module, for the Plot in dragOntoPlot.
-	telemetry::ux::registerQmlTypes();
+	// The module's C++ types for the windows made here: UndoRouter, and
+	// TraceView for the Plot in dragOntoPlot.
+	ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;
@@ -2628,6 +2717,7 @@ int main(int argc, char** argv)
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();
+	deviceActionsNotUndone();
 	watchRowWriteUnknown();
 	watchRowSignedZero();
 	watchRowsToPlot();

@@ -6,8 +6,9 @@
 // Ctrl+Shift+C copy as, Ctrl+C copy, Ctrl+A select all, Esc collapses the
 // selection or closes a bar. Editing is off until Edit: then hex digits (or
 // letters in the text column) write over the bytes, Ctrl+V pastes over them,
-// Ctrl+H replaces what Find finds, Ctrl+Z and Ctrl+Y undo and redo; the
-// viewer's Ctrl+S saves. The status line says how many bytes are changed and
+// Ctrl+H replaces what Find finds - Ctrl+Z and Ctrl+Y undo and redo through
+// the window's UndoRouter, which the viewer's UndoScope points at this file's
+// history; the viewer's Ctrl+S saves. The status line says how many bytes are changed and
 // not saved - Save writes this computer's copy, never the device's file. The
 // actions are the viewer's (FileEditTools, on its row or the host's toolbar,
 // and its `⋯` menu): they call startEditing(), stopEditing(), save(),
