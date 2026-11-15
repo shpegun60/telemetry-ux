@@ -2628,6 +2628,32 @@ Pane {
             property bool differ: false
             onAboutToShow: differ = panel.formatsDiffer()
         }
+        // On the live Plot (LP-1), or off it; its readings are kept either way.
+        MenuItem {
+            id: plotItem
+            objectName: "watchRowPlot"
+            readonly property var traces: panel.provider && panel.provider.watchTraces ? panel.provider.watchTraces : null
+            readonly property string path: rowMenu.item && rowMenu.item.isValue ? rowMenu.item.name : ""
+            readonly property bool shown: traces !== null && path.length > 0 && traces.plotted.indexOf(path) >= 0
+            visible: traces !== null
+            height: visible ? implicitHeight : 0
+            enabled: rowMenu.many === 0 && path.length > 0
+            checkable: true
+            checked: shown
+            text: qsTr("Plot")
+            Accessible.description: path.length > 0 ? qsTr("Shows the readings of %1 on the Plot.").arg(path)
+                                                    : qsTr("Only a value can be plotted, not a group or a Field.")
+            onTriggered: {
+                if (traces.isPlotted(path)) {
+                    traces.unplot(path)
+                } else {
+                    const why = traces.plot(path)
+                    if (why.length > 0)
+                        panel.say(why, false)
+                }
+                checked = Qt.binding(() => plotItem.shown)
+            }
+        }
         MenuSeparator {}
         MenuItem {
             objectName: "watchRowCopy"

@@ -10,6 +10,7 @@
 #include "ScalarEditorMetadata.hpp"
 #include "WatchCoverage.hpp"
 #include "WatchRows.hpp"
+#include "WatchTraces.hpp"
 #include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QPersistentModelIndex>
@@ -314,12 +315,38 @@ struct DynamicConfiguratorProvider::Impl {
 	quint64 previewRevision = 0;
 	QPersistentModelIndex selectedIndex;
 	ValueModel values, responses;
+	// Before watch: a read completing while the Watchlist goes still finds it.
+	WatchTraces traces;
 	DynamicWatchlist watch;
 	// After watch: it goes first, while the rows it shows still exist.
 	WatchRows rows;
 	// Until the Watchlist has a model: its format and the rows' own.
 	WatchNumberFormat watchFormat = WatchNumberFormat::Original;
 	QHash<QString, WatchNumberFormat> rowFormats;
+
+	// The live Plot's readings (LP-1): the rows' paths, taken again whenever
+	// the Watchlist's membership changed, then the frame's values.
+	void feedTraces(const WatchFrame& frame)
+	{
+		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
+		if (!model)
+			return;
+		if (traces.membership() != model->membership()) {
+			QHash<quint64, QString> paths;
+			QHash<QString, bool> categorical;
+			for (int row = 0; row < model->count(); ++row) {
+				const auto key = model->key(row);
+				if (watch_key::isUnresolved(key))
+					continue;
+				const auto index = model->index(row, 0, {});
+				const auto path = index.data(WatchlistModel::NameRole).toString();
+				paths.insert(quint64(key), path);
+				categorical.insert(path, index.data(WatchlistModel::CategoricalRole).toBool());
+			}
+			traces.setPaths(model->membership(), std::move(paths), std::move(categorical));
+		}
+		traces.append(frame);
+	}
 	// Moves with every change of a format, from wherever it comes (a panel, a
 	// project loaded): a reset's Undo holds only while it has not moved.
 	quint64 formatRevision = 0;
@@ -958,8 +985,10 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 		    return !p || p->busy() || p->updating;
 	    });
 	d->watch.setCompletionObserver([weak](const WatchFrame& frame) {
-		if (const auto p = weak.lock(); p && p->q)
+		if (const auto p = weak.lock(); p && p->q) {
+			p->feedTraces(frame);
 			Q_EMIT p->q->watchCompleted(frame);
+		}
 	});
 	// A value inside a struct or array Field is written by writing its whole
 	// Field, which one write must hold.
@@ -1972,6 +2001,11 @@ QAbstractItemModel* DynamicConfiguratorProvider::watchlist() const
 QObject* DynamicConfiguratorProvider::watchRows() const
 {
 	return &d->rows;
+}
+
+QObject* DynamicConfiguratorProvider::watchTraces() const
+{
+	return &d->traces;
 }
 
 bool DynamicConfiguratorProvider::watchReadManySupported() const

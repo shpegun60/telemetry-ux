@@ -2,6 +2,7 @@
 #include <Telemetry/UX/QtConnectionBinding.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/WatchlistModel.hpp>
+#include <Telemetry/UX/WatchTraces.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
 #include <QtCore/QJsonArray>
@@ -359,6 +360,24 @@ void nativeWatchFrames()
 	      frames[6].phase == ux::WatchCompletionPhase::Current && frames[6].rows[0].value.size == 0);
 	CHECK(frames[6].native.client == 0 && frames[6].native.dispatch == 9 &&
 	      frames[6].rows[0].valueStatus != 0 && frames[6].rows[0].value.type.valid());
+	// The live Plot's rings (LP-1): every read kept by its value's path,
+	// plotted or not; a number no double holds exactly (Counter's u64 max),
+	// or a failed read, keeps its place with no number; an enum is drawn as
+	// states.
+	auto* traces = qobject_cast<ux::WatchTraces*>(provider->watchTraces());
+	auto* watched = provider->watchlist();
+	QString counterPath, modePath;
+	for (int row = 0; row < watched->rowCount(); ++row) {
+		const auto path = watched->index(row, 0).data(ux::WatchlistModel::NameRole).toString();
+		if (path.endsWith(QStringLiteral(".Counter")))
+			counterPath = path;
+		if (path.endsWith(QStringLiteral(".Mode")))
+			modePath = path;
+	}
+	CHECK(traces && !counterPath.isEmpty() && !modePath.isEmpty());
+	CHECK(traces->count(modePath) == 3 && traces->latest(modePath).toDouble() == -2.0 && traces->categorical(modePath));
+	CHECK(traces->count(counterPath) == 3 && !traces->latest(counterPath).isValid() && !traces->categorical(counterPath));
+	CHECK(traces->plot(modePath).isEmpty() && traces->plotted() == QStringList{modePath} && traces->newestNs() > 0);
 	peer.setReplyDelay(20);
 	provider->refreshWatch();
 	CHECK(provider->watchPending());

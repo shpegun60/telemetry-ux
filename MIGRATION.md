@@ -497,3 +497,28 @@ takes it (`Item::editorText`: an enum by its code). On `unnamed` Enter writes
 the names in and adds nothing. `selectBatchPath` now refuses only when the
 selection holds an edit to lose (BA-1 refused whenever a Command or a Service
 was selected).
+
+## The live Plot, first slice (LP-1, November 2026)
+
+`DynamicConfiguratorProvider` gains `watchTraces`, a `WatchTraces`: every
+Watchlist value's readings kept in memory by its path - the last ten minutes,
+at most 65,536 readings a value - whether it is plotted or not, filled from the
+same completed reads `watchCompleted` announces, before the signal. A value
+removed from the Watchlist keeps its readings and its line breaks there; a read
+that brought no number (a failure, a drained request, a value no double holds
+exactly) keeps its place with none. `WatchTraces` also holds which values the
+Plot shows (`plotted`, `plot(path)`, `unplot(path)`, at most 16) and their
+colours (`colorIndex`), so the Watchlist's menu and the Plot agree.
+`plotValue(WatchValueBits)` is the one rule for a reading as a number.
+
+`TracePlot` (QML) shows them: Follow, a chip per value with its newest reading
+and ×, and `TraceView`, a C++ `QQuickPaintedItem` that draws the grid, the time
+of day under it, one value axis and a line per value - raw while two readings
+or fewer fall on a device pixel, else each pixel's first, lowest, highest and
+last. It paints with QPainter, so it draws on every backend, the software one
+included; the library takes no QtGraphs dependency. A host that links the
+module statically calls `registerQmlTypes()` so `TraceView` is a QML type.
+
+The Watchlist row's menu gains a checkable **Plot**. `TrendPanel` and
+`TrendHistory` stay for now; the plan retires them when Trend draws with the
+same component.

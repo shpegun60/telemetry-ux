@@ -37,6 +37,10 @@ class DynamicConfiguratorProvider final : public QObject {
 	// by path (a WatchRows over watchlist). Made here, so a host needs no
 	// registered type for the panel's two views.
 	Q_PROPERTY(QObject* watchRows READ watchRows CONSTANT)
+	// Every watched value's last ten minutes of readings, and which of them
+	// the live Plot shows (a WatchTraces, LP-1). It outlives the Watchlist's
+	// rows: a value removed keeps its readings.
+	Q_PROPERTY(QObject* watchTraces READ watchTraces CONSTANT)
 	Q_PROPERTY(bool watchReadManySupported READ watchReadManySupported NOTIFY stateChanged)
 	Q_PROPERTY(bool watchRequiresExplicitIndividual READ watchRequiresExplicitIndividual CONSTANT)
 	Q_PROPERTY(bool watchActive READ watchActive NOTIFY stateChanged)
@@ -161,6 +165,7 @@ public:
 	Q_INVOKABLE bool selectBatchPath(const QString& text);
 	QAbstractItemModel* watchlist() const;
 	QObject* watchRows() const;
+	QObject* watchTraces() const;
 	bool watchReadManySupported() const;
 
 	bool watchRequiresExplicitIndividual() const
