@@ -191,7 +191,7 @@ void cycleGuard(Attempt attempt, const char* name)
 	CHECK((completed == QList<quint32>{originalIds[1], originalIds[2]}));
 	CHECK(watchText(controller, 0) == "18446744073709551615");
 	CHECK(watchText(controller, 1) == "-9223372036854775808");
-	CHECK(watchText(controller, 2) == "-2 (unknown)");
+	CHECK(watchText(controller, 2) == "Unknown (-2)");
 	CHECK(controller.watchStatus().startsWith("Individual FieldRead cycle complete"));
 	CHECK(controller.values()->rowCount() > 0);
 	CHECK(controller.canAddWatch());

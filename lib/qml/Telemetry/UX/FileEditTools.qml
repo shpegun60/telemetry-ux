@@ -12,7 +12,7 @@
 // Viewer never leaves in doubt what it saves. The actions stay in place and
 // are only disabled when they cannot act, so the row never moves under the
 // pointer. Edit shows the bytes (Hex) and starts editing them; pressed again
-// it stops - edits not saved stay. Save writes the copy on this computer; a
+// it stops - edits not saved stay. Save writes the copy in the project; a
 // device's file is changed only by Write to the device, which the host asks
 // about and runs (writeRequested): it says why not in writeBlocked, and while
 // the file is written (writing) nothing here edits it.
@@ -45,7 +45,7 @@ RowLayout {
         disabledReason: tools.readOnly
         text: !tools.content ? qsTr("Edit the bytes of the file in the Viewer")
             : tools.editing ? qsTr("Stop editing %1").arg(tools.fileName)
-            : tools.onDevice ? qsTr("Edit the bytes of %1 - the copy on this computer").arg(tools.fileName)
+            : tools.onDevice ? qsTr("Edit the bytes of %1 - the copy in the project").arg(tools.fileName)
             : qsTr("Edit the bytes of %1").arg(tools.fileName)
         onClicked: tools.editing ? tools.viewer.stopEditing() : tools.viewer.startEditing()
     }
@@ -54,8 +54,8 @@ RowLayout {
         iconName: "save"
         enabled: !!tools.content && tools.content.modified && !tools.writing
         text: !tools.content ? qsTr("Save the file in the Viewer")
-            : tools.onDevice ? qsTr("Save %1 to the copy on this computer; the device's file is unchanged").arg(tools.fileName)
-            : qsTr("Save %1").arg(tools.fileName)
+            : tools.onDevice ? qsTr("Save %1 in the project. The device's file is unchanged.").arg(tools.fileName)
+            : qsTr("Save %1 in the project").arg(tools.fileName)
         shortcutText: qsTr("Ctrl+S")
         onClicked: tools.viewer.save()
     }

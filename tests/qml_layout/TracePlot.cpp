@@ -19,6 +19,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
@@ -28,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -848,6 +850,132 @@ int main(int argc, char** argv)
 			      shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
 		}
 
+		// A narrow dock: as the Plot narrows the zoom buttons go, then the spans
+		// fold into one "1 min ▾" button, then Follow becomes its icon, and last
+		// the axis switch says "Clock ▾"; Back and Measure stay. At every width
+		// nothing in the header overlaps another control or is cut, the axis
+		// switch stays in the graph under its labels, the graph keeps its least
+		// height, and what went is reached by key or menu.
+		{
+			auto* plotRoot = qobject_cast<QQuickItem*>(window->findChild<QObject*>(QStringLiteral("tracePlot")));
+			auto* header = shown(content, "plotBack")->parentItem();
+			auto* graph = shown(content, "plotGraph");
+			CHECK(plotRoot && graph == view->parentItem());
+			const auto sceneRect = [](QQuickItem* item) { return item->mapRectToScene(QRectF(0, 0, item->width(), item->height())); };
+			const auto step = [&] { return plotRoot->property("narrowStep").toInt(); };
+			const auto laidOut = [&] {
+				QList<QQuickItem*> controls;
+				for (auto* child : header->childItems())
+					if (child->isVisible() && !child->objectName().isEmpty())
+						controls << child;
+				for (auto* control : controls) {
+					const auto at = sceneRect(control);
+					if (at.left() < -0.5 || at.right() > plotRoot->width() + 0.5 || at.width() < 1)
+						return false;
+					for (auto* other : controls)
+						if (other != control && at.intersects(sceneRect(other)))
+							return false;
+				}
+				const auto axis = sceneRect(shown(content, "plotTimeTitle"));
+				if (!sceneRect(graph).adjusted(-0.5, -0.5, 0.5, 0.5).contains(axis))
+					return false;
+				for (const auto& label : view->property("timeLabelRects").toList())
+					if (view->mapRectToScene(label.toRectF()).intersects(axis))
+						return false;
+				return labelsWhole(view) && sceneRect(graph).right() <= plotRoot->width() + 0.5 &&
+				       graph->height() >= plotRoot->property("graphMinimumHeight").toDouble() - 0.5;
+			};
+			const auto words = [&](const char* name) { return shown(content, name)->property("text").toString(); };
+			// Narrowing step by step: one thing gives way at a time, in order.
+			int previous = 0, narrowest = 0;
+			QList<int> reached;
+			for (int width = 760; width >= 180; width -= 10) {
+				window->setWidth(width);
+				settle(80);
+				const int now = step();
+				CHECK(now >= previous && now <= 4);
+				previous = now;
+				if (!reached.contains(now))
+					reached << now;
+				CHECK((named(content, "plotZoomIn") != nullptr) == (now < 1) && (named(content, "plotZoomOut") != nullptr) == (now < 1) &&
+				      (named(content, "plotPresets") != nullptr) == (now < 2) && (named(content, "plotSpanButton") != nullptr) == (now >= 2) &&
+				      (named(content, "plotFollow") != nullptr) == (now < 3) && (named(content, "plotFollowIcon") != nullptr) == (now >= 3) &&
+				      shown(content, "plotBack") && shown(content, "plotMeasureToggle") &&
+				      words("plotTimeTitle").startsWith(now >= 4 ? QStringLiteral("Clock") : QStringLiteral("Time of day")));
+				// While the header can hold its controls at all, nothing is cut.
+				if (plotRoot->property("headerRoom").toDouble() >= plotRoot->property("headerMinimum").toDouble())
+					CHECK(laidOut());
+				if (now == 4) {
+					narrowest = width;
+					break;
+				}
+			}
+			CHECK(reached == QList<int>({0, 1, 2, 3, 4}) && narrowest > 0);
+			// At the narrowest: zoom by key, the spans from the button's menu
+			// and by key, Follow from its icon and by End, the axis by its menu.
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Plus);
+			settle(150);
+			CHECK(std::abs(span() - 48) < 1e-6 && !following() && words("plotSpanButton") == QStringLiteral("48 s ▾"));
+			QTest::keyClick(window, Qt::Key_Minus);
+			settle(150);
+			CHECK(std::abs(span() - 60) < 1e-6);
+			click(window, shown(content, "plotSpanButton"));
+			settle(300);
+			click(window, shown(content, "plotSpanItem_600"));
+			settle(200);
+			CHECK(view->property("preset").toInt() == 600 && following() && words("plotSpanButton") == QStringLiteral("10 min ▾"));
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_2);
+			settle(150);
+			CHECK(view->property("preset").toInt() == 60 && words("plotSpanButton") == QStringLiteral("1 min ▾"));
+			auto* followIcon = shown(content, "plotFollowIcon");
+			click(window, followIcon);
+			settle(150);
+			CHECK(!following() && !followIcon->property("switchedOn").toBool());
+			click(window, followIcon);
+			settle(150);
+			CHECK(following() && followIcon->property("switchedOn").toBool() &&
+			      followIcon->property("text").toString() + QStringLiteral(" (") + followIcon->property("shortcutText").toString() +
+			              QLatin1Char(')') == QStringLiteral("Follow the newest reading (End)"));
+			CHECK(view->setProperty("following", false));
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_End);
+			settle(150);
+			CHECK(following() && followIcon->property("switchedOn").toBool());
+			click(window, shown(content, "plotTimeTitle"));
+			settle(300);
+			click(window, shown(content, "plotAxisFromStart"));
+			settle(200);
+			CHECK(view->property("fromStart").toBool() && words("plotTimeTitle") == QStringLiteral("Start ▾"));
+			click(window, shown(content, "plotTimeTitle"));
+			settle(300);
+			click(window, shown(content, "plotAxisTimeOfDay"));
+			settle(200);
+			CHECK(!view->property("fromStart").toBool() && words("plotTimeTitle") == QStringLiteral("Clock ▾"));
+			// 760, 480 and 320: laid out whole, and a cursor at the right edge
+			// puts its chip beside the axis switch, not over it.
+			for (const int width : {760, 480, 320}) {
+				window->setWidth(width);
+				settle(250);
+				CHECK(laidOut());
+				const auto area = view->property("plotArea").toRectF();
+				const auto edge = view->mapToScene(QPointF(area.right() - 3, area.center().y())).toPoint();
+				QTest::mouseMove(window, edge + QPoint(-6, 0));
+				QTest::mouseMove(window, edge);
+				settle(150);
+				CHECK(!sceneRect(shown(content, "plotCursorChip")).intersects(sceneRect(shown(content, "plotTimeTitle"))));
+				if (width < 760)
+					shot(window, argc, argv, QStringLiteral("trace-plot-header-%1").arg(width));
+				auto* back = shown(content, "plotBack");
+				QTest::mouseMove(window, back->mapToScene(QPointF(back->width() + 12, back->height() / 2)).toPoint());
+				settle(100);
+			}
+			window->setWidth(760);
+			settle(250);
+			CHECK(step() == 0 && following());
+		}
+
 		// Analysis: Ctrl and a drag draw a box, and its release zooms the time
 		// to its width and the values to its height; Backspace goes back to the
 		// view before it, and the Back button says when there is none.
@@ -879,11 +1007,199 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_Backspace);
 			settle(200);
 			CHECK(view->property("valueAuto").toBool() && qFuzzyCompare(view->property("spanSeconds").toDouble(), spanBefore));
+			// A level drag, no taller than a pixel: the time only, the values
+			// left fitted.
+			QTest::qWait(700);
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, QPoint(to.x(), from.y()));
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, QPoint(to.x(), from.y()));
+			settle(200);
+			CHECK(view->property("valueAuto").toBool() && view->property("spanSeconds").toDouble() < spanBefore * 0.3);
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(200);
 			// Everything gone back on: the button says there is nothing left.
 			while (view->property("canGoBack").toBool())
 				QMetaObject::invokeMethod(view, "goBack");
 			settle(100);
 			CHECK(!shown(content, "plotBack")->property("enabled").toBool());
+			CHECK(view->setProperty("following", true));
+			settle(150);
+		}
+
+		// Analysis: the numbers stacked in lanes of their own (L). A lane each,
+		// apart, in the order plotted, each fitted to its own number with its
+		// own labels; the cursor's dot on each number in its lane at its
+		// reading; a click on a lane's name focuses it; a box and the keys act
+		// on the lane under the pointer, and Back takes it back. The traces keep
+		// it (a project) and it is one step to undo. Too short for 40 px a
+		// lane, the numbers share one axis again and L says why.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			const auto plottedBefore = traces.plotted();
+			const QString voltage = QStringLiteral("device.Voltage"), gainPath = QStringLiteral("device.Config.Gain");
+			for (const auto& path : {voltage, gainPath})
+				if (!traces.plotted().contains(path))
+					CHECK(traces.plot(path).isEmpty());
+			CHECK(view->setProperty("following", false));
+			settle(200);
+			CHECK(view->property("stackFits").toBool() && view->property("numberLanes").toList().isEmpty() &&
+			      !view->property("stacked").toBool());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_L);
+			settle(300);
+			CHECK(traces.stacked() && view->property("stacked").toBool());
+			// One step, the newest.
+			CHECK(history.undoText() == QStringLiteral("Stack the numbers in lanes") &&
+			      traces.capture().value(QStringLiteral("stacked")).toBool());
+			QStringList numbers;
+			for (const auto& path : traces.plotted())
+				if (!traces.categorical(path))
+					numbers << path;
+			auto lanes = view->property("numberLanes").toList();
+			CHECK(numbers.size() >= 2 && lanes.size() == numbers.size() && view->property("valueAuto").toBool());
+			const auto valuesArea = view->property("valuesArea").toRectF();
+			const auto lane = [&](int i) { return view->property("numberLanes").toList().value(i).toMap(); };
+			// A lane fitted to its own number: its readings in view, drawn as
+			// k x value + b, inside its values with no more than the margins.
+			const auto fitted = [&](int i) {
+				const auto drawn = lane(i);
+				const auto path = drawn.value(QStringLiteral("path")).toString();
+				QVariantMap measured;
+				if (!QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, measured), Q_ARG(QString, path)))
+					return false;
+				const double k = traces.multiplier(path), b = traces.offset(path);
+				const double one = k * measured.value(QStringLiteral("min")).toDouble() + b,
+				             other = k * measured.value(QStringLiteral("max")).toDouble() + b;
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				return measured.value(QStringLiteral("count")).toInt() > 1 && low <= std::min(one, other) &&
+				       high >= std::max(one, other) && high - low <= std::abs(other - one) * 1.25 + 1e-9;
+			};
+			QRectF above;
+			for (int i = 0; i < lanes.size(); ++i) {
+				const auto drawn = lanes[i].toMap();
+				const auto path = drawn.value(QStringLiteral("path")).toString();
+				const auto rect = drawn.value(QStringLiteral("rect")).toRectF();
+				const auto values = drawn.value(QStringLiteral("valueRect")).toRectF();
+				// Its own lane: at least 40 px, inside the numbers' part, under
+				// the one above and never over it, its values inside it.
+				CHECK(path == numbers[i] && rect.height() >= 40 && rect.top() >= valuesArea.top() - 0.5 &&
+				      rect.bottom() <= valuesArea.bottom() + 0.5 && !rect.intersects(above) &&
+				      (i == 0 || rect.top() >= above.bottom() - 0.01) && rect.contains(values));
+				// Its own values: fitted to its own readings in view, drawn as
+				// k x value + b, with labels of its own.
+				QVariantMap measured;
+				CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, measured), Q_ARG(QString, path)));
+				const double k = traces.multiplier(path), b = traces.offset(path);
+				const double drawnMin = std::min(k * measured.value(QStringLiteral("min")).toDouble() + b,
+				                                 k * measured.value(QStringLiteral("max")).toDouble() + b);
+				const double drawnMax = std::max(k * measured.value(QStringLiteral("min")).toDouble() + b,
+				                                 k * measured.value(QStringLiteral("max")).toDouble() + b);
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				CHECK(measured.value(QStringLiteral("count")).toInt() > 1 && low <= drawnMin && high >= drawnMax &&
+				      high - low <= (drawnMax - drawnMin) * 1.25 + 1e-9);
+				const auto labels = drawn.value(QStringLiteral("labels")).toStringList();
+				CHECK(labels.size() >= 2 && labels.size() <= 4);
+				above = rect;
+			}
+			// The two numbers apart: one axis would hold both.
+			CHECK(lane(0).value(QStringLiteral("high")).toDouble() < lane(1).value(QStringLiteral("high")).toDouble() ||
+			      lane(0).value(QStringLiteral("low")).toDouble() > lane(1).value(QStringLiteral("low")).toDouble());
+			CHECK(!named(content, "plotFittedChip") || !shown(content, "plotFittedChip")->isVisible());
+			// The cursor: a dot on each number, in its lane, at its reading.
+			const auto area = view->property("plotArea").toRectF();
+			const auto middle = view->mapToScene(QPointF(area.left() + area.width() * 0.6, lane(0).value(QStringLiteral("rect")).toRectF().center().y())).toPoint();
+			QTest::mouseMove(window, middle + QPoint(-5, 0));
+			QTest::mouseMove(window, middle);
+			settle(200);
+			CHECK(view->property("cursorShown").toBool());
+			for (int i = 0; i < numbers.size(); ++i) {
+				const auto drawn = lane(i);
+				const auto values = drawn.value(QStringLiteral("valueRect")).toRectF();
+				const double low = drawn.value(QStringLiteral("low")).toDouble(), high = drawn.value(QStringLiteral("high")).toDouble();
+				const double y = drawn.value(QStringLiteral("cursorY")).toDouble();
+				QVariant at;
+				CHECK(QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, at), Q_ARG(QString, numbers[i])) && at.isValid());
+				const double expected = traces.multiplier(numbers[i]) * at.toDouble() + traces.offset(numbers[i]);
+				const double read = high - (y - values.top()) / values.height() * (high - low);
+				CHECK(y >= drawn.value(QStringLiteral("rect")).toRectF().top() && y <= drawn.value(QStringLiteral("rect")).toRectF().bottom() &&
+				      std::abs(read - expected) <= (high - low) * 0.01);
+			}
+			shot(window, argc, argv, QStringLiteral("trace-plot-stacked-760"));
+			// A click on a lane's name focuses its curve, again unfocuses it.
+			const auto name = view->mapToScene(lane(1).value(QStringLiteral("nameRect")).toRectF().center()).toPoint();
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, name);
+			settle(150);
+			CHECK(view->property("focusedPath").toString() == numbers[1]);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, name);
+			settle(150);
+			CHECK(view->property("focusedPath").toString().isEmpty());
+			// A box in the second lane zooms its values and leaves the first.
+			const double secondBeforeBox = lane(1).value(QStringLiteral("high")).toDouble() - lane(1).value(QStringLiteral("low")).toDouble();
+			const auto second = lane(1).value(QStringLiteral("valueRect")).toRectF();
+			const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.3, second.top() + second.height() * 0.2)).toPoint();
+			const auto to = view->mapToScene(QPointF(area.left() + area.width() * 0.5, second.top() + second.height() * 0.7)).toPoint();
+			QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+			QTest::mouseMove(window, (from + to) / 2);
+			QTest::mouseMove(window, to);
+			settle(100);
+			CHECK(view->property("boxShown").toBool() && view->property("boxCaptionRect").toRectF().isValid());
+			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, to);
+			settle(250);
+			const double secondSpan = lane(1).value(QStringLiteral("high")).toDouble() - lane(1).value(QStringLiteral("low")).toDouble();
+			// The first lane still fits its own readings, now in the boxed time.
+			CHECK(!view->property("valueAuto").toBool() && secondSpan < secondBeforeBox * 0.6 && secondSpan > secondBeforeBox * 0.4 &&
+			      fitted(0));
+			// Auto (A) stands after the first lane's name, not over it.
+			auto* autoButton = shown(content, "plotAuto");
+			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(0).value(QStringLiteral("nameRect")).toRectF().right());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(250);
+			CHECK(view->property("valueAuto").toBool());
+			// Up over the first lane moves its values, not the second's.
+			const auto firstCentre = view->mapToScene(QPointF(area.center().x(), lane(0).value(QStringLiteral("rect")).toRectF().center().y())).toPoint();
+			QTest::mouseMove(window, firstCentre);
+			settle(100);
+			const auto secondBefore = lane(1);
+			const double firstLow = lane(0).value(QStringLiteral("low")).toDouble();
+			QTest::keyClick(window, Qt::Key_Up);
+			settle(250);
+			CHECK(lane(0).value(QStringLiteral("low")).toDouble() > firstLow &&
+			      lane(1).value(QStringLiteral("low")) == secondBefore.value(QStringLiteral("low")) && !view->property("valueAuto").toBool());
+			// A fits every lane again.
+			QTest::keyClick(window, Qt::Key_A);
+			settle(250);
+			CHECK(view->property("valueAuto").toBool());
+			// Too short for a 40 px lane each: one axis again, and L says why.
+			const int tall = window->height();
+			window->setHeight(170);
+			settle(300);
+			CHECK(!view->property("stackFits").toBool() && view->property("numberLanes").toList().isEmpty() &&
+			      !view->property("valueLabels").toStringList().isEmpty());
+			view->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_L);
+			settle(150);
+			CHECK(!traces.stacked());
+			QTest::keyClick(window, Qt::Key_L);
+			settle(150);
+			CHECK(!traces.stacked() &&
+			      plotRoot->property("notice").toString() ==
+			          QStringLiteral("Too many numbers to stack at this height. Make the Plot taller or remove a curve."));
+			plotRoot->setProperty("notice", QString());
+			window->setHeight(tall);
+			settle(300);
+			// One step: undo stacks them again, and undo once more puts them on
+			// one axis.
+			CHECK(history.undoText() == QStringLiteral("Put the numbers on one axis") && history.undo() && traces.stacked());
+			settle(200);
+			CHECK(view->property("numberLanes").toList().size() == numbers.size());
+			CHECK(history.undo() && !traces.stacked());
+			settle(200);
+			CHECK(view->property("numberLanes").toList().isEmpty() && view->property("valueAuto").toBool());
+			for (const auto& path : traces.plotted())
+				if (!plottedBefore.contains(path))
+					traces.unplot(path);
 			CHECK(view->setProperty("following", true));
 			settle(150);
 		}
@@ -1081,17 +1397,19 @@ int main(int argc, char** argv)
 			CHECK(traces.setAppearance(voltagePath, QString(), 1, 0));
 			// Narrower: the Name column keeps nine body characters, five figures
 			// beside it, then three (At…, Min, Max); the row's tooltip gives the
-			// others. In a 320 px window the toolbar holds the Plot at its own
-			// width, about 480 px in this style, and the table lays out there.
-			const auto narrowed = [&](int width, int columns, const QStringList& tip) {
+			// others. Three are the least: at a 320 px dock the Name takes what
+			// they leave, and the row is still whole inside the Plot.
+			const auto narrowed = [&](int width, int columns, const QStringList& tip, bool nameKept = true) {
 				window->setWidth(width);
 				settle(300);
 				auto* row = rowOf(voltagePath);
 				auto* nameText = shown(row, "plotMeasureName");
 				auto* remove = shown(row, "plotMeasureRemove");
+				const double name = nameText->parentItem()->width();
 				CHECK(measure->property("columns").toInt() == columns &&
-				      nameText->parentItem()->width() >= measure->property("nameWidth").toDouble() - 0.5 &&
-				      remove->x() + remove->width() <= row->width() + 0.5);
+				      (nameKept ? name >= measure->property("nameWidth").toDouble() - 0.5 : name > 0) &&
+				      remove->x() + remove->width() <= row->width() + 0.5 &&
+				      remove->mapToScene(QPointF(remove->width(), 0)).x() <= window->width() + 0.5);
 				const auto hidden = row->property("hidden").toString();
 				CHECK(hidden.split(QStringLiteral(" · ")).size() == tip.size());
 				for (int i = 0; i < tip.size(); ++i)
@@ -1104,8 +1422,10 @@ int main(int argc, char** argv)
 			};
 			narrowed(560, 5, {QStringLiteral("Pk-pk"), QStringLiteral("Std dev")});
 			CHECK(named(rowOf(voltagePath), "plotMeasure_delta") && !named(rowOf(voltagePath), "plotMeasure_pkpk"));
-			narrowed(320, 3, {QStringLiteral("Δ"), QStringLiteral("Mean"), QStringLiteral("Pk-pk"), QStringLiteral("Std dev")});
+			narrowed(400, 3, {QStringLiteral("Δ"), QStringLiteral("Mean"), QStringLiteral("Pk-pk"), QStringLiteral("Std dev")});
+			narrowed(320, 3, {QStringLiteral("Δ"), QStringLiteral("Mean"), QStringLiteral("Pk-pk"), QStringLiteral("Std dev")}, false);
 			CHECK(!named(rowOf(voltagePath), "plotMeasure_delta") && named(rowOf(voltagePath), "plotMeasure_max"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-measure-320"));
 			window->setWidth(760);
 			settle(300);
 			// Many curves: the rows stop at 40 % of the Plot's height and
@@ -1118,7 +1438,7 @@ int main(int argc, char** argv)
 				const double rowHeight = all(content, "plotMeasureRow").first()->height();
 				const double rowsCap = std::max(3 * rowHeight, qobject_cast<QQuickItem*>(plotRoot)->height() * 0.4);
 				CHECK(rows->height() <= rowsCap + 0.5 && rows->property("contentHeight").toDouble() > rows->height() + rowHeight &&
-				      view->height() > 100);
+				      view->height() >= plotRoot->property("graphMinimumHeight").toDouble() - 0.5);
 				shot(window, argc, argv, QStringLiteral("trace-plot-measure-many-760"));
 			}
 			for (int i = 0; i < 12; ++i)
@@ -1296,6 +1616,119 @@ int main(int argc, char** argv)
 			CHECK(!gone);
 			CHECK(labelsWhole(view));
 			shot(window, argc, argv, QStringLiteral("trace-plot-recorded-760"));
+
+			// The Trend's words and rules (TR-2): a finished run offers no
+			// Follow, the axis counts from the run's start, and a chip with no
+			// cursor gives the reading at the right edge of the view, not the
+			// run's last.
+			auto* trend = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(trend && trend->setProperty("recording", true));
+			view->setProperty("fromStart", true);
+			settle(300);
+			CHECK(!named(content, "plotFollow") && !named(content, "plotBehind") && shown(content, "plotPresets"));
+			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("From run start (s)")));
+			// Being written: Follow is offered again.
+			trend->setProperty("writing", true);
+			settle(100);
+			CHECK(shown(content, "plotFollow"));
+			trend->setProperty("writing", false);
+			settle(100);
+			// Back an hour from the end: the speed's chip reads at the edge.
+			CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 600)));
+			settle(200);
+			CHECK(QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -6.0)));
+			settle(400);
+			QVariant atRight;
+			CHECK(QMetaObject::invokeMethod(view, "valueAtRight", Q_RETURN_ARG(QVariant, atRight),
+			                                Q_ARG(QString, QStringLiteral("run.Speed"))));
+			const auto* speed = recorded.readings(QStringLiteral("run.Speed"));
+			CHECK(atRight.isValid() && speed && atRight.toDouble() != speed->back().value);
+			bool edge = false;
+			for (auto* chip : all(content, "plotChip"))
+				if (auto* name = named(chip, "plotChipName"); name && name->property("text").toString() == QStringLiteral("run.Speed"))
+					edge = named(chip, "plotChipValue")->property("text").toString() ==
+					       QString::number(atRight.toDouble(), 'g', 6).replace(QLatin1Char('-'), QChar(0x2212));
+			CHECK(edge);
+			// More of a run being written: after its own readings, kept whole;
+			// nothing for a path never given.
+			const auto before = recorded.count(QStringLiteral("run.Speed"));
+			const auto last = speed->back().ns;
+			recorded.appendRecorded(QStringLiteral("run.Speed"), {{last + 100'000'000, 3.5}, {last + 200'000'000, 4.5}});
+			recorded.appendRecorded(QStringLiteral("run.Missing"), {{last, 1}});
+			CHECK(recorded.count(QStringLiteral("run.Speed")) == before + 2 && recorded.latest(QStringLiteral("run.Speed")).toDouble() == 4.5 &&
+			      !recorded.readings(QStringLiteral("run.Missing")) && recorded.newestNs() == last + 200'000'000);
+			// The host's word over the graph.
+			trend->setProperty("message", QStringLiteral("No readings here. Press All to see the whole run."));
+			settle(100);
+			CHECK(shown(content, "plotMessage")->property("text").toString().startsWith(QStringLiteral("No readings here")));
+			trend->setProperty("message", QString());
+			// A short dock keeps the chips to one row; the rest scroll.
+			for (int i = 0; i < 14; ++i) {
+				const auto path = QStringLiteral("run.Extra Value %1").arg(i);
+				recorded.setRecorded(path, {{start, double(i)}, {start + 1'000'000'000, double(i)}}, false);
+				CHECK(recorded.plot(path).isEmpty());
+			}
+			window->resize(760, 320);
+			settle(400);
+			auto* chipScroll = shown(content, "plotLegendScroll");
+			CHECK(chipScroll->property("scrolls").toBool() && std::abs(chipScroll->height() - shown(content, "plotChip")->height()) < 1.5);
+			const auto oneRow = chipScroll->height();
+			shot(window, argc, argv, QStringLiteral("trace-plot-trend-chips-760"));
+			window->resize(760, 520);
+			settle(400);
+			CHECK(shown(content, "plotLegendScroll")->height() > oneRow * 2);
+			// A narrow dock: the Trend gives way as the live Plot does, with the
+			// host's controls at the ends of the row - the leading keep their width
+			// while the Plot's own give way, the trailing go after Follow's icon
+			// and before the axis' words; Back and Measure stay.
+			trend->setProperty("writing", true);
+			QQmlComponent hostControl(&engine);
+			hostControl.setData("import QtQuick; Rectangle { implicitWidth: 120; implicitHeight: 20 }", QUrl());
+			std::unique_ptr<QQuickItem> leadingControl(qobject_cast<QQuickItem*>(hostControl.create()));
+			std::unique_ptr<QQuickItem> trailingControl(qobject_cast<QQuickItem*>(hostControl.create()));
+			auto* leadingSlot = trend->findChild<QQuickItem*>(QStringLiteral("plotLeading"));
+			auto* trailingSlot = trend->findChild<QQuickItem*>(QStringLiteral("plotTrailing"));
+			CHECK(leadingControl && trailingControl && leadingSlot && trailingSlot);
+			leadingControl->setParentItem(leadingSlot);
+			trailingControl->setParentItem(trailingSlot);
+			{
+				int previous = 0, trailingWent = 0, briefAt = 0;
+				QList<int> reached;
+				for (int width = 900; width >= 200; width -= 10) {
+					window->resize(width, 320);
+					settle(80);
+					const int now = trend->property("narrowStep").toInt();
+					CHECK(now >= previous);
+					previous = now;
+					if (!reached.contains(now))
+						reached << now;
+					const bool trailingShown = named(content, "plotTrailing") != nullptr;
+					CHECK(shown(content, "plotLeading") && shown(content, "plotBack") && shown(content, "plotMeasureToggle") &&
+					      (named(content, "plotZoomIn") != nullptr) == (now < 1) && (named(content, "plotSpanButton") != nullptr) == (now >= 2) &&
+					      (named(content, "plotFollowIcon") != nullptr) == (now >= 3) && (trailingShown || now >= 3) && (!trailingShown || now < 4));
+					// Whole while shown: the trailing inside the Plot, the leading at its width.
+					if (trailingShown)
+						CHECK(trailingControl->mapToScene(QPointF(trailingControl->width(), 0)).x() <= width + 0.5);
+					if (trend->property("headerRoom").toDouble() >= trend->property("headerMinimum").toDouble())
+						CHECK(leadingControl->width() >= 119.5);
+					if (!trailingShown && trailingWent == 0)
+						trailingWent = width;
+					const bool brief = shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Start"));
+					CHECK(brief == (now >= 4));
+					if (now == 4) {
+						briefAt = width;
+						break;
+					}
+				}
+				CHECK(reached == QList<int>({0, 1, 2, 3, 4}) && briefAt > 0 && trailingWent >= briefAt);
+				shot(window, argc, argv, QStringLiteral("trace-plot-trend-narrow"));
+			}
+			trailingControl.reset();
+			leadingControl.reset();
+			trend->setProperty("writing", false);
+			window->resize(760, 360);
+			trend->setProperty("recording", false);
+			view->setProperty("fromStart", false);
 			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
 			settle(300);
 		}
