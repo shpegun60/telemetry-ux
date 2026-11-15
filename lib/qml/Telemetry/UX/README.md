@@ -469,7 +469,8 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
   Watchlist in decimal", "Show 3 values like the Watchlist", "Reset number
   formats to Original", "Plot device.Voltage", "Remove all curves from the
   Plot", "Change the curve of device.Voltage", "Change the points of
-  device.Voltage", "Show measurement points", "Add device.Voltage to the
+  device.Voltage", "Show measurement points", "Stack the numbers in lanes",
+  "Add device.Voltage to the
   Batch", "Move device.Voltage to item 2 in the Batch", "Clear the Batch"; a
   file's names the file: "Overwrite 4 bytes in
   values.bin", "Replace 3 places in values.bin", "Restore the device's version
@@ -480,7 +481,8 @@ keeps linked), over a `QUndoStack`. A host makes one for its workspace -
   (`watch.rows`), formats by path, `""` for the Watchlist's own
   (`watch.format`), bytes by offset, `"*"` for the whole copy (`file.bytes`),
   curves by path with their place and colour (`plot.curves`), a curve's look
-  by path (`plot.look`), the Plot's points (`plot.points`) and Batch items by
+  by path (`plot.look`), the Plot's points (`plot.points`), its numbers stacked
+  in lanes or not (`plot.stack`) and Batch items by
   uid with their place and the row (`batch.items`), never by row index or key. Undo puts every part's state before back through
   its target (`UndoTarget::applyUndoState`), redo its state after; both are
   idempotent. `UndoHistory::kinds()` lists every kind; a host declares one of
