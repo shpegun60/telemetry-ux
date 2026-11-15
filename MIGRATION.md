@@ -1191,6 +1191,20 @@ result in its notice line. `Clipboard.setImage` and `hasImage` are new;
   is what Enter does with a suggestion, and `pickedByKeys` says whether the
   highlight was moved by the arrow keys.
 
+## ValueCell: every choice with its code (November 2026)
+
+- **Codes beside the names.** A bool's list and closed box read "false (0)"
+  and "true (1)" (they had read false and true since BA-4); an enum's read
+  "Idle (0)", and so does an enum's closed cell, which had shown the name
+  alone. This holds wherever ValueCell is used: Details, the Batch's request
+  and write cells and any host table.
+- **`ValueCell.hexCodes`** (default false) writes the codes in hexadecimal,
+  "Idle (0x00)", padded to the type's width, as the Watchlist's hex form
+  shows them (WL-8).
+- A host check that compared a bool choice's `currentText` with "false" or
+  "true" compares it with "false (0)" or "true (1)"; the value written is
+  still `false` or `true`.
+
 ## The designer's fixes to the Plot's analysis tools (November 2026)
 
 From the design review of the analysis tools. **Behaviour changes:** "From
