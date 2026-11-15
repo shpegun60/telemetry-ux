@@ -14,6 +14,7 @@
 #include "ValuesContent.hpp"
 #include <integration/qt/ConnectionSession.hpp>
 #include <integration/qt/ConnectionStorage.hpp>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -33,8 +34,15 @@ bool descriptorFingerprint(const QByteArray& head, quint64& fingerprint)
 	return true;
 }
 
-// A descriptor file with this fingerprint, whole; empty when it is not one.
-QByteArray descriptorIn(const QString& path, quint64 fingerprint)
+// What a descriptor file in a folder is to a values file: not there (or of
+// another fingerprint), there and read, or there with this fingerprint in its
+// header but its bytes not a descriptor this program reads - a copy changed
+// after it was built. A broken one is never used.
+struct Beside {
+	QByteArray bytes;
+	bool broken = false;
+};
+Beside descriptorBeside(const QString& path, quint64 fingerprint)
 {
 	QFile file(path);
 	if (!file.open(QIODevice::ReadOnly) || file.size() > 16 * 1024 * 1024)
@@ -42,7 +50,16 @@ QByteArray descriptorIn(const QString& path, quint64 fingerprint)
 	quint64 found = 0;
 	if (!descriptorFingerprint(file.peek(24), found) || found != fingerprint)
 		return {};
-	return file.readAll();
+	auto bytes = file.readAll();
+	if (DescriptorContent::check(bytes).kind != DescriptorContent::Problem::None)
+		return {{}, true};
+	return {std::move(bytes), false};
+}
+
+// A descriptor file with this fingerprint that reads, whole; empty otherwise.
+QByteArray descriptorIn(const QString& path, quint64 fingerprint)
+{
+	return descriptorBeside(path, fingerprint).bytes;
 }
 } // namespace
 
@@ -57,6 +74,17 @@ void installTelemetryCodecs(OpenFiles& files)
 		    return DescriptorContent::names(identity.devicePath) ? FileMatch::Path : FileMatch::No;
 	    },
 	    [](const QByteArray& bytes, const FileCodecContext&, QString& error) -> std::unique_ptr<QObject> {
+		    // The reason in the files-only card's words; a fingerprint that
+		    // does not match is a copy changed after it was built.
+		    if (const auto problem = DescriptorContent::check(bytes);
+		        problem.kind != DescriptorContent::Problem::None) {
+			    error = problem.kind == DescriptorContent::Problem::Fingerprint
+			                ? QCoreApplication::translate("TelemetryCodecs",
+			                                              "its fingerprint does not match its content, so it was "
+			                                              "changed after it was built")
+			                : DescriptorContent::phrase(problem);
+			    return nullptr;
+		    }
 		    auto content = std::make_unique<DescriptorContent>(bytes);
 		    if (!content->valid()) {
 			    error = content->error();
@@ -65,6 +93,9 @@ void installTelemetryCodecs(OpenFiles& files)
 		    return content;
 	    },
 	    QUrl(QStringLiteral("qrc:/qt/qml/Telemetry/UX/DescriptorView.qml"))});
+	files.setCodecProblem(QStringLiteral("Descriptor"),
+	                      QCoreApplication::translate("TelemetryCodecs",
+	                                                  "This descriptor cannot be read: %1. It is shown as %2."));
 
 	files.addCodec(FileCodec{
 	    QStringLiteral("Values"),
@@ -76,15 +107,30 @@ void installTelemetryCodecs(OpenFiles& files)
 	    [](const QByteArray& bytes, const FileCodecContext& context, QString& error) -> std::unique_ptr<QObject> {
 		    quint64 fingerprint = 0;
 		    QByteArray descriptor;
+		    QString besideProblem;
 		    if (ValuesContent::fingerprintOf(bytes, fingerprint)) {
-			    // The descriptor downloaded with it first: the same device, the same moment.
-			    if (!context.localFile.isEmpty())
-				    descriptor = descriptorIn(QFileInfo(context.localFile).dir().filePath(QStringLiteral("descriptor.bin")),
-				                              fingerprint);
+			    // The descriptor downloaded with it first: the same device, the
+			    // same moment. One beside it that cannot be read never blocks
+			    // the rest - the connected device's when its fingerprint is this
+			    // file's, or one in a device's folder.
+			    if (!context.localFile.isEmpty()) {
+				    const QFileInfo local(context.localFile);
+				    auto beside = descriptorBeside(local.dir().filePath(QStringLiteral("descriptor.bin")), fingerprint);
+				    descriptor = std::move(beside.bytes);
+				    if (beside.broken)
+					    besideProblem =
+					        QCoreApplication::translate("TelemetryCodecs",
+					                                    "%1 cannot be decoded: %2 beside it cannot be read.")
+					            .arg(QFileInfo(context.devicePath.isEmpty() ? context.localFile : context.devicePath)
+					                     .fileName(),
+					                 local.dir().dirName() + QStringLiteral("/descriptor.bin"));
+			    }
 			    if (descriptor.isEmpty() && context.descriptor)
 				    descriptor = context.descriptor(fingerprint);
 		    }
 		    auto content = std::make_unique<ValuesContent>(bytes, descriptor);
+		    if (content->needsDescriptor())
+			    content->setBesideProblem(besideProblem);
 		    quint64 connected = 0;
 		    if (content->needsDescriptor() && context.connectedFingerprint && context.connectedFingerprint(connected))
 			    content->setConnectedFingerprint(connected);

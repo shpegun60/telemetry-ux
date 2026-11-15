@@ -203,11 +203,97 @@ struct DescriptorContent::Schema {
 	rt::RuntimeSchema schema;
 };
 
+DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
+{
+	using Kind = Problem::Kind;
+	const auto size = static_cast<qint64>(bytes.size());
+	const auto u16 = [&](qsizetype at) {
+		return static_cast<quint16>(static_cast<quint8>(bytes[at]) | static_cast<quint8>(bytes[at + 1]) << 8);
+	};
+	const auto u32 = [&](qsizetype at) {
+		quint32 value = 0;
+		for (int i = 0; i < 4; ++i)
+			value |= static_cast<quint32>(static_cast<quint8>(bytes[at + i])) << (8 * i);
+		return value;
+	};
+	// The header as the SDK's parser lays it out: "TDS3", version 3, 0, a
+	// header of 64 bytes, 0, then the whole file's size.
+	constexpr quint16 version = 3;
+	constexpr qsizetype headerBytes = 64;
+	if (size == 0)
+		return {Kind::Empty};
+	if (size > static_cast<qint64>(telemetry::Limits::maxDescriptorBytes))
+		return {Kind::TooLarge, -1, size};
+	const QByteArray magic = QByteArrayLiteral("TDS3");
+	if (!(size < magic.size() ? magic.startsWith(bytes) : bytes.startsWith(magic)))
+		return {Kind::Layout, 0};
+	if (size < 6)
+		return {Kind::EndsEarly, size};
+	if (u16(4) != version)
+		return {Kind::Version, -1, u16(4)};
+	if (size < headerBytes)
+		return {Kind::EndsEarly, size};
+	for (const qsizetype at : {6, 8, 10})
+		if (u16(at) != (at == 8 ? headerBytes : 0))
+			return {Kind::Layout, at};
+	const qint64 declared = u32(12);
+	if (declared > size)
+		return {Kind::EndsEarly, size};
+	if (declared < size)
+		return {Kind::Layout, declared};
+	// The rest is the SDK's: the fingerprint over every byte, then every record.
+	const std::span<const std::byte> input{reinterpret_cast<const std::byte*>(bytes.constData()),
+	                                       static_cast<std::size_t>(bytes.size())};
+	rt::RuntimeSchemaWorkspace sizing{{}, {}, {}, {}, {}};
+	const auto required = rt::RuntimeSchema::parse(input, sizing);
+	if (!required && required.status != rt::Status::Capacity)
+		return {required.error == rt::ParseError::Fingerprint ? Kind::Fingerprint : Kind::Layout};
+	std::vector<rt::RuntimeType> types(required.requirements.types);
+	std::vector<rt::RuntimeMember> members(required.requirements.members);
+	std::vector<rt::RuntimeEnumEntry> enums(required.requirements.enumEntries);
+	std::vector<rt::RuntimeCatalog> catalogs(required.requirements.catalogs);
+	std::vector<rt::RuntimeEndpoint> endpoints(required.requirements.endpoints);
+	rt::RuntimeSchemaWorkspace workspace(types, members, enums, catalogs, endpoints);
+	const auto parsed = rt::RuntimeSchema::parse(input, workspace);
+	if (!parsed)
+		return {parsed.error == rt::ParseError::Fingerprint ? Kind::Fingerprint : Kind::Layout};
+	return {};
+}
+
+QString DescriptorContent::phrase(const Problem& problem)
+{
+	switch (problem.kind) {
+		case Problem::Empty:
+			return tr("it is empty");
+		case Problem::TooLarge:
+			return tr("it is %L1 bytes, more than the %L2 bytes this program accepts")
+			    .arg(problem.value)
+			    .arg(telemetry::Limits::maxDescriptorBytes);
+		case Problem::Version:
+			return tr("it is version %1; this program reads version %2").arg(problem.value).arg(3);
+		case Problem::EndsEarly:
+			return tr("it ends early, at byte %L1").arg(problem.at);
+		case Problem::Fingerprint:
+			return tr("its fingerprint does not match its content");
+		case Problem::Layout:
+			return problem.at >= 0 ? tr("its bytes are not laid out as a descriptor (at byte %L1)").arg(problem.at)
+			                       : tr("its bytes are not laid out as a descriptor");
+		case Problem::None:
+			break;
+	}
+	return {};
+}
+
 DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
     : QObject(parent), tree_(this), shown_(DescriptorTreeModel::NameRole, DescriptorTreeModel::PathRole, this)
 {
 	shown_.setSourceModel(&tree_);
 	tree_.populate = [this](Node& node) { populate(node); };
+	// The reason in words first; the parse below then only builds.
+	if (const auto problem = check(bytes); problem.kind != Problem::None) {
+		error_ = phrase(problem);
+		return;
+	}
 	auto parsedSchema = std::make_unique<Schema>();
 	parsedSchema->bytes = bytes;
 	const std::span<const std::byte> input{reinterpret_cast<const std::byte*>(parsedSchema->bytes.constData()),
@@ -215,9 +301,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 	rt::RuntimeSchemaWorkspace sizing{{}, {}, {}, {}, {}};
 	const auto required = rt::RuntimeSchema::parse(input, sizing);
 	if (!required && required.status != rt::Status::Capacity) {
-		error_ = tr("not a descriptor this program reads (status %1, error %2)")
-		             .arg(static_cast<unsigned>(required.status))
-		             .arg(static_cast<unsigned>(required.error));
+		error_ = phrase({Problem::Layout});
 		return;
 	}
 	parsedSchema->types.resize(required.requirements.types);
@@ -230,9 +314,7 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 	    parsedSchema->endpoints);
 	const auto parsed = rt::RuntimeSchema::parse(input, *parsedSchema->workspace);
 	if (!parsed) {
-		error_ = tr("not a descriptor this program reads (status %1, error %2)")
-		             .arg(static_cast<unsigned>(parsed.status))
-		             .arg(static_cast<unsigned>(parsed.error));
+		error_ = phrase({Problem::Layout});
 		return;
 	}
 	parsedSchema->schema = parsed.schema;

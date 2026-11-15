@@ -83,6 +83,12 @@ FocusScope {
     function openReplace() {
         if (!pane.content || grid.size === 0)
             return
+        // Not edited here at all: Find, and the reason.
+        if (pane.readOnly.length > 0) {
+            openBar("find")
+            barProblem.text = pane.readOnly
+            return
+        }
         // Without Edit: Find, and why Replace is not there.
         if (!pane.content.editing) {
             openBar("find")
@@ -105,7 +111,11 @@ FocusScope {
     property string saveProblem: ""
     // A copy of a device's file: Save writes this computer's copy, never the device's.
     readonly property bool onDevice: !!content && content.devicePath.length > 0
+    // Why this file is not edited here, or empty (FileContent.readOnlyReason).
+    readonly property string readOnly: content && content.readOnlyReason ? content.readOnlyReason : ""
     function startEditing() {
+        if (pane.readOnly.length > 0)
+            return
         pane.content.editing = true
         grid.forceActiveFocus()
     }
@@ -212,19 +222,21 @@ FocusScope {
         objectName: "hexContextMenu"
         MenuItem {
             objectName: "hexEditItem"
-            text: pane.content && pane.content.editing ? qsTr("Stop &editing") : qsTr("&Edit bytes")
-            enabled: grid.size > 0
+            text: pane.content && pane.content.editing ? qsTr("Stop &editing")
+                : pane.readOnly.length > 0 ? qsTr("&Edit bytes (read-only)") : qsTr("&Edit bytes")
+            enabled: grid.size > 0 && pane.readOnly.length === 0
             onTriggered: pane.content.editing ? pane.content.editing = false : pane.startEditing()
         }
         MenuItem {
             objectName: "hexPasteItem"
-            text: qsTr("&Paste over the bytes\tCtrl+V")
+            text: pane.readOnly.length > 0 ? qsTr("&Paste over the bytes (read-only)\tCtrl+V")
+                                           : qsTr("&Paste over the bytes\tCtrl+V")
             enabled: !!pane.content && pane.content.editing && grid.size > 0
             onTriggered: grid.paste()
         }
         MenuItem {
             objectName: "hexReplaceItem"
-            text: qsTr("Repl&ace…\tCtrl+H")
+            text: pane.readOnly.length > 0 ? qsTr("Repl&ace… (read-only)\tCtrl+H") : qsTr("Repl&ace…\tCtrl+H")
             enabled: !!pane.content && pane.content.editing && grid.size > 0
             onTriggered: pane.openReplace()
         }
@@ -653,7 +665,9 @@ FocusScope {
                 // where the difference would be.
                 readonly property bool writtenSame: !!pane.content && pane.content.hasReference
                                                     && pane.content.referenceWritten && pane.content.referenceDiffers === 0
-                visible: editState || deviceDiffers || writtenSame || pane.saveProblem.length > 0
+                readonly property bool readOnlyState: pane.readOnly.length > 0 && !editState && !deviceDiffers
+                                                      && !writtenSame
+                visible: editState || deviceDiffers || writtenSame || readOnlyState || pane.saveProblem.length > 0
                 Layout.maximumWidth: pane.width / 2
                 elide: Text.ElideRight
                 font.pointSize: Type.caption
@@ -664,6 +678,8 @@ FocusScope {
                         return pane.saveProblem
                     if (!pane.content)
                         return ""
+                    if (readOnlyState)
+                        return qsTr("Read-only")
                     if (!editState && !deviceDiffers)
                         return qsTr("Written to the device · checked")
                     if (!editState)
@@ -680,8 +696,9 @@ FocusScope {
                 }
                 HoverHandler { id: editStateHover }
                 ToolTip.visible: editStateHover.hovered && !!pane.content
-                                 && (pane.content.editedBytes > 0 || deviceDiffers || writtenSame)
-                ToolTip.text: !editState && !deviceDiffers
+                                 && (pane.content.editedBytes > 0 || deviceDiffers || writtenSame || readOnlyState)
+                ToolTip.text: readOnlyState ? pane.readOnly
+                            : !editState && !deviceDiffers
                               ? qsTr("Same as %1").arg(pane.content ? pane.content.referenceLabel : "")
                             : !editState ? qsTr("This copy is saved on this computer and differs from %1; Restore the device's version puts them back")
                                                 .arg(pane.content ? pane.content.referenceLabel : "")

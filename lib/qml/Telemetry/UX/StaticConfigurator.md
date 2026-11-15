@@ -46,7 +46,7 @@ provider of the same view.
 ## Static Watchlist
 
 Select a readable scalar Field or enum and call `addWatch()`. Membership is limited
-to 1024 distinct Fields from the validated generated metadata, not by a 32-item
+to 8192 distinct Fields (`watchlistRowLimit`) from the validated generated metadata, not by a 32-item
 wire-operation budget. `watchLimit` exposes that host limit. `refreshWatch()`
 performs one sequential cycle; `startWatch()` requests cycles at
 `watchIntervalMs` (0–60,000 ms). Zero selects continuous cycles using the provider's

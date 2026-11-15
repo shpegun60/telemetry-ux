@@ -41,10 +41,12 @@ struct WatchSample {
 };
 
 // The most rows one Watchlist holds, in both providers: whole Fields and values
-// inside struct or array Fields. One polling cycle then needs at most 32
-// ReadMany portions plus one FieldRead per struct or array Field watched;
-// adding past it reports "capacity".
-inline constexpr int watchlistRowLimit = 1024;
+// inside struct or array Fields. One polling cycle then needs at most 256
+// ReadMany portions of 32 plus one FieldRead per struct or array Field
+// watched; adding past it reports "capacity". 1024 until 15 November 2026,
+// when the owner let it grow (WL-7): a cycle of 1024 values took 41 ms on
+// Windows once an exchange stopped waiting for the session's timer.
+inline constexpr int watchlistRowLimit = 8192;
 
 // Stable codes beside a row's display status. Providers word their statuses
 // differently ("NotRead", "Not read", refusal texts); the codes do not differ.

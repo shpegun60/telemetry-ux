@@ -93,6 +93,7 @@ void WatchTraces::setPaths(quint64 membership, QHash<quint64, QString> paths, QH
 			broke = true;
 		}
 	membership_ = membership;
+	watched_ = std::move(after);
 	paths_ = std::move(paths);
 	categorical_ = std::move(categorical);
 	if (broke) {
@@ -129,6 +130,10 @@ void WatchTraces::append(const WatchFrame& frame)
 	}
 	if (!any)
 		return;
+	// Reading again: the pause ends at this reading. A drained read is the
+	// last of the old run, not the first of a new one.
+	if (!pauses_.empty() && !pauses_.back().toNs && frame.phase != WatchCompletionPhase::Drained)
+		pauses_.back().toNs = std::max(ns, pauses_.back().fromNs);
 	if (total_ > keptTotal)
 		enforceCap();
 	newestNs_ = std::max(newestNs_, ns);
@@ -275,9 +280,15 @@ int WatchTraces::count(const QString& path) const
 	return found ? int(found->size()) : 0;
 }
 
-void WatchTraces::breakAll()
+void WatchTraces::breakAll(PauseReason reason)
 {
 	const auto now = nowNs();
+	// One pause for one silence: a disconnect while stopped stays "stopped".
+	if (newestNs_ && (pauses_.empty() || pauses_.back().toNs)) {
+		pauses_.push_back({std::max(now, newestNs_), 0, reason});
+		if (pauses_.size() > 1024)
+			pauses_.pop_front();
+	}
 	bool broke = false;
 	for (auto it = traces_.begin(); it != traces_.end(); ++it)
 		if (!it->readings.empty() && !std::isnan(it->readings.back().value)) {
@@ -288,6 +299,17 @@ void WatchTraces::breakAll()
 		++revision_;
 		announce();
 	}
+}
+
+double WatchTraces::lastReadUtcMs(const QString& path) const
+{
+	const auto it = traces_.constFind(path);
+	if (it == traces_.cend())
+		return std::numeric_limits<double>::quiet_NaN();
+	for (auto reading = it->readings.crbegin(); reading != it->readings.crend(); ++reading)
+		if (!std::isnan(reading->value))
+			return double(anchor_.utcMs) + double(reading->ns - anchor_.monotonicNs) / 1e6;
+	return std::numeric_limits<double>::quiet_NaN();
 }
 
 QString WatchTraces::refusal(const QString& path) const
@@ -388,6 +410,7 @@ bool WatchTraces::restore(const QVariantMap& state)
 
 void WatchTraces::clear()
 {
+	pauses_.clear();
 	traces_.clear();
 	total_ = 0;
 	newestNs_ = 0;

@@ -105,8 +105,27 @@ class DescriptorContent final : public QObject {
 	// ones the methods below take.
 	Q_PROPERTY(QAbstractItemModel* endpoints READ endpoints CONSTANT)
 public:
-	// Parses bytes with the SDK's RuntimeSchema; invalid() with error() when
-	// they are not a descriptor this SDK reads.
+	// Why bytes are not a descriptor this program reads - the files-only
+	// card's list (doc/DEVICE_FILES.md in the client): empty, too large, a
+	// version it does not read, ending early at a byte, a fingerprint that
+	// does not match the content; anything else is bytes not laid out as a
+	// descriptor, at the byte where that shows when the header says it.
+	struct Problem {
+		enum Kind { None, Empty, TooLarge, Version, EndsEarly, Fingerprint, Layout };
+		Kind kind = None;
+		// The byte: where the file ends early, or where its layout breaks; -1 when not known.
+		qint64 at = -1;
+		// The file's size (TooLarge) or the version it says (Version).
+		qint64 value = 0;
+	};
+	// Reads bytes as the SDK's RuntimeSchema does, the header first; None when they parse.
+	static Problem check(const QByteArray& bytes);
+	// The problem as a sentence's end, after a colon: "its fingerprint does
+	// not match its content". Empty for None. No status numbers.
+	static QString phrase(const Problem& problem);
+
+	// Parses bytes with the SDK's RuntimeSchema; invalid() with error() - the
+	// phrase of check() - when they are not a descriptor this SDK reads.
 	explicit DescriptorContent(const QByteArray& bytes, QObject* parent = nullptr);
 	~DescriptorContent() override;
 

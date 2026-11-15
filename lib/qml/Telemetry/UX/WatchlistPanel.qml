@@ -1512,6 +1512,14 @@ Pane {
             Layout.minimumHeight: panel.open && panel.addAvailable ? Math.min(contentHeight, Type.rowHeight * 3) : 0
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // Rows are made as they come into view, at once. With the default
+            // cache buffer the rows past the edge were made in the background,
+            // and a row still being made when the rows changed was dropped half
+            // made: Qt 6.12 warned "DelegateModel::cancel: index out range" when
+            // the list emptied, or kept counting the row's controls as being
+            // created until the engine closed. The client's emulated-device
+            // check failed 21 runs in 60 that way.
+            cacheBuffer: 0
             model: !panel.open ? null : panel.rows ? panel.rows : panel.provider.watchlist
             // The keyboard: arrows move the current row, Delete removes it,
             // F2 or Enter writes a writable one.
