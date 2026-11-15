@@ -19,6 +19,7 @@
 #include <integration/telemetry/v3/ValuesFile.hpp>
 #include <resource/BytesFile.hpp>
 #include <telemetry/descriptor/Descriptor.hpp>
+#include <telemetry/descriptor/Format.hpp>
 #include <wire/BatchWire.hpp>
 #include <wire/IdentityWire.hpp>
 #include <wire/ReadManyWire.hpp>
@@ -2325,7 +2326,9 @@ void descriptorCodec(const QString& folder)
 	const auto other = write("not-a-descriptor.bin", QByteArray(80, '\x07'));
 	open.open(other, QStringLiteral("/telemetry/descriptor.bin"));
 	auto* broken = open.contentFor(other);
-	CHECK(broken && !broken->decoded() && broken->codecError().startsWith(QStringLiteral("Not a valid Descriptor file:")) &&
+	CHECK(broken && !broken->decoded() &&
+	      broken->codecError() == QStringLiteral("This descriptor cannot be read: its bytes are not laid out as a "
+	                                             "descriptor (at byte 0). It is shown as Hex.") &&
 	      broken->format() == QStringLiteral("Binary"));
 
 	// The surer match first: a later codec that knows the signature beats an
@@ -2517,6 +2520,107 @@ void valuesCodec(const QString& folder)
 	auto* refused = open.contentFor(wrong);
 	CHECK(refused && !refused->decoded() && refused->codecError().startsWith(QStringLiteral("Not a valid Values file:")) &&
 	      refused->format() == QStringLiteral("Binary"));
+}
+
+// A descriptor that cannot be read says why in the files-only card's words,
+// never a status number (FL-1b): empty, too large, another version, ending
+// early at a byte, a fingerprint that does not match its content, or bytes
+// not laid out as a descriptor at the byte where that shows. In the viewer a
+// changed copy is said to be one; values.bin beside a broken descriptor is
+// read with the context's descriptor of its fingerprint, and says why when
+// there is none.
+void descriptorWords(const QString& folder)
+{
+	using telemetry::ux::DescriptorContent;
+	using telemetry::ux::FileCodecContext;
+	using telemetry::ux::ValuesContent;
+	using Kind = DescriptorContent::Problem::Kind;
+	const auto write = [&](const QString& name, const QByteArray& bytes) {
+		const auto path = folder + QLatin1Char('/') + name;
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		QFile file(path);
+		CHECK(file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size());
+		return path;
+	};
+	const auto good = descriptorBytes();
+	const auto words = [](const QByteArray& bytes) { return DescriptorContent::phrase(DescriptorContent::check(bytes)); };
+	CHECK(DescriptorContent::check(good).kind == Kind::None && words(good).isEmpty());
+	CHECK(words({}) == QStringLiteral("it is empty"));
+	CHECK(words(QByteArray(4194305, 'T')) ==
+	      QStringLiteral("it is 4194305 bytes, more than the 4194304 bytes this program accepts"));
+	auto version = good;
+	version[4] = 4;
+	CHECK(words(version) == QStringLiteral("it is version 4; this program reads version 3"));
+	CHECK(words(good.left(40)) == QStringLiteral("it ends early, at byte 40"));
+	CHECK(words(good.left(good.size() - 1)) == QStringLiteral("it ends early, at byte %1").arg(good.size() - 1));
+	CHECK(words(QByteArray("TD")) == QStringLiteral("it ends early, at byte 2"));
+	auto changed = good;
+	changed[changed.size() - 1] = static_cast<char>(changed[changed.size() - 1] ^ 0x5A);
+	CHECK(DescriptorContent::check(changed).kind == Kind::Fingerprint &&
+	      words(changed) == QStringLiteral("its fingerprint does not match its content"));
+	CHECK(words(QByteArray(80, 'X')) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 0)"));
+	auto header = good;
+	header[8] = 32;
+	CHECK(words(header) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 8)"));
+	CHECK(words(good + QByteArray(1, '\0')) ==
+	      QStringLiteral("its bytes are not laid out as a descriptor (at byte %1)").arg(good.size()));
+	// A record past the header that does not read, the fingerprint made to match.
+	auto record = good;
+	record[64] = static_cast<char>(0x7F);
+	quint64 hash = telemetry::descriptor::fingerprintBasis;
+	for (qsizetype i = 0; i < record.size(); ++i) {
+		hash ^= i >= 16 && i < 24 ? 0 : static_cast<quint8>(record[i]);
+		hash *= telemetry::descriptor::fingerprintPrime;
+	}
+	for (int i = 0; i < 8; ++i)
+		record[16 + i] = static_cast<char>((hash >> (8 * i)) & 0xFF);
+	CHECK(words(record) == QStringLiteral("its bytes are not laid out as a descriptor"));
+	// The content's own error is the same phrase.
+	DescriptorContent fromChanged(changed);
+	CHECK(!fromChanged.valid() && fromChanged.error() == QStringLiteral("its fingerprint does not match its content"));
+
+	// In the viewer: the sentence for a copy changed after it was built.
+	telemetry::ux::OpenFiles open;
+	telemetry::ux::installTelemetryCodecs(open);
+	const auto changedCopy = write(QStringLiteral("words/telemetry/descriptor.bin"), changed);
+	open.open(changedCopy, QStringLiteral("/telemetry/descriptor.bin"));
+	auto* shown = open.contentFor(changedCopy);
+	CHECK(shown && !shown->decoded() && shown->format() == QStringLiteral("Binary") &&
+	      shown->codecError() == QStringLiteral("This descriptor cannot be read: its fingerprint does not match its "
+	                                            "content, so it was changed after it was built. It is shown as Hex."));
+	const auto emptyCopy = write(QStringLiteral("words/empty/descriptor.bin"), {});
+	open.open(emptyCopy, QStringLiteral("/telemetry/descriptor.bin"));
+	CHECK(open.contentFor(emptyCopy)->codecError() ==
+	      QStringLiteral("This descriptor cannot be read: it is empty. It is shown as Text."));
+
+	// values.bin beside the changed descriptor: its header names the right
+	// fingerprint, its bytes do not read. Without another, the view says so.
+	device.value = 42;
+	const auto values = write(QStringLiteral("words/telemetry/values.bin"), valuesBytes());
+	open.open(values, QStringLiteral("/telemetry/values.bin"));
+	auto* waiting = qobject_cast<ValuesContent*>(open.contentFor(values)->decoded());
+	CHECK(waiting && !waiting->valid() && waiting->needsDescriptor() &&
+	      waiting->besideProblem() ==
+	          QStringLiteral("values.bin cannot be decoded: telemetry/descriptor.bin beside it cannot be read."));
+	// The connected device's descriptor of its fingerprint reads it: a broken
+	// neighbour never blocks decoding.
+	telemetry::ux::OpenFiles connected;
+	telemetry::ux::installTelemetryCodecs(connected);
+	FileCodecContext context;
+	int asked = 0;
+	context.descriptor = [&](quint64 fingerprint) {
+		++asked;
+		return fingerprint == descriptor.fingerprint() ? descriptorBytes() : QByteArray{};
+	};
+	connected.setContext(context);
+	connected.open(values, QStringLiteral("/telemetry/values.bin"));
+	auto* read = qobject_cast<ValuesContent*>(connected.contentFor(values)->decoded());
+	CHECK(asked == 1 && read && read->valid() && read->besideProblem().isEmpty() &&
+	      read->valueOf(valueRow(*read->fields())) == QStringLiteral("42"));
+	// A good descriptor beside it is still taken first, the context not asked.
+	write(QStringLiteral("words/telemetry/descriptor.bin"), good);
+	connected.open(values, QStringLiteral("/telemetry/values.bin"));
+	CHECK(asked == 1 && qobject_cast<ValuesContent*>(connected.contentFor(values)->decoded())->valid());
 }
 
 // How values read, as the designer set them: a 64-bit number whole (and as
@@ -3679,6 +3783,7 @@ int main(int argc, char** argv)
 	textAndTable();
 	descriptorCodec(folder.path());
 	valuesCodec(folder.path());
+	descriptorWords(folder.path());
 	valuesFormatting();
 	lazyValues();
 	lazyDescriptor();

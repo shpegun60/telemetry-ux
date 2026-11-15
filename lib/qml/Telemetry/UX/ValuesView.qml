@@ -300,7 +300,9 @@ FocusScope {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Theme.textPrimary
-                text: qsTr("No descriptor with this fingerprint was found, so these values cannot be read.")
+                objectName: "valuesNeedsReason"
+                text: view.decoded.besideProblem.length > 0 ? view.decoded.besideProblem
+                      : qsTr("No descriptor with this fingerprint was found, so these values cannot be read.")
             }
             Label {
                 objectName: "valuesNeedsHint"

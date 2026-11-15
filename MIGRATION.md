@@ -568,3 +568,30 @@ shortcut ("Show the project folder (no project open)"), and is its
 gets hover in Qt 6, so the tooltip shows on a disabled button; it is no longer
 drawn with the hover fill, which looked as if it could be pressed. Callers that
 set no reason see no difference.
+
+## A descriptor's problem in words; values.bin not blocked by it (FL-1b, November 2026)
+
+`DescriptorContent::check(bytes)` returns why bytes are not a descriptor this
+program reads, and `DescriptorContent::phrase()` says it in the files-only
+card's words: "it is empty", "it is N bytes, more than the 4194304 bytes this
+program accepts", "it is version N; this program reads version 3", "it ends
+early, at byte N", "its fingerprint does not match its content", or "its bytes
+are not laid out as a descriptor (at byte N)" - the byte only where the header
+shows it. `DescriptorContent::error()` is that phrase; "not a descriptor this
+program reads (status 1, error 3)" is gone.
+
+`OpenFiles::setCodecProblem(codec, sentence)` lets a codec say its failure in a
+sentence of its own, `%1` the reason and `%2` the view shown instead (Table,
+Text, Hex); `installTelemetryCodecs` gives the Descriptor codec "This descriptor
+cannot be read: %1. It is shown as %2.", and a fingerprint that does not match
+reads "…, so it was changed after it was built". Other codecs keep "Not a valid
+<name> file: <reason>". `FileContent::setCodecs` takes the sentences as an
+optional third argument.
+
+The Values codec, and the context's search of the devices' folders, no longer
+take a descriptor whose header names the right fingerprint but whose bytes do
+not read. values.bin beside such a copy is read with the context's descriptor
+of its fingerprint (the connected device's first); with none it waits as before
+and `ValuesContent::besideProblem` says "values.bin cannot be decoded:
+telemetry/descriptor.bin beside it cannot be read.", which `ValuesView` shows
+in place of "No descriptor with this fingerprint was found".

@@ -22,6 +22,7 @@
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
+#include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
 #include <QtGui/QUndoStack>
@@ -222,11 +223,14 @@ public:
 	QObject* decoded() const noexcept { return decoded_; }
 	QUrl codecView() const { return codecView_; }
 	QString codecError() const { return codecError_; }
-	// The codecs tried on every read, and what they may ask; borrowed from OpenFiles.
-	void setCodecs(const std::vector<FileCodec>* codecs, const FileCodecContext* context) noexcept
+	// The codecs tried on every read, and what they may ask; borrowed from
+	// OpenFiles, with the sentences some codecs say their failure in.
+	void setCodecs(const std::vector<FileCodec>* codecs, const FileCodecContext* context,
+	               const QHash<QString, QString>* problems = nullptr) noexcept
 	{
 		codecs_ = codecs;
 		context_ = context;
+		problems_ = problems;
 	}
 	// A codec's parts of the file, for the hex view: the decoded model's
 	// `regions`, or empty.
@@ -372,6 +376,7 @@ private:
 	QString localFile_, devicePath_, error_, text_, figures_, codecName_, codecError_;
 	const std::vector<FileCodec>* codecs_ = nullptr;
 	const FileCodecContext* context_ = nullptr;
+	const QHash<QString, QString>* problems_ = nullptr;
 	const LiveFactory* liveFactory_ = nullptr;
 	const ReferenceLookup* referenceLookup_ = nullptr;
 	QByteArray reference_;
@@ -411,6 +416,11 @@ public:
 	void addCodec(FileCodec codec);
 	// What the codecs may ask for (a descriptor by fingerprint).
 	void setContext(FileCodecContext context) { context_ = std::move(context); }
+	// How the codec of that name says it could not read a file it took for
+	// its own: a sentence with %1 for its reason and %2 for the view the file
+	// is shown in instead ("Table", "Text", "Hex") - "This descriptor cannot be
+	// read: %1. It is shown as %2." Without one: "Not a valid <name> file: <reason>".
+	void setCodecProblem(const QString& codec, const QString& sentence) { problems_.insert(codec, sentence); }
 	// How a device file is read live, for the views that show it so.
 	void setLiveFactory(FileContent::LiveFactory factory) { liveFactory_ = std::move(factory); }
 	// How a copy finds what it is compared against (DeviceBytes::lookup()).
@@ -454,6 +464,7 @@ private:
 
 	std::vector<FileCodec> codecs_;
 	FileCodecContext context_;
+	QHash<QString, QString> problems_;
 	FileContent::LiveFactory liveFactory_;
 	FileContent::ReferenceLookup referenceLookup_;
 	std::vector<std::unique_ptr<FileContent>> files_;

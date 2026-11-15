@@ -687,8 +687,13 @@ FileContent::Decoded FileContent::decodeBytes() const
 		}
 		// The first codec that took the file for its own says why it could not;
 		// one that only guessed says nothing.
-		if (result.error.isEmpty() && !reason.isEmpty())
-			result.error = tr("Not a valid %1 file: %2").arg(codec.name, reason);
+		if (result.error.isEmpty() && !reason.isEmpty()) {
+			const auto sentence = problems_ ? problems_->value(codec.name) : QString{};
+			result.error = sentence.isEmpty() ? tr("Not a valid %1 file: %2").arg(codec.name, reason)
+			                                  : sentence.arg(reason, tabular_   ? tr("Table")
+			                                                         : textual_ ? tr("Text")
+			                                                                    : tr("Hex"));
+		}
 	}
 	return result;
 }
@@ -831,7 +836,7 @@ int OpenFiles::append()
 	// Parented, so QML never takes it over when a script reaches it through
 	// data(); files_ still decides when it goes.
 	auto file = std::make_unique<FileContent>(this);
-	file->setCodecs(&codecs_, &context_);
+	file->setCodecs(&codecs_, &context_, &problems_);
 	file->setLiveFactory(&liveFactory_);
 	file->setReferenceLookup(&referenceLookup_);
 	const auto row = static_cast<int>(files_.size());
