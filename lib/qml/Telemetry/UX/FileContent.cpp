@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "FileContent.hpp"
+#include "DeviceBytes.hpp"
 #include <QtCore/QFile>
 #include <QtCore/QSaveFile>
 #include <QtCore/QFileInfo>
@@ -433,6 +434,8 @@ void FileContent::clearReference()
 	hasReference_ = false;
 	referenceWritten_ = false;
 	referenceDiffers_ = 0;
+	savedDiffers_ = 0;
+	referenceAt_ = {};
 }
 
 void FileContent::findReference()
@@ -444,9 +447,47 @@ void FileContent::findReference()
 		reference_ = std::move(found->bytes);
 		referenceLabel_ = found->label;
 		referenceWritten_ = found->written;
+		referenceAt_ = found->at;
 		hasReference_ = true;
 		referenceDiffers_ = differing(bytes_, reference_);
+		savedDiffers_ = differing(saved_, reference_);
 	}
+}
+
+void FileContent::setDeviceChanged(bool changed)
+{
+	if (changed == deviceChanged_)
+		return;
+	deviceChanged_ = changed;
+	Q_EMIT editChanged();
+}
+
+QString FileContent::descriptorFingerprint(const QByteArray& bytes)
+{
+	if (bytes.size() < 24 || !bytes.startsWith("TDS3"))
+		return {};
+	quint64 fingerprint = 0;
+	for (int i = 0; i < 8; ++i)
+		fingerprint |= static_cast<quint64>(static_cast<quint8>(bytes[16 + i])) << (8 * i);
+	return QStringLiteral("0x") + QStringLiteral("%1").arg(fingerprint, 16, 16, QLatin1Char('0')).toUpper();
+}
+
+QString FileContent::fingerprint() const
+{
+	return loaded_ ? descriptorFingerprint(bytes_) : QString{};
+}
+
+QString FileContent::referenceFingerprint() const
+{
+	return hasReference_ ? descriptorFingerprint(reference_) : QString{};
+}
+
+QString FileContent::connectedFingerprint() const
+{
+	quint64 fingerprint = 0;
+	if (!context_ || !context_->connectedFingerprint || !context_->connectedFingerprint(fingerprint))
+		return {};
+	return QStringLiteral("0x") + QStringLiteral("%1").arg(fingerprint, 16, 16, QLatin1Char('0')).toUpper();
 }
 
 void FileContent::refreshReference()
@@ -467,10 +508,14 @@ QString FileContent::save()
 	saved_ = bytes_;
 	edited_ = 0;
 	readAt_ = QDateTime::currentDateTime();
+	savedAt_ = QFileInfo(localFile_).lastModified();
+	savedDiffers_ = referenceDiffers_;
+	DeviceBytes::changed();
 	history_.setClean();
 	interpret();
 	Q_EMIT editChanged();
 	Q_EMIT changed();
+	Q_EMIT saved();
 	return {};
 }
 
@@ -597,6 +642,8 @@ void FileContent::beginReading(const QString& localFile, const QString& devicePa
 	localFile_ = localFile;
 	loaded_ = textual_ = tabular_ = false;
 	loading_ = true;
+	// Read from the device anew: what was known to have changed is read.
+	deviceChanged_ = false;
 	progress_ = -1;
 	figures_.clear();
 	error_.clear();
@@ -784,6 +831,7 @@ bool FileContent::reload()
 		saved_ = bytes_;
 		loaded_ = true;
 		readAt_ = QDateTime::currentDateTime();
+		savedAt_ = QFileInfo(file).lastModified();
 		hex_.setBytes(&bytes_);
 		interpret();
 		// The device's layer, from what was kept when the file was read from it.
@@ -848,8 +896,16 @@ QVariantList FileContent::regions() const
 
 void OpenFiles::contextChanged()
 {
+	// A file may close itself from a view's handler: walk a copy.
+	std::vector<QPointer<FileContent>> files;
 	for (const auto& file : files_)
-		file->decodeAgainIfWaiting();
+		files.emplace_back(file.get());
+	for (const auto& file : files) {
+		if (file)
+			file->decodeAgainIfWaiting();
+		if (file)
+			Q_EMIT file->contextChanged();
+	}
 }
 
 int OpenFiles::append()
@@ -861,6 +917,8 @@ int OpenFiles::append()
 	file->setLiveFactory(&liveFactory_);
 	file->setReferenceLookup(&referenceLookup_);
 	file->setReadOnlyLookup(&readOnlyLookup_);
+	connect(file.get(), &FileContent::saved, this,
+	        [this, content = file.get()] { Q_EMIT fileSaved(content->localFile()); });
 	const auto row = static_cast<int>(files_.size());
 	QPointer<OpenFiles> alive(this);
 	QPointer<FileContent> added(file.get());
@@ -926,7 +984,7 @@ int OpenFiles::reading(const QString& localFile, const QString& devicePath)
 	if (row < 0 || files_[static_cast<std::size_t>(row)].get() != file)
 		return -1;
 	// A row's loading role follows its content.
-	QObject::disconnect(file, nullptr, this, nullptr);
+	QObject::disconnect(file, &FileContent::changed, this, nullptr);
 	connect(file, &FileContent::changed, this, [this, content = file.data()] {
 		for (std::size_t i = 0; i < files_.size(); ++i)
 			if (files_[i].get() == content) {

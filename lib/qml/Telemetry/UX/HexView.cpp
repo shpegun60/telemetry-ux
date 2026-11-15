@@ -842,7 +842,7 @@ QString HexView::textAs(const QString& format) const
 bool HexView::copy(const QString& format)
 {
 	if (std::max<qint64>(1, selectionLength()) > maxCopyBytes) {
-		setNotice(tr("Copy is limited to 1 MiB; use Save as… for more."));
+		setNotice(tr("Copy is limited to 1 MiB; use Save a copy as… for more."));
 		return false;
 	}
 	const auto text = textAs(format);

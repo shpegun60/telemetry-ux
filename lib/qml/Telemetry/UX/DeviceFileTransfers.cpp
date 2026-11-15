@@ -9,6 +9,7 @@
 #include "DeviceFilesModel.hpp"
 #include "FileContent.hpp"
 #include <integration/files/Client.hpp>
+#include <integration/qt/ConnectionStorage.hpp>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -357,33 +358,21 @@ bool DeviceFileTransfers::makeFolder(const QString& path)
 
 QVariantMap DeviceFileTransfers::copyState(const QString& localFile, const QString& devicePath)
 {
-	const QFileInfo info(localFile);
-	QVariantMap state{{QStringLiteral("exists"), info.isFile()},
-	                  {QStringLiteral("known"), false},
-	                  {QStringLiteral("differs"), qint64{0}},
-	                  {QStringLiteral("written"), false}};
-	if (!info.isFile())
-		return state;
-	state.insert(QStringLiteral("savedAt"), info.lastModified());
-	// The record's bytes, checked against their hash; none of another path.
-	const auto reference = DeviceBytes::reference(localFile, devicePath);
-	if (!reference)
-		return state;
-	QFile file(localFile);
-	if (!file.open(QIODevice::ReadOnly) || file.size() > FileContent::maxBytes)
-		return state;
-	const auto copy = file.readAll();
-	const auto& device = reference->bytes;
-	const auto common = std::min(copy.size(), device.size());
-	qint64 differs = std::max(copy.size(), device.size()) - common;
-	for (qsizetype i = 0; i < common; ++i)
-		differs += copy[i] != device[i] ? 1 : 0;
-	state.insert(QStringLiteral("known"), true);
-	state.insert(QStringLiteral("differs"), differs);
-	state.insert(QStringLiteral("written"), reference->written);
-	if (const auto record = DeviceBytes::find(localFile))
-		state.insert(QStringLiteral("readAt"), record->readAt);
+	const auto copy = DeviceBytes::compare(localFile, devicePath);
+	QVariantMap state{{QStringLiteral("exists"), copy.exists},
+	                  {QStringLiteral("known"), copy.known},
+	                  {QStringLiteral("differs"), copy.differs},
+	                  {QStringLiteral("written"), copy.written}};
+	if (copy.savedAt.isValid())
+		state.insert(QStringLiteral("savedAt"), copy.savedAt);
+	if (copy.readAt.isValid())
+		state.insert(QStringLiteral("readAt"), copy.readAt);
 	return state;
+}
+
+QString DeviceFileTransfers::devicePathOf(const QString& localFile)
+{
+	return DeviceBytes::devicePathOf(localFile);
 }
 
 QString DeviceFileTransfers::copyFile(const QString& from, const QString& to)
@@ -407,6 +396,7 @@ QString DeviceFileTransfers::copyFile(const QString& from, const QString& to)
 	}
 	if (!target.commit())
 		return tr("Could not write %1: %2").arg(QFileInfo(to).fileName(), target.errorString());
+	DeviceBytes::changed();
 	return {};
 }
 
@@ -464,6 +454,78 @@ QString DeviceFileTransfers::deviceFolder(const QString& root, const QString& fa
 		break;
 	}
 	return made(target);
+}
+
+QString DeviceFileTransfers::deviceFolderFound(const QString& root, const QString& fallbackLabel) const
+{
+	const auto existing = [](const QString& path) { return !path.isEmpty() && QFileInfo(path).isDir() ? path : QString{}; };
+	if (root.isEmpty())
+		return {};
+	if (!session_ || session_->identityState() != integration::qt::ConnectionSession::IdentityState::Known)
+		return existing(localPathFor(root, fallbackLabel));
+	const auto target = localPathFor(root, identityLabel(*session_));
+	if (target.isEmpty())
+		return {};
+	if (QFileInfo(target).isDir())
+		return target;
+	// The same device under an earlier name, as deviceFolder() finds it.
+	const auto id = session_->deviceId();
+	const auto suffix = QStringLiteral(" [%1]").arg(id);
+	const QDir folder(root);
+	for (const auto& entry : folder.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+		if (entry.compare(id, Qt::CaseInsensitive) == 0 || entry.endsWith(suffix, Qt::CaseInsensitive))
+			return folder.filePath(entry);
+	return {};
+}
+
+QVariantMap DeviceFileTransfers::keepOtherDescriptor(const QString& deviceFolder, const QString& versionFolder) const
+{
+	if (deviceFolder.isEmpty() || versionFolder.isEmpty() || !session_)
+		return {};
+	const auto storage = session_->storage();
+	if (!storage || !storage->schema.valid())
+		return {};
+	const auto connected = FileContent::descriptorFingerprint(storage->descriptor);
+	const auto devicePath = QStringLiteral("/telemetry/descriptor.bin");
+	const auto copy = localPathFor(deviceFolder, devicePath);
+	QFile file(copy);
+	if (connected.isEmpty() || copy.isEmpty() || !file.open(QIODevice::ReadOnly))
+		return {};
+	const auto found = FileContent::descriptorFingerprint(file.peek(24));
+	file.close();
+	if (found.isEmpty() || found == connected)
+		return {};
+	QVariantMap result{{QStringLiteral("copy"), found},
+	                   {QStringLiteral("connected"), connected},
+	                   {QStringLiteral("kept"), false}};
+	// Kept already, on an earlier connect: a version of this fingerprint.
+	const QDir versions(QFileInfo(versionFolder).absolutePath());
+	for (const auto& entry : versions.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+		const auto earlier = localPathFor(versions.filePath(entry), devicePath);
+		QFile kept(earlier);
+		if (!earlier.isEmpty() && kept.open(QIODevice::ReadOnly) &&
+		    FileContent::descriptorFingerprint(kept.peek(24)) == found) {
+			result.insert(QStringLiteral("version"), earlier);
+			return result;
+		}
+	}
+	const auto version = localPathFor(versionFolder, devicePath);
+	if (version.isEmpty() || !makeFolder(QFileInfo(version).absolutePath())) {
+		result.insert(QStringLiteral("problem"), tr("Could not make the folder for %1.")
+		                                             .arg(QDir::toNativeSeparators(version)));
+		return result;
+	}
+	if (const auto problem = copyFile(copy, version); !problem.isEmpty()) {
+		result.insert(QStringLiteral("problem"), problem);
+		return result;
+	}
+	// The device's bytes as read then go with it: the version is what the
+	// device gave before its firmware changed, and says so.
+	if (const auto device = DeviceBytes::reference(copy, devicePath))
+		(void)DeviceBytes::keepBytes(deviceFolder, version, devicePath, device->bytes, device->at, device->written);
+	result.insert(QStringLiteral("version"), version);
+	result.insert(QStringLiteral("kept"), true);
+	return result;
 }
 
 bool DeviceFileTransfers::inUse(const QString& folder, QObject* viewer) const
@@ -819,10 +881,14 @@ bool DeviceFileTransfers::advanceUpload(Job& job)
 		job.device.clear();
 		job.outcome = outcome;
 		end(job, state, std::move(result));
-		// The copy's reference follows the record: kept anew, or gone.
+		// The copy's reference follows the record: kept anew, or gone. A
+		// device's file found changed is said in its state line until read.
 		if (job.viewer)
-			if (auto* content = job.viewer->contentFor(job.localFile))
+			if (auto* content = job.viewer->contentFor(job.localFile)) {
 				content->refreshReference();
+				if (outcome == Outcome::Changed)
+					content->setDeviceChanged(true);
+			}
 		return true;
 	};
 	// Past the check the device's file may have changed: its record goes.
@@ -879,7 +945,7 @@ bool DeviceFileTransfers::advanceUpload(Job& job)
 					              tr("Not written: the device's file changed after it was read at %1")
 					                  .arg(whenText(record->readAt)));
 				return ending(State::Failed, Outcome::NotKnown,
-				              tr("Not written: nothing here records the device's file to compare with"));
+				              tr("Not written: nothing in the project records the device's file to compare with"));
 			}
 			job.step = Step::Write;
 			job.writer = std::make_unique<Job::Writer>(*session_);
@@ -1052,6 +1118,7 @@ void DeviceFileTransfers::poll()
 			const auto state = job.reader->state();
 			if (state == files::ReadState::Complete) {
 				const bool written = job.file.commit();
+				DeviceBytes::changed();
 				// A file read for the viewer: the device's bytes as read, kept in
 				// the device's folder the host named. Any other write of a copy
 				// with a record removes it, since it would no longer be true.
@@ -1075,11 +1142,18 @@ void DeviceFileTransfers::poll()
 					        .arg(DeviceFilesModel::sizeText(received),
 					             DeviceFilesModel::sizeText(job.size)));
 				else {
-					job.leaves = job.opening && notKept.isEmpty();
-					end(job, State::Saved,
-					    !notKept.isEmpty() ? tr("Opened in the Viewer · the device's bytes were not kept: %1").arg(notKept)
-					    : job.opening      ? tr("Opened in the Viewer")
-					                       : tr("Saved"));
+					// The static generators take a downloaded descriptor for the
+					// device's: one that is not the descriptor read at connect
+					// says so, and keeps its row.
+					const auto otherDescriptor = descriptorNote(job.path, job.localFile);
+					job.leaves = job.opening && notKept.isEmpty() && otherDescriptor.isEmpty();
+					auto line = !notKept.isEmpty()
+					                ? tr("Opened in the Viewer · the device's bytes were not kept: %1").arg(notKept)
+					            : job.opening ? tr("Opened in the Viewer")
+					                          : tr("Saved");
+					if (!otherDescriptor.isEmpty())
+						line = tr("%1 · %2").arg(line, otherDescriptor);
+					end(job, State::Saved, line);
 				}
 			} else {
 				const auto writeError = job.file.errorString();
@@ -1193,6 +1267,32 @@ bool DeviceFileTransfers::complete(int row)
 		return false;
 	leave(id);
 	return !alive.isNull();
+}
+
+QString DeviceFileTransfers::descriptorNote(const QString& path, const QString& localFile) const
+{
+	if (!session_)
+		return {};
+	const auto storage = session_->storage();
+	if (!storage || !storage->schema.valid())
+		return {};
+	return descriptorNote(path, localFile, storage->descriptor);
+}
+
+QString DeviceFileTransfers::descriptorNote(const QString& path, const QString& localFile, const QByteArray& connectedBytes)
+{
+	if (path != QStringLiteral("/telemetry/descriptor.bin"))
+		return {};
+	QFile file(localFile);
+	const auto read = file.open(QIODevice::ReadOnly)
+	                      ? FileContent::descriptorFingerprint(file.read(24))
+	                      : QString{};
+	const auto connected = FileContent::descriptorFingerprint(connectedBytes);
+	if (connected.isEmpty() || read == connected)
+		return {};
+	return read.isEmpty() ? tr("not a descriptor, unlike the one read at connect (%1)").arg(connected)
+	                      : tr("its fingerprint %1 is not the one read at connect (%2): connect again")
+	                            .arg(read, connected);
 }
 
 QString DeviceFileTransfers::readProblem(const Job& job) const
