@@ -6,8 +6,11 @@
 // holds still while reading goes on. 10 s, 1 min, 10 min or All choose the
 // span and follow again; a drag, the wheel, the arrows, + and - move it and
 // stop following, and the chip in the corner says how far behind it is and
-// follows again (End). Presentation only: WatchTraces keeps the readings and
-// TraceView draws them. MIT.
+// follows again (End). The cursor follows the pointer, snapped to a reading;
+// its time shows under the axis and each chip shows its value there. A click
+// or Enter pins a reference: the cursor then says the time since it, each
+// chip its value's difference; Esc takes it away. Presentation only:
+// WatchTraces keeps the readings and TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Basic as Basic
@@ -73,12 +76,40 @@ FocusScope {
         return sec === 0 ? qsTr("%Ln minutes", "", m)
                          : qsTr("%1 %2").arg(qsTr("%Ln minutes", "", m)).arg(qsTr("%Ln seconds", "", sec))
     }
+    // The cursor is in the picture: the chips show their values there. Once
+    // its reading scrolls out they go back to the newest.
+    readonly property bool cursorInView: view.cursorShown && view.cursorX >= view.plotArea.left
+                                         && view.cursorX <= view.plotArea.right
+    // "12:04:31.250": a time on this PC's clock, always to the millisecond.
+    function clockText(ms) {
+        return Qt.formatTime(new Date(ms), "HH:mm:ss.zzz")
+    }
+    // "1.250 s", "1:12.250": the time between the reference and the cursor.
+    function spanText(ms) {
+        const sign = ms < 0 ? "−" : ""
+        const whole = Math.abs(ms) / 1000
+        if (whole < 60)
+            return qsTr("%1 s").arg(sign + whole.toFixed(3))
+        const m = Math.floor(whole / 60)
+        return sign + "%1:%2".arg(m).arg((whole - 60 * m).toFixed(3).padStart(6, "0"))
+    }
+    // "12.4 s", "1:12": how long before the newest reading the cursor is.
+    function agoText(seconds) {
+        return seconds < 60 ? qsTr("%1 s").arg(seconds.toFixed(1)) : behindText(seconds)
+    }
+    // "+0.12", "−3": a difference, signed.
+    function deltaText(value) {
+        if (value === undefined || value === null || isNaN(value))
+            return "–"
+        const text = valueText(Math.abs(value))
+        return (value < 0 ? "−" : "+") + text
+    }
     function valueText(value) {
         if (value === undefined || value === null || isNaN(value))
             return "–"
-        if (Number.isInteger(value))
-            return String(value)
-        return String(Number(value.toPrecision(6)))
+        // One minus sign everywhere, the typographic one.
+        const text = Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)))
+        return text.startsWith("-") ? "−" + text.substring(1) : text
     }
 
     ColumnLayout {
@@ -195,9 +226,23 @@ FocusScope {
                         const at = plot.traces ? plot.traces.colorIndex(path) : -1
                         return at >= 0 && at < plot.curveColors.length ? plot.curveColors[at] : Theme.textSecondary
                     }
-                    readonly property string shown: {
+                    // Its newest reading; its reading at the cursor while the
+                    // cursor is shown.
+                    readonly property var current: {
                         plot.shownTick
-                        return plot.valueText(plot.traces ? plot.traces.latest(path) : undefined)
+                        view.cursorUtcMs
+                        if (!plot.traces)
+                            return undefined
+                        return plot.cursorInView ? view.valueAt(path) : plot.traces.latest(path)
+                    }
+                    readonly property string shown: plot.valueText(current)
+                    // Its difference from the reference, once one is pinned.
+                    readonly property string delta: {
+                        if (!view.referenceShown)
+                            return ""
+                        const reference = view.referenceValue(path)
+                        return reference === undefined || current === undefined ? "Δ –"
+                                                                                : "Δ " + plot.deltaText(current - reference)
                     }
                     implicitWidth: chipRow.implicitWidth + 2 * Type.padding
                     implicitHeight: Type.controlHeight
@@ -244,6 +289,24 @@ FocusScope {
                                 text: "-0.000000"
                             }
                         }
+                        Text {
+                            objectName: "plotChipDelta"
+                            visible: chip.delta.length > 0
+                            // As wide as a long difference from the moment a
+                            // reference is pinned, so the legend never re-wraps.
+                            Layout.minimumWidth: deltaWidth.advanceWidth
+                            TextMetrics {
+                                id: deltaWidth
+                                font.family: Type.fixedFamily
+                                font.pointSize: Type.caption
+                                text: "Δ −0.000000"
+                            }
+                            textFormat: Text.PlainText
+                            color: Theme.textSecondary
+                            font.family: Type.fixedFamily
+                            font.pointSize: Type.caption
+                            text: chip.delta
+                        }
                         ToolButton {
                             objectName: "plotChipRemove"
                             Layout.preferredWidth: Type.chipHeight
@@ -260,7 +323,8 @@ FocusScope {
                         }
                     }
                     Accessible.role: Accessible.StaticText
-                    Accessible.name: qsTr("%1, %2").arg(chip.path).arg(chip.shown)
+                    Accessible.name: plot.cursorInView ? qsTr("%1, %2 at %3").arg(chip.path).arg(chip.shown).arg(plot.clockText(view.cursorUtcMs))
+                                                      : qsTr("%1, %2, latest reading").arg(chip.path).arg(chip.shown)
                 }
             }
         }
@@ -276,6 +340,11 @@ FocusScope {
                 colors: plot.curveColors
                 gridColor: Theme.outlineVariant
                 labelColor: Theme.textSecondary
+                cursorColor: Theme.textMuted
+                // A row of its own under the time labels for the chips.
+                bottomInset: Type.chipHeight + Type.tight
+                referenceColor: Theme.info
+                dotRingColor: Theme.surfaceWindow
                 font.family: Type.fixedFamily
                 font.pointSize: Type.caption
                 visible: plot.plotted.length > 0 && !plot.waiting
@@ -286,7 +355,7 @@ FocusScope {
                     return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                      : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                 }
-                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
+                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
             }
             // The keys are on the graph: the lists' focus frame round it.
             Rectangle {
@@ -300,6 +369,69 @@ FocusScope {
                 border.width: 2
                 border.color: Theme.focusRing
                 Accessible.ignored: true
+            }
+            // The reference's time, under the axis where it is pinned.
+            Rectangle {
+                objectName: "plotReferenceChip"
+                visible: view.visible && view.referenceShown && view.referenceX >= view.plotArea.left
+                         && view.referenceX <= view.plotArea.right
+                width: referenceText.implicitWidth + 2 * Type.padding
+                height: Type.chipHeight
+                x: Math.max(0, Math.min(parent.width - width, view.referenceX - width / 2))
+                y: view.height - height
+                radius: Type.radius
+                color: Theme.infoContainer
+                border.color: Theme.info
+                Text {
+                    id: referenceText
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: Theme.textPrimary
+                    text: plot.clockText(view.referenceUtcMs)
+                }
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("Reference at %1").arg(referenceText.text)
+                Accessible.description: qsTr("Escape removes it.")
+            }
+            // The cursor's time under the axis: how long ago while following,
+            // the time since the reference once one is pinned.
+            Rectangle {
+                objectName: "plotCursorChip"
+                visible: view.visible && view.cursorShown && view.cursorX >= view.plotArea.left
+                         && view.cursorX <= view.plotArea.right
+                width: cursorText.implicitWidth + 2 * Type.padding
+                height: Type.chipHeight
+                x: Math.max(0, Math.min(parent.width - width, view.cursorX - width / 2))
+                y: view.height - height
+                radius: Type.radius
+                color: Theme.surface
+                border.color: Theme.outline
+                Text {
+                    id: cursorText
+                    objectName: "plotCursorText"
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: Theme.textPrimary
+                    text: {
+                        const at = plot.clockText(view.cursorUtcMs)
+                        if (view.referenceShown)
+                            return qsTr("Δ %1 · %2").arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs)).arg(at)
+                        if (view.following)
+                            return qsTr("%1 · %2 ago").arg(at).arg(plot.agoText(view.cursorAgoSeconds))
+                        return at
+                    }
+                }
+                Accessible.role: Accessible.StaticText
+                Accessible.name: view.referenceShown
+                                 ? qsTr("Cursor at %1, %2 from the reference").arg(plot.clockText(view.cursorUtcMs))
+                                       .arg(plot.spanText(view.cursorUtcMs - view.referenceUtcMs))
+                                 : view.following ? qsTr("Cursor at %1, %2 seconds ago").arg(plot.clockText(view.cursorUtcMs))
+                                                        .arg(view.cursorAgoSeconds.toFixed(1))
+                                                  : qsTr("Cursor at %1").arg(plot.clockText(view.cursorUtcMs))
             }
             // Held: how far behind the newest reading, and a way back to it.
             Basic.Button {
