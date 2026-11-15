@@ -51,6 +51,24 @@ public:
 			        {"path", "control.Execute"}, {"operation", "command"}};
 		if (typed == QStringLiteral("Volt"))
 			return {{"status", "partial"}, {"message", "Enter takes measure.Voltage."}, {"path", "measure.Voltage"}};
+		// A Service's values typed after its path (BA-2), as the provider answers.
+		if (typed == QStringLiteral("control.Scale") || typed == QStringLiteral("control.Scale value=2"))
+			return {{"status", "needs"},
+			        {"message", typed.endsWith('2') ? "control.Scale needs factor (f32) too. Enter writes factor=."
+			                                        : "control.Scale needs value (f32) and factor (f32). Enter writes value=; "
+			                                          "Ctrl+Enter fills it in Details."},
+			        {"next", typed.endsWith('2') ? "factor" : "value"}, {"path", "control.Scale"}, {"operation", "service"}};
+		if (typed == QStringLiteral("control.Scale value="))
+			return {{"status", "needs"}, {"message", "value (f32) takes a number."}, {"next", "value"},
+			        {"path", "control.Scale"}, {"operation", "service"}};
+		if (typed == QStringLiteral("control.Scale 2 3"))
+			return {{"status", "unnamed"},
+			        {"message", "control.Scale takes named values: value=2 factor=3. Enter writes the names in."},
+			        {"named", "control.Scale value=2 factor=3"}, {"path", "control.Scale"}, {"operation", "service"}};
+		if (typed == QStringLiteral("control.Scale value=2 factor=3"))
+			return {{"status", "adds"},
+			        {"message", "Adds a call of Service control.Scale (value 2, factor 3) as item 4; it is called when the Batch is executed."},
+			        {"path", "control.Scale"}, {"operation", "service"}};
 		if (typed.isEmpty())
 			return {{"status", "empty"}, {"message", ""}};
 		return {{"status", "missing"}, {"message", typed.contains('.') ? typed + " is not on this device."
@@ -230,21 +248,45 @@ int main(int argc, char** argv)
 			CHECK(shown(content, "batchOperation")->property("currentText") == QStringLiteral("command"));
 			clearField(window);
 
+			// BA-2: a Service's values typed after it. Enter writes the next
+			// name; on "name=" it waits for the value; values with no names get
+			// them written in; once all are valid Enter adds.
+			typeText(window, "control.Scale");
+			CHECK(shown(content, "batchAddCheck")->property("color") == quiet);
+			key(window, Qt::Key_Return);
+			CHECK(field->property("text").toString() == QStringLiteral("control.Scale value=") && calls.added.size() == 1);
+			key(window, Qt::Key_Return);
+			CHECK(field->property("text").toString() == QStringLiteral("control.Scale value="));
+			clearField(window);
+			typeText(window, "control.Scale 2 3");
+			key(window, Qt::Key_Return);
+			CHECK(field->property("text").toString() == QStringLiteral("control.Scale value=2 factor=3") &&
+			      calls.added.size() == 1);
+			settle();
+			key(window, Qt::Key_Return);
+			CHECK(calls.added.size() == 2 && calls.added.last() == QStringList({QStringLiteral("control.Scale value=2 factor=3")}));
+			// Ctrl+Enter: to Details with it, whatever is typed.
+			typeText(window, "control.Scale value=2");
+			QTest::keyClick(window, Qt::Key_Return, Qt::ControlModifier);
+			settle();
+			CHECK(calls.selected.last() == QStringLiteral("control.Scale value=2") && calls.added.size() == 2);
+			clearField(window);
+
 			// A refusal in the error colour; Enter adds nothing.
 			typeText(window, "Nope");
 			line = shown(content, "batchAddCheck");
 			CHECK(line->property("text").toString() == QStringLiteral("Nothing on this device is named Nope."));
 			CHECK(line->property("color") != quiet);
 			key(window, Qt::Key_Return);
-			CHECK(calls.added.size() == 1);
+			CHECK(calls.added.size() == 2);
 			clearField(window);
 
 			// Pasted lines: one call, in order.
 			QGuiApplication::clipboard()->setText(QStringLiteral("device.Voltage\ncommand control.Ping\n"));
 			key(window, Qt::Key_V, Qt::ControlModifier);
-			CHECK(calls.added.size() == 2 &&
+			CHECK(calls.added.size() == 3 &&
 			      calls.added.last() == QStringList({QStringLiteral("device.Voltage"), QStringLiteral("command control.Ping")}));
-			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 2 to 3."));
+			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added 2 items as items 3 to 4."));
 			// A refused paste: nothing added, the line named, in the error colour.
 			QGuiApplication::clipboard()->setText(QStringLiteral("device.Voltage\nNope\n"));
 			key(window, Qt::Key_V, Qt::ControlModifier);

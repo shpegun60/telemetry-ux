@@ -1,6 +1,7 @@
 // Shared native execution, independent Qt presentation. Ruslan Kovtun, codexAi. MIT.
 #include "DynamicConfiguratorProvider.hpp"
 #include "RequestArguments.hpp"
+#include "SchemaText.hpp"
 #include "EndpointPreviews.hpp"
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
@@ -1367,6 +1368,17 @@ QString valuesSaid(const request_arguments::Result& result)
 	return parts.join(QStringLiteral(", "));
 }
 
+// "value=2 factor=3": the values in the line's own form, as an item shows
+// them, so a copied item pastes back into the row.
+QString valuesLine(const request_arguments::Result& result)
+{
+	QStringList parts;
+	for (const auto& item : result.items)
+		if (item.status == request_arguments::Item::Status::Ok)
+			parts << (item.name.isEmpty() ? item.canonical : QStringLiteral("%1=%2").arg(item.name, item.canonical));
+	return parts.join(QLatin1Char(' '));
+}
+
 QVariantList argumentsOf(const request_arguments::Result& result)
 {
 	QVariantList out;
@@ -1505,7 +1517,9 @@ QVariantMap DynamicConfiguratorProvider::checkBatchPath(const QString& text) con
 		           batchWords("%1 takes input. Enter selects it: fill it in Details, then Add selected draft.").arg(entry.path));
 	if (!p->batch.supported())
 		return say(QStringLiteral("unsupported"), batchWords("This device has no Batch."));
-	const auto row = p->pathRow(entry, typed ? &typed->request : nullptr);
+	auto row = p->pathRow(entry, typed ? &typed->request : nullptr);
+	if (row && typed && !valuesLine(*typed).isEmpty())
+		row->name = entry.path + QLatin1Char(' ') + valuesLine(*typed);
 	if (!row)
 		return say(QStringLiteral("busy"), batchWords("Wait for the current read or write to finish, then add."));
 	const auto refusal = p->batch.refusal({&*row, 1});
@@ -1539,6 +1553,65 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 	const auto list = p->endpoints.endpointList();
 	if (list.isEmpty())
 		return out;
+	// After a Command's or a Service's path and a space (BA-2): its arguments
+	// not given yet, in declared order; after "name=", a bool's or an enum's
+	// values. Choosing one writes it into the line.
+	auto pick = endpoint_paths::resolve(text, list);
+	// "control.Scale " - its name and a space: no values yet, all to give.
+	if (!pick.hasTail && text.endsWith(QLatin1Char(' ')) && pick.matches.size() == 1 && pick.matches.first().category != 1)
+		pick.hasTail = true;
+	if (pick.hasTail && pick.matches.size() == 1 && p->takesInput(pick.matches.first())) {
+		const auto& entry = pick.matches.first();
+		const auto schema = p->batch.schema();
+		const auto utf8 = entry.path.toUtf8();
+		const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
+		const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where);
+		if (!endpoint)
+			return out;
+		const auto inputs = request_arguments::arguments(schema, endpoint->typeId);
+		const auto given = request_arguments::parse(pick.tail);
+		auto line = text;
+		while (line.endsWith(QLatin1Char(' ')))
+			line.chop(1);
+		// "name=" just typed: its values.
+		if (!given.empty() && !given.back().name.isEmpty() && given.back().text.isEmpty() && text.endsWith(QLatin1Char('='))) {
+			for (const auto& input : inputs)
+				if (input.name.compare(given.back().name, Qt::CaseInsensitive) == 0)
+					for (qsizetype i = 0; i < input.choices.size(); ++i)
+						out.append(QVariantMap{{QStringLiteral("path"), line + input.choices[i] + QLatin1Char(' ')},
+						                       {QStringLiteral("completion"), line + input.choices[i] + QLatin1Char(' ')},
+						                       {QStringLiteral("name"), input.choices[i]},
+						                       {QStringLiteral("kind"), batchWords("value")},
+						                       {QStringLiteral("kindCode"), QStringLiteral("value")},
+						                       {QStringLiteral("typeText"), input.value.enumeration ? QString::number(input.codes[i]) : QString{}},
+						                       {QStringLiteral("note"), batchWords("value for %1").arg(input.name)},
+						                       {QStringLiteral("container"), false}});
+			return out;
+		}
+		if (!text.endsWith(QLatin1Char(' ')) && !pick.tail.isEmpty())
+			return out; // a value being typed: nothing to suggest
+		for (std::size_t i = 0; i < inputs.size(); ++i) {
+			const auto& input = inputs[i];
+			if (input.name.isEmpty())
+				continue;
+			const bool done = std::any_of(given.begin(), given.end(), [&input](const request_arguments::Given& g) {
+				return g.name.compare(input.name, Qt::CaseInsensitive) == 0;
+			});
+			if (done)
+				continue;
+			const auto completion = line + QLatin1Char(' ') + input.name + QLatin1Char('=');
+			out.append(QVariantMap{{QStringLiteral("path"), completion},
+			                       {QStringLiteral("completion"), completion},
+			                       {QStringLiteral("name"), input.name},
+			                       {QStringLiteral("kind"), batchWords("argument")},
+			                       {QStringLiteral("kindCode"), QStringLiteral("argument")},
+			                       {QStringLiteral("typeText"), input.typeText},
+			                       {QStringLiteral("note"), input.scalar ? batchWords("argument %L1 of %L2").arg(int(i) + 1).arg(int(inputs.size()))
+			                                                             : batchWords("in Details")},
+			                       {QStringLiteral("container"), false}});
+		}
+		return out;
+	}
 	auto typed = text.trimmed();
 	// A leading kind word narrows the suggestions as it narrows the line.
 	int category = 0;
@@ -1573,8 +1646,19 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		                    : entry.writable                  ? QStringLiteral("rw") : QStringLiteral("r-");
 		const bool input = entry.category != 1 && p->takesInput(entry);
 		const int count = inBatch(entry);
-		const auto typeText = entry.category == 1 ? entry.typeText + QLatin1Char(' ') + access
-		                      : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
+		auto typeText = entry.category == 1 ? entry.typeText + QLatin1Char(' ') + access
+		                : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
+		if (input) {
+			// "(value: f32, factor: f32) -> f32": the names to type (BA-2).
+			const auto schema = p->batch.schema();
+			const auto utf8 = entry.path.toUtf8();
+			const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
+			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where)) {
+				typeText = request_arguments::signatureText(schema, endpoint->typeId);
+				if (entry.category == 3 && endpoint->responseTypeId)
+					typeText += QStringLiteral(" -> ") + schema_text::typeText(schema, endpoint->responseTypeId);
+			}
+		}
 		const auto completion = shared ? operationWord(entry) + QLatin1Char(' ') + entry.path : keyword + entry.path;
 		return QVariantMap{
 		    {QStringLiteral("path"), completion},
@@ -1585,8 +1669,7 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		    {QStringLiteral("operation"), operationWord(entry)},
 		    {QStringLiteral("input"), input},
 		    {QStringLiteral("note"), count == 1 ? batchWords("in Batch")
-		                             : count > 1 ? batchWords("%L1 in Batch").arg(count)
-		                             : input ? batchWords("takes input") : QString{}},
+		                             : count > 1 ? batchWords("%L1 in Batch").arg(count) : QString{}},
 		    {QStringLiteral("container"), false}};
 	};
 	const auto wanted = [category](const EndpointEntry& entry) { return category == 0 || entry.category == category; };
@@ -1642,9 +1725,11 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 		const auto typed = status == QStringLiteral("adds") && pick.matches.size() == 1 && pick.status == QStringLiteral("input")
 		                       ? typedArguments(p->batch, pick.matches.first(), pick.tail)
 		                       : std::nullopt;
-		const auto row = status == QStringLiteral("adds") && pick.matches.size() == 1
-		                     ? p->pathRow(pick.matches.first(), typed && typed->ok() ? &typed->request : nullptr)
-		                     : std::nullopt;
+		auto row = status == QStringLiteral("adds") && pick.matches.size() == 1
+		               ? p->pathRow(pick.matches.first(), typed && typed->ok() ? &typed->request : nullptr)
+		               : std::nullopt;
+		if (row && typed && !valuesLine(*typed).isEmpty())
+			row->name = pick.matches.first().path + QLatin1Char(' ') + valuesLine(*typed);
 		if (!row) {
 			const auto path = check.value(QStringLiteral("path")).toString();
 			const auto reason = status == QStringLiteral("partial")
@@ -1701,7 +1786,9 @@ bool DynamicConfiguratorProvider::selectBatchPath(const QString& text)
 {
 	auto p = d;
 	// An edit in Details is never replaced unseen: finish or cancel it first.
-	if (editing())
+	// A Command or a Service merely selected counts as editing its draft, so
+	// the test is whether there is anything to lose, not whether it is open.
+	if (selectionRequiresDiscard())
 		return false;
 	const auto pick = endpoint_paths::resolve(text, p->endpoints.endpointList());
 	if (pick.matches.size() != 1)

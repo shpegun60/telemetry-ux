@@ -786,6 +786,10 @@ void batchPaths()
 	CHECK(provider->selectBatchPath(QStringLiteral("control.Execute")) &&
 	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Execute");
 	CHECK(!provider->selectBatchPath(QStringLiteral("Ping")) && !provider->selectBatchPath(QStringLiteral("Nope")));
+	// Selected and untouched, a Command is not an edit to lose: the row
+	// selects another (BA-1 refused the second).
+	CHECK(provider->selectBatchPath(QStringLiteral("control.Accept")) &&
+	      provider->selectedEndpointIndex().data(ux::EndpointModel::PathRole) == "control.Accept");
 	CHECK(check("Nope").value("status") == "missing" && check("Nope").value("message") == "Nothing on this device is named Nope.");
 	CHECK(check("device.Nope").value("message") == "device.Nope is not on this device.");
 	CHECK(check("device.Setpoint = 3").value("status") == "error");
@@ -844,6 +848,17 @@ void batchPaths()
 		CHECK(typed.value("status") == "unsupported" && arguments.size() == 1 &&
 		      arguments.first().toMap().value("status") == "ok" && arguments.first().toMap().value("canonical") == "1.5");
 	}
+	// Suggestions: the named signature, then the arguments to give.
+	const auto found = calibrate->batchPathCandidates(QStringLiteral("Calib"));
+	bool signature = false;
+	for (const auto& candidate : found)
+		signature = signature || (candidate.toMap().value("path") == "control.Calibrate" &&
+		                          candidate.toMap().value("typeText") == "(reference: f32)");
+	CHECK(signature);
+	const auto arguments = calibrate->batchPathCandidates(QStringLiteral("control.Calibrate "));
+	CHECK(arguments.size() == 1 && arguments.first().toMap().value("completion") == "control.Calibrate reference=" &&
+	      arguments.first().toMap().value("kindCode") == "argument" && arguments.first().toMap().value("typeText") == "f32");
+	CHECK(calibrate->batchPathCandidates(QStringLiteral("control.Calibrate reference=1 ")).isEmpty());
 	second.disconnect();
 }
 

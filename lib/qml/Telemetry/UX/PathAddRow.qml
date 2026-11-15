@@ -156,6 +156,14 @@ FocusScope {
                 prefix = prefix.substring(0, prefix.length - 1)
         return prefix.length > field.text.length ? prefix : field.text
     }
+    // The line as an adapter writes it (BA-2): the next "name=", or values
+    // with their names written in; the suggestions follow it.
+    function setText(value) {
+        field.text = value
+        field.cursorPosition = value.length
+        refresh()
+        recheck()
+    }
     // Adds what the field names, or every pasted line.
     function add(lines) {
         const result = adapter.add(lines)
@@ -273,7 +281,11 @@ FocusScope {
                             addRow.highlighted = -1
                         }
                         addRow.recheck()
-                        if (popup.visible && addRow.highlighted >= 0) {
+                        // Ctrl+Enter: an adapter's other way (the Batch: to Details).
+                        if ((event.modifiers & Qt.ControlModifier) && typeof addRow.adapter.select === "function") {
+                            popup.close()
+                            addRow.adapter.select(text)
+                        } else if (popup.visible && addRow.highlighted >= 0) {
                             addRow.choose(addRow.highlighted)
                         } else if (addRow.adapter.enter(text)) {
                             // the adapter did what Enter means for it
