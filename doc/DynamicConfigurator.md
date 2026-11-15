@@ -263,22 +263,28 @@ Field readback; add a Field read explicitly when it is needed.
 
 Every checked item shows its own outcome. Accepted remains distinct from
 Executed, and a Service refusal remains distinct from a successful outer reply.
-**View result** selects an owned FieldRead/Service value in the existing lazy
-read-only value model, including structured responses. Invalid or stale values
+Choosing an item shows it in the pane beside the list, which is Details over
+`batchItem` (a `BatchItemDetails`, BA-4a): a Command's arguments, a Service's
+request and response, a write's value and a read's value read, in the same lazy
+value models. A value is set on the item as it is typed and is one step of the
+central Undo (`batch.request`); a Field that can be read and written has a
+Read | Write switch. Invalid or stale values
 are suppressed independently from the checked operation facts. A missing outer
 reply identifies no executed prefix: rows retain no fabricated per-item success.
 OutcomeUnknown and known historical outcomes remain visible after disconnect;
 old values and old-session recipes cannot become current or run automatically.
 
 The provider exposes `batchSupported`, `batchItems`, `batchCount`, `batchPending`,
-`canExecuteBatch`, `batchStatus`, `batchSelection`, `batchResponses` and
-`batchResponseEndpoint`. Its invokables are `canAddBatch(operation)`,
+`canExecuteBatch`, `batchStatus`, `batchSelection` and `batchItem`. Its
+invokables are `canAddBatch(operation)`,
 `addBatch(operation)`, `removeBatch(row)`, `moveBatch(row, delta)` (delta -1/+1),
 `clearBatch()`, `selectBatch(row)` and `executeBatch()`. Operation names are the
 four lowercase strings above. `batchFinished()` is emitted after native progress
 returns; it does not imply that every item succeeded. The row model provides
-`name`, `operation`, `endpointId`, `status`, `hasValue`, `historical`, and a
-`result` map containing checked native status facts. That map is empty when no
+`name`, `operation`, `endpointId`, `status`, `hasValue`, `historical`, `line`
+(the request's values in one line), `changed` (they differ from what Execute
+sent), `at` (when it ran), `uid`, and a `result` map containing checked native
+status facts. That map is empty when no
 checked per-item outcome exists.
 
 The native callback only copies facts and bounded bytes into an owned completion
