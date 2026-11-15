@@ -676,6 +676,45 @@ int main(int argc, char** argv)
 			settle(300);
 			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
 			traces.setShowPoints(false);
+			settle(150);
+
+			// LP-1g. The graph's menu: Follow off and on, a reference pinned
+			// where it was opened and removed, every curve off and back.
+			const auto openGraphMenu = [&](double part) {
+				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+				                  view->mapToScene(QPointF(graph.left() + graph.width() * part, graph.center().y())).toPoint());
+				settle(300);
+			};
+			openGraphMenu(0.3);
+			click(window, shown(content, "plotMenuFollow"));
+			settle(200);
+			CHECK(!view->property("following").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuPin"));
+			settle(200);
+			CHECK(view->property("referenceShown").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuUnpin"));
+			settle(200);
+			CHECK(!view->property("referenceShown").toBool());
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuFollow"));
+			settle(200);
+			CHECK(view->property("following").toBool());
+			const auto before = traces.capture();
+			openGraphMenu(0.4);
+			click(window, shown(content, "plotMenuRemoveAll"));
+			settle(200);
+			CHECK(traces.plotted().isEmpty() && traces.count(voltage) > 0 && shown(content, "plotEmpty"));
+			CHECK(traces.restore(before) && traces.plotted() == order);
+			settle(200);
+			// Delete on a chip's settings button takes that curve off.
+			auto* settingsButton = all(content, "plotChipSettings").first();
+			settingsButton->forceActiveFocus(Qt::TabFocusReason);
+			QTest::keyClick(window, Qt::Key_Delete);
+			settle(200);
+			CHECK(!traces.isPlotted(voltage) && traces.plotted().size() == order.size() - 1);
+			CHECK(traces.restore(before) && traces.plotted() == order);
 			QTest::mouseMove(window, QPoint(4, 4));
 			settle(150);
 		}

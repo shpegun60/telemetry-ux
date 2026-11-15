@@ -1638,6 +1638,74 @@ ApplicationWindow {
 	connection.disconnect();
 }
 
+// The live Plot from the Watchlist (LP-1g): Ctrl+P on a row puts its value on
+// the Plot and takes it off again; on a selection it takes every value in it,
+// and the row menu says how many. Counter reads a u64 no double holds: a
+// number type, so it is plotted all the same.
+void watchRowsToPlot()
+{
+	inspector_qml::TcpDemoServer peer;
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setWatchIndividual(true);
+	for (const auto& name : {QStringLiteral("Counter"), QStringLiteral("Offset"), QStringLiteral("Mode")}) {
+		const auto field = endpoint(provider->endpoints(), name);
+		CHECK(field.isValid() && provider->addWatchMany({QVariant::fromValue(field)}).value("added").toInt() == 1);
+	}
+	provider->refreshWatch();
+	CHECK(await([&] { return !provider->watchActive() && !provider->watchPending(); }));
+	auto* traces = qobject_cast<ux::WatchTraces*>(provider->watchTraces());
+	CHECK(traces && traces->plotted().isEmpty());
+
+	QQmlApplicationEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("testProvider"), provider);
+	QQmlComponent component(&engine);
+	component.setData(R"qml(
+import QtQuick
+import QtQuick.Controls
+import Telemetry.UX
+ApplicationWindow {
+    width: 840; height: 480; visible: true
+    WatchlistPanel { anchors.fill: parent; provider: testProvider; collapsible: false }
+}
+)qml", QUrl(QStringLiteral("rows-to-plot.qml")));
+	CHECK(component.isReady());
+	std::unique_ptr<QObject> object(component.create());
+	auto* window = qobject_cast<QQuickWindow*>(object.get());
+	CHECK(window && QTest::qWaitForWindowExposed(window));
+	window->requestActivate();
+	CHECK(QTest::qWaitForWindowActive(window));
+	auto* list = control(window->contentItem(), QStringLiteral("watchlistView"));
+	CHECK(list->setProperty("currentIndex", 0));
+	list->forceActiveFocus(Qt::TabFocusReason);
+	CHECK(await([&] { return list->hasActiveFocus(); }));
+	const auto first = provider->watchlist()->index(0, 0).data(ux::WatchlistModel::NameRole).toString();
+	// One row: on, then off; its readings stay.
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted() == QStringList{first}; }));
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().isEmpty() && traces->count(first) > 0; }));
+	// The whole list selected: every value, in the order shown.
+	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().size() == 3 && traces->plotted().first() == first; }));
+	// The row menu speaks for the selection.
+	QTest::keyClick(window, Qt::Key_Menu);
+	auto* item = control(window->contentItem(), QStringLiteral("watchRowPlot"));
+	CHECK(item->property("text").toString() == QStringLiteral("Plot 3 values\tCtrl+P") && item->property("enabled").toBool() &&
+	      !item->property("checkable").toBool());
+	QTest::keyClick(window, Qt::Key_Escape);
+	// Every one on it already: Ctrl+P takes them all off.
+	CHECK(await([&] { return list->hasActiveFocus(); }));
+	QTest::keyClick(window, Qt::Key_P, Qt::ControlModifier);
+	CHECK(await([&] { return traces->plotted().isEmpty(); }));
+	object.reset();
+	connection.disconnect();
+}
+
 void presentationPanels()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -2098,6 +2166,7 @@ int main(int argc, char** argv)
 	watchRowWrite();
 	watchRowWriteUnknown();
 	watchRowSignedZero();
+	watchRowsToPlot();
 	presentationPanels();
 	disconnectedPanels();
 	outcomeAttention();
