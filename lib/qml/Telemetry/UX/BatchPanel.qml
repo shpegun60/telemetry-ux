@@ -48,8 +48,9 @@ Pane {
         Label {
             objectName: "batchOutcomeLabel"
             textFormat: Text.PlainText
-            text: panel.provider.batchSupported || panel.provider.batchCount === 0 ? panel.provider.batchStatus
-                : qsTr("These items are from an earlier connection and are never sent again. Clear them to start a new Batch.")
+            // The provider says it all, items of an earlier connection
+            // included; a run that failed keeps its words after a disconnect.
+            text: panel.provider.batchStatus
             color: panel.provider.batchAttention === true ? Theme.warning : Theme.textSecondary
             font.pointSize: Type.caption
             wrapMode: Text.Wrap
