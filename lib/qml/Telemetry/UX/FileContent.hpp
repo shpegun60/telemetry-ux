@@ -177,6 +177,9 @@ class FileContent final : public QObject {
 	// two seconds, is one step. 1000 steps; emptied by a read, Reload and
 	// Discard. Undo and redo change only the bytes in memory, editing on or off.
 	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history CONSTANT)
+	// The host is writing this copy to the device: its Undo and Redo wait
+	// ("Wait for values.bin to finish writing to the device.") until it ends.
+	Q_PROPERTY(bool writing READ writing WRITE setWriting NOTIFY editChanged)
 	// The device's layer: whether the device's bytes as read are known for
 	// this copy, what to call them in a sentence, and how many bytes of the
 	// working copy differ from them, edits not saved included. Without them
@@ -286,6 +289,8 @@ public:
 	qint64 editedBytes() const noexcept { return edited_; }
 	bool modified() const noexcept { return edited_ > 0; }
 	UndoHistory* history() noexcept { return &history_; }
+	bool writing() const noexcept { return writing_; }
+	void setWriting(bool writing);
 	// The file's name in a step's words: the device's file, else the copy's.
 	QString stepName() const;
 	// Overwrites bytes at offset, cut at the file's end: one step to undo,
@@ -408,6 +413,7 @@ private:
 	QByteArray saved_;
 	qint64 edited_ = 0;
 	bool editing_ = false;
+	bool writing_ = false;
 	UndoHistory history_;
 	UndoFunctions target_;
 	// The typing step on top of the history: its serial, the bytes it covers

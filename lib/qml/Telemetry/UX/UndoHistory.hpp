@@ -28,8 +28,9 @@ namespace telemetry::ux {
 //
 // Actions that act on the device are never steps and clear nothing:
 // noteIrreversible(words) keeps their words ("The write to device.Gain is not
-// undone; write 1.5 to go back.") until the next step or
-// acknowledgeIrreversible(), for whatever answers Ctrl+Z to say first.
+// undone; write 1.5 to go back.") until the next step, a step taken or
+// acknowledgeIrreversible(), for the window's UndoRouter to say at the next
+// Ctrl+Z instead of undoing.
 class UndoHistory : public QObject {
 	Q_OBJECT
 	QML_ELEMENT
@@ -42,9 +43,10 @@ class UndoHistory : public QObject {
 	// offers its Undo while undoSerial is that step's. 0 when there is none.
 	Q_PROPERTY(int undoSerial READ undoSerial NOTIFY changed)
 	Q_PROPERTY(int redoSerial READ redoSerial NOTIFY changed)
-	// Why the step undo would take cannot be taken now, in words; empty when
-	// it can or there is none.
+	// Why the step undo (redo) would take cannot be taken now, in words;
+	// empty when it can or there is none.
 	Q_PROPERTY(QString blockedReason READ blockedReason NOTIFY changed)
+	Q_PROPERTY(QString redoBlockedReason READ redoBlockedReason NOTIFY changed)
 	Q_PROPERTY(QString irreversibleNote READ irreversibleNote NOTIFY changed)
 	// Steps kept, 100 unless set (a file's bytes keep 1000). Setting it drops
 	// every step.
@@ -64,6 +66,7 @@ public:
 	[[nodiscard]] int undoSerial() const;
 	[[nodiscard]] int redoSerial() const;
 	[[nodiscard]] QString blockedReason() const;
+	[[nodiscard]] QString redoBlockedReason() const;
 	[[nodiscard]] QString irreversibleNote() const { return irreversible_; }
 	[[nodiscard]] int limit() const { return stack_.undoLimit() > 0 ? stack_.undoLimit() : limit_; }
 	void setLimit(int limit);
@@ -71,9 +74,16 @@ public:
 	[[nodiscard]] int count() const { return stack_.count(); }
 
 	// Takes the step back (forward); false, and nothing changed, when there is
-	// none or it is blocked. Emits done().
+	// none or it is blocked. Ends the irreversible note: what the user takes
+	// is past it. Emits done().
 	Q_INVOKABLE bool undo();
 	Q_INVOKABLE bool redo();
+	// A notice in a panel that showed what the undo() or redo() under way did
+	// says so from its done() handler; whoever took the step then need not
+	// say it again elsewhere (the router's status line). noticed() answers
+	// for the last undo() or redo() taken.
+	Q_INVOKABLE void markNoticed();
+	[[nodiscard]] bool noticed() const noexcept { return noticed_; }
 	// Every step goes: a project closed or another opened, a file read again.
 	Q_INVOKABLE void clear();
 	Q_INVOKABLE void noteIrreversible(const QString& words);
@@ -119,8 +129,10 @@ Q_SIGNALS:
 	// A step was recorded, or merged into the one before, now under serial.
 	void recorded(int serial);
 	// undo() or redo() took the step with serial; outcome is "done",
-	// "partial" or "skipped", note the target's words for what it could not.
-	void done(int serial, const QString& text, bool undone, const QString& note, const QString& outcome);
+	// "partial" or "skipped", note the target's words for what it could not,
+	// kinds the kinds of its parts - which panel's notice speaks for it.
+	void done(int serial, const QString& text, bool undone, const QString& note, const QString& outcome,
+	          const QStringList& kinds);
 
 private:
 	const UndoStep* step(int index) const;
@@ -131,12 +143,13 @@ private:
 	int limit_ = 100;
 	int serial_ = 0;
 	bool taking_ = false;
+	bool noticed_ = false;
 	QString irreversible_;
 	std::function<qint64()> clock_;
 	// What was last published, so changed() is said only when it moved.
 	struct Shown {
 		bool canUndo = false, canRedo = false, clean = true;
-		QString undoText, redoText, blocked, irreversible;
+		QString undoText, redoText, blocked, redoBlocked, irreversible;
 		int undoSerial = 0, redoSerial = 0, count = 0, limit = 0;
 	} shown_;
 	Shown current() const;

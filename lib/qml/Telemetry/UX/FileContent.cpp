@@ -211,10 +211,21 @@ bool FileTableModel::numeric(int column) const
 FileContent::FileContent(QObject* parent)
     : QObject(parent),
       target_([this](const QString&, const QVariantMap& state, const QStringList& keys) { return applyBytes(state, keys); },
-              [] { return QString{}; }),
+              [this] {
+	              return writing_ ? tr("Wait for %1 to finish writing to the device.").arg(stepName()) : QString{};
+              }),
       hex_(this), table_(this), lines_(this), rows_(&table_, this)
 {
 	history_.setLimit(1000);
+}
+
+void FileContent::setWriting(bool writing)
+{
+	if (writing_ == writing)
+		return;
+	writing_ = writing;
+	history_.refresh();
+	Q_EMIT editChanged();
 }
 
 QString FileContent::stepName() const

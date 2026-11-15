@@ -516,11 +516,23 @@ void hexEditing(const QString& folder)
 	CHECK(content.bytes().startsWith("Zz") && view.cursor() == 2 && content.editedBytes() == 2);
 	view.moveTo(1);
 	CHECK(view.status().contains(QStringLiteral("Edited, not saved")));
-	// One step for what was typed in one go.
+	// One step for what was typed in one go. Ctrl+Z and Ctrl+Y are the
+	// window's UndoRouter's (UR-1), never the grid's own: here they do nothing.
 	press(&view, Qt::Key_Z, Qt::ControlModifier);
+	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2 && content.history()->canUndo());
+	CHECK(content.history()->undo());
 	CHECK(content.bytes() == QByteArray("ABCDEFGH") && content.editedBytes() == 0 && !content.history()->canUndo());
 	press(&view, Qt::Key_Y, Qt::ControlModifier);
+	CHECK(content.bytes() == QByteArray("ABCDEFGH"));
+	CHECK(content.history()->redo());
 	CHECK(content.bytes().startsWith("Zz") && content.editedBytes() == 2);
+	// While the host writes the copy to the device its steps wait, in words.
+	content.setWriting(true);
+	CHECK(!content.history()->canUndo() &&
+	      content.history()->blockedReason() == QStringLiteral("Wait for editing.bin to finish writing to the device.") &&
+	      !content.history()->undo() && content.bytes().startsWith("Zz"));
+	content.setWriting(false);
+	CHECK(content.history()->canUndo() && content.history()->blockedReason().isEmpty());
 	// A letter outside the printable range is not typed; a hex digit in the
 	// text column is a letter there.
 	view.moveTo(7);

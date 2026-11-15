@@ -1,6 +1,9 @@
 ﻿#include <Telemetry/UX/TrendHistory.hpp>
 #include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/UndoHistory.hpp>
+#include <Telemetry/UX/UndoRouter.hpp>
+#include <Telemetry/UX/UndoScope.hpp>
+#include <QQuickItem>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -35,6 +38,16 @@ int main(int argc, char** argv) {
     auto* undo = engine.rootObjects().first()->findChild<telemetry::ux::UndoHistory*>("workspaceHistory");
     if (!undo || undo->limit() != 100 || undo->canUndo() || undo->undo() || undo->undoSerial() != 0) return 3;
     std::puts("Installed UndoHistory made in QML passed");
+    // The router, its buttons, a notice and a scope, from the installed module.
+    auto* root = engine.rootObjects().first();
+    auto* router = root->findChild<telemetry::ux::UndoRouter*>("undoRouter");
+    auto* inert = root->findChild<QQuickItem*>("inertArea");
+    const auto* scope = telemetry::ux::UndoScope::of(inert);
+    if (!router || router->workspace() != undo || router->active() != undo || router->canUndo() ||
+        router->undoReason() != QStringLiteral("Nothing to undo.") || !root->findChild<QObject*>("undoButtons") ||
+        !root->findChild<QObject*>("undoNotice") || !scope || !scope->inert())
+        return 4;
+    std::puts("Installed UndoRouter, UndoButtons, UndoNotice and UndoScope made in QML passed");
     return 0;
 }
 #include "TrendInstalled.moc"

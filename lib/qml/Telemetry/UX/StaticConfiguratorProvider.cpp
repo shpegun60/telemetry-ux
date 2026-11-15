@@ -1471,11 +1471,12 @@ struct StaticConfiguratorProvider::Impl {
 		           : text;
 	}
 
-	void start(Operation op)
+	// Sends op for the selected endpoint; whether it went to the device.
+	bool start(Operation op)
 	{
 		const auto* e = endpoint();
 		if (!e || !idle() || watchCycle)
-			return;
+			return false;
 		// Snapshot arguments before calling generated conversion code, which can
 		// run application QJS getters. No borrowed cache/draft survives reentry.
 		const auto args = draft;
@@ -1502,19 +1503,20 @@ struct StaticConfiguratorProvider::Impl {
 		else if ((op == Operation::Command || op == Operation::Service) && e->invoke)
 			issued = e->invoke(binding.api, args);
 		if (!alive)
-			return;
+			return false;
 		if (issued.isEmpty()) {
 			pending = false;
 			operation = Operation::None;
 			status = QStringLiteral("Submission refused");
 			publish(false);
-			return;
+			return false;
 		}
 		token = issued;
 		if (selectedBefore == selected &&
 		    (op == Operation::Write || op == Operation::Read || op == Operation::Readback))
 			retired = true;
 		publish();
+		return true;
 	}
 
 	void finished(const QString& completed, const QVariantMap& result)
@@ -2244,22 +2246,33 @@ void StaticConfiguratorProvider::cancelEdit()
 	d->publish();
 }
 
+// The device's actions are never steps: once one is sent, the first Ctrl+Z
+// says so instead of undoing (UR-1).
 void StaticConfiguratorProvider::apply()
 {
-	if (canApply())
-		d->start(Impl::Operation::Write);
+	if (!canApply())
+		return;
+	const auto name = selection();
+	if (d->start(Impl::Operation::Write) && d->history)
+		d->history->noteIrreversible(tr("The write to %1 is not undone; apply the old value to go back.").arg(name));
 }
 
 void StaticConfiguratorProvider::executeCommand()
 {
-	if (canExecute())
-		d->start(Impl::Operation::Command);
+	if (!canExecute())
+		return;
+	const auto name = selection();
+	if (d->start(Impl::Operation::Command) && d->history)
+		d->history->noteIrreversible(tr("The Command %1 was sent; Undo does not take it back.").arg(name));
 }
 
 void StaticConfiguratorProvider::callService()
 {
-	if (canCallService())
-		d->start(Impl::Operation::Service);
+	if (!canCallService())
+		return;
+	const auto name = selection();
+	if (d->start(Impl::Operation::Service) && d->history)
+		d->history->noteIrreversible(tr("The request to %1 was sent; Undo does not take it back.").arg(name));
 }
 
 bool StaticConfiguratorProvider::setScalarText(const QModelIndex& index, const QString& text)

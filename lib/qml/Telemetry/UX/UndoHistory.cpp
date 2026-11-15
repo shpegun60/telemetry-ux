@@ -92,6 +92,12 @@ QString UndoHistory::blockedReason() const
 	return top ? top->blocked() : QString{};
 }
 
+QString UndoHistory::redoBlockedReason() const
+{
+	const auto* next = step(stack_.index());
+	return next ? next->blocked() : QString{};
+}
+
 void UndoHistory::setLimit(int limit)
 {
 	if (limit < 1 || limit == this->limit())
@@ -122,6 +128,12 @@ bool UndoHistory::take(bool undo)
 		return false;
 	const auto serial = taken->serial();
 	const auto text = taken->text();
+	// A skipped step is deleted by the stack: its kinds are read first.
+	QStringList kinds;
+	for (const auto& part : taken->parts())
+		if (!kinds.contains(part.kind))
+			kinds << part.kind;
+	kinds.sort();
 	UndoOutcome outcome;
 	auto* reporting = const_cast<UndoStep*>(taken);
 	reporting->setReport([&outcome](const UndoOutcome& said) { outcome = said; });
@@ -134,9 +146,17 @@ bool UndoHistory::take(bool undo)
 	// A skipped step is gone already; one kept stops reporting to this frame.
 	if (const auto* kept = step(undo ? stack_.index() : stack_.index() - 1); kept && kept->serial() == serial)
 		const_cast<UndoStep*>(kept)->setReport({});
+	// The user took a step: the action on the device is behind them now.
+	irreversible_.clear();
+	noticed_ = false;
 	publish();
-	Q_EMIT done(serial, text, undo, outcome.note, outcomeName(outcome.kind));
+	Q_EMIT done(serial, text, undo, outcome.note, outcomeName(outcome.kind), kinds);
 	return true;
+}
+
+void UndoHistory::markNoticed()
+{
+	noticed_ = true;
 }
 
 void UndoHistory::clear()
@@ -248,6 +268,7 @@ UndoHistory::Shown UndoHistory::current() const
 	now.undoText = undoText();
 	now.redoText = redoText();
 	now.blocked = blockedReason();
+	now.redoBlocked = redoBlockedReason();
 	now.irreversible = irreversible_;
 	now.undoSerial = undoSerial();
 	now.redoSerial = redoSerial();
@@ -261,7 +282,8 @@ void UndoHistory::publish()
 	const auto now = current();
 	const bool same = now.canUndo == shown_.canUndo && now.canRedo == shown_.canRedo && now.clean == shown_.clean &&
 	                  now.undoText == shown_.undoText && now.redoText == shown_.redoText &&
-	                  now.blocked == shown_.blocked && now.irreversible == shown_.irreversible &&
+	                  now.blocked == shown_.blocked && now.redoBlocked == shown_.redoBlocked &&
+	                  now.irreversible == shown_.irreversible &&
 	                  now.undoSerial == shown_.undoSerial && now.redoSerial == shown_.redoSerial &&
 	                  now.count == shown_.count && now.limit == shown_.limit;
 	if (same)
