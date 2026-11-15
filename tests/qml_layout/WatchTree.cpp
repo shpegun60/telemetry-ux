@@ -408,7 +408,8 @@ int main(int argc, char** argv)
 				QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier);
 				settle();
 				CHECK(formatIs("hex") && ownFormats() == chosen);
-				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone") && !named(content, "watchUndo"));
+				CHECK(textOf(content, "watchNotice") == QStringLiteral("Undone: Reset number formats to Original") &&
+				      !named(content, "watchUndo"));
 				// From the row's Number format menu, by keys: Down to it, Right
 				// into it, past "Like the Watchlist", Original, Dec and Hex to
 				// the reset under them.
@@ -421,11 +422,12 @@ int main(int argc, char** argv)
 				CHECK(rowReset->property("enabled").toBool() && rowReset->property("highlighted").toBool());
 				key(window, Qt::Key_Return);
 				CHECK(formatIs("original") && ownFormats().isEmpty() && named(content, "watchUndo"));
-				// A form chosen: the notice no longer says how things are, and
-				// Undo would take back more than it says; both go.
+				// A form chosen: the notice no longer says how things are, and its
+				// step is no longer the one Undo would take; both go.
 				click(window, named(content, "watchFormat_dec"));
 				CHECK(formatIs("dec") && !named(content, "watchNoticeLine") && !named(content, "watchUndo"));
-				CHECK(!fixture->property("canUndoWatch").toBool());
+				auto* history = fixture->property("history").value<QObject*>();
+				CHECK(history && history->property("undoText").toString() == QStringLiteral("Show the Watchlist in dec"));
 				// A value in a format of its own is counted by a mark before the
 				// format control, and the mark shows every value as Original
 				// (WL-3c). With nothing to count it keeps its room, clear and out
@@ -724,7 +726,8 @@ int main(int argc, char** argv)
 			CHECK(removedLine && removedLine->property("text").toString() ==
 			                         QStringLiteral("Removed 2 values of device.Config"));
 			click(window, named(content, "watchUndo"));
-			CHECK(calls.undos == 1 && removedLine->property("text").toString() == QStringLiteral("Undone"));
+			CHECK(calls.undos == 1 &&
+			      removedLine->property("text").toString() == QStringLiteral("Undone: Remove 2 values from the Watchlist"));
 			CHECK(!named(content, "watchUndo"));
 			list->setProperty("currentIndex", 0);
 			list->forceActiveFocus();
@@ -823,9 +826,11 @@ int main(int argc, char** argv)
 				CHECK(textOf(content, "watchNotice") == QStringLiteral("Removed %1 values").arg(model.rowCount()));
 				// After a removal the cursor's row is the one selected.
 				CHECK(selectedRows() == QList<int>({current()}));
-				// With no device there is no Undo to bring them back: asked first.
+				// With no history there is no Undo to bring them back: asked
+				// first. A history puts them back with no device too (UR-1).
 				auto* fixture = panel->property("provider").value<QObject*>();
-				fixture->setProperty("connected", false);
+				const auto history = fixture->property("history");
+				fixture->setProperty("history", QVariant::fromValue<QObject*>(nullptr));
 				QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 				settle();
 				calls.removed.clear();
@@ -845,7 +850,7 @@ int main(int argc, char** argv)
 				fixture->setProperty("watchRevision", fixture->property("watchRevision").toInt() + 1);
 				settle();
 				CHECK(!dialog->property("visible").toBool() && calls.removed.isEmpty());
-				fixture->setProperty("connected", true);
+				fixture->setProperty("history", history);
 				list->forceActiveFocus();
 				settle();
 				// Home and End; Shift+Down on the last row moves nothing and

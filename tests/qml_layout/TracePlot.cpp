@@ -8,6 +8,7 @@
 // completed reads deliver them. MIT.
 #include "Telemetry/UX/QmlTypes.hpp"
 #include "Telemetry/UX/WatchTraces.hpp"
+#include "Telemetry/UX/UndoHistory.hpp"
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
@@ -173,6 +174,10 @@ int main(int argc, char** argv)
 		CHECK(!ux::plotValue(ux::WatchValueBits{}));
 
 		ux::WatchTraces traces;
+		// The Plot's changes go to a history, as a provider gives its own (UR-1).
+		ux::UndoHistory history;
+		traces.setHistory(&history);
+		CHECK(traces.history() == &history);
 		constexpr quint64 gain = 3 | quint64{1} << 32;
 		traces.setPaths(1, {{1, QStringLiteral("device.Voltage")}, {2, QStringLiteral("device.Ready")}, {gain, QStringLiteral("device.Config.Gain")}},
 		                {{QStringLiteral("device.Ready"), true}});
@@ -716,6 +721,7 @@ int main(int argc, char** argv)
 			click(window, shown(content, "plotChipPointsShow"));
 			settle(300);
 			CHECK(traces.points(voltage) == 1 && !named(content, "plotChipPointsShow"));
+			CHECK(history.undoText() == QStringLiteral("Change the points of %1").arg(voltage));
 			traces.setPoints(voltage, 0);
 			// The graph's menu (right-click): every curve's points.
 			const auto graph = view->property("plotArea").toRectF();
@@ -725,6 +731,7 @@ int main(int argc, char** argv)
 			click(window, shown(content, "plotShowPoints"));
 			settle(300);
 			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
+			CHECK(history.undoText() == QStringLiteral("Show measurement points"));
 			traces.setShowPoints(false);
 			settle(150);
 
@@ -752,6 +759,10 @@ int main(int argc, char** argv)
 			settle(200);
 			CHECK(view->property("following").toBool());
 			const auto before = traces.capture();
+			QHash<QString, int> colours;
+			for (const auto& path : order)
+				colours.insert(path, traces.colorIndex(path));
+			const auto steps = history.count();
 			openGraphMenu(0.4);
 			// The menu is taller than this 360 px window: the item is chosen
 			// as a key would choose it, and the menu closed.
@@ -760,7 +771,13 @@ int main(int argc, char** argv)
 				QMetaObject::invokeMethod(menu, "close");
 			settle(200);
 			CHECK(traces.plotted().isEmpty() && traces.count(voltage) > 0 && shown(content, "plotEmpty"));
-			CHECK(traces.restore(before) && traces.plotted() == order);
+			// One step (UR-1): Undo puts every curve back in its place, with
+			// its colour; a project's Plot put back records nothing.
+			CHECK(history.count() == steps + 1 && history.undoText() == QStringLiteral("Remove all curves from the Plot"));
+			CHECK(history.undo() && traces.plotted() == order);
+			for (const auto& path : order)
+				CHECK(traces.colorIndex(path) == colours.value(path));
+			CHECK(traces.restore(before) && traces.plotted() == order && history.count() == steps + 1);
 			settle(200);
 			// A stop, then readings again: a band where nothing was read.
 			CHECK(view->property("drawnGaps").toInt() == 0);
@@ -778,7 +795,8 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_Delete);
 			settle(200);
 			CHECK(!traces.isPlotted(voltage) && traces.plotted().size() == order.size() - 1);
-			CHECK(traces.restore(before) && traces.plotted() == order);
+			CHECK(history.undoText() == QStringLiteral("Remove %1 from the Plot").arg(voltage) && history.undo() &&
+			      traces.plotted() == order);
 			QTest::mouseMove(window, QPoint(4, 4));
 			settle(150);
 		}

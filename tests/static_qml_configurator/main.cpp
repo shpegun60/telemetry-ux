@@ -463,7 +463,6 @@ static void qmlInput(const QString& image, bool standalone = false)
 	select(p, "Config");
 	p.refresh();
 	drain(h, p);
-	p.beginEdit();
 	QQmlEngine engine;
 	QQmlComponent component(&engine);
 	const auto form =
@@ -531,19 +530,32 @@ static void qmlInput(const QString& image, bool standalone = false)
 		view->setProperty("watchlistVisible", false);
 		events();
 	}
+	// No Edit button: the cell is the editor; the draft opens with the first
+	// change (BA-4).
+	check(!visual(window->contentItem(), QStringLiteral("editButton")) && !p.editing() &&
+	          !visual(window->contentItem(), QStringLiteral("applyButton")),
+	      "no Edit button, and no draft or Apply before a change");
+	auto* cellText = visual(window->contentItem(), QStringLiteral("valueText"), QStringLiteral("gain"));
+	check(cellText != nullptr, "the gain cell reads as a value");
+	QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+	                  cellText->mapToScene(QPointF(cellText->width() / 2, cellText->height() / 2)).toPoint());
+	events();
 	auto* input =
 	    visual(window->contentItem(), QStringLiteral("scalarEditor"), QStringLiteral("gain"));
-	check(input != nullptr, "live QML scalar editor");
-	const auto inputPoint =
-	    input->mapToScene(QPointF(input->width() / 2, input->height() / 2)).toPoint();
-	QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, inputPoint);
+	check(input && input->hasActiveFocus(), "a click opens the cell's editor");
 	QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 	for (const auto key : {Qt::Key_4, Qt::Key_Period, Qt::Key_2, Qt::Key_5})
 		QTest::keyClick(window, key);
 	check(input->property("text").toString() == QStringLiteral("4.25"),
 	      "actual keyboard input retained before Enter");
+	check(p.editing(), "the first change opened the draft");
 	auto* apply = visual(window->contentItem(), QStringLiteral("applyButton"));
 	check(apply && apply->isVisible() && apply->isEnabled(), "actual Apply ready");
+	// Apply came with the draft: the header lays out again before it is hit
+	// (an offscreen window has no frame to do it for the click).
+	for (auto* item = apply; item; item = item->parentItem())
+		item->ensurePolished();
+	events();
 	QTest::mouseClick(
 	    window, Qt::LeftButton, Qt::NoModifier,
 	    apply->mapToScene(QPointF(apply->width() / 2, apply->height() / 2)).toPoint());

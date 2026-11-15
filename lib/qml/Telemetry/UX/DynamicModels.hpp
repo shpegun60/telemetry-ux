@@ -162,7 +162,10 @@ public:
 		EditorChoicesRole,
 		EditorChoicesTruncatedRole,
 		CanonicalTextRole,
-		TypeTextRole
+		TypeTextRole,
+		// What the cell says while its text is not a value of its type:
+		// "Enter a number from 0 to 255." Empty on rows that take no text.
+		TakesRole
 	};
 	Q_ENUM(Role)
 	static constexpr int fetchBatch = 128;
@@ -179,6 +182,11 @@ public:
 	[[nodiscard]] telemetry::integration::inspector::NodeResult
 	node(const QModelIndex& index) const;
 	void updateScalar(const QModelIndex& index);
+	// A Field's cells are editable before a draft exists: the first change
+	// opens it (Details, BA-4). The owner says when its Field may be edited;
+	// a draft or a request editor makes the cells editable on their own.
+	void setEditOffer(bool offered);
+	[[nodiscard]] bool editOffer() const noexcept;
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;
 	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
