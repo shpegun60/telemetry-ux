@@ -1130,7 +1130,7 @@ FocusScope {
                     id: autoValues
                     objectName: "plotAuto"
                     visible: view.visible && !view.valueAuto
-                    x: view.numberLanes.length > 0 ? view.valuesArea.right - width - Type.padding
+                    x: view.numberLanes.length > 0 ? view.numberLanes[0].nameRect.right + Type.padding
                                                    : view.valuesArea.left + Type.padding
                     y: view.valuesArea.top + Type.padding
                     height: Type.chipHeight
