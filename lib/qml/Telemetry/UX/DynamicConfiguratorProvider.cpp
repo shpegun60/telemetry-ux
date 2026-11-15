@@ -429,7 +429,7 @@ struct DynamicConfiguratorProvider::Impl {
 		traces.append(frame);
 	}
 	// Moves with every change of a format, from wherever it comes (a panel, a
-	// project loaded): a reset's Undo holds only while it has not moved.
+	// project loaded, an Undo).
 	quint64 formatRevision = 0;
 	// The rows shown in a format of their own, counted once per change of the
 	// formats or the rows, not on every reading (WL-3c).
@@ -544,16 +544,249 @@ struct DynamicConfiguratorProvider::Impl {
 	bool available = false;
 	QSet<quint64> heldKeys;
 	quint64 heldMembership = ~quint64{0};
-	// The one change Undo takes back: rows added or removed, or (formats) a
-	// reset of the number formats, with what they were.
-	struct WatchUndo {
-		bool valid = false, added = false, formats = false;
-		QSet<WatchKey> addedIds;
-		QVector<WatchlistModel::Removed> removed;
-		quint64 membership = 0, treeEpoch = 0, formatRevision = 0;
-		WatchNumberFormat format = WatchNumberFormat::Original;
-		QHash<QString, WatchNumberFormat> pathFormats;
-	} undo;
+	// Where the Watchlist's changes go as steps (UR-1), and the target the
+	// steps put their states back through: "watch.rows" by path ({at,
+	// format}) and "watch.format" by path, "" for the Watchlist's own.
+	QPointer<UndoHistory> undoHistory;
+	// Made with the provider: it keeps this alive while a step is put back,
+	// so a model notification that deletes the provider ends nothing early.
+	std::unique_ptr<UndoFunctions> watchTarget;
+
+	static QString formatWords(const QString& name)
+	{
+		if (name == QStringLiteral("hex"))
+			return DynamicConfiguratorProvider::tr("in hex");
+		if (name == QStringLiteral("dec"))
+			return DynamicConfiguratorProvider::tr("in decimal");
+		return DynamicConfiguratorProvider::tr("as Original");
+	}
+
+	// Rows in a step's words: "device.Voltage", "4 values of device.Config"
+	// (values of one struct or array Field), "3 values".
+	QString rowsWords(const QVector<QPair<QString, WatchKey>>& named) const
+	{
+		if (named.size() == 1)
+			return named.first().first;
+		std::optional<quint32> field;
+		bool one = true;
+		for (const auto& [path, key] : named) {
+			if (watch_key::isUnresolved(key) || watch_key::isWhole(key) ||
+			    (field && *field != watch_key::field(key))) {
+				one = false;
+				break;
+			}
+			field = watch_key::field(key);
+		}
+		const auto fieldPath = one && field && current() ? endpoints.fieldPath(*field) : QString{};
+		return fieldPath.isEmpty()
+		           ? DynamicConfiguratorProvider::tr("%L1 values").arg(named.size())
+		           : DynamicConfiguratorProvider::tr("%L1 values of %2").arg(named.size()).arg(fieldPath);
+	}
+
+	// A row as a "watch.rows" fragment: its place, its own format, and
+	// whether the device attached lacked it then - one put back that the
+	// device lacks is said, unless it was a missing row already.
+	QVariantMap rowFragment(int at, const std::optional<WatchNumberFormat>& format, WatchKey key) const
+	{
+		QVariantMap fragment{{QStringLiteral("at"), at},
+		                     {QStringLiteral("format"), format ? watch_format::name(*format) : QString{}}};
+		if (current() && watch_key::isUnresolved(key))
+			fragment.insert(QStringLiteral("missing"), true);
+		return fragment;
+	}
+
+	int recordWatch(const QString& text, const QString& kind, QVariantMap before, QVariantMap after,
+	                const QString& mergeKey = {})
+	{
+		if (!undoHistory)
+			return 0;
+		return undoHistory->record(text, {UndoPart{watchTarget.get(), kind, std::move(before), std::move(after)}}, mergeKey);
+	}
+
+	// The rows [from, count) just added, as one step.
+	int recordAdded(int from)
+	{
+		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
+		if (!model || !undoHistory || from >= model->count())
+			return 0;
+		QVariantMap after;
+		QVector<QPair<QString, WatchKey>> named;
+		for (int row = from; row < model->count(); ++row) {
+			const auto path = model->index(row, 0).data(WatchlistModel::NameRole).toString();
+			after.insert(path, rowFragment(row, model->rowFormat(row), model->key(row)));
+			named.push_back({path, model->key(row)});
+		}
+		return recordWatch(DynamicConfiguratorProvider::tr("Add %1 to the Watchlist").arg(rowsWords(named)),
+		                   QStringLiteral("watch.rows"), {}, std::move(after));
+	}
+
+	// The rows' own formats by key, read before they go.
+	QHash<WatchKey, std::optional<WatchNumberFormat>> formatsOf(const QSet<WatchKey>& keys) const
+	{
+		QHash<WatchKey, std::optional<WatchNumberFormat>> formats;
+		const auto* model = qobject_cast<const WatchlistModel*>(watch.model());
+		for (int row = 0; model && row < model->count(); ++row)
+			if (keys.contains(model->key(row)))
+				formats.insert(model->key(row), model->rowFormat(row));
+		return formats;
+	}
+
+	// Rows just taken out, as one step: "Remove ..." or, all of them, "Clear".
+	int recordRemoved(const QVector<WatchlistModel::Removed>& removed,
+	                  const QHash<WatchKey, std::optional<WatchNumberFormat>>& formats, bool cleared = false)
+	{
+		if (!undoHistory || removed.isEmpty())
+			return 0;
+		QVariantMap before;
+		QVector<QPair<QString, WatchKey>> named;
+		for (const auto& row : removed) {
+			before.insert(row.entry.name, rowFragment(row.row, formats.value(row.entry.key), row.entry.key));
+			named.push_back({row.entry.name, row.entry.key});
+		}
+		return recordWatch(cleared ? DynamicConfiguratorProvider::tr("Clear the Watchlist")
+		                           : DynamicConfiguratorProvider::tr("Remove %1 from the Watchlist").arg(rowsWords(named)),
+		                   QStringLiteral("watch.rows"), std::move(before), {});
+	}
+
+	// Formats as a "watch.format" state: the Watchlist's under "", each path
+	// with one of its own under its path.
+	QVariantMap formatState(const QStringList& paths, bool list) const
+	{
+		QVariantMap state;
+		if (list)
+			state.insert(QString{}, watch_format::name(watchFormat));
+		const auto formats = pathFormats();
+		for (const auto& path : paths)
+			if (const auto own = formats.constFind(path); own != formats.cend())
+				state.insert(path, watch_format::name(own.value()));
+		return state;
+	}
+
+	// Why the Watchlist's steps wait: the device's tree is being made again.
+	QString watchBlocked() const
+	{
+		if (!q)
+			return {};
+		if (updating || (current() && (endpoints.changing() || !watch.canTellHoldable())))
+			return DynamicConfiguratorProvider::tr("The device is changing; try again in a moment.");
+		return {};
+	}
+
+	UndoOutcome applyWatch(const QString& kind, const QVariantMap& state, const QStringList& keys)
+	{
+		if (!q)
+			return {UndoOutcome::Kind::Skipped, DynamicConfiguratorProvider::tr("the Watchlist is gone")};
+		return kind == QStringLiteral("watch.format") ? applyFormats(state, keys) : applyRows(state, keys);
+	}
+
+	// The formats a step names, back as it says; every other path's stays.
+	UndoOutcome applyFormats(const QVariantMap& state, const QStringList& keys)
+	{
+		auto formats = pathFormats();
+		auto list = watchFormat;
+		for (const auto& key : keys) {
+			const auto named = watch_format::parse(state.value(key).toString());
+			if (key.isEmpty())
+				list = named.value_or(WatchNumberFormat::Original);
+			else if (state.contains(key) && named)
+				formats.insert(key, *named);
+			else
+				formats.remove(key);
+		}
+		{
+			WatchRows::Changes held{rows};
+			if (!putPathFormats(std::move(formats)))
+				return {UndoOutcome::Kind::Blocked, {}};
+		}
+		putFormat(list);
+		++formatRevision;
+		notify();
+		return {};
+	}
+
+	// The rows a step names, back as it says, by path: those it says are
+	// absent taken out wherever they are now; those it says are there put
+	// back at their places with their formats - found on the device attached,
+	// kept by their path without one (WL-4c), and said when this device does
+	// not have them.
+	UndoOutcome applyRows(const QVariantMap& state, const QStringList& keys)
+	{
+		auto* model = qobject_cast<WatchlistModel*>(watch.model());
+		if (!model)
+			return {UndoOutcome::Kind::Skipped, DynamicConfiguratorProvider::tr("the Watchlist is gone")};
+		const auto pathOf = [model](int row) { return model->index(row, 0).data(WatchlistModel::NameRole).toString(); };
+		QHash<QString, int> rowOf;
+		for (int row = 0; row < model->count(); ++row)
+			rowOf.insert(pathOf(row), row);
+		QSet<WatchKey> out;
+		QVector<DynamicWatchlist::PathRow> in;
+		QHash<QString, QString> formats;
+		QSet<QString> wasMissing;
+		QStringList gone, already;
+		for (const auto& key : keys) {
+			const auto found = rowOf.constFind(key);
+			if (!state.contains(key)) {
+				if (found != rowOf.cend())
+					out.insert(model->key(found.value()));
+				else
+					gone << key;
+				continue;
+			}
+			if (found != rowOf.cend()) {
+				already << key;
+				continue;
+			}
+			const auto fragment = state.value(key).toMap();
+			in.push_back({fragment.value(QStringLiteral("at")).toInt(), key});
+			formats.insert(key, fragment.value(QStringLiteral("format")).toString());
+			if (fragment.value(QStringLiteral("missing")).toBool())
+				wasMissing.insert(key);
+		}
+		if (in.size() > WatchlistModel::maxRows - model->count() + out.size())
+			return {UndoOutcome::Kind::Skipped,
+			        DynamicConfiguratorProvider::tr("the Watchlist has no room for them")};
+		{
+			WatchRows::Changes held{rows};
+			if (!out.isEmpty() && watch.removeMany(out).isEmpty())
+				return {UndoOutcome::Kind::Blocked, {}};
+			if (!in.isEmpty()) {
+				if (!watch.putBack(in))
+					return {UndoOutcome::Kind::Blocked, {}};
+				// Each row's own format, as it was: before it is found on the
+				// device, which keeps it.
+				for (int row = 0; row < model->count(); ++row) {
+					const auto format = formats.constFind(pathOf(row));
+					if (format != formats.cend() && watch_key::isUnresolved(model->key(row)))
+						model->setRowFormat(row, watch_format::parse(format.value()));
+				}
+				if (current())
+					watch.rebindRows();
+			}
+		}
+		// Rows this device has not: kept by their path, and said.
+		QStringList missing;
+		if (current())
+			for (int row = 0; row < model->count(); ++row)
+				if (watch_key::isUnresolved(model->key(row)) && formats.contains(pathOf(row)) &&
+				    !wasMissing.contains(pathOf(row)))
+					missing << pathOf(row);
+		notify();
+		const int applied = static_cast<int>(out.size() + in.size());
+		QStringList notes;
+		const auto said = [&notes](const QStringList& paths, const char* one, const char* many) {
+			if (paths.size() == 1)
+				notes << DynamicConfiguratorProvider::tr(one).arg(paths.first());
+			else if (paths.size() > 1)
+				notes << DynamicConfiguratorProvider::tr(many).arg(paths.size());
+		};
+		said(missing, "%1 is not on this device; it is back as a missing row",
+		     "%L1 values are not on this device; they are back as missing rows");
+		said(already, "%1 is already watched", "%L1 values are already watched");
+		said(gone, "%1 is no longer in the Watchlist", "%L1 values are no longer in the Watchlist");
+		if (applied == 0)
+			return {UndoOutcome::Kind::Skipped, notes.join(QStringLiteral("; "))};
+		return {notes.isEmpty() ? UndoOutcome::Kind::Done : UndoOutcome::Kind::Partial, notes.join(QStringLiteral("; "))};
+	}
 
 	const QSet<quint64>& held()
 	{
@@ -806,6 +1039,9 @@ struct DynamicConfiguratorProvider::Impl {
 			available = now;
 			++availability;
 		}
+		// Whether a step can be taken may have changed with the device.
+		if (undoHistory)
+			undoHistory->refresh();
 		if (q)
 			Q_EMIT q->stateChanged();
 	}
@@ -1143,6 +1379,15 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 {
 	d->definitions.setSourceModel(&d->endpoints);
 	std::weak_ptr<Impl> weak = d;
+	d->watchTarget = std::make_unique<UndoFunctions>(
+	    [weak](const QString& kind, const QVariantMap& state, const QStringList& keys) {
+		    const auto p = weak.lock();
+		    return p ? p->applyWatch(kind, state, keys) : UndoOutcome{UndoOutcome::Kind::Skipped, {}};
+	    },
+	    [weak] {
+		    const auto p = weak.lock();
+		    return p ? p->watchBlocked() : QString{};
+	    });
 	d->watch.setNotify(
 	    [weak] {
 		    if (auto p = weak.lock())
@@ -1204,7 +1449,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	};
 	connect(&d->endpoints, &QAbstractItemModel::modelReset, this, treeChanged);
 	// Opening a struct or an array adds its value rows; the boxes count values
-	// from the schema, so nothing they cover changed and Undo stays.
+	// from the schema, so nothing they cover changed.
 	const auto rowsChanged = [treeChanged](const QModelIndex& parent) {
 		if (parent.isValid() && (parent.data(EndpointModel::IsEndpointRole).toBool() ||
 		                         parent.data(EndpointModel::PreviewChildRole).toBool()))
@@ -2046,6 +2291,7 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 	result[QStringLiteral("added")] = static_cast<int>(count);
 	result[QStringLiteral("items")] = items;
 	result[QStringLiteral("first")] = first;
+	result[QStringLiteral("serial")] = p->batch.lastSerial();
 	return result;
 }
 
@@ -2262,7 +2508,13 @@ void DynamicConfiguratorProvider::setWatchIntervalMs(int ms)
 bool DynamicConfiguratorProvider::addWatch()
 {
 	auto p = d;
-	return canAddWatch() && p->watch.add(p->state->endpointId, p->selection);
+	if (!canAddWatch())
+		return false;
+	const int from = p->watch.count();
+	if (!p->watch.add(p->state->endpointId, p->selection))
+		return false;
+	p->recordAdded(from);
+	return true;
 }
 
 bool DynamicConfiguratorProvider::watchCandidate(const QModelIndex& index) const
@@ -2308,12 +2560,15 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 		result[QStringLiteral("status")] = QStringLiteral("stale");
 		return result;
 	}
+	const int from = p->watch.count();
 	{
 		WatchRows::Changes held{p->rows};
 		result = p->watch.addMany(fields);
 	}
-	if (result.value(QStringLiteral("added")).toInt() > 0)
+	if (result.value(QStringLiteral("added")).toInt() > 0) {
+		result[QStringLiteral("serial")] = p->recordAdded(from);
 		p->notify();
+	}
 	if (result.value(QStringLiteral("status")) == QStringLiteral("ok"))
 		result[QStringLiteral("unsupported")] =
 		    result.value(QStringLiteral("unsupported")).toInt() + unsupported;
@@ -2322,8 +2577,7 @@ QVariantMap DynamicConfiguratorProvider::addWatchMany(const QVariantList& indexe
 
 void DynamicConfiguratorProvider::removeWatch(int row)
 {
-	auto p = d;
-	p->watch.remove(row);
+	removeWatchRows({row});
 }
 
 QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& rows)
@@ -2348,6 +2602,7 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 		return result;
 	}
 	// Every key is a row's, so nothing removed means the Watchlist refused.
+	const auto formats = p->formatsOf(keys);
 	QVector<WatchlistModel::Removed> removed;
 	{
 		WatchRows::Changes held{p->rows};
@@ -2357,11 +2612,7 @@ QVariantMap DynamicConfiguratorProvider::removeWatchRows(const QVariantList& row
 		return result;
 	result[QStringLiteral("status")] = QStringLiteral("ok");
 	result[QStringLiteral("changed")] = static_cast<int>(removed.size());
-	p->undo = {};
-	p->undo.valid = true;
-	p->undo.removed = removed;
-	p->undo.membership = p->watch.membership();
-	p->undo.treeEpoch = p->treeEpoch;
+	result[QStringLiteral("serial")] = p->recordRemoved(removed, formats);
 	p->notify();
 	return result;
 }
@@ -2503,6 +2754,7 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 		return result;
 	}
 	QVariantMap added;
+	const int from = p->watch.count();
 	{
 		WatchRows::Changes held{p->rows};
 		added = p->watch.addEntries(add);
@@ -2514,15 +2766,8 @@ QVariantMap DynamicConfiguratorProvider::addWatchPaths(const QStringList& lines)
 	const int count = added.value(QStringLiteral("added")).toInt();
 	// The values added; the rows kept for paths not on this device are said apart.
 	result[QStringLiteral("added")] = count - static_cast<int>(missing.size());
-	if (count > 0) {
-		p->undo = {};
-		p->undo.valid = true;
-		p->undo.added = true;
-		for (const auto& entry : std::as_const(add))
-			p->undo.addedIds.insert(entry.key);
-		p->undo.membership = p->watch.membership();
-		p->undo.treeEpoch = p->treeEpoch;
-	}
+	if (count > 0)
+		result[QStringLiteral("serial")] = p->recordAdded(from);
 	p->notify();
 	return result;
 }
@@ -2604,8 +2849,6 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 		p->watch.rebindRows();
 	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
-	if (replace)
-		p->undo = {};
 	p->notify();
 	return result;
 }
@@ -2669,16 +2912,13 @@ bool DynamicConfiguratorProvider::chooseWatchFormat(const QString& format)
 		return false;
 	if (*parsed == p->watchFormat)
 		return true;
-	// A format chosen is one change Undo takes back (WL-2c): Ctrl+Z after it
-	// returns the format, never an older change under it.
-	Impl::WatchUndo undo;
-	undo.valid = true;
-	undo.formats = true;
-	undo.format = p->watchFormat;
-	undo.pathFormats = p->pathFormats();
+	// A format chosen is one step (WL-2c); choices within two seconds merge,
+	// and one back where they started leaves none.
+	const auto before = p->formatState({}, true);
 	p->putFormat(*parsed);
-	undo.formatRevision = ++p->formatRevision;
-	p->undo = std::move(undo);
+	++p->formatRevision;
+	p->recordWatch(tr("Show the Watchlist %1").arg(Impl::formatWords(watch_format::name(*parsed))),
+	               QStringLiteral("watch.format"), before, p->formatState({}, true), QStringLiteral("watch.format:"));
 	p->notify();
 	return true;
 }
@@ -2699,22 +2939,29 @@ bool DynamicConfiguratorProvider::setWatchRowFormat(const QVariantList& rows, co
 		chosen.push_back(at);
 	}
 	const auto target = format.isEmpty() ? std::nullopt : parsed;
-	const auto before = model->pathFormats();
+	const auto formatsBefore = model->pathFormats();
+	QStringList paths;
+	for (const int row : std::as_const(chosen))
+		if (const auto path = model->index(row, 0).data(WatchlistModel::NameRole).toString(); !paths.contains(path))
+			paths << path;
+	const auto before = p->formatState(paths, false);
 	bool done = true;
 	{
 		WatchRows::Changes held{p->rows};
 		for (const int row : std::as_const(chosen))
 			done = model->setRowFormat(row, target) && done;
 	}
-	if (model->pathFormats() != before) {
-		// One change for all the rows given, which Undo takes back.
-		Impl::WatchUndo undo;
-		undo.valid = true;
-		undo.formats = true;
-		undo.format = p->watchFormat;
-		undo.pathFormats = before;
-		undo.formatRevision = ++p->formatRevision;
-		p->undo = std::move(undo);
+	if (model->pathFormats() != formatsBefore) {
+		// One step for all the rows given; the same rows again within two
+		// seconds merge into it.
+		++p->formatRevision;
+		const auto what = paths.size() == 1 ? paths.first() : tr("%L1 values").arg(paths.size());
+		auto sorted = paths;
+		std::sort(sorted.begin(), sorted.end());
+		p->recordWatch(format.isEmpty() ? tr("Show %1 like the Watchlist").arg(what)
+		                                : tr("Show %1 %2").arg(what, Impl::formatWords(format)),
+		               QStringLiteral("watch.format"), before, p->formatState(paths, false),
+		               QStringLiteral("watch.format:%1").arg(qHash(sorted.join(QLatin1Char('\n')))));
 	}
 	p->notify();
 	return done;
@@ -2740,22 +2987,20 @@ QVariantMap DynamicConfiguratorProvider::resetWatchFormats()
 {
 	auto p = d;
 	QVariantMap result{{QStringLiteral("status"), QStringLiteral("unchanged")}, {QStringLiteral("rows"), 0}};
-	auto before = p->pathFormats();
-	if (p->watchFormat == WatchNumberFormat::Original && before.isEmpty())
+	const auto formats = p->pathFormats();
+	if (p->watchFormat == WatchNumberFormat::Original && formats.isEmpty())
 		return result;
 	const int rows = p->ownFormatRows();
+	const auto paths = formats.keys();
+	const auto before = p->formatState(paths, true);
 	if (!p->putPathFormats({})) {
 		result[QStringLiteral("status")] = QStringLiteral("refused");
 		return result;
 	}
-	Impl::WatchUndo undo;
-	undo.valid = true;
-	undo.formats = true;
-	undo.format = p->watchFormat;
-	undo.pathFormats = std::move(before);
 	p->putFormat(WatchNumberFormat::Original);
-	undo.formatRevision = ++p->formatRevision;
-	p->undo = std::move(undo);
+	++p->formatRevision;
+	result[QStringLiteral("serial")] = p->recordWatch(tr("Reset number formats to Original"), QStringLiteral("watch.format"),
+	                                                  before, p->formatState(paths, true));
 	p->notify();
 	result[QStringLiteral("status")] = QStringLiteral("ok");
 	result[QStringLiteral("rows")] = rows;
@@ -2792,7 +3037,18 @@ bool DynamicConfiguratorProvider::setWatchRowFormats(const QVariantMap& formats)
 void DynamicConfiguratorProvider::clearWatch()
 {
 	auto p = d;
+	// Every row as it is, for the step: its place, its path and its format.
+	QVector<WatchlistModel::Removed> rows;
+	QHash<WatchKey, std::optional<WatchNumberFormat>> formats;
+	if (const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model()))
+		for (int row = 0; row < model->count(); ++row) {
+			const auto key = model->key(row);
+			rows.push_back({row, WatchEntry::of(key, model->index(row, 0).data(WatchlistModel::NameRole).toString())});
+			formats.insert(key, model->rowFormat(row));
+		}
 	p->watch.clear();
+	if (!rows.isEmpty() && p->watch.count() == 0)
+		p->recordRemoved(rows, formats, true);
 }
 
 int DynamicConfiguratorProvider::watchRevision() const
@@ -2800,14 +3056,20 @@ int DynamicConfiguratorProvider::watchRevision() const
 	return static_cast<int>((d->watch.membership() + d->treeEpoch + d->availability + d->formatRevision) & 0x7fffffffU);
 }
 
-bool DynamicConfiguratorProvider::canUndoWatch() const
+UndoHistory* DynamicConfiguratorProvider::history() const
 {
-	const auto& undo = d->undo;
-	// A reset of the formats needs no device: only that no format changed since.
-	if (undo.formats)
-		return undo.valid && undo.formatRevision == d->formatRevision;
-	return undo.valid && undo.membership == d->watch.membership() &&
-	       undo.treeEpoch == d->treeEpoch && d->current() && !d->updating;
+	return d->undoHistory;
+}
+
+void DynamicConfiguratorProvider::setHistory(UndoHistory* history)
+{
+	if (d->undoHistory == history)
+		return;
+	d->undoHistory = history;
+	// The live Plot's changes and the Batch's go to the same history.
+	d->traces.setHistory(history);
+	d->batch.setHistory(history);
+	Q_EMIT historyChanged();
 }
 
 int DynamicConfiguratorProvider::watchState(const QModelIndex& index) const
@@ -3052,6 +3314,7 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 		}
 		if (!add.isEmpty()) {
 			QVariantMap added;
+			const int from = p->watch.count();
 			{
 				WatchRows::Changes held{p->rows};
 				added = p->watch.addEntries(add);
@@ -3062,15 +3325,8 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 			}
 			const int count = added.value(QStringLiteral("added")).toInt();
 			result[QStringLiteral("changed")] = count;
-			if (count > 0) {
-				p->undo = {};
-				p->undo.valid = true;
-				p->undo.added = true;
-				for (const auto& entry : add)
-					p->undo.addedIds.insert(entry.key);
-				p->undo.membership = p->watch.membership();
-				p->undo.treeEpoch = p->treeEpoch;
-			}
+			if (count > 0)
+				result[QStringLiteral("serial")] = p->recordAdded(from);
 		}
 	} else {
 		QSet<WatchKey> keys;
@@ -3083,6 +3339,7 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 					keys.insert(watch_key::member(field, ordinal));
 		result[QStringLiteral("unchanged")] = total - keys.size();
 		if (!keys.isEmpty()) {
+			const auto formats = p->formatsOf(keys);
 			QVector<WatchlistModel::Removed> removed;
 			{
 				WatchRows::Changes held{p->rows};
@@ -3091,58 +3348,10 @@ QVariantMap DynamicConfiguratorProvider::setWatchMany(const QVariantList& indexe
 			if (removed.isEmpty())
 				return result;
 			result[QStringLiteral("changed")] = static_cast<int>(removed.size());
-			p->undo = {};
-			p->undo.valid = true;
-			p->undo.removed = removed;
-			p->undo.membership = p->watch.membership();
-			p->undo.treeEpoch = p->treeEpoch;
+			result[QStringLiteral("serial")] = p->recordRemoved(removed, formats);
 		}
 	}
 	result[QStringLiteral("status")] = QStringLiteral("ok");
-	p->notify();
-	return result;
-}
-
-QVariantMap DynamicConfiguratorProvider::undoWatch()
-{
-	auto p = d;
-	QVariantMap result{{QStringLiteral("status"), QStringLiteral("refused")},
-	                   {QStringLiteral("changed"), 0}};
-	if (!canUndoWatch())
-		return result;
-	if (p->undo.formats) {
-		// The rows' formats first: if the model refuses, nothing changed and
-		// Undo stays.
-		const auto& undo = p->undo;
-		const auto now = p->pathFormats();
-		int changed = undo.format != p->watchFormat ? 1 : 0;
-		for (auto at = undo.pathFormats.cbegin(); at != undo.pathFormats.cend(); ++at)
-			changed += now.value(at.key()) != at.value() || !now.contains(at.key()) ? 1 : 0;
-		for (auto at = now.cbegin(); at != now.cend(); ++at)
-			changed += undo.pathFormats.contains(at.key()) ? 0 : 1;
-		if (!p->putPathFormats(undo.pathFormats))
-			return result;
-		p->putFormat(undo.format);
-		p->undo = {};
-		++p->formatRevision;
-		result[QStringLiteral("status")] = QStringLiteral("ok");
-		result[QStringLiteral("changed")] = changed;
-		p->notify();
-		return result;
-	}
-	const auto undo = std::exchange(p->undo, {});
-	int changed = 0;
-	{
-		WatchRows::Changes held{p->rows};
-		if (undo.added)
-			changed = static_cast<int>(p->watch.removeMany(undo.addedIds).size());
-		else if (p->watch.restore(undo.removed))
-			changed = static_cast<int>(undo.removed.size());
-	}
-	if (changed == 0)
-		return result;
-	result[QStringLiteral("status")] = QStringLiteral("ok");
-	result[QStringLiteral("changed")] = changed;
 	p->notify();
 	return result;
 }

@@ -13,6 +13,7 @@
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
+#include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 #include <cstdio>
 #include <stdexcept>
@@ -139,7 +140,9 @@ public:
 		}
 		const int first = count + 1;
 		count += int(lines.size());
-		return {{"status", "ok"}, {"added", int(lines.size())}, {"items", items}, {"first", first}};
+		// The provider's step (UR-1): one serial per addition.
+		return {{"status", "ok"}, {"added", int(lines.size())}, {"items", items}, {"first", first},
+		        {"serial", 100 + int(added.size())}};
 	}
 	Q_INVOKABLE bool selectPath(const QString& text)
 	{
@@ -248,8 +251,11 @@ int main(int argc, char** argv)
 			auto* line = shown(content, "batchAddCheck");
 			CHECK(line->property("text").toString() == QStringLiteral("Adds a read of device.Voltage as item 1."));
 			const auto quiet = line->property("color");
+			// The row says what it added, and the step it recorded (UR-1).
+			QSignalSpy said(named(content, "batchAddRow"), SIGNAL(added(QString, bool, int)));
 			key(window, Qt::Key_Return);
 			CHECK(calls.added.size() == 1 && calls.added.first() == QStringList({QStringLiteral("device.Voltage")}));
+			CHECK(said.count() == 1 && said.first().at(1).toBool() && said.first().at(2).toInt() == 101);
 			CHECK(textOf(content, "batchAddNotice") == QStringLiteral("Added a read of device.Voltage as item 1."));
 			CHECK(field->property("text").toString().isEmpty() && field->hasActiveFocus());
 			const auto noticeQuiet = shown(content, "batchAddNotice")->property("color");

@@ -32,7 +32,7 @@ PathAddRow {
     enabled: usable && provider.batchPending !== true
     function say(notice, refused) {
         lastRefused = refused
-        batchAdd.added(notice, false)
+        batchAdd.added(notice, false, 0)
     }
     // Selects what the line names in the Device tree, for Details; the
     // provider puts the valid values typed into its draft when changes are
@@ -112,10 +112,11 @@ PathAddRow {
                     ? qsTr("Added %1 as item %L2.").arg(items[0].what).arg(result.first)
                     : qsTr("Added %L1 items as items %L2 to %L3.").arg(added).arg(result.first).arg(result.first + added - 1)
                 batchAdd.lastRefused = false
-                return { notice: notice, undoable: false, clear: true }
+                // One step to undo (UR-1); serial is the step's.
+                return { notice: notice, undoable: true, serial: result.serial || 0, clear: true }
             }
             batchAdd.lastRefused = (result.message || "").length > 0
-            return { notice: result.message || "", undoable: false, clear: false }
+            return { notice: result.message || "", undoable: false, serial: 0, clear: false }
         }
     }
 }

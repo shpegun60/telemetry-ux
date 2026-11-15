@@ -169,15 +169,15 @@ Actions retain the existing provider signatures:
   (`data.Samples[0 … 63]`), then paths whose last step holds the word typed.
   `addWatchPaths(QStringList) -> QVariantMap` adds what each line names - a
   path, a struct or array for all its values, or a line copied from the
-  Watchlist (`path = value`, `path<Tab>value`) - as one change `undoWatch()`
-  takes back: `{status, added, already, missing: [paths], refused: [{path,
-  reason}]}`. The panel shows the row (`WatchAddRow.qml`) where a provider has
+  Watchlist (`path = value`, `path<Tab>value`) - as one step of the
+  provider's `history` (see Undo and Redo): `{status, added, already, missing:
+  [paths], refused: [{path, reason}], serial}`. The panel shows the row (`WatchAddRow.qml`) where a provider has
   all three; Insert, or Down from the last row, edits it; Tab completes the
   common prefix; several pasted lines are added at once.
-- `removeWatchRows(QVariantList of rows) -> QVariantMap` (Dynamic) stops
-  watching several rows as one change that `undoWatch()` takes back; the panel
-  uses it for a node's × and Delete. `{status: ok, invalid or refused,
-  changed}`. Without it the panel removes the rows one by one.
+- `removeWatchRows(QVariantList of rows) -> QVariantMap` (both providers)
+  stops watching several rows as one step; the panel uses it for a node's ×
+  and Delete. `{status: ok, invalid or refused, changed, serial}`. Without it
+  the panel removes the rows one by one.
 - `watchCandidate(QModelIndex) -> bool` tells whether an `endpoints` row could be
   watched, without selecting it. `addWatchMany(QVariantList of QModelIndex) ->
   QVariantMap` adds several Fields in one model change, leaving the selected
@@ -195,15 +195,16 @@ Actions retain the existing provider signatures:
       or array Field, at any depth (S3-A). A struct's or an array's box counts
       all its values, whether its rows are open or not; a member's, an
       element's and a range row's box counts its own. Opening a struct changes
-      no box and keeps Undo.
+      no box.
   - `setWatchMany(QVariantList, bool watched) -> QVariantMap` watches, or stops
     watching, every value the Watchlist can hold at or under each index, in tree
-    order, as one change and with no request sent. A value's row is named by its
+    order, as one step and with no request sent. A value's row is named by its
     path: `device.Config.Gain`, `data.Samples[3]`.
     - The map holds `status` (`ok`, `refused`, `invalid`, `stale` or
       `capacity`) and `changed`, `unchanged`, `fields` (the values asked for),
-      `room`; Dynamic adds `values` (a struct's or array's values were asked)
-      and, when adding, `adding` (how many rows that would add).
+      `room`, `serial` (the step's, 0 when none was recorded); Dynamic adds
+      `values` (a struct's or array's values were asked) and, when adding,
+      `adding` (how many rows that would add).
     - All or nothing: a group that does not fit changes nothing, and `room` says
       how many more fit.
   - Dynamic only: `watchTally(QModelIndex) -> QVariantMap` is what a box counts,
@@ -212,10 +213,9 @@ Actions retain the existing provider signatures:
     `watchRefusal(QModelIndex)` says why a Field's box is off: write only, no
     values, larger than the Watchlist reads at once (64 KiB), or a connection
     that can't read struct members.
-  - `undoWatch() -> QVariantMap` undoes the last such change: removed rows go
-    back in their places. `canUndoWatch` says whether it can: nothing else may
-    have changed the Watchlist or the tree since. In Dynamic it works while the
-    Watchlist polls.
+  - Undo is the provider's `history` (see Undo and Redo): removed rows go
+    back in their places, by path. In Dynamic it works while the Watchlist
+    polls, and with no device.
   - `watchRevision` moves whenever a box may show something else: the Fields
     held, the tree, or whether boxes can be answered at all (a model update, a
     new connection, the Watchlist's source). A view asks `watchState` again
@@ -316,7 +316,7 @@ remain authoritative.
 With a Session-backed Dynamic provider, the Watchlist and the rest of the panel
 work together. While it polls, selecting an endpoint, refreshing Details, editing,
 Apply, Commands, Services and Batch all work, and so do the Watchlist's own
-changes: ticking boxes, adding, removing, Undo and Clear (`watchChangesWhilePolling`
+changes: ticking boxes, adding, removing, Undo, Redo and Clear (`watchChangesWhilePolling`
 is true). A change enters the list at once; a read already sent finishes as asked
 and is applied to the rows still there; the next portion is planned from the rows
 shown then, so every cycle reads one list. An addition between two cycles is read
@@ -443,6 +443,103 @@ keeps the provider alive while the view or its deferred updates exist, and
 implements all lifecycle/permission/error rules. Buttons forward their action to that provider; text can also be revalidated
 on focus loss. The view supplies no automatic mutation replay or exactly-once
 guarantee. Existing lazy array fetching remains limited to 128 immediate rows.
+
+## Undo and Redo (UR-1)
+
+One kind of history, `UndoHistory` (C++, and a QML type `registerQmlTypes()`
+keeps linked), over a `QUndoStack`. A host makes one for its workspace -
+`UndoHistory {}` - and gives it to whatever should record into it:
+
+- **Providers.** `history` (read and write) on `DynamicConfiguratorProvider` and
+  `StaticConfiguratorProvider` is null by default: nothing is recorded and there
+  is no Undo. With one, every change of the Watchlist a user makes is one step:
+  the tree's boxes (`setWatchMany`), `addWatch`, `addWatchMany`,
+  `addWatchPaths`, `removeWatch`, `removeWatchRows` and `clearWatch`; in Dynamic
+  the number formats too (`chooseWatchFormat`, `setWatchRowFormat`,
+  `resetWatchFormats`). The maps they return hold `serial`, the step's. What a
+  project or host restores is never a step: `restoreWatchBindings`,
+  `addWatchBindings`, `setWatchFormat`, `setWatchRowFormats`, rows found again
+  on a device.
+- **The live Plot.** A Dynamic provider gives its `watchTraces` its history
+  (`WatchTraces.history`, which a host with traces of its own sets there):
+  `plot`, `unplot`, `setAppearance`, `setPoints` and `showPoints` are each a
+  step, and `plotMany(paths)` and `unplotMany(paths)` several curves as one -
+  the Watchlist's Plot (Ctrl+P) and the Plot's "Remove all curves" use them.
+  A curve comes back in its place with its colour. `restore()` records
+  nothing.
+- **The Batch.** A Dynamic provider gives its Batch its history: add (one
+  item, or `addBatchPaths`' lines as one step), remove, move (one item's moves
+  within two seconds merging) and Clear, by `BatchRow.uid` with each row's
+  place (`batch.items`). Rows go back whatever the connection: one of an
+  earlier session comes back historical, never sent again. Execute is never a
+  step, and a step waits while a Batch is in flight ("Wait for the Batch to
+  finish."). `addBatchPaths` answers the step's `serial`.
+- **Words.** A step names its panel: "Add device.Voltage to the Watchlist",
+  "Add 4 values of device.Config to the Watchlist", "Remove 3 values from the
+  Watchlist", "Clear the Watchlist", "Show device.Voltage in hex", "Show the
+  Watchlist in decimal", "Show 3 values like the Watchlist", "Reset number
+  formats to Original", "Plot device.Voltage", "Remove all curves from the
+  Plot", "Change the curve of device.Voltage", "Change the points of
+  device.Voltage", "Show measurement points", "Add device.Voltage to the
+  Batch", "Move device.Voltage to item 2 in the Batch", "Clear the Batch"; a
+  file's names the file: "Overwrite 4 bytes in
+  values.bin", "Replace 3 places in values.bin", "Restore the device's version
+  in values.bin".
+- **By stable identity.** A step (`UndoStep`) holds parts, `UndoPart{target,
+  kind, before, after}`: a target's state as key -> fragment, a key missing
+  meaning absent. Rows are kept by path with their place and their own format
+  (`watch.rows`), formats by path, `""` for the Watchlist's own
+  (`watch.format`), bytes by offset, `"*"` for the whole copy (`file.bytes`),
+  curves by path with their place and colour (`plot.curves`), a curve's look
+  by path (`plot.look`), the Plot's points (`plot.points`) and Batch items by
+  uid with their place and the row (`batch.items`), never by row index or key. Undo puts every part's state before back through
+  its target (`UndoTarget::applyUndoState`), redo its state after; both are
+  idempotent. `UndoHistory::kinds()` lists every kind; a host declares one of
+  its own with `declareKind` and implements `UndoTarget` (or `UndoFunctions`).
+- **Without a device, or another one.** Rows go back by path: with no device
+  they are kept as a disconnect keeps them and found again on the next device
+  that has them; on a device that lacks them they come back as rows that say
+  so, and the undo says it: "Undone: Remove 3 values from the Watchlist.
+  device.Old.Gain is not on this device; it is back as a missing row." A step
+  that finds nothing left to change is skipped and leaves the history, one
+  press one step: "Skipped: Add device.Old to the Watchlist; device.Old is no
+  longer in the Watchlist." Dynamic's steps work while the Watchlist polls;
+  Static's wait for it to stop.
+- **Merging.** Steps of one merge key within two seconds of each other merge:
+  the earliest state before, the latest after, the newest words and serial.
+  Back where they started, the step goes. The Watchlist's format choices merge,
+  formats given to the same rows merge, a curve's points merge, one Batch
+  item's moves merge, and so does typing in a file where it stopped (never
+  across a save). Ticks and removals never merge.
+- **Blocked.** A step whose target cannot change now keeps its words, greyed:
+  `canUndo` is false, `undoText` stays and `blockedReason` says why ("Stop
+  polling to change the Watchlist.").
+- **Actions on the device are never steps.** Apply, a Watchlist row write,
+  Execute, Call, Execute Batch and Write to the device push nothing and clear
+  nothing. `noteIrreversible(words)` keeps their words in `irreversibleNote`
+  until the next step or `acknowledgeIrreversible()`, for whatever answers
+  Ctrl+Z to say first.
+- **The API.** Properties `canUndo`, `canRedo`, `undoText`, `redoText`,
+  `undoSerial` and `redoSerial` (the step undo or redo would take, 0 when
+  none), `blockedReason`, `irreversibleNote`, `limit` (100; setting it drops
+  every step), `clean`, `count`. Methods `undo()`, `redo()`, `clear()`,
+  `setClean()`, `noteIrreversible(words)`, `acknowledgeIrreversible()` and
+  `sentence(text, undone, note, outcome)`, the words after an undo or a redo;
+  for C++ `record(text, parts, mergeKey, mergeWindowMs)` (2000 unless said; 0
+  merges for as long as the key stays the same, the caller ending it by
+  changing the key, as an editor does when its cell is left), `refresh()` and
+  `stack()`. Signals
+  `changed()`, `recorded(serial)` and `done(serial, text, undone, note,
+  outcome)`, outcome `done`, `partial` or `skipped`. Never persisted.
+- **Files.** `FileContent.history` is the file's own: 1000 steps, emptied by a
+  read, Reload and Discard, clean at Save.
+- **The panels, until UX-B.** The Watchlist's and the Device tree's notices
+  offer "· Undo" while their step is the one Undo would take (`undoSerial`), and
+  say "Undone: ..." after it. Ctrl+Z in the Watchlist, and Ctrl+Z and Ctrl+Y in
+  the hex view while editing, call the history; `FileEditTools`' Undo and Redo
+  call `content.history`. The Watchlist asks before Clear, and before removing
+  several values when its provider has no history. UX-B gives a window one
+  router for Ctrl+Z, a notice and Undo/Redo buttons of its own, and these go.
 
 ## Theme and Type
 

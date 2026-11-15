@@ -4,4 +4,6 @@ import Telemetry.UX
 Window {
     width: 640; height: 400; visible: true
     TrendPanel { anchors.fill: parent; provider: testProvider; history: testHistory }
+    // The central Undo's history, made as a host makes one (UR-1).
+    UndoHistory { objectName: "workspaceHistory" }
 }

@@ -25,10 +25,10 @@
 #include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
-#include <QtGui/QUndoStack>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
 #include "FileTextModels.hpp"
+#include "UndoHistory.hpp"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -171,8 +171,12 @@ class FileContent final : public QObject {
 	// The bytes that differ from the copy on disk, and whether there are any.
 	Q_PROPERTY(qint64 editedBytes READ editedBytes NOTIFY editChanged)
 	Q_PROPERTY(bool modified READ modified NOTIFY editChanged)
-	Q_PROPERTY(bool canUndo READ canUndo NOTIFY editChanged)
-	Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
+	// This file's own history of edits (UR-1): every overwrite, Replace all
+	// and Restore is a step of the kind "file.bytes", named with the file
+	// ("Overwrite 4 bytes in values.bin"); typing on where it stopped, within
+	// two seconds, is one step. 1000 steps; emptied by a read, Reload and
+	// Discard. Undo and redo change only the bytes in memory, editing on or off.
+	Q_PROPERTY(telemetry::ux::UndoHistory* history READ history CONSTANT)
 	// The device's layer: whether the device's bytes as read are known for
 	// this copy, what to call them in a sentence, and how many bytes of the
 	// working copy differ from them, edits not saved included. Without them
@@ -281,22 +285,20 @@ public:
 	void setEditing(bool editing);
 	qint64 editedBytes() const noexcept { return edited_; }
 	bool modified() const noexcept { return edited_ > 0; }
-	bool canUndo() const { return undo_.canUndo(); }
-	bool canRedo() const { return undo_.canRedo(); }
+	UndoHistory* history() noexcept { return &history_; }
+	// The file's name in a step's words: the device's file, else the copy's.
+	QString stepName() const;
 	// Overwrites bytes at offset, cut at the file's end: one step to undo,
 	// joined to the one before when typing goes on where it stopped (or writes
-	// a byte's second digit). False when nothing was written: not editing, not
-	// loaded, or the offset outside the file.
+	// a byte's second digit) within two seconds. False when nothing was
+	// written: not editing, not loaded, or the offset outside the file.
 	Q_INVOKABLE bool overwrite(qint64 offset, const QByteArray& bytes, bool typing = false);
 	// Overwrites several places as one step to undo (Replace all), each as
-	// overwrite() does; the view hears of it once. `text` names the step.
-	// False when nothing was written: not editing, not loaded, or no place
-	// inside the file.
+	// overwrite() does; the view hears of it once. `text` names the step, the
+	// file's name added ("Replace 3 places in values.bin"). False when nothing
+	// was written: not editing, not loaded, or no place inside the file.
 	using Run = std::pair<qint64, QByteArray>;
 	bool overwriteRuns(const std::vector<Run>& runs, const QString& text);
-	// Editing on or off: they change only the bytes in memory.
-	Q_INVOKABLE void undo();
-	Q_INVOKABLE void redo();
 	// Writes the bytes as edited to localFile, through a temporary file so a
 	// failure leaves the old copy whole; the text, table and codec are read
 	// again from them. Empty when written, else why not.
@@ -323,8 +325,9 @@ public:
 		           : -1;
 	}
 	// Restore the device's version: every byte the device's as read, as one
-	// step to undo, editing on or off; saved like any edit. Empty when done;
-	// otherwise why not (not known, another size, nothing differs).
+	// step to undo ("Restore the device's version in values.bin"), editing on
+	// or off; saved like any edit. Empty when done; otherwise why not (not
+	// known, another size, nothing differs).
 	Q_INVOKABLE QString restoreReference();
 	// Looks for the reference again - the device's bytes kept anew after this
 	// copy was written to the device - without reading the copy again.
@@ -354,11 +357,12 @@ Q_SIGNALS:
 private:
 	friend class OpenFiles;
 	bool retire();
-	friend class OverwriteStep;
-	friend class RunsStep;
-	friend class WholeStep;
 	// The working copy replaced whole (Restore), its counts made again.
 	void putWhole(const QByteArray& bytes);
+	// A step of the history: the bytes as keyed parts ("*" the whole copy,
+	// else an offset), put back by applyBytes.
+	int recordBytes(const QString& text, QVariantMap before, QVariantMap after, const QString& mergeKey = {});
+	UndoOutcome applyBytes(const QVariantMap& state, const QStringList& keys);
 	// The reference for localFile, from the lookup, after a read.
 	void findReference();
 	void clearReference();
@@ -404,7 +408,16 @@ private:
 	QByteArray saved_;
 	qint64 edited_ = 0;
 	bool editing_ = false;
-	QUndoStack undo_;
+	UndoHistory history_;
+	UndoFunctions target_;
+	// The typing step on top of the history: its serial, the bytes it covers
+	// [start, end), when it was last typed and the key it merges by.
+	struct Typing {
+		int serial = 0;
+		qint64 start = 0, end = 0, at = 0;
+		QString key;
+	} typing_;
+	quint64 typingRuns_ = 0;
 	QDateTime readAt_;
 	qreal progress_ = -1;
 	bool loaded_ = false, loading_ = false, textual_ = false, tabular_ = false;
