@@ -455,3 +455,33 @@ the panel shows a confirmed write quietly and the others in the primary text
 colour. F2, or a double-click, on a value that can't be written says why: read
 only, not connected, changes off (with Allow changes beside it), a write in
 progress, or the provider's own reason.
+
+## A Command's or Service's values in the Batch row (BA-2, November 2026)
+
+The Batch's "+" row takes a Command's or Service's values after its path, named:
+`control.Scale value=2 factor=3`. `request_arguments` (new,
+`RequestArguments.hpp`) reads that text against the request type, checks each
+value as Details would and, when every one is valid, encodes the request.
+`EndpointPaths::Pick` gains `tail` and `hasTail`: a line whose first word names a
+Command or a Service is split into the path and its values; a Field still takes
+none, and input to an endpoint that takes none is refused in words.
+`DynamicBatch::schema()` is new.
+
+`checkBatchPath` has three new statuses: `needs` (values missing; `next` names
+the one Enter writes as `name=`), `error` (a value that is not one, a misspelt
+name, an argument given twice) and `unnamed` (values typed without names;
+`named` is the line with them written in). `input` now means only a struct or
+an array argument, which Details fills. `adds` carries `arguments`, and its
+message lists the values as they will be sent. `addBatchPaths` adds the typed
+request, and names the item with its values in the line's own form, so a copied
+item pastes back. `batchPathCandidates` shows a Command's or Service's named
+signature - `(reference: f32)` - and, after the path and a space, the arguments
+not given yet (`kindCode` `argument`), then a bool's or an enum's values.
+
+`PathAddRow` gains `setText()`, and Ctrl+Enter calls the adapter's `select(text)`
+when it has one; `BatchAddRow` uses it to select the endpoint for Details, and
+`selectBatchPath` puts each valid value typed into the draft (with changes
+allowed; otherwise it only selects). On `needs` Enter writes the next name; on
+`unnamed` it writes the names in; neither adds. `selectBatchPath` now refuses
+only when the selection holds an edit to lose (BA-1 refused whenever a Command
+or a Service was selected).
