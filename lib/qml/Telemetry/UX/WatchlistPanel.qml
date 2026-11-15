@@ -2520,12 +2520,18 @@ Pane {
         palette.highlight: Theme.stateSelected
         palette.highlightedText: Theme.selectedForeground
         title: qsTr("Remove %Ln values from the Watchlist?", "", panel.removalAsked.length)
-        Label {
-            width: removeDialog.availableWidth
-            wrapMode: Text.Wrap
-            text: panel.provider.connected !== true ? qsTr("No device is connected, so Undo cannot bring them back.")
-                                                    : qsTr("Undo cannot bring them back.")
-            color: Theme.textSecondary
+        // In a layout, as in HexPane and UnsavedChangesDialog: a wrapped label
+        // straight in a dialog loops its implicit height through the popup's
+        // content size once the window is narrower than the dialog.
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: panel.provider.connected !== true ? qsTr("No device is connected, so Undo cannot bring them back.")
+                                                        : qsTr("Undo cannot bring them back.")
+                color: Theme.textSecondary
+            }
         }
         footer: DialogButtonBox {
             Button {

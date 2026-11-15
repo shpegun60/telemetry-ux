@@ -485,6 +485,11 @@ int main(int argc, char** argv)
 				settle();
 				CHECK(moreMenu && !moreMenu->property("visible").toBool());
 			}
+			// A window narrower than the remove dialog: the popup narrows it, and
+			// the dialog's height must not follow its body's wrapping (a binding
+			// loop, warned about, in the client's style).
+			window->setWidth(140);
+			settle();
 			window->setWidth(480);
 			settle();
 
