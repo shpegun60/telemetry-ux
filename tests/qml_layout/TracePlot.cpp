@@ -8,12 +8,15 @@
 // completed reads deliver them. MIT.
 #include "Telemetry/UX/QmlTypes.hpp"
 #include "Telemetry/UX/WatchTraces.hpp"
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QElapsedTimer>
 #include <QtGui/QClipboard>
 #include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickItem>
@@ -75,6 +78,27 @@ void click(QQuickWindow* window, QQuickItem* item)
 {
 	QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
 	                  item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+}
+// A visible item whose text starts with prefix: a tooltip's words.
+QQuickItem* withText(QQuickItem* root, const QString& prefix)
+{
+	if (root->isVisible() && root->property("text").toString().startsWith(prefix))
+		return root;
+	for (auto* child : root->childItems())
+		if (auto* found = withText(child, prefix))
+			return found;
+	return nullptr;
+}
+// Every time label the view drew is whole: none cut at either edge.
+bool labelsWhole(QQuickItem* view)
+{
+	const auto rects = view->property("timeLabelRects").toList();
+	if (rects.isEmpty() || rects.size() != view->property("timeLabels").toStringList().size())
+		return false;
+	for (const auto& rect : rects)
+		if (rect.toRectF().left() < 0 || rect.toRectF().right() > view->width())
+			return false;
+	return true;
 }
 void settle(int ms = 60)
 {
@@ -182,6 +206,24 @@ int main(int argc, char** argv)
 		// Nothing plotted: how to plot, and no empty grid.
 		CHECK(shown(content, "plotEmpty") && !named(content, "plotView") && !named(content, "plotLegend"));
 		shot(window, argc, argv, QStringLiteral("trace-plot-empty-760"));
+		// Rows have no grip: the empty Plot says that they can be dragged, and
+		// a drag from the Device tree says it joins the Watchlist first.
+		auto* tracePlot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+		CHECK(tracePlot && shown(content, "plotEmptyHint")->property("text").toString() ==
+		                       QStringLiteral("Right-click a row and choose Plot, press Ctrl+P, or drag rows here."));
+		const auto dropWords = [&](const QString& from, const QStringList& paths) {
+			QVariant words;
+			CHECK(QMetaObject::invokeMethod(tracePlot, "dropWords", Q_RETURN_ARG(QVariant, words),
+			                                Q_ARG(QVariant, QVariant(QVariantMap{{QStringLiteral("from"), from}, {QStringLiteral("paths"), paths}}))));
+			return words.toString();
+		};
+		CHECK(dropWords(QStringLiteral("device"), {QStringLiteral("device.Config")}) ==
+		      QStringLiteral("Drop to add device.Config to the Watchlist and plot it"));
+		CHECK(dropWords(QStringLiteral("device"), {QStringLiteral("device.A"), QStringLiteral("device.B"), QStringLiteral("device.C")}) ==
+		      QStringLiteral("Drop to add 3 to the Watchlist and plot them"));
+		CHECK(dropWords(QStringLiteral("watchlist"), {QStringLiteral("device.Voltage"), QStringLiteral("device.Ready")}) ==
+		      QStringLiteral("Drop to plot 2 values"));
+		const double headerBefore = shown(content, "plotFollow")->parentItem()->height();
 
 		// Plotted before anything is read: it says it is waiting.
 		traces.setPaths(4, {{1, QStringLiteral("device.Voltage")}, {2, QStringLiteral("device.Ready")},
@@ -220,6 +262,12 @@ int main(int argc, char** argv)
 			CHECK(seconds.match(label).hasMatch());
 		CHECK(!view->property("valueLabels").toStringList().isEmpty());
 		shot(window, argc, argv, QStringLiteral("trace-plot-760"));
+		// The Measure toggle is a segment as the spans are: no taller than
+		// they, so the header keeps its height when the first curve comes.
+		CHECK(shown(content, "plotMeasureToggle")->height() == shown(content, "plotPreset_10")->height() &&
+		      shown(content, "plotFollow")->parentItem()->height() == headerBefore);
+		// Only whole time labels: one the edge would cut is left out.
+		CHECK(labelsWhole(view));
 
 		// Following, the right edge is the newest reading: it rests while
 		// nothing comes and moves with the next one; unticked, it holds.
@@ -736,8 +784,9 @@ int main(int argc, char** argv)
 		}
 
 		// LP-1h. The time axis from the start of reading: labels in time since
-		// the end of the last stop, the cursor chip with both times; its menu
-		// brings the time of day back.
+		// the first reading of this run, the cursor chip with both times; its
+		// menu brings the time of day back. (The fixture appended readings
+		// older than its first frame, so this view starts below zero.)
 		{
 			const auto clockLabels = view->property("timeLabels").toStringList();
 			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("Time of day")));
@@ -751,6 +800,28 @@ int main(int argc, char** argv)
 			      view->property("originUtcMs").toDouble() <= view->property("rightUtcMs").toDouble());
 			CHECK(shown(content, "plotTimeTitle")->property("text").toString().startsWith(QStringLiteral("From start")));
 			shot(window, argc, argv, QStringLiteral("trace-plot-from-start-760"));
+			// One fixed start: the first reading of this run (the anchor), not
+			// the end of the stop before; panned back across that stop it stays,
+			// and the CSV's seconds count from it as the axis does.
+			const double origin = view->property("originUtcMs").toDouble();
+			CHECK(!traces.pauses().empty() && traces.pauses().back().toNs > traces.anchor().monotonicNs &&
+			      origin == double(traces.anchor().utcMs) && labelsWhole(view));
+			QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -0.25));
+			settle(150);
+			const double stopEndUtc = double(traces.anchor().utcMs) + double(traces.pauses().back().toNs - traces.anchor().monotonicNs) / 1e6;
+			CHECK(!view->property("following").toBool() && view->property("rightUtcMs").toDouble() < stopEndUtc &&
+			      view->property("originUtcMs").toDouble() == origin && labelsWhole(view));
+			QString csv;
+			CHECK(QMetaObject::invokeMethod(view, "valuesText", Q_RETURN_ARG(QString, csv), Q_ARG(bool, true)));
+			const auto csvRows = csv.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+			CHECK(csvRows.size() > 2);
+			for (const auto& row : {csvRows[1], csvRows.last()}) {
+				const auto fields = row.split(QLatin1Char(','));
+				const auto at = QDateTime::fromString(fields[0], QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+				CHECK(at.isValid() && std::abs(fields[1].toDouble() * 1000 - (double(at.toMSecsSinceEpoch()) - origin)) < 1.5);
+			}
+			CHECK(view->setProperty("following", true));
+			settle(150);
 			click(window, shown(content, "plotTimeTitle"));
 			settle(300);
 			click(window, shown(content, "plotAxisTimeOfDay"));
@@ -774,6 +845,12 @@ int main(int argc, char** argv)
 			QTest::mouseMove(window, to);
 			settle(100);
 			CHECK(view->property("boxShown").toBool());
+			// Its size on a chip at the corner under the pointer: outside the
+			// box, inside the plot area.
+			const auto caption = view->property("boxCaptionRect").toRectF();
+			const auto corner = view->mapFromScene(QPointF(to));
+			CHECK(!caption.isEmpty() && area.contains(caption) && caption.left() >= corner.x() && caption.top() >= corner.y() &&
+			      caption.left() - corner.x() < 12 && caption.top() - corner.y() < 12);
 			shot(window, argc, argv, QStringLiteral("trace-plot-box-760"));
 			QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, to);
 			settle(200);
@@ -824,10 +901,31 @@ int main(int argc, char** argv)
 			csv.close();
 			QFile::remove(file);
 			CHECK(plotRoot->property("notice").toString().startsWith(QStringLiteral("Saved ")));
+			CHECK(plotRoot->property("noticeKind").toString() == QStringLiteral("done"));
+			// The picture: the graph with its chips, without the toolbar, the
+			// notice line or the pointer's cursor.
+			const auto middle = view->mapToScene(view->property("plotArea").toRectF().center()).toPoint();
+			QTest::mouseMove(window, middle + QPoint(-5, 0));
+			QTest::mouseMove(window, middle);
+			settle(100);
+			CHECK(view->property("cursorShown").toBool());
 			QGuiApplication::clipboard()->clear();
 			CHECK(QMetaObject::invokeMethod(plotRoot, "copyPicture"));
+			CHECK(!view->property("cursorShown").toBool());
 			CHECK(QTest::qWaitFor([] { return !QGuiApplication::clipboard()->image().isNull(); }, 3000));
+			auto* picture = shown(content, "plotPicture");
+			auto* follow = shown(content, "plotFollow");
+			const auto image = QGuiApplication::clipboard()->image();
+			const double ratio = window->effectiveDevicePixelRatio();
+			CHECK(std::abs(image.height() - picture->height() * ratio) <= 1 &&
+			      image.height() < qobject_cast<QQuickItem*>(plotRoot)->height() * ratio - 8 &&
+			      picture->mapToScene(QPointF(0, 0)).y() >= follow->mapToScene(QPointF(0, follow->height())).y());
 			CHECK(plotRoot->property("notice").toString() == QStringLiteral("Copied the picture."));
+			// "Copied …" leaves on its own after five seconds.
+			QElapsedTimer noticeShown;
+			noticeShown.start();
+			CHECK(QTest::qWaitFor([plotRoot] { return plotRoot->property("notice").toString().isEmpty(); }, 7000));
+			CHECK(noticeShown.elapsed() >= 4500 && !named(content, "plotNotice"));
 		}
 
 		// Analysis: the measurements. M turns the chips into a table of every
@@ -884,7 +982,130 @@ int main(int argc, char** argv)
 			CHECK(view->property("referenceShown").toBool() && view->property("endShown").toBool() && range.value("pinned").toBool() &&
 			      range.value("seconds").toDouble() > 0 &&
 			      shown(content, "plotMeasureRange")->property("text").toString().startsWith(QStringLiteral("Reference to end · ")));
+			// The end's chip: how long after the reference, then its time of
+			// day, beside the reference's chip; the cursor's chip steps aside
+			// while the cursor sits on the end.
+			const QRegularExpression endWords(QStringLiteral("^Δ \\d+\\.\\d{3} s · \\d\\d:\\d\\d:\\d\\d\\.\\d{3}$"));
+			auto* endChip = shown(content, "plotEndChip");
+			auto* referenceChip = shown(content, "plotReferenceChip");
+			CHECK(endWords.match(shown(content, "plotEndText")->property("text").toString()).hasMatch() &&
+			      (endChip->x() >= referenceChip->x() + referenceChip->width() + 3.5 ||
+			       endChip->x() + endChip->width() <= referenceChip->x() - 3.5) &&
+			      view->property("cursorUtcMs").toDouble() == view->property("endUtcMs").toDouble() && !named(content, "plotCursorChip"));
+			CHECK(shown(content, "plotMeasureTitle_now")->property("text").toString() == QStringLiteral("At cursor"));
+			// The pointer up to the table: the cursor goes, and the first column
+			// gives the readings at the end, Δ the end minus the reference.
+			auto* rangeCaption = shown(content, "plotMeasureRange");
+			const auto onCaption = rangeCaption->mapToScene(QPointF(rangeCaption->width() / 2, rangeCaption->height() / 2)).toPoint();
+			QTest::mouseMove(window, onCaption);
+			settle(200);
+			CHECK(!view->property("cursorShown").toBool() && shown(content, "plotEndChip") &&
+			      shown(content, "plotMeasureTitle_now")->property("text").toString() == QStringLiteral("At end"));
+			const auto rowOf = [&](const QString& path) {
+				for (auto* row : all(content, "plotMeasureRow"))
+					if (row->property("path").toString() == path)
+						return row;
+				throw std::runtime_error("no Measure row for " + path.toStdString());
+			};
+			const auto cellText = [](QQuickItem* row, const char* name) { return shown(row, name)->property("text").toString(); };
+			const auto plotText = [&](const char* function, const QVariant& value) {
+				QVariant out;
+				CHECK(QMetaObject::invokeMethod(plotRoot, function, Q_RETURN_ARG(QVariant, out), Q_ARG(QVariant, value)));
+				return out.toString();
+			};
+			const QString voltagePath = QStringLiteral("device.Voltage");
+			QVariant atEnd, atReference;
+			CHECK(QMetaObject::invokeMethod(view, "endValue", Q_RETURN_ARG(QVariant, atEnd), Q_ARG(QString, voltagePath)) &&
+			      QMetaObject::invokeMethod(view, "referenceValue", Q_RETURN_ARG(QVariant, atReference), Q_ARG(QString, voltagePath)) &&
+			      atEnd.isValid() && atReference.isValid());
+			auto* voltageRow = rowOf(voltagePath);
+			CHECK(cellText(voltageRow, "plotMeasure_now") == plotText("valueText", atEnd) &&
+			      cellText(voltageRow, "plotMeasure_delta") == plotText("deltaText", QVariant(atEnd.toDouble() - atReference.toDouble())));
+			// A state gives its reading in words and no Δ; its shares span the
+			// figures after them.
+			auto* readyRow = rowOf(QStringLiteral("device.Ready"));
+			auto* measure = shown(content, "plotMeasure");
+			const double cell = measure->property("cell").toDouble();
+			const auto readyNow = cellText(readyRow, "plotMeasure_now");
+			CHECK((readyNow == QStringLiteral("true") || readyNow == QStringLiteral("false")) &&
+			      cellText(readyRow, "plotMeasure_delta").isEmpty() && measure->property("columns").toInt() == 7 &&
+			      std::abs(shown(readyRow, "plotMeasureShares")->width() - cell * 5) < 0.5);
+			// Mean and Std dev to one decimal more than Min and Max; the × kept
+			// apart from the last figure.
+			const auto decimals = [](const QString& text) {
+				const auto at = text.indexOf(QLatin1Char('.'));
+				return at < 0 ? 0 : int(text.size() - at - 1);
+			};
+			for (auto* row : {voltageRow, rowOf(QStringLiteral("device.Config.Gain"))}) {
+				const int places = std::max(decimals(cellText(row, "plotMeasure_min")), decimals(cellText(row, "plotMeasure_max"))) + 1;
+				auto* last = shown(row, "plotMeasure_std");
+				auto* remove = shown(row, "plotMeasureRemove");
+				CHECK(decimals(cellText(row, "plotMeasure_mean")) == places && decimals(cellText(row, "plotMeasure_std")) == places &&
+				      remove->x() - (last->x() + last->width()) >= 3);
+			}
+			// Min and Max are links: the pointing hand, and what a click does.
+			auto* minimum = shown(voltageRow, "plotMeasure_min");
+			QTest::mouseMove(window, minimum->mapToScene(QPointF(minimum->width() - 4, minimum->height() / 2)).toPoint());
+			settle(900);
+			CHECK(withText(content, QStringLiteral("Put the cursor on this reading, ")) &&
+			      window->cursor().shape() == Qt::PointingHandCursor);
+			QTest::mouseMove(window, onCaption);
+			settle(200);
+			// A curve drawn ×k+b says so after its name, as its chip does; the
+			// figures stay the readings.
+			CHECK(traces.setAppearance(voltagePath, QString(), 2, 0));
+			settle(150);
+			bool scaled = false;
+			for (auto* child : shown(voltageRow, "plotMeasureTransform")->childItems())
+				scaled = scaled || child->property("text").toString() == QStringLiteral("×2");
+			CHECK(scaled && cellText(voltageRow, "plotMeasure_now") == plotText("valueText", atEnd));
 			shot(window, argc, argv, QStringLiteral("trace-plot-measure-760"));
+			CHECK(traces.setAppearance(voltagePath, QString(), 1, 0));
+			// Narrower: the Name column keeps nine body characters, five figures
+			// beside it, then three (At…, Min, Max); the row's tooltip gives the
+			// others. In a 320 px window the toolbar holds the Plot at its own
+			// width, about 480 px in this style, and the table lays out there.
+			const auto narrowed = [&](int width, int columns, const QStringList& tip) {
+				window->setWidth(width);
+				settle(300);
+				auto* row = rowOf(voltagePath);
+				auto* nameText = shown(row, "plotMeasureName");
+				auto* remove = shown(row, "plotMeasureRemove");
+				CHECK(measure->property("columns").toInt() == columns &&
+				      nameText->parentItem()->width() >= measure->property("nameWidth").toDouble() - 0.5 &&
+				      remove->x() + remove->width() <= row->width() + 0.5);
+				const auto hidden = row->property("hidden").toString();
+				CHECK(hidden.split(QStringLiteral(" · ")).size() == tip.size());
+				for (int i = 0; i < tip.size(); ++i)
+					CHECK(hidden.split(QStringLiteral(" · "))[i].startsWith(tip[i] + QLatin1Char(' ')));
+				QTest::mouseMove(window, nameText->mapToScene(QPointF(4, nameText->height() / 2)).toPoint());
+				settle(900);
+				CHECK(withText(content, hidden));
+				QTest::mouseMove(window, rangeCaption->mapToScene(QPointF(8, rangeCaption->height() / 2)).toPoint());
+				settle(100);
+			};
+			narrowed(560, 5, {QStringLiteral("Pk-pk"), QStringLiteral("Std dev")});
+			CHECK(named(rowOf(voltagePath), "plotMeasure_delta") && !named(rowOf(voltagePath), "plotMeasure_pkpk"));
+			narrowed(320, 3, {QStringLiteral("Δ"), QStringLiteral("Mean"), QStringLiteral("Pk-pk"), QStringLiteral("Std dev")});
+			CHECK(!named(rowOf(voltagePath), "plotMeasure_delta") && named(rowOf(voltagePath), "plotMeasure_max"));
+			window->setWidth(760);
+			settle(300);
+			// Many curves: the rows stop at 40 % of the Plot's height and
+			// scroll, and the graph keeps its room.
+			for (int i = 0; i < 12; ++i)
+				CHECK(traces.plot(QStringLiteral("device.Many%1").arg(i)).isEmpty());
+			settle(300);
+			{
+				auto* rows = shown(content, "plotMeasureRows");
+				const double rowHeight = all(content, "plotMeasureRow").first()->height();
+				const double rowsCap = std::max(3 * rowHeight, qobject_cast<QQuickItem*>(plotRoot)->height() * 0.4);
+				CHECK(rows->height() <= rowsCap + 0.5 && rows->property("contentHeight").toDouble() > rows->height() + rowHeight &&
+				      view->height() > 100);
+				shot(window, argc, argv, QStringLiteral("trace-plot-measure-many-760"));
+			}
+			for (int i = 0; i < 12; ++i)
+				traces.unplot(QStringLiteral("device.Many%1").arg(i));
+			settle(200);
 			// Esc: the end first, then the reference.
 			view->forceActiveFocus(Qt::TabFocusReason);
 			QTest::keyClick(window, Qt::Key_Escape);
@@ -928,11 +1149,51 @@ int main(int argc, char** argv)
 			for (int i = 0; i < 40 && stepped; ++i)
 				CHECK(QMetaObject::invokeMethod(view, "stepChange", Q_RETURN_ARG(bool, stepped), Q_ARG(int, 1)));
 			settle(100);
-			CHECK(!stepped && plotRoot->property("notice").toString().startsWith(QStringLiteral("No change of device.Ready after ")));
+			CHECK(!stepped && plotRoot->property("notice").toString().startsWith(QStringLiteral("No change of device.Ready after ")) &&
+			      plotRoot->property("noticeKind").toString() == QStringLiteral("find"));
+			// One that finds its change takes those words away.
+			CHECK(QMetaObject::invokeMethod(view, "stepChange", Q_RETURN_ARG(bool, stepped), Q_ARG(int, -1)) && stepped &&
+			      plotRoot->property("notice").toString().isEmpty());
 			view->setProperty("focusedPath", QString());
 			QMetaObject::invokeMethod(view, "hideCursor");
 			CHECK(view->setProperty("following", true));
 			settle(150);
+		}
+
+		// A drop passes text over and plots the rest; the notice counts what
+		// was text and stays until its ×. Dropped alone, text has its own
+		// sentence.
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			const QString ready = QStringLiteral("device.Ready"), name = QStringLiteral("device.Name"),
+			              label = QStringLiteral("device.Label"), gainPath = QStringLiteral("device.Config.Gain");
+			traces.setPaths(6, {{1, QStringLiteral("device.Voltage")}, {2, ready}, {gain, gainPath}, {10, QStringLiteral("device.Mode")},
+			                    {11, name}, {12, label}},
+			                {{ready, true}, {QStringLiteral("device.Mode"), true}});
+			traces.append(frame(ux::WatchTraces::nowNs(), {{11, 0, ux::WatchValueBits{}}, {12, 0, ux::WatchValueBits{}}}));
+			CHECK(!traces.refusal(name).isEmpty() && !traces.refusal(label).isEmpty() && traces.refusal(ready).isEmpty());
+			const auto order = traces.plotted();
+			const auto drop = [&](const QStringList& paths) {
+				QVariant plottedAny;
+				CHECK(QMetaObject::invokeMethod(plotRoot, "dropPaths", Q_RETURN_ARG(QVariant, plottedAny),
+				                                Q_ARG(QVariant, QVariant(QVariantMap{{QStringLiteral("from"), QStringLiteral("watchlist")},
+				                                                                     {QStringLiteral("paths"), paths}}))));
+				return plottedAny.toBool();
+			};
+			traces.unplot(ready);
+			traces.unplot(gainPath);
+			CHECK(drop({ready, name, gainPath}) && traces.plotted() == order &&
+			      plotRoot->property("notice").toString() == QStringLiteral("1 of 3 values is text and was not plotted.") &&
+			      plotRoot->property("noticeKind").toString() == QStringLiteral("refusal"));
+			traces.unplot(ready);
+			traces.unplot(gainPath);
+			CHECK(drop({ready, name, label, gainPath}) && traces.plotted() == order &&
+			      plotRoot->property("notice").toString() == QStringLiteral("2 of 4 values are text and were not plotted."));
+			CHECK(!drop({name}) && plotRoot->property("notice").toString() == traces.refusal(name));
+			settle(100);
+			click(window, shown(content, "plotNoticeClose"));
+			settle();
+			CHECK(plotRoot->property("notice").toString().isEmpty());
 		}
 
 		// The chip's × takes a value off the Plot; its readings stay.
@@ -974,6 +1235,12 @@ int main(int argc, char** argv)
 			}
 			CHECK(since);
 			CHECK(view->property("drawnEnds").toInt() >= 1);
+			// Sixteen chips: three rows of them, then they scroll, and the
+			// graph keeps its room.
+			auto* legendScroll = shown(content, "plotLegendScroll");
+			const double legendCap = 3 * all(content, "plotChip").first()->height() + 2 * shown(content, "plotLegend")->property("spacing").toDouble();
+			CHECK(legendScroll->height() <= legendCap + 0.5 && legendScroll->property("contentHeight").toDouble() > legendScroll->height() &&
+			      view->height() > 150);
 			shot(window, argc, argv, QStringLiteral("trace-plot-not-read-760"));
 		}
 
@@ -1007,6 +1274,7 @@ int main(int argc, char** argv)
 			for (auto* value : all(content, "plotChipValue"))
 				gone = gone || value->property("text").toString().startsWith(QStringLiteral("not read"));
 			CHECK(!gone);
+			CHECK(labelsWhole(view));
 			shot(window, argc, argv, QStringLiteral("trace-plot-recorded-760"));
 			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
 			settle(300);
@@ -1019,7 +1287,8 @@ int main(int argc, char** argv)
 			traces.append(frame(start + qint64(i) * 1000, {{5, 0, bits(S::U8, 1, quint64(i & 0xff))}}));
 		CHECK(traces.count(QStringLiteral("device.Fast")) == int(ux::WatchTraces::keptReadings));
 		std::size_t sum = 0;
-		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Mode", "device.Fast"})
+		for (const auto& path : {"device.Voltage", "device.Ready", "device.Config.Gain", "device.Mode", "device.Name", "device.Label",
+		                         "device.Fast"})
 			sum += std::size_t(traces.count(QString::fromLatin1(path)));
 		CHECK(traces.total() == sum);
 		for (int i = 0; i < 700; ++i)
