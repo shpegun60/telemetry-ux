@@ -82,8 +82,126 @@ Pane {
     // Some row is on this device (WL-4c); a provider that does not say is.
     readonly property bool readable: provider.watchReadable !== false
     readonly property bool canRead: connected && count > 0 && readable && !active
-    readonly property string statusText: provider.watchPending ? qsTr("Reading…")
+    readonly property string statusText: paceText.length > 0 ? paceText
+                                       : provider.watchPending ? qsTr("Reading…")
                                        : provider.watchStatus ? provider.watchStatus : ""
+
+    // How polling keeps pace with its interval (WL-6), from the provider's
+    // watchPace: a line in place of the status from the first completed cycle
+    // on, shown even where a host hides the status, since it corrects the
+    // interval the toolbar shows; its tooltip; and what a screen reader hears
+    // when polling falls behind or catches up. A wait, a failure or a stop
+    // still says itself.
+    readonly property var pace: provider.watchPace !== undefined && provider.watchPace !== null ? provider.watchPace : ({})
+    readonly property bool paceKnown: typeof pace.cycles === "number" && pace.cycles > 0
+    readonly property bool pacePolling: paceKnown && pace.polling === true && provider.watchActive === true
+    readonly property bool paceBehind: pacePolling && pace.behind === true
+    // Continuous, yet slower than its own cycles: other requests went first.
+    readonly property bool paceCrowded: pacePolling && pace.intervalMs === 0 &&
+                                        pace.achievedPeriodMs >= 1.25 * pace.medianCycleMs
+    readonly property string paceLine: {
+        if (!paceKnown || pace.routine !== true)
+            return ""
+        const one = pace.values === 1
+        const took = durationText(pace.polling ? pace.medianCycleMs : pace.lastCycleMs)
+        if (!pace.polling)
+            return provider.watchActive === true ? "" : one ? qsTr("1 value read in %1").arg(took)
+                                                            : qsTr("%L1 values read in %2").arg(pace.values).arg(took)
+        if (!pacePolling)
+            return ""
+        if (paceBehind) {
+            const every = intervalText(pace.achievedPeriodMs), asked = intervalText(pace.intervalMs)
+            return one ? qsTr("Every %1, not %2: a cycle of 1 value takes %3").arg(every).arg(asked).arg(took)
+                       : qsTr("Every %1, not %2: a cycle of %L3 values takes %4").arg(every).arg(asked).arg(pace.values).arg(took)
+        }
+        if (paceCrowded) {
+            const every = durationText(pace.achievedPeriodMs)
+            return one ? qsTr("Every %1: a cycle of 1 value takes %2").arg(every).arg(took)
+                       : qsTr("Every %1: a cycle of %L2 values takes %3").arg(every).arg(pace.values).arg(took)
+        }
+        return one ? qsTr("A cycle of 1 value takes %1").arg(took)
+                   : qsTr("A cycle of %L1 values takes %2").arg(pace.values).arg(took)
+    }
+    readonly property string paceTip: {
+        if (!paceKnown)
+            return ""
+        const lines = []
+        if (pace.polling && pace.intervalMs === 0)
+            lines.push(qsTr("Continuous: each cycle starts when the last one ends, after other requests."))
+        else if (paceBehind)
+            lines.push(qsTr("Every %1, not %2: a cycle due while the last one still runs is skipped.")
+                       .arg(intervalText(pace.achievedPeriodMs)).arg(intervalText(pace.intervalMs)))
+        else if (pace.polling)
+            lines.push(qsTr("Every %1, as asked.").arg(intervalText(pace.intervalMs)))
+        const kinds = []
+        if (pace.readMany > 0) kinds.push(qsTr("%L1 ReadMany").arg(pace.readMany))
+        if (pace.batch > 0) kinds.push(qsTr("%L1 Batch").arg(pace.batch))
+        if (pace.fieldRead > 0) kinds.push(qsTr("%L1 FieldRead").arg(pace.fieldRead))
+        const exchanges = pace.readMany + pace.batch + pace.fieldRead
+        const joined = kinds.length < 2 ? kinds.join("")
+                     : kinds.slice(0, -1).join(", ") + qsTr(" and ") + kinds[kinds.length - 1]
+        const requests = exchanges === 1 ? qsTr("%1 request").arg(joined) : qsTr("%1 requests").arg(joined)
+        lines.push(pace.values === 1 ? qsTr("1 value in %1; the last cycle took %2.").arg(requests).arg(durationText(pace.lastCycleMs))
+                                     : qsTr("%L1 values in %2; the last cycle took %3.").arg(pace.values).arg(requests)
+                                         .arg(durationText(pace.lastCycleMs)))
+        if (pace.again > 0)
+            lines.push(qsTr("Written Fields read again: %L1.").arg(pace.again))
+        if (paceBehind)
+            lines.push(qsTr("Continuous reads as soon as a cycle ends; fewer values make a cycle shorter. Stop to change the interval."))
+        return lines.join("\n")
+    }
+    // A time in words: milliseconds to two significant digits below a
+    // second; one decimal up to ten (more only where one would read as the
+    // interval); whole seconds up to a minute; then minutes and seconds.
+    function durationText(ms) {
+        if (!(ms >= 0))
+            return ""
+        if (ms < 1000)
+            return qsTr("%L1 ms").arg(ms < 10 ? Math.round(ms) : Number(ms.toPrecision(2)))
+        if (ms < 10000) {
+            let seconds = Number((ms / 1000).toFixed(1))
+            if (seconds * 1000 === provider.watchIntervalMs && Math.abs(ms - provider.watchIntervalMs) >= 0.5)
+                seconds = Number((ms / 1000).toFixed(3))
+            return qsTr("%L1 s").arg(seconds)
+        }
+        if (ms < 60000)
+            return qsTr("%L1 s").arg(Math.round(ms / 1000))
+        const whole = Math.round(ms / 1000)
+        return qsTr("%1 min %2 s").arg(Math.floor(whole / 60)).arg(whole % 60)
+    }
+    // The line changes at most every two seconds, so a cycle's figure does not
+    // flicker; it goes at once when there is nothing to say.
+    property string paceText: ""
+    property double paceTaken: 0
+    onPaceLineChanged: {
+        const since = Date.now() - paceTaken
+        if (paceLine.length === 0 || paceText.length === 0 || since >= 2000) {
+            paceSettle.stop()
+            paceText = paceLine
+            paceTaken = Date.now()
+        } else if (!paceSettle.running) {
+            paceSettle.interval = Math.max(1, 2000 - since)
+            paceSettle.start()
+        }
+    }
+    Timer {
+        id: paceSettle
+        onTriggered: {
+            panel.paceText = panel.paceLine
+            panel.paceTaken = Date.now()
+        }
+    }
+    // Falling behind and catching up are said, at most every 30 s.
+    property double paceSaid: 0
+    onPaceBehindChanged: {
+        if (Date.now() - paceSaid < 30000 || !pacePolling)
+            return
+        paceSaid = Date.now()
+        panel.Accessible.announce(paceBehind
+            ? qsTr("Reading every %1, not every %2: a cycle takes %3").arg(intervalText(pace.achievedPeriodMs))
+                  .arg(intervalText(pace.intervalMs)).arg(durationText(pace.medianCycleMs))
+            : qsTr("Reading every %1 again").arg(intervalText(pace.intervalMs)))
+    }
     // With watch boxes in the Device tree a Field is watched by ticking it;
     // without them, by "Watch the selected Field".
     readonly property bool treeBoxes: typeof provider.watchState === "function" &&
@@ -638,11 +756,18 @@ Pane {
                 HoverHandler { id: intervalHover }
                 ToolTip.visible: intervalHover.hovered && !interval.popup.visible
                 ToolTip.delay: 700
+                // Stopped after polling, the last cycle's time comes first: what
+                // an interval can be chosen against.
+                readonly property string lastCycle: !panel.paceKnown || panel.pace.polling !== true ? ""
+                    : panel.pace.values === 1 ? qsTr("The last cycle of 1 value took %1.").arg(panel.durationText(panel.pace.lastCycleMs))
+                    : qsTr("The last cycle of %L1 values took %2.").arg(panel.pace.values).arg(panel.durationText(panel.pace.lastCycleMs))
+                readonly property string howOften: panel.provider.watchIntervalMs === 0
+                    ? qsTr("Read again as soon as a read finishes, at low priority: other requests go first.")
+                    : qsTr("How often to read. Fields are read one after another.")
                 ToolTip.text: panel.active ? qsTr("Stop to change the interval.")
-                            : panel.provider.watchIntervalMs === 0
-                              ? qsTr("Read again as soon as a read finishes, at low priority: other requests go first.")
-                              : intervalInput.visible ? qsTr("%L1 to %L2 ms, then Enter.").arg(panel.intervalMinimum).arg(panel.intervalMaximum)
-                              : qsTr("How often to read. Fields are read one after another.")
+                            : intervalInput.visible ? qsTr("%L1 to %L2 ms, then Enter.").arg(panel.intervalMinimum).arg(panel.intervalMaximum)
+                            : lastCycle.length > 0 ? lastCycle + " " + howOften
+                            : howOften
                 ComboBox {
                     id: interval
                     objectName: "watchInterval"
@@ -1134,7 +1259,7 @@ Pane {
         // whole, however long, and the toolbar does not move as it changes.
         Label {
             objectName: "watchStatusLabel"
-            visible: (panel.statusShown || panel.readManyAdvice) && text.length > 0
+            visible: (panel.statusShown || panel.readManyAdvice || panel.paceText.length > 0) && text.length > 0
             Layout.fillWidth: true
             // The height its text takes, wrapped: the layout missed this
             // label's implicit height growing (a bigger font, a glyph from a
@@ -1145,6 +1270,15 @@ Pane {
             color: panel.readManyAdvice ? Theme.warning : Theme.textSecondary
             font.pointSize: Type.caption
             wrapMode: Text.Wrap
+            readonly property string tip: panel.paceText.length > 0 ? panel.paceTip : ""
+            Accessible.description: tip
+            HoverHandler { id: statusHover }
+            PlainToolTip {
+                objectName: "watchPaceTip"
+                visible: statusHover.hovered && parent.tip.length > 0
+                delay: 700
+                text: parent.tip
+            }
         }
         // The outcome of the last write from a row, in words; or why the row
         // asked to write can't be.

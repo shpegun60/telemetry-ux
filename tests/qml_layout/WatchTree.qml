@@ -14,7 +14,7 @@ ApplicationWindow {
         readonly property var watchRows: watchTreeRows
         readonly property int watchCount: 5
         property bool connected: true
-        readonly property bool watchActive: false
+        property bool watchActive: false
         readonly property bool watchPending: false
         readonly property bool canWriteWatch: true
         readonly property bool canAddWatch: false
@@ -23,7 +23,8 @@ ApplicationWindow {
         property bool watchIndividual: false
         property int watchIntervalMs: 1000
         readonly property int watchIntervalMinimumMs: 1
-        readonly property string watchStatus: ""
+        property string watchStatus: ""
+        property var watchPace: ({})
         readonly property string watchWriteOutcome: ""
         function writeWatch(row, value) { watchTreeCalls.write(row, value) }
         property bool canUndoWatch: false

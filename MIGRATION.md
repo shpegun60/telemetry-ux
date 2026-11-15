@@ -378,3 +378,47 @@ reach while it counts nothing, so its coming and going moves nothing. Past
 oldest first (by when each was set), no longer in hash order; formats put back
 together (`setPathFormats`, an Undo) keep when each held path was set, and the
 paths new to the map count as set in path order.
+
+## The read plan on its own (WL-6, November 2026)
+
+`ReadPortions.hpp` (installed with the dynamic configurator) holds the plan
+the Watchlist builds at the start of each cycle: `read_portions::plan` takes the
+watched keys in row order and what the source can do, and returns the portions
+(ReadMany of whole scalars within the advertised budgets, one member read per
+struct or array Field, one FieldRead each in Individual mode) with a failure
+code where it stops; the Watchlist puts the code in the words it always used.
+Nothing it sends changed. The Device tree's previews (PV-2) are to plan with
+it next.
+
+## Struct Fields read in one Batch (WL-6, November 2026)
+
+Where the device has Batch, the Watchlist reads the values it watches in two
+or more struct or array Fields with one Batch of FieldReads instead of one
+read each, within the Batch's item, request (and the host's 4096-byte buffer)
+and reply budgets; a Field too large for any Batch, of unknown size, or left
+alone stays a read of its own, and Individual mode reads each on its own as
+before. `WatchlistSource` gains `batchCapability`, `valueBytes` and
+`readBatch` (all optional; the Qt connection binding supplies them), and
+`WatchlistCompletion` gains `parts`. Each Field of a Batch is published as
+frames of its own with `WatchOperation::Batch` (new, 3) and that item's own
+outcome, so **a frame observer that tells FieldRead from ReadMany must accept
+Batch** - a recorder storing the operation in particular. A refused Field
+shows why in its rows and the cycle goes on; a Batch that failed as a whole
+stops the Watchlist as any failed read does. A written struct of a Batch is
+read again on its own.
+
+## The Watchlist says its pace (WL-6, November 2026)
+
+`DynamicConfiguratorProvider::watchPace` (from `DynamicWatchlist::pace()`)
+says how polling keeps up with its interval: what the last cycle read and with
+which exchanges, its time, the median of the last five cycles and periods, the
+ticks skipped, and the period polling achieves - a whole number of intervals,
+since a tick due while a cycle runs is skipped. From the first completed cycle
+the Watchlist panel shows a line in place of the status ("A cycle of 65 values
+takes 410 ms"; behind, "Every 2 s, not 1 s: a cycle of 65 values takes 1.2 s"),
+with the exchanges in its tooltip, and says falling behind and catching up to a
+screen reader. **The line shows even where a host sets `statusShown: false`**,
+since it corrects the interval the toolbar shows; a wait, a failure or a stop
+still shows only with the status. A host that shows the polling period
+elsewhere should take `watchPace.achievedPeriodMs`. A Read once ends with
+"65 values read in 150 ms".

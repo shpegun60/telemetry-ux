@@ -1714,6 +1714,28 @@ QString DynamicConfiguratorProvider::watchStatus() const
 	return d->watch.status();
 }
 
+QVariantMap DynamicConfiguratorProvider::watchPace() const
+{
+	const auto pace = d->watch.pace();
+	if (pace.cycles == 0)
+		return {};
+	return {{QStringLiteral("cycles"), pace.cycles},
+	        {QStringLiteral("polling"), pace.polling},
+	        {QStringLiteral("routine"), pace.routine},
+	        {QStringLiteral("values"), pace.values},
+	        {QStringLiteral("readMany"), pace.readMany},
+	        {QStringLiteral("batch"), pace.batch},
+	        {QStringLiteral("fieldRead"), pace.fieldRead},
+	        {QStringLiteral("again"), pace.again},
+	        {QStringLiteral("lastCycleMs"), pace.lastCycleMs},
+	        {QStringLiteral("medianCycleMs"), pace.medianCycleMs},
+	        {QStringLiteral("medianPeriodMs"), pace.medianPeriodMs},
+	        {QStringLiteral("achievedPeriodMs"), pace.achievedPeriodMs},
+	        {QStringLiteral("intervalMs"), pace.intervalMs},
+	        {QStringLiteral("skippedTicks"), qulonglong(pace.skippedTicks)},
+	        {QStringLiteral("behind"), pace.behind}};
+}
+
 bool DynamicConfiguratorProvider::watchIndividual() const
 {
 	return d->watch.individual();

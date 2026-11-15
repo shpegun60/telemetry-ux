@@ -140,11 +140,64 @@ void copyWatchValue(WatchValueBits& into, const runtime::DynamicValueView& value
 	const auto bytes = value.bytes();
 	if (bytes) (void)into.assign(bytes.value.data(), bytes.value.size());
 }
+// The value at a leaf of a struct or array value, by the steps WatchLeaves
+// located it with; false when the reply lacks it.
+bool fillLeaf(WatchlistCompletion::Row& row, runtime::DynamicValueView value, const WatchLeaves::Leaf& leaf)
+{
+	for (std::size_t step = 0; step < leaf.depth; ++step) {
+		const auto next = leaf.steps[step].element ? value.index(leaf.steps[step].index)
+		                                           : value.member(leaf.steps[step].index);
+		if (!next)
+			return false;
+		value = next.value;
+	}
+	row.status = QStringLiteral("Ok");
+	copyWatchValue(row.value, value);
+	row.text = WatchlistModel::formatValue(value);
+	row.sample = WatchlistModel::sampleOf(value);
+	return true;
+}
+// A struct or array Field's leaves as rows to fill, with their steps; empty
+// when the Field or a leaf can't be read this way.
+bool planLeaves(const integration::qt::ConnectionStorage& storage, WatchLeaves& numbered, quint32 field,
+                std::span<const std::uint32_t> leaves, std::vector<WatchlistCompletion::Row>& rows,
+                std::vector<WatchLeaves::Leaf>& plan)
+{
+	if (leaves.empty() || leaves.size() > std::size_t(watchlistRowLimit))
+		return false;
+	const auto binding = storage.inspector.bindField(field);
+	const auto root = binding ? binding.endpoint.responseType() : TypeId{0};
+	const auto* type = binding ? storage.schema.type(root) : nullptr;
+	if (!type || (type->kind != TypeKind::Struct && type->kind != TypeKind::Array) || type->wireBytes == 0 ||
+	    type->wireBytes > workbenchSnapshotBytes)
+		return false;
+	if (!numbered.matches(storage.schema))
+		numbered.reset(storage.schema);
+	for (std::size_t i = 0; i < leaves.size(); ++i) {
+		auto leaf = numbered.locate(root, leaves[i]);
+		if (!leaf || (i && leaves[i] <= leaves[i - 1]))
+			return false;
+		WatchlistCompletion::Row row;
+		row.id = field;
+		row.leaf = leaves[i] + 1;
+		row.value.type = watchType(storage.schema, leaf->type);
+		if (!row.value.type.valid())
+			return false;
+		rows.push_back(std::move(row));
+		plan.push_back(std::move(*leaf));
+	}
+	return true;
+}
+QString refusedText(const client::ResultView& result)
+{
+	return QStringLiteral("Field refused (dispatch %1, endpoint %2)").arg(result.dispatch).arg(result.endpointStatus);
+}
 
 WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 {
 	using Session = integration::qt::ConnectionSession;
 	namespace rm = integration::read_many;
+	namespace bt = integration::batch;
 	const QPointer<Session> session(value);
 	const auto storage = value ? value->storage() : nullptr;
 	WatchlistSource source;
@@ -266,29 +319,12 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 			return {client::Status::NotAdmitted, {}};
 		if (leaves.empty() || leaves.size() > std::size_t(watchlistRowLimit))
 			return {client::Status::InvalidArgument, {}};
-		const auto binding = storage->inspector.bindField(field);
-		const auto root = binding ? binding.endpoint.responseType() : TypeId{0};
-		const auto* type = binding ? storage->schema.type(root) : nullptr;
-		if (!type || (type->kind != TypeKind::Struct && type->kind != TypeKind::Array) ||
-		    type->wireBytes == 0 || type->wireBytes > workbenchSnapshotBytes)
-			return {client::Status::NotAdmitted, {}};
-		if (!numbered->matches(storage->schema))
-			numbered->reset(storage->schema);
-		auto rows = std::make_shared<std::vector<WatchlistCompletion::Row>>(leaves.size());
+		auto rows = std::make_shared<std::vector<WatchlistCompletion::Row>>();
 		auto plan = std::make_shared<std::vector<WatchLeaves::Leaf>>();
+		rows->reserve(leaves.size());
 		plan->reserve(leaves.size());
-		for (std::size_t i = 0; i < leaves.size(); ++i) {
-			auto leaf = numbered->locate(root, leaves[i]);
-			if (!leaf || (i && leaves[i] <= leaves[i - 1]))
-				return {client::Status::NotAdmitted, {}};
-			auto& row = (*rows)[i];
-			row.id = field;
-			row.leaf = leaves[i] + 1;
-			row.value.type = watchType(storage->schema, leaf->type);
-			if (!row.value.type.valid())
-				return {client::Status::NotAdmitted, {}};
-			plan->push_back(std::move(*leaf));
-		}
+		if (!planLeaves(*storage, *numbered, field, leaves, *rows, *plan))
+			return {client::Status::NotAdmitted, {}};
 		const WatchSourceSnapshot origin{storage->inspector.session(), storage->schema.fingerprint(), storage->schema.generation()};
 		return session->readFieldValue(
 		    field, [done = std::move(done), rows = std::move(rows), plan = std::move(plan), origin](
@@ -302,9 +338,7 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 				    out.status = client::Status::CodecError;
 			    out.members = std::move(*rows);
 			    out.count = int(out.members.size());
-			    const auto refused = QStringLiteral("Field refused (dispatch %1, endpoint %2)")
-			                             .arg(result.operation.dispatch)
-			                             .arg(result.operation.endpointStatus);
+			    const auto refused = refusedText(result.operation);
 			    for (std::size_t i = 0; i < out.members.size(); ++i) {
 				    auto& row = out.members[i];
 				    row.itemStatus = result.operation.endpointStatus;
@@ -313,25 +347,99 @@ WatchlistSource watchSource(integration::qt::ConnectionSession* value)
 					    row.status = refused;
 					    continue;
 				    }
-				    const auto& leaf = (*plan)[i];
-				    auto value = result.value;
-				    bool found = true;
-				    for (std::size_t step = 0; found && step < leaf.depth; ++step) {
-					    const auto next = leaf.steps[step].element ? value.index(leaf.steps[step].index)
-					                                               : value.member(leaf.steps[step].index);
-					    found = bool(next);
-					    if (found)
-						    value = next.value;
-				    }
-				    if (!found) {
+				    if (!fillLeaf(row, result.value, (*plan)[i])) {
 					    row.status = QStringLiteral("Bad reply");
 					    out.status = client::Status::CodecError;
-					    continue;
 				    }
-				    row.status = QStringLiteral("Ok");
-				    copyWatchValue(row.value, value);
-				    row.text = WatchlistModel::formatValue(value);
-				    row.sample = WatchlistModel::sampleOf(value);
+			    }
+			    *done = std::move(out);
+		    });
+	};
+	// Several struct or array Fields in one Batch of FieldReads where the
+	// device has Batch: one exchange, each Field answered as its own member
+	// read would be, with its own outcome. A Batch of reads changes nothing on
+	// the device and is never retried.
+	source.batchCapability = [session, current]() -> std::optional<WatchlistSource::Limits> {
+		const auto capability = current() ? session->batchCapability() : std::nullopt;
+		if (!capability)
+			return {};
+		return WatchlistSource::Limits{capability->itemLimit, capability->requestLimit, capability->replyLimit};
+	};
+	source.valueBytes = [storage, current](quint32 id) -> std::optional<unsigned> {
+		if (!current())
+			return {};
+		const auto binding = storage->inspector.bindField(id);
+		const auto* type = binding ? storage->schema.type(binding.endpoint.responseType()) : nullptr;
+		if (!type || (type->kind != TypeKind::Struct && type->kind != TypeKind::Array) || type->wireBytes == 0 ||
+		    type->wireBytes > workbenchSnapshotBytes)
+			return {};
+		return type->wireBytes;
+	};
+	source.readBatch = [session, storage, current, numbered](std::span<const WatchlistSource::BatchField> fields,
+	                                                         WatchlistSource::Completion done) -> client::Submission {
+		if (!current())
+			return {client::Status::NotAdmitted, {}};
+		if (fields.size() < 2 || fields.size() > 32)
+			return {client::Status::InvalidArgument, {}};
+		auto rows = std::make_shared<std::vector<WatchlistCompletion::Row>>();
+		auto plan = std::make_shared<std::vector<WatchLeaves::Leaf>>();
+		auto parts = std::make_shared<std::vector<WatchlistCompletion::Part>>();
+		std::array<Session::BatchRequest, 32> requests{};
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			WatchlistCompletion::Part part;
+			part.field = fields[i].field;
+			part.first = int(rows->size());
+			if (!planLeaves(*storage, *numbered, fields[i].field, fields[i].leaves, *rows, *plan))
+				return {client::Status::NotAdmitted, {}};
+			part.count = int(rows->size()) - part.first;
+			parts->push_back(part);
+			requests[i] = {client::Operation::FieldRead, fields[i].field, {}};
+		}
+		const WatchSourceSnapshot origin{storage->inspector.session(), storage->schema.fingerprint(), storage->schema.generation()};
+		return session->batch(
+		    std::span{requests}.first(fields.size()),
+		    [done = std::move(done), rows = std::move(rows), plan = std::move(plan), parts = std::move(parts),
+		     origin](const bt::BatchResult& result) noexcept {
+			    WatchlistCompletion out;
+			    out.source = origin;
+			    out.native = watchStatus(result.operation, int(result.valueStatus));
+			    out.completed = WatchTimestamp::now();
+			    out.status = result.operation.status;
+			    out.members = std::move(*rows);
+			    out.count = int(out.members.size());
+			    out.parts = std::move(*parts);
+			    if (out.status == client::Status::Ok && (!result.operation.succeeded() || result.count != out.parts.size()))
+				    out.status = client::Status::CodecError;
+			    for (std::size_t i = 0; out.status == client::Status::Ok && i < out.parts.size(); ++i) {
+				    const auto& item = result.items[i];
+				    auto& part = out.parts[i];
+				    part.native = watchStatus(item.operation, int(item.valueStatus));
+				    part.status = item.operation.status;
+				    if (item.id != part.field) {
+					    out.status = client::Status::CodecError;
+					    break;
+				    }
+				    if (item.operation.succeeded() && !item.hasValue()) {
+					    // Read, yet no value to show: the reply does not match the schema.
+					    part.status = client::Status::CodecError;
+					    out.status = client::Status::CodecError;
+					    break;
+				    }
+				    const auto refused = refusedText(item.operation);
+				    for (int r = part.first; r < part.first + part.count; ++r) {
+					    auto& row = out.members[std::size_t(r)];
+					    row.itemStatus = item.operation.endpointStatus;
+					    row.valueStatus = qint32(item.valueStatus);
+					    if (!item.hasValue()) {
+						    row.status = refused;
+						    continue;
+					    }
+					    if (!fillLeaf(row, item.value, (*plan)[std::size_t(r)])) {
+						    row.status = QStringLiteral("Bad reply");
+						    part.status = client::Status::CodecError;
+						    out.status = client::Status::CodecError;
+					    }
+				    }
 			    }
 			    *done = std::move(out);
 		    });

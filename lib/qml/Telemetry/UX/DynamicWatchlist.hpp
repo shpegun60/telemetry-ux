@@ -26,7 +26,16 @@ struct WatchlistCompletion {
 	int count = 0;
 	std::array<Row, 32> rows{};
 	// readMembers only: one row per leaf asked, in its order; count is its size.
+	// readBatch: every Field's rows, the Fields in the order asked.
 	std::vector<Row> members;
+	// readBatch only: each Field's rows in members, and that item's outcome.
+	struct Part {
+		quint32 field = 0;
+		int first = 0, count = 0;
+		client::Status status = client::Status::Ok;
+		WatchNativeStatus native;
+	};
+	std::vector<Part> parts;
 	WatchNativeStatus native;
 	WatchSourceSnapshot source;
 	WatchTimestamp completed;
@@ -54,8 +63,47 @@ struct WatchlistSource {
 	// completion.members. Without it the Watchlist holds whole Fields only.
 	std::function<client::Submission(quint32 field, std::span<const std::uint32_t> leaves, Completion)>
 	    readMembers;
+	// Optional, with readMembers: several struct or array Fields in one Batch
+	// of FieldReads, answered as readMembers answers one, Field after Field,
+	// with completion.parts. batchCapability gives the device's Batch budgets,
+	// valueBytes a struct or array Field's size on the wire. Without them each
+	// such Field is a read of its own.
+	struct BatchField {
+		quint32 field = 0;
+		std::span<const std::uint32_t> leaves;
+	};
+	std::function<std::optional<Limits>()> batchCapability;
+	std::function<std::optional<unsigned>(quint32)> valueBytes;
+	std::function<client::Submission(std::span<const BatchField>, Completion)> readBatch;
 	// Optional admitted metadata, copied once on attachment. No read is sent.
 	std::function<runtime::RuntimeSchema()> schema;
+};
+
+// How the Watchlist keeps pace with its interval (WL-6): from the cycles it
+// completed since Start, or from the last Read once. Times in milliseconds.
+// A cycle runs from its first request to its last completion; the period from
+// one cycle's start to the next's. A tick due while a cycle still runs is
+// skipped, so the period polling achieves is a whole number of intervals.
+struct WatchPace {
+	int cycles = 0;       // completed since Start, or 1 after a Read once
+	bool polling = false; // false: the figures are the last Read once's
+	// The status is a cycle's progress or completion, not a wait, a failure or
+	// a stop: what the pace may stand in for.
+	bool routine = false;
+	int values = 0; // rows the last cycle read
+	// The last cycle's exchanges by kind; again: written Fields read again.
+	quint32 readMany = 0, batch = 0, fieldRead = 0, again = 0;
+	double lastCycleMs = 0, medianCycleMs = 0, medianPeriodMs = 0;
+	// The period polling achieves, a whole number of intervals: the last cycle
+	// rounded up to one, or the median period rounded to one, whichever is
+	// longer - so a slow cycle shows at once, and the median of five periods
+	// lets go only when most of them fit again. Continuous: the median period
+	// itself, or the last cycle before two have started.
+	double achievedPeriodMs = 0;
+	int intervalMs = 0;
+	quint64 skippedTicks = 0;
+	// Polling reads less often than its interval asks.
+	bool behind = false;
 };
 
 // What the Watchlist can hold of a Field: the Field itself (a scalar), or its
@@ -80,6 +128,9 @@ public:
 	void retire(bool clearRows = true);
 	void poll(); // Only after native callback/progress has returned.
 	void tick(); // Local scheduler tick, also usable with a controlled test clock.
+	WatchPace pace() const;
+	// The monotonic clock the pace is measured with, in nanoseconds; for tests.
+	void setClock(std::function<qint64()> monotonicNs);
 	QAbstractItemModel* model() const;
 	bool supported() const;
 	bool active() const;

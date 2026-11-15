@@ -43,6 +43,11 @@ class DynamicConfiguratorProvider final : public QObject {
 	// Some row is on this device; false when every row's path is one it lacks.
 	Q_PROPERTY(bool watchReadable READ watchReadable NOTIFY stateChanged)
 	Q_PROPERTY(QString watchStatus READ watchStatus NOTIFY stateChanged)
+	// How polling keeps pace with its interval (WL-6), as WatchPace: cycles,
+	// polling, routine, values, readMany, batch, fieldRead, again, lastCycleMs,
+	// medianCycleMs, medianPeriodMs, achievedPeriodMs, intervalMs,
+	// skippedTicks, behind. Empty before a cycle has completed.
+	Q_PROPERTY(QVariantMap watchPace READ watchPace NOTIFY stateChanged)
 	Q_PROPERTY(bool canWriteWatch READ canWriteWatch NOTIFY stateChanged)
 	// How the Watchlist shows its numbers: "original", "dec" or "hex" (WL-3).
 	// The view's only: the recording, Trend and a write are the same in all.
@@ -158,6 +163,7 @@ public:
 	int watchCount() const;
 	bool watchReadable() const;
 	QString watchStatus() const;
+	QVariantMap watchPace() const;
 	bool watchIndividual() const;
 	int watchIntervalMs() const;
 	static constexpr int watchIntervalMinimumMs() noexcept { return 0; }

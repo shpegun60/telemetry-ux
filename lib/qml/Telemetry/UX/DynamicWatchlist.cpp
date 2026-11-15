@@ -1,5 +1,6 @@
 // One pending read, bounded wire chunks, Qt-owned scalar rows. MIT.
 #include "DynamicWatchlist.hpp"
+#include "ReadPortions.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
@@ -8,32 +9,15 @@
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 #include <vector>
 
 namespace telemetry::ux {
 struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
-	// One read of a cycle, planned when the cycle starts. Portions keep the
-	// order of their first row: whole Fields go together in ReadMany portions
-	// (or one FieldRead each in individual mode), and all the values watched in
-	// one struct or array Field are one FieldRead, wherever their rows are. A
-	// Fail portion stops the cycle where the read it replaces would have gone.
-	struct Portion {
-		enum class Kind : quint8 { Many, Field, Members, Fail } kind = Kind::Many;
-		quint32 field = 0;
-		std::vector<std::uint32_t> ids;    // Many: the Fields, at most 32
-		std::vector<std::uint32_t> leaves; // Members: ascending ordinals
-		QString failure;
-
-		int rows() const
-		{
-			return kind == Kind::Many      ? int(ids.size())
-			       : kind == Kind::Members ? int(leaves.size())
-			       : kind == Kind::Field   ? 1
-			                               : 0;
-		}
-	};
+	// One read of a cycle, planned when the cycle starts (ReadPortions.hpp).
+	using Portion = read_portions::Portion;
 
 	struct Request {
 		std::shared_ptr<void> storage;
@@ -46,6 +30,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		quint64 membership = 0; // the rows the plan was built from
 		std::array<std::uint32_t, 32> ids{};
 		std::vector<std::uint32_t> leaves;
+		std::vector<Portion::Member> fields; // Batch only
 		std::optional<WatchlistCompletion> completion;
 	};
 
@@ -103,6 +88,81 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// a time and only while nothing else is in flight. The timer then only
 	// backs it up.
 	int intervalMs = 1000;
+	// The pace (WatchPace): the current cycle's first request and exchanges,
+	// the last five cycles and periods, and what was last worked out.
+	std::function<qint64()> clock;
+	struct Pace {
+		qint64 cycleStart = 0, lastStart = 0;
+		quint32 many = 0, batch = 0, field = 0, again = 0;
+		std::vector<qint64> cycles, periods;
+		WatchPace shown;
+	} pace;
+
+	qint64 nowNs() const
+	{
+		return clock ? clock() : WatchTimestamp::now().monotonicNs;
+	}
+
+	static void keepFive(std::vector<qint64>& last, qint64 value)
+	{
+		last.push_back(value);
+		if (last.size() > 5)
+			last.erase(last.begin());
+	}
+
+	static double medianMs(std::vector<qint64> values)
+	{
+		if (values.empty())
+			return 0;
+		std::sort(values.begin(), values.end());
+		const auto n = values.size();
+		const double ns = n % 2 ? double(values[n / 2]) : (double(values[n / 2 - 1]) + double(values[n / 2])) / 2;
+		return ns / 1e6;
+	}
+
+	void resetPace(bool polling)
+	{
+		pace = {};
+		pace.shown.polling = polling;
+		pace.shown.intervalMs = intervalMs;
+	}
+
+	// A cycle ended with every portion read: its time, its exchanges, the
+	// period and whether polling keeps up.
+	void finishPace()
+	{
+		if (!pace.cycleStart)
+			return; // nothing was sent: a list with nothing to read
+		const auto took = nowNs() - pace.cycleStart;
+		keepFive(pace.cycles, took);
+		auto& s = pace.shown;
+		++s.cycles;
+		s.polling = running;
+		s.values = model.count();
+		s.readMany = pace.many;
+		s.batch = pace.batch;
+		s.fieldRead = pace.field;
+		s.again = pace.again;
+		s.lastCycleMs = double(took) / 1e6;
+		s.medianCycleMs = medianMs(pace.cycles);
+		s.medianPeriodMs = medianMs(pace.periods);
+		s.intervalMs = intervalMs;
+		if (!running) {
+			s.achievedPeriodMs = 0;
+			s.behind = false;
+		} else if (intervalMs == 0) {
+			s.achievedPeriodMs = pace.periods.empty() ? s.lastCycleMs : s.medianPeriodMs;
+			s.behind = false;
+		} else {
+			const double interval = intervalMs;
+			// A tick due during a cycle is skipped: the next starts on a later
+			// one. Periods are whole intervals with a little jitter: the nearest.
+			const double byCycle = std::ceil(s.lastCycleMs / interval - 1e-9);
+			const double byPeriod = pace.periods.empty() ? 0.0 : std::round(s.medianPeriodMs / interval);
+			s.achievedPeriodMs = (std::max)({1.0, byCycle, byPeriod}) * interval;
+			s.behind = s.achievedPeriodMs > interval;
+		}
+	}
 
 	explicit Impl(QObject* owner) : context(owner)
 	{
@@ -156,110 +216,75 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		cycle = true;
 		cursor = 0;
 		done = 0;
+		if (running) {
+			const auto start = nowNs();
+			if (pace.lastStart)
+				keepFive(pace.periods, start - pace.lastStart);
+			pace.lastStart = start;
+		}
+		pace.cycleStart = 0;
+		pace.many = pace.batch = pace.field = pace.again = 0;
 		buildPlan();
 		return true;
 	}
 
-	// The rows of a cycle in portions, with the budgets and failures whole
-	// Fields always had: a list of whole Fields sends exactly the reads it did.
+	// The rows of a cycle in portions (ReadPortions.hpp), planned from the
+	// keys in row order.
 	void buildPlan()
 	{
-		plan.clear();
-		planOf.clear();
-		hasMembers = false;
 		replan = false;
 		planMembership = model.membership();
-		QString failure;
-		std::optional<WatchlistSource::Limits> limits;
-		bool asked = false;
-		int open = -1;
-		unsigned reply = 0;
-		const auto room = [&limits](unsigned n) {
-			return n < 32u && n < limits->items && 2u + 4u * (n + 1u) <= limits->requestBytes;
-		};
-		const auto exceeds = [] {
-			return QStringLiteral("Next Field exceeds ReadMany byte budget - select Individual FieldRead");
-		};
-		for (int row = 0; row < model.count() && failure.isEmpty(); ++row) {
-			const auto key = model.key(row);
-			if (watch_key::isUnresolved(key))
-				continue;
-			const auto field = watch_key::field(key);
-			if (!watch_key::isWhole(key)) {
-				hasMembers = true;
-				if (!source.readMembers) {
-					failure = QStringLiteral("This connection can't read struct members.");
-					break;
-				}
-				auto at = planOf.value(field, -1);
-				if (at < 0 || plan[std::size_t(at)].kind != Portion::Kind::Members) {
-					at = int(plan.size());
-					Portion members;
-					members.kind = Portion::Kind::Members;
-					members.field = field;
-					plan.push_back(std::move(members));
-					planOf.insert(field, at);
-				}
-				plan[std::size_t(at)].leaves.push_back(watch_key::ordinal(key));
-				continue;
-			}
-			if (individual) {
-				if (!source.readField) {
-					failure = QStringLiteral("Individual FieldRead unavailable");
-					break;
-				}
-				Portion one;
-				one.kind = Portion::Kind::Field;
-				one.field = field;
-				planOf.insert(field, int(plan.size()));
-				plan.push_back(std::move(one));
-				continue;
-			}
-			if (!asked) {
-				limits = source.capability ? source.capability() : std::nullopt;
-				asked = true;
-			}
-			if (!limits || !source.readMany) {
-				failure = QStringLiteral(
+		std::vector<WatchKey> keys;
+		keys.reserve(std::size_t(model.count()));
+		for (int row = 0; row < model.count(); ++row)
+			keys.push_back(model.key(row));
+		read_portions::Source can;
+		can.individual = individual;
+		can.readMany = bool(source.readMany);
+		can.readField = bool(source.readField);
+		can.readMembers = bool(source.readMembers);
+		can.readBatch = bool(source.readMembers) && bool(source.readBatch);
+		if (source.batchCapability)
+			can.batchBudget = [this]() -> std::optional<read_portions::Budget> {
+				const auto limits = source.batchCapability();
+				if (!limits)
+					return std::nullopt;
+				return read_portions::Budget{limits->items, limits->requestBytes, limits->replyBytes};
+			};
+		can.valueBytes = source.valueBytes;
+		if (source.capability)
+			can.budget = [this]() -> std::optional<read_portions::Budget> {
+				const auto limits = source.capability();
+				if (!limits)
+					return std::nullopt;
+				return read_portions::Budget{limits->items, limits->requestBytes, limits->replyBytes};
+			};
+		can.fieldBytes = source.fieldBytes;
+		auto planned = read_portions::plan(keys, can);
+		plan = std::move(planned.portions);
+		planOf = std::move(planned.of);
+		hasMembers = planned.members;
+	}
+
+	// A plan's stop in words.
+	static QString failureText(read_portions::Failure failure)
+	{
+		switch (failure) {
+			case read_portions::Failure::NoMembers:
+				return QStringLiteral("This connection can't read struct members.");
+			case read_portions::Failure::NoFieldRead:
+				return QStringLiteral("Individual FieldRead unavailable");
+			case read_portions::Failure::NoReadMany:
+				return QStringLiteral(
 				    "This device can't read several Fields at once: choose Read each Field with FieldRead in the Watchlist's menu.");
+			case read_portions::Failure::NotScalar:
+				return QStringLiteral("Watch Field is stale or not a readable scalar");
+			case read_portions::Failure::ExceedsReadMany:
+				return QStringLiteral("Next Field exceeds ReadMany byte budget - select Individual FieldRead");
+			case read_portions::Failure::None:
 				break;
-			}
-			// A ReadMany portion takes Fields while its item, request and reply
-			// budgets allow; a Field it can't take starts the next one.
-			const bool fits = open >= 0 && room(unsigned(plan[std::size_t(open)].ids.size()));
-			const auto bytes = source.fieldBytes ? source.fieldBytes(field) : std::nullopt;
-			if (!bytes || *bytes == 0 || *bytes > 8) {
-				if (fits) {
-					// The read it would have joined is not sent either.
-					plan.resize(std::size_t(open));
-					for (auto it = planOf.begin(); it != planOf.end();)
-						it = it.value() >= open ? planOf.erase(it) : std::next(it);
-				}
-				failure = fits || room(0) ? QStringLiteral("Watch Field is stale or not a readable scalar")
-				                          : exceeds();
-				break;
-			}
-			if (!fits || reply + 8u + *bytes > limits->replyBytes) {
-				if (!room(0) || 2u + 8u + *bytes > limits->replyBytes) {
-					failure = exceeds();
-					break;
-				}
-				open = int(plan.size());
-				plan.push_back({});
-				reply = 2;
-			}
-			plan[std::size_t(open)].ids.push_back(field);
-			reply += 8u + *bytes;
-			planOf.insert(field, open);
 		}
-		for (auto& step : plan)
-			std::sort(step.leaves.begin(), step.leaves.end());
-		if (!failure.isEmpty()) {
-			Portion failed;
-			failed.kind = Portion::Kind::Fail;
-			failed.failure = std::move(failure);
-			plan.push_back(std::move(failed));
-		}
+		return {};
 	}
 
 	// The rows changed (added, removed, put back, cleared). Mid-cycle the plan
@@ -303,6 +328,16 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	{
 		sequence = value.sequence;
 		++portion;
+		if (!pace.cycleStart)
+			pace.cycleStart = nowNs();
+		if (value.urgent)
+			++pace.again;
+		else if (value.kind == Portion::Kind::Many)
+			++pace.many;
+		else if (value.kind == Portion::Kind::Batch)
+			++pace.batch;
+		else
+			++pace.field;
 	}
 
 	client::Submission submit(Request& pending, WatchlistSource::Completion complete)
@@ -315,6 +350,14 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 				return source.readField(pending.field, std::move(complete));
 			case Portion::Kind::Members:
 				return source.readMembers(pending.field, pending.leaves, std::move(complete));
+			case Portion::Kind::Batch: {
+				if (!source.readBatch || pending.fields.size() > 32)
+					break;
+				std::array<WatchlistSource::BatchField, 32> fields{};
+				for (std::size_t i = 0; i < pending.fields.size(); ++i)
+					fields[i] = {pending.fields[i].field, pending.fields[i].leaves};
+				return source.readBatch(std::span{fields}.first(pending.fields.size()), std::move(complete));
+			}
 			case Portion::Kind::Fail:
 				break;
 		}
@@ -586,8 +629,18 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		while (!urgent.empty()) {
 			const auto id = urgent.front();
 			const auto at = planOf.value(id, -1);
-			const bool members = at >= 0 && at < int(plan.size()) &&
-			                     plan[std::size_t(at)].kind == Portion::Kind::Members;
+			// A struct read as one of a Batch is read again on its own.
+			const std::vector<std::uint32_t>* watched = nullptr;
+			if (at >= 0 && at < int(plan.size())) {
+				const auto& step = plan[std::size_t(at)];
+				if (step.kind == Portion::Kind::Members)
+					watched = &step.leaves;
+				else if (step.kind == Portion::Kind::Batch)
+					for (const auto& member : step.fields)
+						if (member.field == id)
+							watched = &member.leaves;
+			}
+			const bool members = watched != nullptr;
 			if (!members && rowOf(id) < 0) {
 				urgent.erase(urgent.begin());
 				continue;
@@ -605,7 +658,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			pending->field = id;
 			if (members) {
 				pending->kind = Portion::Kind::Members;
-				pending->leaves = plan[std::size_t(at)].leaves;
+				pending->leaves = *watched;
 				pending->count = int(pending->leaves.size());
 			} else {
 				pending->kind = individual ? Portion::Kind::Field : Portion::Kind::Many;
@@ -673,6 +726,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			return;
 		if (cursor >= int(plan.size())) {
 			cycle = false;
+			finishPace();
 			// Rows kept for paths this device lacks are never read (WL-4c).
 			const bool readable = model.hasBound();
 			status = model.count() == 0
@@ -695,7 +749,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		}
 		const auto& step = plan[std::size_t(cursor)];
 		if (step.kind == Portion::Kind::Fail) {
-			fail(step.failure);
+			fail(failureText(step.failure));
 			return;
 		}
 		auto pending = std::make_shared<Request>();
@@ -709,6 +763,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			std::copy(step.ids.begin(), step.ids.end(), pending->ids.begin());
 		else if (step.kind == Portion::Kind::Field)
 			pending->ids[0] = step.field;
+		else if (step.kind == Portion::Kind::Batch)
+			pending->fields = step.fields;
 		else
 			pending->leaves = step.leaves;
 		if (!prepare(*pending)) return;
@@ -749,8 +805,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		frame.source = result.source;
 		frame.native = result.native;
 		frame.presentationStatus = qint32(result.status);
-		frame.operation = completed.kind == Portion::Kind::Many ? WatchOperation::ReadMany
-		                                                        : WatchOperation::FieldRead;
+		frame.operation = completed.kind == Portion::Kind::Many    ? WatchOperation::ReadMany
+		                  : completed.kind == Portion::Kind::Batch ? WatchOperation::Batch
+		                                                           : WatchOperation::FieldRead;
 		frame.urgent = completed.urgent;
 		frame.membership = completed.membership;
 		return frame;
@@ -860,6 +917,89 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 		return true;
 	}
 
+	// A Batch of struct and array Fields: each Field's values published as the
+	// member read's are, in frames of at most 32 rows carrying that item's own
+	// outcome, the Fields in the order asked, every frame of the same cycle and
+	// portion with the next sequence. A Field the device refused shows why in
+	// its rows and the cycle goes on; a Batch that failed as a whole stops it,
+	// as any failed read does.
+	bool completeBatch(Request& completed, WatchlistCompletion& result)
+	{
+		const auto& fields = completed.fields;
+		std::size_t total = 0;
+		bool correlated = !fields.empty() && result.parts.size() == fields.size();
+		for (std::size_t i = 0; correlated && i < fields.size(); ++i) {
+			const auto& part = result.parts[i];
+			correlated = part.field == fields[i].field && part.first == int(total) &&
+			             part.count == int(fields[i].leaves.size());
+			total += fields[i].leaves.size();
+		}
+		correlated = correlated && result.members.size() == total && result.count == int(total);
+		for (std::size_t i = 0, k = 0; correlated && i < fields.size(); ++i)
+			for (std::size_t j = 0; correlated && j < fields[i].leaves.size(); ++j, ++k)
+				correlated = result.members[k].id == fields[i].field &&
+				             result.members[k].leaf == fields[i].leaves[j] + 1;
+		const bool applicable = result.status == client::Status::Ok && correlated && completed.step == cursor;
+		const auto phase = completed.revision != revision || !current() ? WatchCompletionPhase::Drained
+		                   : applicable ? WatchCompletionPhase::Current : WatchCompletionPhase::Failed;
+		bool firstFrame = true;
+		for (std::size_t i = 0, k = 0; i < fields.size(); ++i) {
+			const auto n = fields[i].leaves.size();
+			for (std::size_t first = 0; first < n; first += 32) {
+				auto frame = frameOf(completed, result);
+				if (!firstFrame) {
+					if (sequence == (std::numeric_limits<qint64>::max)()) {
+						fail(QStringLiteral("Watch completion identities exhausted"));
+						return false;
+					}
+					frame.sequence = ++sequence;
+				}
+				firstFrame = false;
+				if (correlated) {
+					frame.native = result.parts[i].native;
+					frame.presentationStatus = qint32(result.parts[i].status);
+				}
+				frame.phase = phase;
+				frame.count = int((std::min)(std::size_t{32}, n - first));
+				frame.correlated = correlated;
+				frame.exact = true;
+				for (int r = 0; r < frame.count; ++r) {
+					auto& row = frame.rows[std::size_t(r)];
+					row.id = fields[i].field;
+					row.leaf = fields[i].leaves[first + std::size_t(r)] + 1;
+					if (correlated)
+						copyRow(row, result.members[k + first + std::size_t(r)]);
+					if (!exactRow(row))
+						frame.exact = false;
+				}
+				if (!report(frame))
+					return false;
+			}
+			k += n;
+		}
+		if (completed.revision != revision || !current()) {
+			status = QStringLiteral("Stopped - accepted read drained");
+			return true;
+		}
+		if (applicable) {
+			publishing = true;
+			for (std::size_t i = 0, k = 0; context && i < fields.size(); ++i)
+				for (std::size_t j = 0; context && j < fields[i].leaves.size(); ++j, ++k) {
+					const auto row = model.rowOf(watch_key::member(fields[i].field, fields[i].leaves[j]));
+					if (row < 0)
+						continue;
+					auto& value = result.members[k];
+					model.setResult(row, std::move(value.status), std::move(value.text), value.sample, value.value);
+				}
+			publishing = false;
+			++cursor;
+			done += int(total);
+		} else {
+			stopFailed(result.status == client::Status::Ok ? client::Status::CodecError : result.status);
+		}
+		return true;
+	}
+
 	void poll()
 	{
 		if (guarded() || reportingCompletion)
@@ -872,6 +1012,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			auto result = std::move(*completed->completion);
 			if (completed->kind == Portion::Kind::Members) {
 				if (!completeMembers(*completed, result))
+					return;
+			} else if (completed->kind == Portion::Kind::Batch) {
+				if (!completeBatch(*completed, result))
 					return;
 			} else {
 				// The accepted Request, not a possibly empty failure body, owns the IDs.
@@ -955,6 +1098,8 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// shares the session with a continuous one.
 	void tick()
 	{
+		if (running && (cycle || request))
+			++pace.shown.skippedTicks;
 		if (guarded() || reportingCompletion || !running || cycle || request || !current())
 			return;
 		if (startCycle())
@@ -1787,6 +1932,19 @@ int DynamicWatchlist::interval() const
 	return d->intervalMs;
 }
 
+WatchPace DynamicWatchlist::pace() const
+{
+	auto shown = d->pace.shown;
+	const auto& status = d->status;
+	shown.routine = status.startsWith(QLatin1String("Reading ")) || status.contains(QLatin1String(" complete - "));
+	return shown;
+}
+
+void DynamicWatchlist::setClock(std::function<qint64()> monotonicNs)
+{
+	d->clock = std::move(monotonicNs);
+}
+
 void DynamicWatchlist::setInterval(int ms)
 {
 	auto p = d;
@@ -1826,6 +1984,7 @@ bool DynamicWatchlist::begin(bool polling)
 	p->urgent.clear();
 	p->rerun = false;
 	p->running = polling;
+	p->resetPace(polling);
 	if (!p->startCycle()) return false;
 	if (polling)
 		p->timer.start();
