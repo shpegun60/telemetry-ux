@@ -479,7 +479,7 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	// No Edit button: the cells are the editor, and the draft opens with the
 	// first change (BA-4).
 	CHECK(!visual(ui.details, QStringLiteral("editButton")) && !provider.editing());
-	ui.choose("Enabled", 0, "false");
+	ui.choose("Enabled", 0, "false (0)");
 	CHECK(value(provider, "Enabled") == "false");
 	ui.enter("Gain", "0.25");
 	CHECK(provider.editing());
@@ -517,7 +517,7 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	}));
 	std::puts("Endpoint editor journey: Apply true");
 	CHECK(!visual(ui.details, QStringLiteral("applyButton")));
-	ui.choose("Enabled", 1, "true"); CHECK(value(provider, "Enabled") == "true");
+	ui.choose("Enabled", 1, "true (1)"); CHECK(value(provider, "Enabled") == "true");
 	CHECK(provider.editing());
 	click(*ui.window, control(ui.details, "applyButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeWrites() == writes + 2; }));
@@ -525,7 +525,7 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	std::puts("Endpoint editor journey: Command");
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Execute"))));
 	CHECK(provider.commandSelected());
-	ui.choose("Enabled", 1, "true"); CHECK(value(provider, "Enabled") == "true");
+	ui.choose("Enabled", 1, "true (1)"); CHECK(value(provider, "Enabled") == "true");
 	const auto commands = peer.nativeCommands();
 	click(*ui.window, control(ui.details, "executeButton"));
 	CHECK(await([&] { return !provider.busy() && peer.nativeCommands() == commands + 1; }));
@@ -536,7 +536,7 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Transform"))));
 	CHECK(provider.serviceSelected());
 	ui.enter("Gain", "0.1");
-	ui.choose("Enabled", 0, "false");
+	ui.choose("Enabled", 0, "false (0)");
 	// A request's enum starts at its first name (BA-4b, the SDK's one
 	// builder): Idle (-7), never an unnamed zero. Choose it, then explicitly
 	// enter another numeric code through the real ComboBox/manual-code control.

@@ -37,6 +37,9 @@ Item {
     property string canonicalText: ""
     // What the cell says while its text is no value: "Enter a number from 0 to 255."
     property string takes: ""
+    // Codes in hexadecimal beside the names, "Idle (0x00)", as the
+    // Watchlist shows them in its hex form; decimal otherwise.
+    property bool hexCodes: false
     // The row is selected: its text is on the selection colour.
     property bool highlighted: false
     // From an earlier run (family spec A6): italic and muted, the note in the
@@ -126,13 +129,30 @@ Item {
         manualCode = false
     }
 
+    // A choice's words with its code beside the name, so the constant
+    // written is in sight: "false (0)", "Idle (0)", "Idle (0x00)" in hex.
+    function codeLabel(item) {
+        let label = item.label
+        if (editorKind === "bool" && !/\(\d+\)$/.test(label))
+            label = item.text + (item.text === "true" ? " (1)" : " (0)")
+        if (!hexCodes)
+            return label
+        const found = /^(.*) \((-?\d+)\)$/.exec(label)
+        if (!found)
+            return label
+        const code = Number(found[2])
+        const bits = /(?:8|16|32|64)/.exec(typeText)
+        const digits = bits ? Number(bits[0]) / 4 : 2
+        const shown = code < 0 ? "-0x" + (-code).toString(16).toUpperCase().padStart(digits, "0")
+                               : "0x" + code.toString(16).toUpperCase().padStart(digits, "0")
+        return found[1] + " (" + shown + ")"
+    }
     readonly property var options: {
         const rows = []
         for (let i = 0; i < editorChoices.length; ++i) {
             const item = editorChoices[i]
             if (item && typeof item.label === "string" && typeof item.text === "string")
-                // A bool reads false and true; its code is in the item's tooltip.
-                rows.push({ label: editorKind === "bool" ? item.text : item.label, text: item.text, manual: false })
+                rows.push({ label: codeLabel(item), text: item.text, manual: false })
         }
         if (editorKind === "enum" && !rows.some(function(item) { return item.text === cell.editorText }))
             rows.unshift({ label: (choicesTruncated ? qsTr("Code (%1)") : qsTr("Unknown (%1)")).arg(editorText),
@@ -179,7 +199,9 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
-                text: cell.value
+                // An enum reads its name with the code, as its list does.
+                text: cell.editorKind === "enum" && cell.optionIndex >= 0 && !cell.isAggregate
+                      ? cell.options[cell.optionIndex].label : cell.value
                 color: cell.highlighted ? Theme.selectedForeground
                     : cell.isAggregate || cell.stale ? Theme.textMuted : Theme.textPrimary
                 font.family: cell.isAggregate ? Qt.application.font.family : Type.fixedFamily
