@@ -10,6 +10,7 @@
 // TraceView draws them. MIT.
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Layouts
 
 FocusScope {
@@ -285,10 +286,23 @@ FocusScope {
                     return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                      : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                 }
-                Accessible.description: qsTr("Arrows pan, plus and minus zoom, End follows.")
+                Accessible.description: qsTr("Arrows pan, plus and minus zoom, Home goes to the oldest reading, End follows, 1 to 4 choose the span.")
+            }
+            // The keys are on the graph: the lists' focus frame round it.
+            Rectangle {
+                objectName: "plotFocus"
+                visible: view.visible && view.activeFocus
+                x: view.plotArea.x - 1
+                y: view.plotArea.y - 1
+                width: view.plotArea.width + 2
+                height: view.plotArea.height + 2
+                color: "transparent"
+                border.width: 2
+                border.color: Theme.focusRing
+                Accessible.ignored: true
             }
             // Held: how far behind the newest reading, and a way back to it.
-            Button {
+            Basic.Button {
                 id: behind
                 objectName: "plotBehind"
                 visible: view.visible && !view.following
@@ -307,6 +321,31 @@ FocusScope {
                                           : qsTr("%1 behind. Follow the newest readings").arg(plot.behindWords(view.behindSeconds))
                 Accessible.description: qsTr("End")
                 onClicked: view.follow()
+                // A chip over the plot, not a toolbar button: the time in the
+                // fixed face, the way back in the primary text colour.
+                contentItem: Row {
+                    spacing: 0
+                    Text {
+                        visible: !behind.atNewest
+                        text: plot.behindText(view.behindSeconds) + " " + qsTr("behind") + " · "
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: Theme.textSecondary
+                        Accessible.ignored: true
+                    }
+                    Text {
+                        text: qsTr("Follow (End)")
+                        font.pointSize: Type.caption
+                        color: Theme.textPrimary
+                        Accessible.ignored: true
+                    }
+                }
+                background: Rectangle {
+                    radius: Type.radius
+                    color: behind.down ? Theme.statePressed : behind.hovered ? Theme.stateHover : Theme.surface
+                    border.width: behind.visualFocus ? 2 : 1
+                    border.color: behind.visualFocus ? Theme.focusRing : Theme.outline
+                }
             }
             Label {
                 objectName: "plotTimeTitle"

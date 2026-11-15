@@ -76,6 +76,7 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 	setOpaquePainting(false);
 	setAcceptedMouseButtons(Qt::LeftButton);
 	setActiveFocusOnTab(true);
+	setCursor(Qt::CrossCursor);
 	// New readings mark the picture; it is drawn again at most every 50 ms,
 	// however fast they come.
 	frames_.setInterval(50);
@@ -120,8 +121,12 @@ void TraceView::setFollowing(bool following)
 	if (following == following_)
 		return;
 	// Unfollowing keeps the picture where it is now.
-	if (!following)
+	if (!following) {
+		heldAllNs_ = showAll_ ? spanNs() : 0;
 		frozenNs_ = rightNs();
+	} else {
+		heldAllNs_ = 0;
+	}
 	following_ = following;
 	Q_EMIT viewChanged();
 	update();
@@ -148,6 +153,7 @@ int TraceView::preset() const
 
 void TraceView::choosePreset(int seconds)
 {
+	heldAllNs_ = 0;
 	if (seconds <= 0) {
 		showAll_ = true;
 	} else {
@@ -176,6 +182,8 @@ std::pair<qint64, qint64> TraceView::kept() const
 
 qint64 TraceView::spanNs() const
 {
+	if (showAll_ && !following_ && heldAllNs_)
+		return heldAllNs_;
 	if (showAll_) {
 		const auto [oldest, newest] = kept();
 		// All: everything kept, and a second at the least.
@@ -186,11 +194,14 @@ qint64 TraceView::spanNs() const
 
 void TraceView::hold(qint64 right)
 {
-	// Never past the newest reading nor before the oldest: there is nothing
-	// to see there.
+	if (following_ && showAll_)
+		heldAllNs_ = spanNs();
+	// The right edge never past the newest reading, and the left edge never
+	// before the oldest while more is kept than the span: there is nothing
+	// to see out there.
 	const auto [oldest, newest] = kept();
 	if (newest)
-		right = std::clamp(right, oldest, newest);
+		right = std::clamp(right, std::min(newest, oldest + spanNs()), newest);
 	frozenNs_ = right;
 	following_ = false;
 	Q_EMIT viewChanged();
@@ -206,7 +217,19 @@ void TraceView::zoom(qreal factor, qreal at)
 	at = std::clamp<qreal>(at, 0, 1);
 	const auto pinned = right - span + qint64(double(span) * at);
 	const double next = std::clamp(double(span) * factor, 1e7, 86400e9);
+	// Out as far as what is kept, and no further: that is All.
+	const auto [oldest, newest] = kept();
+	if (newest && factor > 1 && next >= double(newest - oldest)) {
+		showAll_ = true;
+		heldAllNs_ = std::max<qint64>(1'000'000'000, newest - oldest);
+		frozenNs_ = newest;
+		following_ = false;
+		Q_EMIT viewChanged();
+		update();
+		return;
+	}
 	showAll_ = false;
+	heldAllNs_ = 0;
 	spanSeconds_ = next / 1e9;
 	// The time under the pointer stays under it.
 	hold(pinned + qint64((double(right - pinned)) * next / double(span)));
@@ -240,6 +263,8 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 	// A drag of more than a few pixels pans; less is a click.
 	if (!dragging_ && std::abs(moved) < 4)
 		return;
+	if (!dragging_)
+		setCursor(Qt::ClosedHandCursor);
 	dragging_ = true;
 	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
 	hold(pressRightNs_ - qint64(double(spanNs()) * moved / widthPx));
@@ -248,6 +273,8 @@ void TraceView::mouseMoveEvent(QMouseEvent* event)
 
 void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
+	if (dragging_)
+		setCursor(Qt::CrossCursor);
 	dragging_ = false;
 	event->accept();
 }

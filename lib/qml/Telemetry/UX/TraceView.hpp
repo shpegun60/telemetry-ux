@@ -130,6 +130,9 @@ private:
 	QTimer frames_;
 	qreal spanSeconds_ = 60;
 	bool following_ = true, showAll_ = false;
+	// All, held: its span when it was held, so new readings do not
+	// rescale a picture that should stand still.
+	qint64 heldAllNs_ = 0;
 	qreal behindSeconds_ = 0;
 	// A drag: where it started and the right edge then.
 	qreal pressX_ = 0;

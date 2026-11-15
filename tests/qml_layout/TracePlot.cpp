@@ -259,7 +259,10 @@ int main(int argc, char** argv)
 		CHECK(area.width() > 400 && view->property("drawnPoints").toInt() < 400 + int(area.width() * window->effectiveDevicePixelRatio()) * 4 + 8);
 		shot(window, argc, argv, QStringLiteral("trace-plot-dense-760"));
 
-		// LP-1b. A preset sets the span and follows the newest again.
+		// LP-1b. Nine minutes kept, so there is somewhere to go.
+		traces.append(frame(dense - 540'000'000'000, {{3, 1, bits(S::S16, 2, 0)}}));
+		settle(150);
+		// A preset sets the span and follows the newest again.
 		const auto span = [view] { return view->property("spanSeconds").toDouble(); };
 		const auto following = [view] { return view->property("following").toBool(); };
 		click(window, shown(content, "plotPreset_10"));
@@ -336,6 +339,31 @@ int main(int argc, char** argv)
 		click(window, shown(content, "plotZoomIn"));
 		settle();
 		CHECK(std::abs(span() - 48) < 1e-6);
+		// Out no further than what is kept: there it is All, and held All
+		// stands still while readings come.
+		for (int i = 0; i < 12; ++i)
+			click(window, shown(content, "plotZoomOut"));
+		settle(150);
+		CHECK(view->property("showAll").toBool() && view->property("preset").toInt() == 0 && !following());
+		const double heldRight = view->property("rightUtcMs").toDouble();
+		traces.append(frame(ux::WatchTraces::nowNs(), {{3, 1, bits(S::S16, 2, 5)}}));
+		settle(150);
+		CHECK(view->property("rightUtcMs").toDouble() == heldRight && view->property("behindSeconds").toDouble() > 0);
+		// A pan never leaves empty time at the left: back a long way, the
+		// left edge stops at the oldest reading kept.
+		click(window, shown(content, "plotPreset_60"));
+		settle(150);
+		for (int i = 0; i < 200; ++i)
+			QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -0.5));
+		settle(150);
+		const double oldestRight = view->property("rightUtcMs").toDouble();
+		QMetaObject::invokeMethod(view, "toOldest");
+		settle(150);
+		CHECK(std::abs(view->property("rightUtcMs").toDouble() - oldestRight) < 2);
+		// The keys' focus frame is round the graph.
+		view->forceActiveFocus(Qt::TabFocusReason);
+		settle();
+		CHECK(shown(content, "plotFocus"));
 		click(window, shown(content, "plotPreset_60"));
 		settle(150);
 		CHECK(following() && span() == 60);
