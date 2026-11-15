@@ -553,6 +553,133 @@ int main(int argc, char** argv)
 			settle(150);
 		}
 
+		// LP-1f. A curve's look: its colour, k and b, kept for its path; a
+		// colour not #rrggbb or a k or b not finite is refused and changes
+		// nothing.
+		{
+			const QString voltage = QStringLiteral("device.Voltage");
+			CHECK(!traces.setAppearance(voltage, QStringLiteral("red"), 1, 0) &&
+			      !traces.setAppearance(voltage, QString(), std::numeric_limits<double>::quiet_NaN(), 0) &&
+			      !traces.setAppearance(voltage, QString(), 1, std::numeric_limits<double>::infinity()) &&
+			      traces.multiplier(voltage) == 1 && traces.color(voltage).isEmpty());
+			QColor drawnIn;
+			CHECK(QMetaObject::invokeMethod(view, "curveColor", Q_RETURN_ARG(QColor, drawnIn), Q_ARG(QString, voltage)) &&
+			      drawnIn == QColor(QStringLiteral("#58a6ff")));
+			const auto valueBefore = all(content, "plotChipValue").first()->property("text").toString();
+			CHECK(traces.setAppearance(voltage, QStringLiteral("#FF7E8F"), 100, 0.5) && traces.color(voltage) == QStringLiteral("#ff7e8f"));
+			settle(150);
+			CHECK(QMetaObject::invokeMethod(view, "curveColor", Q_RETURN_ARG(QColor, drawnIn), Q_ARG(QString, voltage)) &&
+			      drawnIn == QColor(QStringLiteral("#ff7e8f")));
+			// The chip says how it is drawn, and still gives the reading.
+			CHECK(all(content, "plotChipTransform").size() == 1 &&
+			      all(content, "plotChipValue").first()->property("text").toString() == valueBefore);
+			bool tagged = false;
+			for (auto* child : all(content, "plotChipTransform").first()->childItems())
+				tagged = tagged || child->property("text").toString() == QStringLiteral("×100 +0.5");
+			CHECK(tagged);
+			// Focused, the values fit the drawn curve: 100 x 1..8 + 0.5.
+			view->setProperty("focusedPath", voltage);
+			settle(200);
+			double highest = -1e9;
+			for (const auto& label : view->property("valueLabels").toStringList())
+				highest = std::max(highest, QString(label).remove(QChar(',')).toDouble());
+			CHECK(highest > 300);
+			shot(window, argc, argv, QStringLiteral("trace-plot-transformed-760"));
+			view->setProperty("focusedPath", QString());
+			settle(150);
+
+			// Measurement points: none by default, every number's with the
+			// Plot's setting, none on a curve that hides its own.
+			CHECK(view->property("drawnDots").toInt() == 0);
+			traces.setShowPoints(true);
+			settle(200);
+			const int allDots = view->property("drawnDots").toInt();
+			CHECK(allDots > 0 && traces.pointsShown(voltage));
+			shot(window, argc, argv, QStringLiteral("trace-plot-points-760"));
+			traces.setPoints(voltage, 2);
+			settle(200);
+			const int hidden = view->property("drawnDots").toInt();
+			CHECK(hidden < allDots && !traces.pointsShown(voltage));
+			traces.setShowPoints(false);
+			traces.setPoints(voltage, 1);
+			settle(200);
+			CHECK(view->property("drawnDots").toInt() == allDots - hidden);
+			traces.setPoints(voltage, 0);
+			settle(200);
+			CHECK(view->property("drawnDots").toInt() == 0);
+
+			// What a project keeps: the curves in order and their looks.
+			const auto saved = traces.capture();
+			const auto order = traces.plotted();
+			traces.unplot(voltage);
+			CHECK(traces.setAppearance(voltage, QString(), 1, 0));
+			traces.setShowPoints(true);
+			CHECK(traces.restore(saved) && traces.plotted() == order && traces.multiplier(voltage) == 100 &&
+			      traces.offset(voltage) == 0.5 && traces.color(voltage) == QStringLiteral("#ff7e8f") && !traces.showPoints());
+			// A saved look that is not one is skipped; the rest is restored.
+			auto damaged = saved;
+			damaged[QStringLiteral("curves")] = QVariantMap{{voltage, QVariantMap{{QStringLiteral("color"), QStringLiteral("blue")}}}};
+			CHECK(!traces.restore(damaged) && traces.plotted() == order);
+			CHECK(traces.setAppearance(voltage, QString(), 1, 0) && all(content, "plotChipTransform").isEmpty());
+			settle(150);
+
+			// The chip's colour mark opens its settings: a swatch, k and b, Apply.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			auto* colorField = shown(content, "plotCurveColor");
+			CHECK(colorField->property("text").toString() == QStringLiteral("#58a6ff"));
+			shot(window, argc, argv, QStringLiteral("trace-plot-curve-settings-760"));
+			click(window, shown(content, "plotColorPreset_4"));
+			shown(content, "plotCurveMultiplier")->setProperty("text", QStringLiteral("2"));
+			shown(content, "plotCurveOffset")->setProperty("text", QStringLiteral("-1.5"));
+			settle();
+			CHECK(colorField->property("text").toString() == QStringLiteral("#ff7e8f"));
+			click(window, shown(content, "plotCurveApply"));
+			settle(300);
+			CHECK(!named(content, "plotCurveColor") && traces.multiplier(voltage) == 2 && traces.offset(voltage) == -1.5 &&
+			      traces.color(voltage) == QStringLiteral("#ff7e8f"));
+			// Not a number: said in words, Apply off; Cancel changes nothing.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			shown(content, "plotCurveMultiplier")->setProperty("text", QStringLiteral("abc"));
+			settle();
+			CHECK(shown(content, "plotCurveSettingsProblem")->property("text").toString() ==
+			      QStringLiteral("Enter finite numbers for k and b.") &&
+			      !shown(content, "plotCurveApply")->property("enabled").toBool());
+			click(window, shown(content, "plotCurveCancel"));
+			settle(300);
+			CHECK(!named(content, "plotCurveColor") && traces.multiplier(voltage) == 2);
+			// Its palette colour and Reset transform make it plain again.
+			click(window, all(content, "plotChipSettings").first());
+			settle(300);
+			click(window, shown(content, "plotColorPreset_0"));
+			click(window, shown(content, "plotCurveResetTransform"));
+			click(window, shown(content, "plotCurveApply"));
+			settle(300);
+			CHECK(traces.color(voltage).isEmpty() && traces.multiplier(voltage) == 1 && traces.offset(voltage) == 0);
+
+			// The chip's menu (right-click): its points shown.
+			auto* chipName = all(content, "plotChipName").first();
+			QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+			                  chipName->mapToScene(QPointF(chipName->width() / 2, chipName->height() / 2)).toPoint());
+			settle(300);
+			click(window, shown(content, "plotChipPointsShow"));
+			settle(300);
+			CHECK(traces.points(voltage) == 1 && !named(content, "plotChipPointsShow"));
+			traces.setPoints(voltage, 0);
+			// The graph's menu (right-click): every curve's points.
+			const auto graph = view->property("plotArea").toRectF();
+			QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+			                  view->mapToScene(QPointF(graph.left() + graph.width() * 0.3, graph.center().y())).toPoint());
+			settle(300);
+			click(window, shown(content, "plotShowPoints"));
+			settle(300);
+			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
+			traces.setShowPoints(false);
+			QTest::mouseMove(window, QPoint(4, 4));
+			settle(150);
+		}
+
 		// The chip's × takes a value off the Plot; its readings stay.
 		const auto removes = all(content, "plotChipRemove");
 		CHECK(removes.size() == 3);

@@ -49,6 +49,12 @@ class WatchTraces;
 // the pointer; a drag over the labels pans; Up and Down pan a tenth, Ctrl+Up
 // and Ctrl+Down zoom - and stays through Follow, the presets and time zoom.
 // A double-click on the labels, or A, returns to Auto.
+//
+// A curve's look (LP-1f): its own colour, if it has one, and its multiplier
+// and offset - a number is drawn and fitted as k x value + b, while every
+// value the chips and the cursor give stays the reading - and its
+// measurement points: a 5 px dot at each reading while the curve is drawn raw,
+// never closer than 6 px to the last.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -67,6 +73,8 @@ class TraceView : public QQuickPaintedItem {
 	Q_PROPERTY(QString focusedPath READ focusedPath WRITE setFocusedPath NOTIFY viewChanged)
 	// The numbers' part of the plot area, above the lanes.
 	Q_PROPERTY(QRectF valuesArea READ valuesArea NOTIFY drawn)
+	// Measurement points the last paint drew, for its checks.
+	Q_PROPERTY(int drawnDots READ drawnDots NOTIFY drawn)
 	// The cursor: shown, its time on this PC's clock (ms since the epoch),
 	// how long before the newest reading, and where it is drawn (item x;
 	// outside the plot area when it has scrolled out).
@@ -135,6 +143,9 @@ public:
 	QString focusedPath() const { return focusedPath_; }
 	void setFocusedPath(const QString& path);
 	QRectF valuesArea() const { return valuesArea_; }
+	int drawnDots() const { return drawnDots_; }
+	// The colour a path is drawn in: its own, else its palette place's.
+	Q_INVOKABLE QColor curveColor(const QString& path) const;
 	// The values times factor (below 1 zooms in) about a point of the
 	// height (0 top, 1 bottom); Manual.
 	Q_INVOKABLE void zoomValues(qreal factor, qreal at = 0.5);
@@ -265,6 +276,7 @@ private:
 	Range manual_, shown_, pressRange_;
 	QString focusedPath_;
 	QRectF valuesArea_;
+	int drawnDots_ = 0;
 	qint64 narrowSinceNs_ = 0;
 	// Per path: drawn per pixel rather than raw, for the hysteresis.
 	QHash<QString, bool> aggregated_;

@@ -1,6 +1,7 @@
 // The Watchlist's readings kept in memory for the live Plot (LP-1). MIT.
 #include "WatchTraces.hpp"
 #include <QtCore/QMetaObject>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QSet>
 #include <algorithm>
 #include <cmath>
@@ -295,6 +296,94 @@ QString WatchTraces::refusal(const QString& path) const
 	if (it == traces_.cend() || it->readings.empty() || it->type.valid())
 		return {};
 	return tr("%1 is text; only numbers, booleans and enums are plotted.").arg(path);
+}
+
+bool WatchTraces::setAppearance(const QString& path, const QString& color, double multiplier, double offset)
+{
+	static const QRegularExpression hex(QStringLiteral("^#[0-9a-fA-F]{6}$"));
+	if (path.isEmpty() || !std::isfinite(multiplier) || !std::isfinite(offset) ||
+	    (!color.isEmpty() && !hex.match(color).hasMatch()))
+		return false;
+	auto look = appearance_.value(path);
+	look.color = color.toLower();
+	look.multiplier = multiplier;
+	look.offset = offset;
+	if (look.plain())
+		appearance_.remove(path);
+	else
+		appearance_.insert(path, look);
+	++appearanceRevision_;
+	Q_EMIT appearanceChanged();
+	return true;
+}
+
+void WatchTraces::setPoints(const QString& path, int mode)
+{
+	if (path.isEmpty() || mode < 0 || mode > 2)
+		return;
+	auto look = appearance_.value(path);
+	if (look.points == mode)
+		return;
+	look.points = mode;
+	if (look.plain())
+		appearance_.remove(path);
+	else
+		appearance_.insert(path, look);
+	++appearanceRevision_;
+	Q_EMIT appearanceChanged();
+}
+
+bool WatchTraces::pointsShown(const QString& path) const
+{
+	const int mode = appearance_.value(path).points;
+	return mode == 1 || (mode == 0 && showPoints_);
+}
+
+void WatchTraces::setShowPoints(bool show)
+{
+	if (show == showPoints_)
+		return;
+	showPoints_ = show;
+	++appearanceRevision_;
+	Q_EMIT appearanceChanged();
+}
+
+QVariantMap WatchTraces::capture() const
+{
+	QVariantMap curves;
+	for (auto it = appearance_.cbegin(); it != appearance_.cend(); ++it)
+		curves.insert(it.key(), QVariantMap{{QStringLiteral("color"), it->color},
+		                                    {QStringLiteral("multiplier"), it->multiplier},
+		                                    {QStringLiteral("offset"), it->offset},
+		                                    {QStringLiteral("points"), it->points}});
+	return {{QStringLiteral("plotted"), plotted_}, {QStringLiteral("curves"), curves},
+	        {QStringLiteral("showPoints"), showPoints_}};
+}
+
+bool WatchTraces::restore(const QVariantMap& state)
+{
+	// A curve whose saved look is not one is skipped, not the whole Plot.
+	bool whole = true;
+	const auto curves = state.value(QStringLiteral("curves")).toMap();
+	for (auto it = curves.cbegin(); it != curves.cend(); ++it) {
+		const auto look = it.value().toMap();
+		const auto k = look.value(QStringLiteral("multiplier"), 1.0), b = look.value(QStringLiteral("offset"), 0.0);
+		const bool ok = setAppearance(it.key(), look.value(QStringLiteral("color")).toString(), k.toDouble(), b.toDouble());
+		if (ok)
+			setPoints(it.key(), look.value(QStringLiteral("points")).toInt());
+		whole = whole && ok;
+	}
+	setShowPoints(state.value(QStringLiteral("showPoints")).toBool());
+	const auto chosen = state.value(QStringLiteral("plotted")).toStringList();
+	// In the saved order; each keeps its colour, as a curve plotted again does.
+	if (plotted_ == chosen)
+		return whole;
+	const auto current = plotted_;
+	for (const auto& path : current)
+		unplot(path);
+	for (const auto& path : chosen)
+		whole = plot(path).isEmpty() && whole;
+	return whole;
 }
 
 void WatchTraces::clear()

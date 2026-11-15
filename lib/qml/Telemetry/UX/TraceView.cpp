@@ -102,6 +102,11 @@ void TraceView::setTraces(QObject* traces)
 	if (traces_) {
 		connect(traces_, &WatchTraces::appended, this, &TraceView::schedule);
 		connect(traces_, &WatchTraces::plottedChanged, this, [this] { update(); });
+		connect(traces_, &WatchTraces::appearanceChanged, this, [this] {
+			// A new multiplier or offset is a new fit.
+			range_ = {};
+			update();
+		});
 	}
 	Q_EMIT tracesChanged();
 	update();
@@ -481,6 +486,18 @@ void TraceView::toOldest()
 	hold(oldest + spanNs());
 }
 
+QColor TraceView::curveColor(const QString& path) const
+{
+	if (traces_) {
+		if (const auto own = traces_->color(path); !own.isEmpty())
+			return QColor(own);
+		const int at = traces_->colorIndex(path);
+		if (at >= 0 && at < colors_.size())
+			return colors_[at].value<QColor>();
+	}
+	return labelColor_;
+}
+
 void TraceView::setFocusedPath(const QString& path)
 {
 	if (path == focusedPath_)
@@ -799,7 +816,7 @@ void TraceView::paint(QPainter* painter)
 		for (auto it = from; it != readings->end() && it->ns <= right; ++it) {
 			if (std::isnan(it->value))
 				continue;
-			const double v = std::clamp(it->value, -valueLimit, valueLimit);
+			const double v = std::clamp(traces_->multiplier(path) * it->value + traces_->offset(path), -valueLimit, valueLimit);
 			wanted.low = any ? std::min(wanted.low, v) : v;
 			wanted.high = any ? std::max(wanted.high, v) : v;
 			any = true;
@@ -920,7 +937,7 @@ void TraceView::paint(QPainter* painter)
 
 	// The lines: raw while two readings or fewer fall on each device pixel,
 	// else each pixel's first, lowest, highest and last.
-	int points = 0, raw = 0, curves = 0;
+	int points = 0, raw = 0, curves = 0, dots = 0;
 	const double pixels = area.width() * ratio;
 	painter->save();
 	painter->setClipRect(numbersArea);
@@ -938,8 +955,10 @@ void TraceView::paint(QPainter* painter)
 		const auto count = std::distance(from, to);
 		if (count <= 0)
 			continue;
-		const int colorAt = traces_->colorIndex(path);
-		const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
+		const QColor color = curveColor(path);
+		// Drawn as k x value + b; the readings stay as they were read.
+		const double k = traces_->multiplier(path), b = traces_->offset(path);
+		const auto drawn = [k, b](double v) { return std::clamp(k * v + b, -valueLimit, valueLimit); };
 		// The focused curve stands out.
 		QPen pen(color, path == focusedPath_ ? 2.6 : 1.8);
 		pen.setCapStyle(Qt::RoundCap);
@@ -973,7 +992,7 @@ void TraceView::paint(QPainter* painter)
 				}
 				if (previous && it->ns - previous > std::max(pauseNs, 10 * gapAt))
 					flush();
-				const QPointF at(xOf(it->ns), yOf(it->value));
+				const QPointF at(xOf(it->ns), yOf(drawn(it->value)));
 				if (step && !line.isEmpty())
 					line.push_back(QPointF(at.x(), line.back().y()));
 				line.push_back(at);
@@ -981,6 +1000,26 @@ void TraceView::paint(QPainter* painter)
 				previous = it->ns;
 			}
 			flush();
+			// Measurement points: a 5 px dot ringed in the background at each
+			// reading, never closer than 6 px to the last one - a dot the
+			// line's own width would vanish into it.
+			if (traces_->pointsShown(path)) {
+				painter->save();
+				painter->setPen(QPen(dotRingColor_, 1));
+				painter->setBrush(color);
+				qreal lastX = -1e9;
+				for (auto it = from; it != to; ++it) {
+					if (std::isnan(it->value) || it->ns < left || it->ns > right)
+						continue;
+					const qreal x = xOf(it->ns);
+					if (x - lastX < 6)
+						continue;
+					painter->drawEllipse(QPointF(x, yOf(drawn(it->value))), 2.5, 2.5);
+					lastX = x;
+					++dots;
+				}
+				painter->restore();
+			}
 		} else {
 			// Per pixel column: its first, lowest, highest and last.
 			const int columns = std::max(1, int(std::ceil(area.width() * ratio)));
@@ -990,10 +1029,10 @@ void TraceView::paint(QPainter* painter)
 				if (column < 0)
 					return;
 				const qreal x = area.left() + (column + 0.5) / ratio;
-				line.push_back(QPointF(x, yOf(first)));
-				line.push_back(QPointF(x, yOf(low)));
-				line.push_back(QPointF(x, yOf(high)));
-				line.push_back(QPointF(x, yOf(last)));
+				line.push_back(QPointF(x, yOf(drawn(first))));
+				line.push_back(QPointF(x, yOf(drawn(low))));
+				line.push_back(QPointF(x, yOf(drawn(high))));
+				line.push_back(QPointF(x, yOf(drawn(last))));
 			};
 			for (auto it = from; it != to; ++it) {
 				if (std::isnan(it->value)) {
@@ -1044,8 +1083,7 @@ void TraceView::paint(QPainter* painter)
 			continue;
 		++curves;
 		++raw;
-		const int colorAt = traces_->colorIndex(path);
-		const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
+		const QColor color = curveColor(path);
 		const bool flag = traces_->stateText(path, 1.0) == QStringLiteral("true");
 		auto from = std::lower_bound(readings->begin(), readings->end(), left,
 		                             [](const TraceReading& r, qint64 at) { return r.ns < at; });
@@ -1115,11 +1153,11 @@ void TraceView::paint(QPainter* painter)
 			const auto* at = readings ? atOrBefore(*readings, cursorNs_) : nullptr;
 			if (!at || std::isnan(at->value) || at->ns < left)
 				continue;
-			const int colorAt = traces_->colorIndex(path);
-			const QColor color = colorAt >= 0 && colorAt < colors_.size() ? colors_[colorAt].value<QColor>() : labelColor_;
+			const QColor color = curveColor(path);
 			painter->setPen(QPen(dotRingColor_, 1));
 			painter->setBrush(color);
-			painter->drawEllipse(QPointF(xOf(at->ns), yOf(std::clamp(at->value, -valueLimit, valueLimit))), 3.5, 3.5);
+			const double drawnAt = traces_->multiplier(path) * at->value + traces_->offset(path);
+			painter->drawEllipse(QPointF(xOf(at->ns), yOf(std::clamp(drawnAt, -valueLimit, valueLimit))), 3.5, 3.5);
 		}
 		painter->setBrush(Qt::NoBrush);
 	}
@@ -1136,6 +1174,8 @@ void TraceView::paint(QPainter* painter)
 	rawCurves_ = raw;
 	drawnCurves_ = curves;
 	plotArea_ = area;
+	const bool dotsChanged = dots != drawnDots_;
+	drawnDots_ = dots;
 	valuesArea_ = numbersArea;
 	rightUtcMs_ = qreal(utcOf(right));
 	const auto newest = traces_ ? traces_->newestNs() : 0;
@@ -1148,7 +1188,7 @@ void TraceView::paint(QPainter* painter)
 	// A path no longer plotted forgets how it was drawn.
 	for (auto it = aggregated_.begin(); it != aggregated_.end();)
 		it = plotted.contains(it.key()) ? std::next(it) : aggregated_.erase(it);
-	if (changed || following_ || behindChanged || linesMoved)
+	if (changed || following_ || behindChanged || linesMoved || dotsChanged)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
 }
 } // namespace telemetry::ux

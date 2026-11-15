@@ -582,3 +582,18 @@ the values to one curve and draws it heavier; setting it returns to Auto. New
 invokables: `zoomValues(factor, at)` and `panValues(part)`. `TracePlot` shows
 an "Auto (A)" chip in Manual, a "Fitted to ..." chip while focused, and focuses
 a curve on a click on its chip's name.
+
+## Curve settings and measurement points on the live Plot (LP-1f, November 2026)
+
+Each curve has a look of its own again, kept for its path whether plotted or
+not: `WatchTraces.setAppearance(path, color, k, b)` sets its colour (`""` for
+its palette place, else `#rrggbb`) and the multiplier and offset it is drawn
+with, y = k x reading + b, for display only - the rings, the chips and the
+cursor keep the readings. `setPoints(path, mode)` (0 as the Plot, 1 show, 2
+hide) and the Plot-wide `showPoints` draw a dot at each reading of a raw curve.
+`appearanceChanged` and `appearanceRevision` report a change. `capture()` and
+`restore(map)` carry the plotted curves in order, every look and `showPoints`,
+for a project to keep. `TraceView` gains `curveColor(path)` and `drawnDots`.
+`TracePlot` opens a curve's settings from its chip's colour mark, tags a scaled
+chip ("×100 +0.5"), and has a chip menu and a graph menu (right-click, Menu,
+Shift+F10).
