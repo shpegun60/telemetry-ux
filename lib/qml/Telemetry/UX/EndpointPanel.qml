@@ -300,10 +300,28 @@ Pane {
             return model.index(-1, -1)
         return typeof model.contentRoot === "function" ? model.contentRoot() : model.index(-1, -1)
     }
+    // The table has taken the model's current root index (a reset moves it).
+    // The root row of a Field stays in the table's expanded set; the root
+    // index of a section is that very row, and with it open its rows show twice.
+    function closeRootRow(view, withHeading) {
+        if (withHeading && view && view.rows > 0 && view.isExpanded(0)) {
+            view.noteBusy = true
+            view.collapse(0)
+            view.noteBusy = false
+        }
+    }
+    function viewCaughtUp(view) {
+        if (view.section === "value" || view.section === "request" ? view.headed !== panel.headed : false)
+            return false
+        const wanted = contentRoot(view.model, view.headed)
+        return !wanted || !wanted.valid ? !view.rootIndex.valid
+               : view.rootIndex.valid && view.rootIndex.row === wanted.row && view.rootIndex.model === wanted.model
+    }
     function fetchRoot(model, withHeading) {
         const root = contentRoot(model, withHeading)
-        if (root && root.valid && model.canFetchMore(root))
+        if (root && root.valid && model.canFetchMore(root)) {
             model.fetchMore(root)
+        }
     }
     // The tables are set to their defaults and what the user had opened when
     // the model, the selection or the panel itself arrives.
@@ -314,8 +332,12 @@ Pane {
         id: rootFetch
         interval: 0
         onTriggered: {
-            panel.fetchRoot(panel.provider.values, panel.headed)
-            panel.fetchRoot(panel.provider.responses, true)
+            // Rows fetched under a root the table has not taken yet would be
+            // shown twice once it does.
+            if (typeof valueTree === "undefined" || !valueTree || panel.viewCaughtUp(valueTree))
+                panel.fetchRoot(panel.provider.values, panel.headed)
+            if (typeof responseTree === "undefined" || !responseTree || panel.viewCaughtUp(responseTree))
+                panel.fetchRoot(panel.provider.responses, true)
             if (typeof valueTree !== "undefined" && valueTree && !panel.showMetadata)
                 panel.restoreFolds(valueTree)
             if (typeof responseTree !== "undefined" && responseTree && responseSection.hasRows)
@@ -439,7 +461,6 @@ Pane {
         const known = memory.entries(memoryScope, view.section).filter(function(item) { return item.path === path })
         if (known.length > 0 && known[0].open === false)
             return
-        console.warn("DEFAULT-EXPAND", view.section, view.rows, view.rootIndex.valid)
         view.noteBusy = true
         view.expand(0)
         view.noteBusy = false
@@ -447,15 +468,10 @@ Pane {
     // After a model reset: defaults, then what the user had opened, shallowest
     // first; a path that no longer exists is dropped; last the current row.
     function restoreFolds(view) {
-        console.warn("RESTORE", view.section, view.rows, view.restoreTries)
         const model = view.model
         if (!view || !model)
             return
-        // The table has taken the model's current root index (a reset moves it).
-        const wanted = contentRoot(model, view.headed)
-        const caughtUp = !wanted || !wanted.valid ? !view.rootIndex.valid
-                         : view.rootIndex.valid && view.rootIndex.row === wanted.row && view.rootIndex.model === wanted.model
-        if (!caughtUp || view.rows < model.rowCount(view.rootIndex)) {
+        if (!viewCaughtUp(view) || view.rows < model.rowCount(view.rootIndex)) {
             // A table not shown yet, or not caught up with its model, has no
             // rows to open; try again when it has.
             if (view.restoreTries < 8) {
@@ -638,6 +654,9 @@ Pane {
                     panel.memory.noteCurrent(panel.memoryScope, tree.section, panel.pathOfRow(tree, row))
             } } }
         onRowsChanged: scheduleActive()
+        // The root row of a Field stays in the table's expanded set; moving to
+        // a section (whose root is hidden) with it open shows the rows twice.
+
         onExpanded: function(row, depth) {
             scheduleActive()
             if (noteBusy)
@@ -1165,6 +1184,7 @@ Pane {
                         clip: true; model: panel.provider.values; alternatingRows: false
                         rootIndex: {
                             void panel.valueModelRevision
+                            void panel.valueRowsRevision
                             return panel.contentRoot(panel.provider.values, panel.headed)
                         }
                         activeFocusOnTab: true
