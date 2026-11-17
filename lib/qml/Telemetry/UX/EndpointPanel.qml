@@ -426,7 +426,7 @@ Pane {
         if (view.rows === 0)
             return
         const opens = !view.headed ? rootOpenByDefault && panel.rowHasChildren(view, 0)
-                                    : view.rows === 1 && panel.rowHasChildren(view, 0)
+                                    : view.model.rowCount(view.rootIndex) === 1 && panel.rowHasChildren(view, 0)
         if (!opens || view.isExpanded(0))
             return
         const path = pathOfRow(view, 0)
@@ -443,9 +443,10 @@ Pane {
         const model = view.model
         if (!view || !model)
             return
-        if (view.rows === 0) {
-            // A table not shown yet has no rows to open; try again when it has.
-            if (model.rowCount(view.rootIndex) > 0 && view.restoreTries < 8) {
+        if (view.rows < model.rowCount(view.rootIndex)) {
+            // A table not shown yet, or not caught up with its model, has no
+            // rows to open; try again when it has.
+            if (view.restoreTries < 8) {
                 ++view.restoreTries
                 view.restoreRetry.restart()
             }
