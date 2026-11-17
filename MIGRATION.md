@@ -1489,6 +1489,28 @@ Per editor:
   no step in the UndoHistory (a step merged back to where it started is
   dropped; `tests/dynamic_batch` now holds this); a real change stays one step.
 
+### The Plot's later list: Measure tooltips, warnings, pins, gaps, keys
+
+- Measure: the Δ, Mean, Pk-pk and Std dev titles carry a tooltip saying what the
+  column is. The range caption ends with "· 2 failed reads" when reads failed in
+  the range. A line (`plotMeasureTrimmed`, Theme.warning) says "Readings before
+  12:01:02 are no longer kept; measured from there." when a pinned reference is
+  older than the readings kept. A Measure row takes focus with Tab, and the Menu
+  key (or Shift+F10) opens the chip menu there (Go to minimum / maximum).
+- `TraceView::measureRange()` also returns `failed` and, when the pinned range
+  starts before the oldest reading kept, `keptFromUtcMs`. New invokable
+  `gapCaptionAt(x)` and properties `hoverGap` / `hoverGapX`: a gap band too
+  narrow for its caption says "Watchlist stopped 14:14:41" in a tooltip.
+- The graph menu groups Pin reference here, Pin end here, Remove end, Remove
+  reference (new item `plotMenuUnpinEnd`). "Pin end here" works without a
+  reference: it pins one first, as Shift+click does. The menu is taller by two
+  separators and an item. `plotSaveDialog`'s title is "Save the values from the
+  reference to the end" while both pins are set.
+- A bool or enum chip shows no Δ at all with a reference (it showed "Δ –" where
+  no reading existed). When the reference and end chips would collide, or would
+  not fit beside the axis switch (320 px), one chip, the end's ("Δ 0.4 s ·
+  14:14:17.875"), stands for both.
+
 ### A dropped struct or member is one Batch item, the Field
 
 - `addBatchPaths` maps every path to the Field that holds it, keeps the first
