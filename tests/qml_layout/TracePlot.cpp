@@ -1952,6 +1952,74 @@ int main(int argc, char** argv)
 			settle(300);
 		}
 
+		// TR-2, another run on the same graph: a curve with an anchor of its
+		// own lines up with the run shown on "From run start" and sits at its
+		// own time of day on "Time of day"; the cursor, Measure and the clock
+		// of a reading use that curve's anchor.
+		{
+			ux::WatchTraces overlay;
+			const qint64 startA = 1'000'000'000'000, startB = 500'000'000'000;
+			const qint64 utcA = 1'763'200'000'000, utcB = utcA - 3'600'000; // B an hour earlier
+			overlay.setAnchor({startA, utcA});
+			const QString here = QStringLiteral("run.Speed"), earlier = QStringLiteral("run.Speed · 18:02");
+			std::vector<ux::TraceReading> a, b;
+			for (int i = 0; i <= 10; ++i) {
+				a.push_back({startA + qint64(i) * 1'000'000'000, double(i)});
+				b.push_back({startB + qint64(i) * 1'000'000'000, 100.0 + i});
+			}
+			overlay.setRecordedAnchor(earlier, {startB, utcB});
+			overlay.setRecorded(here, a, false);
+			overlay.setRecorded(earlier, b, false);
+			CHECK(overlay.plot(here).isEmpty() && overlay.plot(earlier).isEmpty());
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &overlay);
+			auto* trendRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			CHECK(trendRoot && trendRoot->setProperty("recording", true));
+			view->setProperty("fromStart", true);
+			settle(300);
+			CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+			settle(300);
+			// From the start: the same times, whatever the runs' clocks.
+			const auto* ra = overlay.readings(here);
+			const auto* rb = overlay.readings(earlier);
+			CHECK(ra && rb && ra->size() == rb->size() && overlay.shiftNs(earlier) == startA - startB && overlay.shiftNs(here) == 0);
+			bool lined = ra && rb && ra->size() == rb->size();
+			for (std::size_t i = 0; lined && i < ra->size(); ++i)
+				lined = (*ra)[i].ns == (*rb)[i].ns;
+			CHECK(lined);
+			QMetaObject::invokeMethod(view, "putCursorAt", Q_ARG(qreal, double(utcA) + 3000.0));
+			QVariant va, vb;
+			CHECK(QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, va), Q_ARG(QString, here)) &&
+			      QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, vb), Q_ARG(QString, earlier)));
+			CHECK(va.toDouble() == 3.0 && vb.toDouble() == 103.0);
+			QVariantMap stats;
+			CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, stats), Q_ARG(QString, earlier)));
+			CHECK(stats.value(QStringLiteral("min")).toDouble() == 100.0 && stats.value(QStringLiteral("max")).toDouble() == 110.0 &&
+			      stats.value(QStringLiteral("minUtcMs")).toDouble() == double(utcA));
+			// The clock of its last reading is its own run's, on either axis.
+			CHECK(overlay.lastReadUtcMs(earlier) == double(utcB) + 10'000.0 && overlay.lastReadUtcMs(here) == double(utcA) + 10'000.0);
+			// Time of day: B sits an hour before A, at its own clock time.
+			view->setProperty("fromStart", false);
+			settle(300);
+			CHECK(overlay.axisFromStart() == false && overlay.shiftNs(earlier) == startA - startB - 3'600'000LL * 1'000'000);
+			CHECK(rb->front().ns == ra->front().ns - 3'600'000LL * 1'000'000 && rb->back().ns == ra->front().ns - 3'600'000LL * 1'000'000 + 10'000'000'000);
+			QMetaObject::invokeMethod(view, "putCursorAt", Q_ARG(qreal, double(utcB) + 4000.0));
+			CHECK(QMetaObject::invokeMethod(view, "valueAt", Q_RETURN_ARG(QVariant, vb), Q_ARG(QString, earlier)));
+			CHECK(vb.toDouble() == 104.0);
+			CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, stats), Q_ARG(QString, earlier)));
+			CHECK(stats.value(QStringLiteral("minUtcMs")).toDouble() == double(utcB));
+			// The axis toggled back moves it back; the curve as given never changed.
+			view->setProperty("fromStart", true);
+			settle(100);
+			CHECK(rb->front().ns == ra->front().ns);
+			// Taking the anchor off puts it back on the shared one.
+			overlay.setRecordedAnchor(earlier, {});
+			CHECK(overlay.shiftNs(earlier) == 0 && rb->front().ns == startB);
+			view->setProperty("fromStart", false);
+			trendRoot->setProperty("recording", false);
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
+			settle(300);
+		}
+
 		// A pinned reference older than the readings kept: Measure says from
 		// when it measures. Last, since a reading 11 minutes on moves "now".
 		{

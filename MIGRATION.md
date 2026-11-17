@@ -1510,3 +1510,22 @@ Per editor:
   no reading existed). When the reference and end chips would collide, or would
   not fit beside the axis switch (320 px), one chip, the end's ("Δ 0.4 s ·
   14:14:17.875"), stands for both.
+
+### A curve of another run has its own anchor (Trend, From another run)
+
+- `WatchTraces` keeps an anchor per recorded path: `setRecordedAnchor(path, {originNs, utcMs})`
+  (a zero anchor takes the path back to the shared one), `recordedAnchor(path)`,
+  `shiftNs(path)`. `setRecorded` and `appendRecorded` still take readings as their run
+  recorded them; `readings(path)` holds them where the axis puts them, so every reader
+  (the cursor, Measure, the reference and end pins, find, the CSV, box zoom, Back, the
+  lanes) sees one time base without knowing about anchors. A path with no anchor of its
+  own is untouched, so the live Plot, where every curve shares the session anchor, behaves
+  exactly as before.
+- `setAxisFromStart(bool)` (default false, the Plot's time of day) says how a curve with an
+  anchor of its own is placed: counted from its own start, lined up with the run shown, or
+  at its own clock time. `TraceView::setFromStart` and `setTraces` set it, so the switch
+  at the bottom right moves such curves with no other wiring. Changing it, or `setAnchor`,
+  moves the stored readings by the difference in one pass.
+- `lastReadUtcMs(path)` gives the time on the curve's own run's clock. The CSV's time of
+  day column and Measure's "at" times of a curve of another run are, on "From run start",
+  the shown run's clock at the aligned moment; on "Time of day" its own.
