@@ -57,6 +57,9 @@ Pane {
     readonly property var selectionInfo: typeof provider.selectionInfo === "object" && provider.selectionInfo ? provider.selectionInfo : ({})
     property int valueModelRevision: 0
     property int responseModelRevision: 0
+    // Moved one turn after rows come or go; the tables' root indexes follow only the resets.
+    property int valueRowsRevision: 0
+    property int responseRowsRevision: 0
     // Changes are off: what the selection would need them for, in words.
     readonly property bool changesOff: typeof provider.allowMutations === "boolean" && !provider.allowMutations
     property string refusalText: !showSelection || !hasSelection || disconnected || !changesOff ? ""
@@ -66,11 +69,13 @@ Pane {
     // A Command or Service that takes nothing: a caption, not an empty table.
     readonly property bool noArguments: {
         void valueModelRevision
+        void valueRowsRevision
         return showSelection && hasSelection && (provider.commandSelected || provider.serviceSelected) && !provider.busy
             && !!provider.values && typeof provider.values.rowCount === "function" && provider.values.rowCount() === 0
     }
     readonly property bool showMetadata: {
         void valueModelRevision
+        void valueRowsRevision
         if (!showSelection || disconnected || !hasSelection || selectedCategory !== 1 || provider.editing ||
             typeof provider.definitions !== "object" || !provider.definitions ||
             typeof provider.definitionRootIndex === "undefined")
@@ -110,6 +115,7 @@ Pane {
     // (detailsStatus) is taken at its word; otherwise it is made here.
     readonly property var statusInfo: {
         void valueModelRevision
+        void valueRowsRevision
         if (typeof provider.detailsStatus === "object" && provider.detailsStatus
             && typeof provider.detailsStatus.text === "string")
             return provider.detailsStatus
@@ -1275,6 +1281,7 @@ Pane {
                 visible: panel.showResponse
                 readonly property bool hasRows: {
                     void panel.responseModelRevision
+                    void panel.responseRowsRevision
                     return !!panel.provider.responses && typeof panel.provider.responses.rowCount === "function"
                         && panel.provider.responses.rowCount() > 0
                 }
@@ -1409,8 +1416,8 @@ Pane {
         color: Theme.textMuted
         text: panel.categoryFilter === 1 ? qsTr("Select a Field") : panel.categoryFilter === 2 ? qsTr("Select a Command") : qsTr("Select a Service")
     }
-    Timer { id: valueRevision; interval: 0; onTriggered: ++panel.valueModelRevision }
-    Timer { id: responseRevision; interval: 0; onTriggered: ++panel.responseModelRevision }
+    Timer { id: valueRevision; interval: 0; onTriggered: ++panel.valueRowsRevision }
+    Timer { id: responseRevision; interval: 0; onTriggered: ++panel.responseRowsRevision }
     Connections {
         target: panel.provider.values
         function onModelReset() {
