@@ -239,6 +239,9 @@ public:
 	// The row at a dotted path (see PathRole), fetching the batches of members
 	// it lies in; invalid when the path no longer exists.
 	Q_INVOKABLE QModelIndex indexOfPath(const QString& path);
+	// The rows are a section's own (a request's or a response's), whose root is
+	// the section's heading and not a row; false for a Field's value.
+	Q_INVOKABLE bool sectioned() const;
 	// What PathRole holds; empty for an invalid or stale index.
 	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
 	[[nodiscard]] int deepest() const noexcept;

@@ -292,7 +292,14 @@ Pane {
     // One root per table: a section heading (Arguments, Request, Response) or
     // the Field's own root row, never both. Under a heading the table shows the
     // struct's members; a Field keeps its root row (spec A).
-    readonly property bool headed: provider.commandSelected === true || provider.serviceSelected === true
+    readonly property bool headed: {
+        // The model says what it holds at the moment it is reset; the
+        // provider's selection flags may follow a moment later.
+        void valueModelRevision
+        const values = provider.values
+        return values && typeof values.sectioned === "function" ? values.sectioned()
+            : provider.commandSelected === true || provider.serviceSelected === true
+    }
     function contentRoot(model, withHeading) {
         if (!model || typeof model.index !== "function")
             return undefined

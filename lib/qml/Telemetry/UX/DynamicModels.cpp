@@ -1762,6 +1762,11 @@ QString ValueModel::pathOf(const QModelIndex& index) const
 	return row ? Impl::pathKey(row->valuePath) + (row->valueRange ? row->name : QString{}) : QString{};
 }
 
+bool ValueModel::sectioned() const
+{
+	return impl_->inspector.requestEditor() || impl_->inspector.response;
+}
+
 int ValueModel::deepest() const noexcept
 {
 	return impl_->deepestDepth;
