@@ -1578,3 +1578,15 @@ Per editor:
 - `lastReadUtcMs(path)` gives the time on the curve's own run's clock. The CSV's time of
   day column and Measure's "at" times of a curve of another run are, on "From run start",
   the shown run's clock at the aligned moment; on "Time of day" its own.
+
+## Trend: a data update never undoes the user's time zoom
+
+- No API change. `TracePlot`/`TraceView` state for the time axis (`showAll`, `spanSeconds`,
+  the held right edge) is changed only by the user: wheel, drag, box, keys, presets, Back,
+  Follow, or a host choosing another run (`choosePreset`). `WatchTraces::setRecorded`,
+  `appendRecorded` and `setRecordedAnchor` never touch it.
+- qml_layout now holds this: after a wheel zoom from All, on a recording and on an overlaid
+  curve an hour away, setting and appending readings again leaves the span and right edge
+  as they were, and a step sideways still pans.
+- Known, left to the gesture redesign: at All (or a span longer than what is kept) the
+  right-edge clamp in `TraceView::hold` leaves a sideways drag nowhere to go.
