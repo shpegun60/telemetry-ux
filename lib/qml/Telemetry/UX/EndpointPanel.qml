@@ -577,7 +577,10 @@ Pane {
             const index = selectionModel ? selectionModel.currentIndex : undefined
             return index && index.valid ? rowAtIndex(index) : -1
         }
-        function scheduleActive() { Qt.callLater(function() { if (tree) tree.updateActive() }) }
+        // Timers, not Qt.callLater: the table may be gone by the next turn.
+        Timer { id: activeTimer; interval: 0; onTriggered: tree.updateActive() }
+        Timer { id: stepTimer; interval: 0; onTriggered: tree.updateStep() }
+        function scheduleActive() { activeTimer.restart() }
         function updateActive() {
             const row = currentIndexRow()
             if (row < 0 || row >= rows) {
@@ -607,13 +610,13 @@ Pane {
         onWidthChanged: updateStep()
         onDeepestChanged: updateStep()
         Component.onCompleted: updateStep()
-        Connections { target: Type; function onBodyChanged() { Qt.callLater(function() { if (tree) tree.updateStep() }) } }
+        Connections { target: Type; function onBodyChanged() { stepTimer.restart() } }
         // The columns settle as values are measured: valueSeen and typeSeen only grow.
         Connections {
             target: panel
-            function onColumnEpochChanged() { Qt.callLater(function() { if (tree) tree.updateStep() }) }
-            function onValueSeenChanged() { Qt.callLater(function() { if (tree) tree.updateStep() }) }
-            function onTypeSeenChanged() { Qt.callLater(function() { if (tree) tree.updateStep() }) }
+            function onColumnEpochChanged() { stepTimer.restart() }
+            function onValueSeenChanged() { stepTimer.restart() }
+            function onTypeSeenChanged() { stepTimer.restart() }
         }
         Connections { target: tree.selectionModel; function onCurrentChanged() { tree.scheduleActive()
             if (!tree.noteBusy && tree.section.length > 0) {
