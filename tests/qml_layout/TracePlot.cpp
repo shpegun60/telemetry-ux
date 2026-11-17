@@ -37,13 +37,13 @@ namespace ux = telemetry::ux;
 
 namespace {
 int checks = 0, warnings = 0;
-void check(bool condition, const char* expression)
+void check(bool condition, const char* expression, int line)
 {
 	++checks;
 	if (!condition)
-		throw std::runtime_error(expression);
+		throw std::runtime_error(std::string(expression) + " (line " + std::to_string(line) + ")");
 }
-#define CHECK(x) check(bool(x), #x)
+#define CHECK(x) check(bool(x), #x, __LINE__)
 
 QQuickItem* named(QQuickItem* root, const char* name)
 {
@@ -493,8 +493,12 @@ int main(int argc, char** argv)
 		settle(150);
 		CHECK(shown(content, "plotCursorText")->property("text").toString().startsWith(QStringLiteral("Δ −")));
 		const auto deltas = all(content, "plotChipDelta");
-		CHECK(deltas.size() == 3 && deltas[2]->property("text").toString().startsWith(QStringLiteral("Δ ")));
+		CHECK(deltas.size() == 2 && deltas[1]->property("text").toString().startsWith(QStringLiteral("Δ ")));
 		shot(window, argc, argv, QStringLiteral("trace-plot-reference-760"));
+		// A state never shows a difference, with a reading at the pointer or without.
+		QTest::mouseMove(window, pointAt(0.05));
+		settle(150);
+		CHECK(all(content, "plotChipDelta").size() == 2);
 		QTest::keyClick(window, Qt::Key_Escape);
 		settle();
 		CHECK(!view->property("referenceShown").toBool() && all(content, "plotChipDelta").isEmpty());
@@ -730,7 +734,10 @@ int main(int argc, char** argv)
 			QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
 			                  view->mapToScene(QPointF(graph.left() + graph.width() * 0.3, graph.center().y())).toPoint());
 			settle(300);
-			click(window, shown(content, "plotShowPoints"));
+			// The menu is taller than this 360 px window: chosen as a key would.
+			QMetaObject::invokeMethod(shown(content, "plotShowPoints"), "triggered");
+			if (auto* menu = window->findChild<QObject*>(QStringLiteral("plotGraphMenu")))
+				QMetaObject::invokeMethod(menu, "close");
 			settle(300);
 			CHECK(traces.showPoints() && view->property("drawnDots").toInt() > 0);
 			CHECK(history.undoText() == QStringLiteral("Show measurement points"));
@@ -791,6 +798,28 @@ int main(int argc, char** argv)
 			CHECK(traces.pauses().back().toNs > traces.pauses().back().fromNs + 500'000'000);
 			CHECK(view->property("drawnGaps").toInt() == 1);
 			shot(window, argc, argv, QStringLiteral("trace-plot-gap-760"));
+			// The band is too narrow for its caption: hovering it says it.
+			{
+				const auto area = view->property("plotArea").toRectF();
+				double hoverX = -1;
+				QString bandWords;
+				for (double x = area.left(); x < area.right() && hoverX < 0; x += 1) {
+					QString words;
+					CHECK(QMetaObject::invokeMethod(view, "gapCaptionAt", Q_RETURN_ARG(QString, words), Q_ARG(qreal, x)));
+					if (!words.isEmpty()) {
+						hoverX = x;
+						bandWords = words;
+					}
+				}
+				CHECK(hoverX >= 0);
+				const auto at = view->mapToScene(QPointF(hoverX + 1, area.center().y())).toPoint();
+				QTest::mouseMove(window, at + QPoint(-6, 0));
+				QTest::mouseMove(window, at);
+				settle(600);
+				CHECK(withText(content, bandWords));
+				QTest::mouseMove(window, QPoint(4, 4));
+				settle(100);
+			}
 			// Delete on a chip's settings button takes that curve off.
 			auto* settingsButton = all(content, "plotChipSettings").first();
 			settingsButton->forceActiveFocus(Qt::TabFocusReason);
@@ -1389,9 +1418,10 @@ int main(int argc, char** argv)
 			// while the cursor sits on the end.
 			const QRegularExpression endWords(QStringLiteral("^Δ \\d+\\.\\d{3} s · \\d\\d:\\d\\d:\\d\\d\\.\\d{3}$"));
 			auto* endChip = shown(content, "plotEndChip");
-			auto* referenceChip = shown(content, "plotReferenceChip");
+			// The reference's chip beside it, or merged into it when they crowd.
+			auto* referenceChip = named(content, "plotReferenceChip");
 			CHECK(endWords.match(shown(content, "plotEndText")->property("text").toString()).hasMatch() &&
-			      (endChip->x() >= referenceChip->x() + referenceChip->width() + 3.5 ||
+			      (!referenceChip || endChip->x() >= referenceChip->x() + referenceChip->width() + 3.5 ||
 			       endChip->x() + endChip->width() <= referenceChip->x() - 3.5) &&
 			      view->property("cursorUtcMs").toDouble() == view->property("endUtcMs").toDouble() && !named(content, "plotCursorChip"));
 			CHECK(shown(content, "plotMeasureTitle_now")->property("text").toString() == QStringLiteral("At cursor"));
@@ -1496,6 +1526,127 @@ int main(int argc, char** argv)
 			shot(window, argc, argv, QStringLiteral("trace-plot-measure-320"));
 			window->setWidth(760);
 			settle(300);
+			// The designer's later list for the Measure table and the pins.
+			// Column titles say what they are on hover.
+			{
+				const auto hoverTip = [&](QQuickItem* target, const QString& prefix) {
+					const auto centre = target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint();
+					QTest::mouseMove(window, centre + QPoint(-3, 0));
+					QTest::mouseMove(window, centre);
+					settle(900);
+					const bool found = withText(content, prefix) != nullptr;
+					QTest::mouseMove(window, QPoint(4, 4));
+					settle(100);
+					return found;
+				};
+				CHECK(hoverTip(shown(content, "plotMeasureTitle_mean"), QStringLiteral("Mean of the ")));
+				CHECK(hoverTip(shown(content, "plotMeasureTitle_pkpk"), QStringLiteral("Peak to peak: Max − Min")));
+				CHECK(hoverTip(shown(content, "plotMeasureTitle_std"), QStringLiteral("Spread about the mean: the AC RMS of the readings")));
+				CHECK(hoverTip(shown(content, "plotMeasureTitle_delta"), QStringLiteral("Change from the reference")));
+			}
+			// Failed reads go in the range caption.
+			{
+				QVariantMap range;
+				CHECK(QMetaObject::invokeMethod(view, "measureRange", Q_RETURN_ARG(QVariantMap, range)));
+				const int failedBefore = range.value("failed").toInt();
+				const auto anchor = traces.anchor();
+				for (int part = 1; part <= 2; ++part) {
+					const double utc = range.value("fromUtcMs").toDouble() +
+					                   (range.value("toUtcMs").toDouble() - range.value("fromUtcMs").toDouble()) * part / 3;
+					traces.append(frame(anchor.monotonicNs + qint64((utc - double(anchor.utcMs)) * 1e6),
+					                    {{1, 0, bits(S::F32, 4, floatBits(9.0f))}}, false));
+				}
+				settle(300);
+				CHECK(shown(content, "plotMeasureRange")->property("text").toString()
+				          .endsWith(QStringLiteral(" · %1 failed reads").arg(failedBefore + 2)));
+			}
+			// The graph's menu: the pins together, and Pin end without a reference.
+			{
+				const auto area = view->property("plotArea").toRectF();
+				const auto openMenu = [&](double part) {
+					QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+					                  view->mapToScene(QPointF(area.left() + area.width() * part, area.center().y())).toPoint());
+					settle(300);
+				};
+				const auto closeMenu = [&]() {
+					if (auto* menu = window->findChild<QObject*>(QStringLiteral("plotGraphMenu")))
+						QMetaObject::invokeMethod(menu, "close");
+					settle(150);
+				};
+				const auto menuY = [&](const char* name) {
+					auto* item = shown(content, name);
+					return item->mapToScene(QPointF(0, 0)).y();
+				};
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle(100);
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle(100);
+				CHECK(!view->property("referenceShown").toBool() && !view->property("endShown").toBool());
+				openMenu(0.3);
+				CHECK(menuY("plotMenuPin") < menuY("plotMenuPinEnd") && menuY("plotMenuPinEnd") < menuY("plotMenuUnpinEnd") &&
+				      menuY("plotMenuUnpinEnd") < menuY("plotMenuUnpin") && menuY("plotMenuUnpin") < menuY("plotMenuMeasure"));
+				CHECK(shown(content, "plotMenuPinEnd")->property("enabled").toBool() &&
+				      !shown(content, "plotMenuUnpinEnd")->property("enabled").toBool() &&
+				      !shown(content, "plotMenuUnpin")->property("enabled").toBool());
+				// No reference: Pin end pins one first.
+				QMetaObject::invokeMethod(shown(content, "plotMenuPinEnd"), "triggered");
+				closeMenu();
+				CHECK(view->property("referenceShown").toBool() && !view->property("endShown").toBool());
+				auto* saveDialog = window->findChild<QObject*>(QStringLiteral("plotSaveDialog"));
+				CHECK(saveDialog && saveDialog->property("title").toString() == QStringLiteral("Save the values in view"));
+				openMenu(0.6);
+				QMetaObject::invokeMethod(shown(content, "plotMenuPinEnd"), "triggered");
+				closeMenu();
+				CHECK(view->property("endShown").toBool());
+				// The save dialog follows the range.
+				CHECK(saveDialog->property("title").toString() == QStringLiteral("Save the values from the reference to the end"));
+				openMenu(0.6);
+				CHECK(shown(content, "plotMenuUnpinEnd")->property("enabled").toBool());
+				QMetaObject::invokeMethod(shown(content, "plotMenuUnpinEnd"), "triggered");
+				closeMenu();
+				CHECK(!view->property("endShown").toBool() && view->property("referenceShown").toBool() &&
+				      saveDialog->property("title").toString() == QStringLiteral("Save the values in view"));
+				openMenu(0.6);
+				QMetaObject::invokeMethod(shown(content, "plotMenuPinEnd"), "triggered");
+				closeMenu();
+				CHECK(view->property("endShown").toBool());
+			}
+			// The end's chip at 320 px: never over the reference's chip or the
+			// axis switch; merged into one chip when they would collide.
+			{
+				const auto apart = [](QQuickItem* a, QQuickItem* b) {
+					return a->x() + a->width() <= b->x() || b->x() + b->width() <= a->x();
+				};
+				const QRegularExpression endWords(QStringLiteral("^Δ \\d+\\.\\d{3} s · \\d\\d:\\d\\d:\\d\\d\\.\\d{3}$"));
+				for (const int width : {760, 320}) {
+					window->setWidth(width);
+					settle(400);
+					auto* endChip = shown(content, "plotEndChip");
+					auto* axis = shown(content, "plotTimeTitle");
+					auto* referenceChip = named(content, "plotReferenceChip");
+					CHECK(apart(endChip, axis) && (!referenceChip || apart(endChip, referenceChip)) &&
+					      (!referenceChip || apart(referenceChip, axis)) && endChip->x() >= 0 &&
+					      endChip->x() + endChip->width() <= endChip->parentItem()->width());
+					CHECK(endWords.match(shown(content, "plotEndText")->property("text").toString()).hasMatch());
+					if (width == 320)
+						CHECK(!referenceChip);
+				}
+				window->setWidth(760);
+				settle(400);
+			}
+			// The Menu key on a focused Measure row opens the chip menu.
+			{
+				auto* row = rowOf(voltagePath);
+				row->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_Menu);
+				settle(300);
+				auto* chipMenu = window->findChild<QObject*>(QStringLiteral("plotChipMenu"));
+				CHECK(chipMenu && chipMenu->property("visible").toBool() && chipMenu->property("path").toString() == voltagePath);
+				CHECK(shown(content, "plotChipMinimum") && shown(content, "plotChipMaximum"));
+				QMetaObject::invokeMethod(chipMenu, "close");
+				settle(150);
+			}
 			// Many curves: the rows stop at 40 % of the Plot's height and
 			// scroll, and the graph keeps its room.
 			for (int i = 0; i < 12; ++i)
@@ -1611,7 +1762,7 @@ int main(int argc, char** argv)
 		                  removes[0]->mapToScene(QPointF(removes[0]->width() / 2, removes[0]->height() / 2)).toPoint());
 		settle();
 		CHECK(traces.plotted() == QStringList({QStringLiteral("device.Ready"), QStringLiteral("device.Config.Gain")}) &&
-		      traces.count(QStringLiteral("device.Voltage")) == 65);
+		      traces.count(QStringLiteral("device.Voltage")) == 67);
 		// Plotted again, it keeps its colour; a colour another curve took
 		// meanwhile is never shared.
 		CHECK(traces.plot(QStringLiteral("device.Voltage")).isEmpty() && traces.colorIndex(QStringLiteral("device.Voltage")) == 0);
@@ -1629,7 +1780,7 @@ int main(int argc, char** argv)
 		// A value that leaves the Watchlist breaks its line there; its
 		// readings stay.
 		traces.setPaths(2, {{2, QStringLiteral("device.Ready")}, {gain, QStringLiteral("device.Config.Gain")}});
-		CHECK(traces.count(QStringLiteral("device.Voltage")) == 66 && !traces.latest(QStringLiteral("device.Voltage")).isValid());
+		CHECK(traces.count(QStringLiteral("device.Voltage")) == 68 && !traces.latest(QStringLiteral("device.Voltage")).isValid());
 		CHECK(!traces.watched(QStringLiteral("device.Voltage")) && traces.watched(QStringLiteral("device.Ready")) &&
 		      !std::isnan(traces.lastReadUtcMs(QStringLiteral("device.Voltage"))));
 		settle(600);
@@ -1799,6 +1950,42 @@ int main(int argc, char** argv)
 			view->setProperty("fromStart", false);
 			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
 			settle(300);
+		}
+
+		// A pinned reference older than the readings kept: Measure says from
+		// when it measures. Last, since a reading 11 minutes on moves "now".
+		{
+			auto* plotRoot = window->findChild<QObject*>(QStringLiteral("tracePlot"));
+			const QString voltagePath = QStringLiteral("device.Voltage");
+			for (const auto& path : traces.plotted())
+				if (path != voltagePath)
+					traces.unplot(path);
+			if (!traces.isPlotted(voltagePath))
+				CHECK(traces.plot(voltagePath).isEmpty());
+			CHECK(view->setProperty("following", true));
+			settle(300);
+			CHECK(view->setProperty("following", false));
+			QMetaObject::invokeMethod(view, "hideCursor");
+			settle(200);
+			QMetaObject::invokeMethod(view, "stepCursor", Q_ARG(int, 0));
+			CHECK(view->property("cursorShown").toBool());
+			for (int i = 0; i < 5; ++i)
+				QMetaObject::invokeMethod(view, "stepCursor", Q_ARG(int, -1));
+			QMetaObject::invokeMethod(view, "pinReference");
+			CHECK(view->property("referenceShown").toBool());
+			for (int i = 0; i < 3; ++i)
+				QMetaObject::invokeMethod(view, "stepCursor", Q_ARG(int, 1));
+			QMetaObject::invokeMethod(view, "pinEnd");
+			CHECK(plotRoot->setProperty("measuring", true));
+			settle(300);
+			CHECK(view->property("endShown").toBool() && !named(content, "plotMeasureTrimmed"));
+			// The Watchlist reads Voltage again, so a frame of it is kept.
+			traces.setPaths(7, {{1, voltagePath}});
+			traces.append(frame(ux::WatchTraces::nowNs() + 660'000'000'000, {{1, 0, bits(S::F32, 4, floatBits(3.0f))}}));
+			settle(300);
+			const auto warning = shown(content, "plotMeasureTrimmed")->property("text").toString();
+			CHECK(warning.startsWith(QStringLiteral("Readings before ")) &&
+			      warning.endsWith(QStringLiteral(" are no longer kept; measured from there.")));
 		}
 
 		// At most 65,536 readings, and ten minutes, a value.

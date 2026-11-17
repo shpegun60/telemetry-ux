@@ -165,7 +165,8 @@ FocusScope {
     FileDialog {
         id: saveDialog
         objectName: "plotSaveDialog"
-        title: qsTr("Save the values in view")
+        title: view.referenceShown && view.endShown ? qsTr("Save the values from the reference to the end")
+                                                    : qsTr("Save the values in view")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("Comma-separated values (*.csv)")]
         defaultSuffix: "csv"
@@ -794,6 +795,20 @@ FocusScope {
                           + plot.clockText(measureTable.range.fromUtcMs) + " – " + plot.clockText(measureTable.range.toUtcMs) + " · "
                           + plot.spanText(measureTable.range.seconds * 1000) + " · "
                           + qsTr("%L1 readings").arg(measureTable.range.readings)
+                          + (measureTable.range.failed > 0 ? " · " + (measureTable.range.failed === 1 ? qsTr("1 failed read")
+                                                                                         : qsTr("%L1 failed reads").arg(measureTable.range.failed)) : "")
+                }
+                // The reference is older than the readings kept.
+                Label {
+                    objectName: "plotMeasureTrimmed"
+                    Layout.fillWidth: true
+                    visible: measureTable.range.keptFromUtcMs !== undefined
+                    textFormat: Text.PlainText
+                    wrapMode: Text.WordWrap
+                    color: Theme.warning
+                    font.pointSize: Type.caption
+                    text: visible ? qsTr("Readings before %1 are no longer kept; measured from there.")
+                                      .arg(plot.clockText(measureTable.range.keptFromUtcMs)) : ""
                 }
                 // The column titles.
                 RowLayout {
@@ -811,6 +826,27 @@ FocusScope {
                             text: measureTable.title(modelData)
                             color: Theme.textSecondary
                             font.pointSize: Type.caption
+                            readonly property string tip: {
+                                switch (modelData) {
+                                case "mean":
+                                    return qsTr("Mean of the %L1 readings").arg(measureTable.range.readings)
+                                case "pkpk":
+                                    return qsTr("Peak to peak: Max − Min")
+                                case "std":
+                                    return qsTr("Spread about the mean: the AC RMS of the readings")
+                                case "delta":
+                                    return qsTr("Change from the reference")
+                                default:
+                                    return ""
+                                }
+                            }
+                            HoverHandler { id: titleHover }
+                            PlainToolTip {
+                                objectName: "plotMeasureTitleTip"
+                                visible: titleHover.hovered && parent.tip.length > 0
+                                delay: 500
+                                text: parent.tip
+                            }
                         }
                     }
                     Item {
@@ -839,6 +875,17 @@ FocusScope {
                     }
                     delegate: Rectangle {
                         id: measureRow
+                        activeFocusOnTab: true
+                        border.width: activeFocus ? 2 : 0
+                        border.color: Theme.focusRing
+                        // The chip menu from the keyboard: Go to minimum / maximum.
+                        Keys.onPressed: (event) => {
+                            if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                                chipMenu.path = measureRow.path
+                                chipMenu.popup(measureRow, Type.chipHeight, measureRow.height)
+                                event.accepted = true
+                            }
+                        }
                         required property string modelData
                         required property int index
                         objectName: "plotMeasureRow"
@@ -1120,7 +1167,7 @@ FocusScope {
                             // Its difference from the reference, once one is pinned.
                             readonly property string delta: {
                                 // A state has no difference: a number does.
-                                if (!view.referenceShown || words.length > 0)
+                                if (!view.referenceShown || words.length > 0 || (plot.traces && plot.traces.categorical(path)))
                                     return ""
                                 const reference = view.referenceValue(path)
                                 return reference === undefined || current === undefined ? "Δ –"
@@ -1365,6 +1412,15 @@ FocusScope {
                     border.color: Theme.focusRing
                     Accessible.ignored: true
                 }
+                // A gap band too narrow for its caption says it on hover.
+                PlainToolTip {
+                    objectName: "plotGapTip"
+                    visible: view.hoverGap.length > 0
+                    delay: 300
+                    x: view.hoverGapX + Type.padding
+                    y: view.plotArea.y + Type.chipHeight
+                    text: view.hoverGap
+                }
                 // The graph's menu: right-click.
                 TapHandler {
                     acceptedButtons: Qt.RightButton
@@ -1429,7 +1485,8 @@ FocusScope {
                 Rectangle {
                     id: referenceChip
                     objectName: "plotReferenceChip"
-                    visible: view.visible && view.referenceShown && plot.onPlot(view.referenceX)
+                    // Merged into the end's chip while the two would collide.
+                    visible: view.visible && view.referenceShown && plot.onPlot(view.referenceX) && !endChip.merged
                     width: referenceText.implicitWidth + 2 * Type.padding
                     height: Type.chipHeight
                     // Under its line, beside the axis switch if it would cover it.
@@ -1459,7 +1516,16 @@ FocusScope {
                     visible: view.visible && view.endShown && plot.onPlot(view.endX)
                     width: endText.implicitWidth + 2 * Type.padding
                     height: Type.chipHeight
-                    x: plot.chipX(view.endX, width, parent.width, [referenceChip, timeAxis])
+                    // Both pins crowd the axis: the lines are closer than their
+                    // two chips are wide, or the two chips and the axis switch
+                    // do not fit side by side. Then this chip stands for both
+                    // ("Δ 0.4 s · 14:14:17.875") and the reference's is not shown.
+                    readonly property bool merged: view.visible && view.referenceShown && view.endShown
+                        && plot.onPlot(view.referenceX) && plot.onPlot(view.endX)
+                        && (Math.abs(view.endX - view.referenceX) < (referenceChip.width + width) / 2 + 8
+                            || referenceChip.width + width + timeAxis.width + 3 * 4 + Type.tight > parent.width)
+                    x: merged ? plot.chipX((view.endX + view.referenceX) / 2, width, parent.width, [timeAxis])
+                              : plot.chipX(view.endX, width, parent.width, [referenceChip, timeAxis])
                     y: view.height - height
                     radius: Type.radius
                     color: Theme.infoContainer
@@ -1719,6 +1785,7 @@ FocusScope {
             enabled: view.canGoBack
             onTriggered: view.goBack()
         }
+        MenuSeparator {}
         MenuItem {
             objectName: "plotMenuPin"
             text: qsTr("Pin reference here") + "\t" + qsTr("Enter")
@@ -1734,13 +1801,29 @@ FocusScope {
         MenuItem {
             objectName: "plotMenuPinEnd"
             text: qsTr("Pin end here") + "\t" + qsTr("Shift+Enter")
-            enabled: view.referenceShown
+            // Without a reference it pins one first, as Shift and a click do.
+            enabled: plot.plotted.length > 0
             onTriggered: {
                 if (graphMenu.at >= view.plotArea.left)
                     view.setCursorAt(graphMenu.at)
+                else if (!view.cursorShown)
+                    view.stepCursor(0)
                 view.pinEnd()
             }
         }
+        MenuItem {
+            objectName: "plotMenuUnpinEnd"
+            text: qsTr("Remove end")
+            enabled: view.endShown
+            onTriggered: view.clearEnd()
+        }
+        MenuItem {
+            objectName: "plotMenuUnpin"
+            text: qsTr("Remove reference") + "\t" + qsTr("Esc")
+            enabled: view.referenceShown
+            onTriggered: view.clearReference()
+        }
+        MenuSeparator {}
         MenuItem {
             objectName: "plotMenuMeasure"
             text: qsTr("Measure") + "\t" + qsTr("M")
@@ -1762,12 +1845,6 @@ FocusScope {
                 plot.toggleStack()
                 checked = Qt.binding(() => plot.traces !== null && plot.traces.stacked)
             }
-        }
-        MenuItem {
-            objectName: "plotMenuUnpin"
-            text: qsTr("Remove reference") + "\t" + qsTr("Esc")
-            enabled: view.referenceShown
-            onTriggered: view.clearReference()
         }
         MenuSeparator {}
         MenuItem {
