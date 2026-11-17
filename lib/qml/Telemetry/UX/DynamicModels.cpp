@@ -4,6 +4,7 @@
  * @author Ruslan Kovtun (shpegun60), codexAi
  * SPDX-License-Identifier: MIT
  */
+#include <QtCore/QRegularExpression>
 #include "DynamicModels.hpp"
 #include "EndpointPreviews.hpp"
 #include "SchemaText.hpp"
@@ -103,6 +104,11 @@ struct Row {
 	QString editorKind = QStringLiteral("text");
 	QVariantList valuePath;
 	std::uint32_t endpointId = 0, totalChildren = 0;
+	// A value array's element count (its children are ranges of 128 when it
+	// is longer); and a range row, whose children are the elements
+	// [rangeFirst, rangeFirst + rangeCount) of its array.
+	std::uint32_t elements = 0;
+	bool valueRange = false;
 	TypeId typeId = 0, responseTypeId = 0;
 	std::uint32_t wireBytes = 0, responseWireBytes = 0;
 	std::uint32_t previewFieldId = 0, previewOffset = 0, previewFieldBytes = 0;
@@ -449,7 +455,12 @@ std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& ha
 	                ? QLatin1Char('[') + integerText(info.value.index) + QLatin1Char(']')
 	                : text(info.value.name);
 	row->totalChildren = info.value.children;
+	row->elements = info.value.children;
 	row->aggregate = info.value.kind == Kind::Struct || info.value.kind == Kind::Array;
+	// An array longer than a batch shows ranges of 128, each fetched when
+	// opened, as a debugger's variables view does.
+	if (info.value.kind == Kind::Array && info.value.children > 128)
+		row->totalChildren = (info.value.children + 127) / 128;
 	if (row->aggregate) {
 		row->type =
 		    info.value.kind == Kind::Struct ? QStringLiteral("struct") : QStringLiteral("array");
@@ -1204,6 +1215,7 @@ struct ValueModel::Impl {
 	detail::ScalarEditorMetadata metadata;
 	bool offer = false, stale = false;
 	QString staleNote;
+	int deepestDepth = 0;
 	// The values sent last, by path ("" for a scalar root, "factor", "a.b[2]").
 	QHash<QString, QString> baseline;
 
@@ -1216,9 +1228,16 @@ struct ValueModel::Impl {
 		return parts.join(QLatin1Char('.')).replace(QStringLiteral(".["), QStringLiteral("["));
 	}
 
-	// A draft's value against the value read, or a value against the one sent.
+	// A draft's value against the value read, or a value against the one sent;
+	// a branch is unsent when any loaded value under it is.
 	bool unsent(const Row& row) const
 	{
+		if (row.aggregate) {
+			for (const auto& child : row.children)
+				if (unsent(*child))
+					return true;
+			return false;
+		}
 		if (!row.scalar)
 			return false;
 		if (!baseline.isEmpty()) {
@@ -1247,6 +1266,77 @@ struct ValueModel::Impl {
 			return false;
 		const auto snapshot = inspector.snapshotInfo();
 		return snapshot.ready && snapshot.admission == admission && snapshot.revision == revision;
+	}
+
+	// How far below a node the deepest value lies: every member of a struct,
+	// the first element of an array (the rest have its shape).
+	int depthBelow(const ins::NodeHandle& handle, int guard) const
+	{
+		if (guard <= 0)
+			return 0;
+		const auto info = inspector.info(handle);
+		if (!info || info.value.children == 0 ||
+		    (info.value.kind != Kind::Struct && info.value.kind != Kind::Array))
+			return 0;
+		const std::uint32_t count = info.value.kind == Kind::Array ? 1 : info.value.children;
+		int deepest = info.value.kind == Kind::Array && info.value.children > 128 ? 1 : 0;
+		for (std::uint32_t at = 0; at < count; ++at) {
+			const auto child = inspector.child(handle, at);
+			if (child)
+				deepest = (std::max)(deepest, depthBelow(child.value, guard - 1) + 1);
+		}
+		return deepest;
+	}
+
+	// A scalar as a summary shows it: an enum by its name only.
+	QString leafSummary(const ins::NodeHandle& handle, const ins::NodeInfo& info) const
+	{
+		const auto scalar = inspector.scalar(handle);
+		if (!scalar)
+			return QStringLiteral("?");
+		if (info.kind == Kind::Enum)
+			return scalar.value.enumKnown && !scalar.value.enumName.empty() ? text(scalar.value.enumName)
+			                                                              : scalarNumberText(scalar.value);
+		return scalarText(scalar.value);
+	}
+
+	QString summaryKind(const Row& row) const
+	{
+		if (!row.aggregate)
+			return {};
+		if (row.type == QStringLiteral("struct"))
+			return QStringLiteral("struct");
+		if (row.elements == 0)
+			return QStringLiteral("array");
+		const auto first = inspector.child(row.handle, row.valueRange ? row.rangeFirst : 0);
+		if (!first)
+			return QStringLiteral("array");
+		const auto info = inspector.info(first.value);
+		return info && (info.value.kind == Kind::Struct || info.value.kind == Kind::Array)
+		           ? QStringLiteral("arrayOfAggregates") : QStringLiteral("array");
+	}
+
+	QStringList summaryParts(const Row& row) const
+	{
+		QStringList parts;
+		const auto kind = summaryKind(row);
+		if (kind.isEmpty() || kind == QStringLiteral("arrayOfAggregates"))
+			return parts;
+		const auto count = (std::min)(row.elements, std::uint32_t{8});
+		const auto base = row.valueRange ? row.rangeFirst : 0;
+		for (std::uint32_t at = 0; at < count; ++at) {
+			const auto child = inspector.child(row.handle, base + at);
+			if (!child)
+				break;
+			const auto info = inspector.info(child.value);
+			if (!info)
+				break;
+			const auto shown = info.value.kind == Kind::Struct ? QStringLiteral("{…}")
+			                   : info.value.kind == Kind::Array ? QStringLiteral("[…]")
+			                                                    : leafSummary(child.value, info.value);
+			parts << (kind == QStringLiteral("struct") ? text(info.value.name) + QLatin1Char(' ') + shown : shown);
+		}
+		return parts;
 	}
 
 	bool metadataCurrent() const
@@ -1287,6 +1377,10 @@ void ValueModel::clear()
 	endResetModel();
 	if (wasStale)
 		Q_EMIT staleChanged();
+	if (impl_->deepestDepth != 0) {
+		impl_->deepestDepth = 0;
+		Q_EMIT deepestChanged();
+	}
 }
 
 bool ValueModel::changing() const noexcept
@@ -1401,6 +1495,13 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 	endResetModel();
 	if (wasStale)
 		Q_EMIT staleChanged();
+	int deepest = 0;
+	if (!impl_->tree.roots.empty() && impl_->current())
+		deepest = impl_->depthBelow(impl_->tree.roots.front()->handle, 32);
+	if (deepest != impl_->deepestDepth) {
+		impl_->deepestDepth = deepest;
+		Q_EMIT deepestChanged();
+	}
 }
 
 QModelIndex ValueModel::index(int row, int column, const QModelIndex& parent) const
@@ -1446,6 +1547,8 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return row->aggregate ? row->value : hints.displayValue(row->value);
 		case TypeRole:
 		case TypeTextRole:
+			if (row->valueRange)
+				return QString{};
 			if (const auto* type = impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
 				return type->label;
 			return row->type;
@@ -1453,12 +1556,20 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return row->aggregate;
 		case ChildCountRole:
 			return row->totalChildren;
+		case ItemCountRole:
+			return row->elements;
 		case LoadedCountRole:
 			return static_cast<int>(row->children.size());
 		case EditableRole:
 			return impl_->editable(*row);
 		case UnsentRole:
 			return impl_->unsent(*row);
+		case PathRole:
+			return Impl::pathKey(row->valuePath) + (row->valueRange ? row->name : QString{});
+		case SummaryKindRole:
+			return impl_->summaryKind(*row);
+		case SummaryPartsRole:
+			return impl_->summaryParts(*row);
 		case StaleRole:
 			return impl_->stale;
 		case StaleNoteRole:
@@ -1506,6 +1617,7 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {TypeRole, "type"},
 	        {AggregateRole, "isAggregate"},
 	        {ChildCountRole, "childCount"},
+	        {ItemCountRole, "itemCount"},
 	        {LoadedCountRole, "loadedCount"},
 	        {EditableRole, "editable"},
 	        {EditorTextRole, "editorText"},
@@ -1517,7 +1629,10 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {TakesRole, "takes"},
 	        {UnsentRole, "unsent"},
 	        {StaleRole, "stale"},
-	        {StaleNoteRole, "staleNote"}};
+	        {StaleNoteRole, "staleNote"},
+	        {PathRole, "path"},
+	        {SummaryPartsRole, "summaryParts"},
+	        {SummaryKindRole, "summaryKind"}};
 }
 
 QHash<QString, QString> ValueModel::texts() const
@@ -1538,14 +1653,14 @@ void ValueModel::setBaseline(const QHash<QString, QString>& sent)
 		return;
 	QVector<QModelIndex> indices;
 	for (const auto* row : std::as_const(impl_->tree.rows))
-		if (row->scalar)
+		if (row->scalar || row->aggregate)
 			indices.append(createIndex(row->row, 0, row->token));
 	const QPointer<ValueModel> alive(this);
 	for (const auto& index : indices) {
 		if (!alive)
 			return;
 		if (impl_->tree.at(this, index))
-			Q_EMIT dataChanged(index, index, {UnsentRole});
+			Q_EMIT dataChanged(index, index, {UnsentRole, SummaryPartsRole});
 	}
 }
 
@@ -1628,6 +1743,69 @@ QModelIndex ValueModel::contentRoot() const
 	return createIndex(0, 0, impl_->tree.roots.front()->token);
 }
 
+int ValueModel::deepest() const noexcept
+{
+	return impl_->deepestDepth;
+}
+
+QModelIndex ValueModel::indexOfPath(const QString& path)
+{
+	if (impl_->tree.roots.empty() || !impl_->current())
+		return {};
+	auto* row = impl_->tree.roots.front().get();
+	static const QRegularExpression step(QStringLiteral("([^.\\[\\]]+)|(\\[[^\\]]+\\])"));
+	auto steps = step.globalMatch(path);
+	while (steps.hasNext()) {
+		const auto found = steps.next();
+		const auto name = found.captured(found.capturedLength(1) > 0 ? 1 : 2);
+		Row* match = nullptr;
+		// An element of a long array lies under its range.
+		if (row->aggregate && !row->valueRange && row->type == QStringLiteral("array") && row->elements > 128 &&
+		    !name.contains(QChar(0x2026))) {
+			bool whole = false;
+			const auto index = name.mid(1, name.size() - 2).toUInt(&whole);
+			if (!whole || index >= row->elements)
+				return {};
+			const auto first = index / 128 * 128;
+			const auto rangeName = QStringLiteral("[%1…%2]").arg(first).arg((std::min)(first + 127, row->elements - 1));
+			for (;;) {
+				for (const auto& child : row->children)
+					if (child->name == rangeName)
+						row = child.get();
+				if (row->valueRange)
+					break;
+				const auto here = createIndex(row->row, 0, row->token);
+				const auto before = row->children.size();
+				if (!canFetchMore(here))
+					return {};
+				fetchMore(here);
+				if (row->children.size() == before)
+					return {};
+			}
+		}
+		for (;;) {
+			for (const auto& child : row->children)
+				if (child->name == name) {
+					match = child.get();
+					break;
+				}
+			if (match)
+				break;
+			const auto here = createIndex(row->row, 0, row->token);
+			const auto before = row->children.size();
+			if (!canFetchMore(here))
+				break;
+			fetchMore(here);
+			if (row->children.size() == before)
+				break;
+		}
+		if (!match)
+			return {};
+		row = match;
+	}
+	return createIndex(row->row, 0, row->token);
+}
+
 void ValueModel::setEditOffer(bool offered)
 {
 	if (impl_->offer == offered)
@@ -1679,6 +1857,12 @@ void ValueModel::updateScalar(const QModelIndex& index)
 	row->editorText = scalarNumberText(scalar.value);
 	row->canonicalText = row->editorText;
 	Q_EMIT dataChanged(index, index, {ValueRole, EditorTextRole, CanonicalTextRole, UnsentRole});
+	// A folded branch shows what is under it: its summary and its mark.
+	const QPointer<ValueModel> alive(this);
+	for (const auto* up = row->parent; up && alive; up = up->parent) {
+		const auto ancestor = createIndex(up->row, 0, up->token);
+		Q_EMIT dataChanged(ancestor, ancestor, {UnsentRole, SummaryPartsRole});
+	}
 }
 
 bool ValueModel::canFetchMore(const QModelIndex& parent) const
@@ -1699,8 +1883,35 @@ void ValueModel::fetchMore(const QModelIndex& parent)
 	const auto last = std::min<std::size_t>(row->totalChildren, first + fetchBatch);
 	std::vector<std::unique_ptr<Row>> pending;
 	pending.reserve(last - first);
+	// A long array's children are its ranges; nothing is read from the
+	// device's values until a range is opened.
+	if (row->aggregate && !row->valueRange && row->type == QStringLiteral("array") && row->elements > 128) {
+		for (auto at = first; at < last; ++at) {
+			auto range = std::make_unique<Row>();
+			range->handle = row->handle;
+			range->typeId = row->typeId;
+			range->aggregate = true;
+			range->valueRange = true;
+			range->type = QStringLiteral("array");
+			range->rangeFirst = static_cast<std::uint32_t>(at * 128);
+			range->rangeCount = (std::min)(std::uint32_t{128}, row->elements - range->rangeFirst);
+			range->totalChildren = range->elements = range->rangeCount;
+			range->name = QStringLiteral("[%1…%2]").arg(range->rangeFirst).arg(range->rangeFirst + range->rangeCount - 1);
+			range->valuePath = row->valuePath;
+			range->detail = range->name;
+			pending.push_back(std::move(range));
+		}
+		if (pending.empty() || impl_->tree.nextToken == 0)
+			return;
+		beginInsertRows(parent, static_cast<int>(first), static_cast<int>(last - 1));
+		for (auto& child : pending)
+			impl_->tree.append(std::move(child), row);
+		endInsertRows();
+		Q_EMIT dataChanged(parent, parent, {LoadedCountRole});
+		return;
+	}
 	for (auto at = first; at < last; ++at) {
-		const auto handle = impl_->inspector.child(row->handle, static_cast<std::uint32_t>(at));
+		const auto handle = impl_->inspector.child(row->handle, static_cast<std::uint32_t>(at + (row->valueRange ? row->rangeFirst : 0)));
 		if (!handle)
 			return;
 		auto child = valueRow(impl_->inspector, handle.value);

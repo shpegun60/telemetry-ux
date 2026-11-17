@@ -151,6 +151,10 @@ class ValueModel final : public QAbstractItemModel {
 	// since), and the note that says which.
 	Q_PROPERTY(bool stale READ stale NOTIFY staleChanged)
 	Q_PROPERTY(QString staleNote READ staleNote NOTIFY staleChanged)
+	// How many levels the deepest value lies below the root row (the root is
+	// 0), counting the first element of every array: what a tree table needs
+	// to choose its indent step. 0 for a scalar and while nothing is shown.
+	Q_PROPERTY(int deepest READ deepest NOTIFY deepestChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -175,7 +179,18 @@ public:
 		UnsentRole,
 		// A value from an earlier run, shown italic and muted, and why.
 		StaleRole,
-		StaleNoteRole
+		StaleNoteRole,
+		// The row's dotted path from the table's first level: "" for the
+		// root, "Calib", "Calib.Phase[0]" (the format of texts()).
+		PathRole,
+		// A folded branch's members as text, at most eight, whole parts:
+		// "Gain 1.5" for a struct's member, "0" for an array's element.
+		SummaryPartsRole,
+		// "struct", "array" or "arrayOfAggregates"; empty on a leaf.
+		SummaryKindRole,
+		// How many elements or members a branch holds: an array's length
+		// even when it is shown as ranges (ChildCountRole counts the ranges).
+		ItemCountRole
 	};
 	Q_ENUM(Role)
 	static constexpr int fetchBatch = 128;
@@ -219,6 +234,10 @@ public:
 	// The rows to show without the root row the model keeps: the root of a
 	// struct or array, or an invalid index (a scalar has no root row to hide).
 	Q_INVOKABLE QModelIndex contentRoot() const;
+	// The row at a dotted path (see PathRole), fetching the batches of members
+	// it lies in; invalid when the path no longer exists.
+	Q_INVOKABLE QModelIndex indexOfPath(const QString& path);
+	[[nodiscard]] int deepest() const noexcept;
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;
 	void setPresentation(const PresentationOverlay& overlay, const QString& fingerprint,
@@ -238,6 +257,7 @@ public:
 
 Q_SIGNALS:
 	void staleChanged();
+	void deepestChanged();
 
 private:
 	struct Impl;

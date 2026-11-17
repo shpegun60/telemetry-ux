@@ -10,6 +10,11 @@
 // was, and the caption under the closed cell says why ("Not changed: Enter a
 // number from 0 to 255."). Ctrl+Enter keeps the value and goes on to the owner
 // (Apply, Execute or Call).
+//
+// Draft mode (the Watchlist): with `commitText` set the cell edits a draft.
+// Typing only asks `checkText`; keeping it (Enter, Tab, focus going elsewhere,
+// a choice) calls `commitText(text)` once when the text is a value and differs
+// from what the cell was opened with; Escape calls nothing.
 import QtQuick
 import QtQuick.Controls
 // The editor is drawn here (22 px, a 1 px outline): Basic takes that in every
@@ -55,19 +60,48 @@ Item {
     property bool stale: false
     property string staleNote: ""
     // The value's own width, for an owner whose column grows to its widest.
-    readonly property real textWidth: shown.implicitWidth
+    // Measured from the text, never from the elided label, so a narrow column
+    // never reports a narrow value.
+    readonly property real textWidth: isAggregate ? 0 : Math.ceil(shownMetrics.advanceWidth)
     // Nothing opens: changes are off, or the owner is busy. The value stays.
     property bool locked: false
     // Writes text into the row; returns whether the text is a value.
     property var setText: null
     // Loads the next 128 members of a large struct or array.
     property var loadMore: null
+    // A branch row: open (its members show below) or folded. A folded branch
+    // shows its summary in the Value column and over the Name's spare room.
+    property bool expanded: false
+    property var summaryParts: []
+    property string summaryKind: ""
+    // Elements or members under a branch (an array shown as ranges holds more than childCount); -1: childCount.
+    property int itemCount: -1
+    // Draft mode (see above): null keeps the live setText.
+    property var commitText: null
+    // {ok, preview, error} for a typed text, in draft mode.
+    property var checkText: null
+    // The owner's quiet line under the open cell, and its hover tooltip.
+    property string note: ""
+    property string noteDetail: ""
+    // False: the owner calls begin() itself (the Watchlist's double-click).
+    property bool openOnClick: true
+    // The value changed on the device since it was last shown: Theme.info.
+    property bool changed: false
+    // Words added to the editor's accessible description.
+    property string extraDescription: ""
+    // Room to the cell's left up to the name's x, to its right up to the
+    // row's last column edge, and the room a folded summary may take to the
+    // left (up to the name's text end + the column gap). All 0 by default.
+    property real captionRoom: 0
+    property real captionRightRoom: 0
+    property real restRoom: 0
 
     // Numbers and true/false stand right, as the Device tree's do.
     readonly property bool numeric: /^(?:[usi](?:8|16|32|64)|f(?:32|64)|u?int(?:8|16|32|64)|float(?:32|64)|bool)$/.test(typeText)
     readonly property bool floating: /^(?:f(?:32|64)|float(?:32|64))$/.test(typeText)
     readonly property bool choices: editorKind === "bool" || editorKind === "enum"
-    readonly property bool canOpen: editable && !locked && !isAggregate && typeof setText === "function"
+    readonly property bool draftMode: typeof commitText === "function"
+    readonly property bool canOpen: editable && !locked && !isAggregate && (typeof setText === "function" || draftMode)
     // The editor is open.
     property bool open: false
     // The text in the editor is no value; the caption says what is.
@@ -79,6 +113,9 @@ Item {
     // Why the last text left was not kept: "Not changed: Enter a number from
     // 0 to 255.", under the closed cell until it is opened again.
     property string refusal: ""
+    // The words a draft's check gave for the text typed, and its preview.
+    property string checkError: ""
+    property string checkPreview: ""
 
     // Tab or Shift+Tab: the owner opens the next or previous cell.
     signal tabbed(bool forward)
@@ -95,6 +132,8 @@ Item {
             return false
         startText = editorText
         refusal = ""
+        checkError = ""
+        checkPreview = ""
         invalid = false
         manualCode = false
         open = true
@@ -108,6 +147,16 @@ Item {
         }
         return true
     }
+    // What the editor holds now.
+    function currentText() {
+        return choices && !manualCode ? startText : input.text
+    }
+    // Draft mode: the text goes to the owner once, when it is a value that
+    // differs from what the cell was opened with.
+    function commitDraft(text) {
+        if (draftMode && text !== startText)
+            commitText(text)
+    }
     // Closes it, keeping what was typed when it is a value; otherwise the last
     // value comes back.
     function keep(byKey) {
@@ -117,10 +166,13 @@ Item {
         // Text that is no value is never dropped in silence: the last value
         // comes back, and the caption says why, in Enter's words.
         if (invalid) {
-            refusal = qsTr("Not changed: %1").arg(takesText)
-            if (typeof setText === "function")
+            refusal = qsTr("Not changed: %1").arg(draftMode && checkError.length > 0 ? checkError : takesText)
+            if (!draftMode && typeof setText === "function")
                 setText(editorText)
+        } else if (draftMode) {
+            commitDraft(currentText())
         }
+        input.deselect()
         invalid = false
         manualCode = false
         open = false
@@ -133,8 +185,9 @@ Item {
             return
         closing = true
         refusal = ""
-        if (typeof setText === "function" && editorText !== startText)
+        if (!draftMode && typeof setText === "function" && editorText !== startText)
             setText(startText)
+        input.deselect()
         invalid = false
         manualCode = false
         open = false
@@ -146,6 +199,49 @@ Item {
         open = false
         invalid = false
         manualCode = false
+    }
+    // The exact value a float cell encodes and its bits, for the caption's tooltip.
+    function exactText(text) {
+        const number = Number(text)
+        if (!isFinite(number) || text.length === 0)
+            return ""
+        const bytes = new DataView(new ArrayBuffer(8))
+        const hex = function(value) { return value.toString(16).toUpperCase().padStart(8, "0") }
+        if (/^(?:f32|float32)$/.test(typeText)) {
+            const single = Math.fround(number)
+            bytes.setFloat32(0, single)
+            return String(single) + " · 0x" + hex(bytes.getUint32(0))
+        }
+        bytes.setFloat64(0, number)
+        return String(number) + " · 0x" + hex(bytes.getUint32(0)) + hex(bytes.getUint32(4))
+    }
+    // The folded summary that fits `room` characters: whole parts only, then
+    // the tail ("…}" or "… 64 items]"); "{…}" / "[… N items]" when none fits.
+    function summaryFor(room) {
+        const count = function(n) { return n === 1 ? qsTr("1 item") : qsTr("%L1 items").arg(n) }
+        const parts = summaryParts || []
+        const total = itemCount >= 0 ? itemCount : childCount
+        if (summaryKind === "arrayOfAggregates")
+            return "[" + count(total) + "]"
+        const isStruct = summaryKind === "struct"
+        const open = isStruct ? "{" : "[", close = isStruct ? "}" : "]"
+        const tail = isStruct ? "…" : "… " + count(total)
+        const complete = parts.length >= total
+        if (complete) {
+            const whole = open + parts.join(", ") + close
+            if (whole.length <= room)
+                return whole
+        }
+        for (let k = complete ? parts.length - 1 : parts.length; k >= 1; --k) {
+            const text = open + parts.slice(0, k).join(", ") + ", " + tail + close
+            if (text.length <= room)
+                return text
+        }
+        return open + tail + close
+    }
+    // Everything the model gave, up to its eight parts, for the tooltip.
+    function summaryAll() {
+        return summaryFor(1e9)
     }
 
     // A choice's words with its code beside the name, so the constant
@@ -197,9 +293,9 @@ Item {
             Layout.fillWidth: true
             implicitHeight: Type.rowHeight
 
-            HoverHandler { id: hover; enabled: cell.canOpen && !cell.open }
+            HoverHandler { id: hover; enabled: cell.canOpen && !cell.open && cell.openOnClick }
             TapHandler {
-                enabled: cell.canOpen && !cell.open
+                enabled: cell.canOpen && !cell.open && cell.openOnClick
                 onTapped: cell.begin()
             }
             // A cell that opens on a click says so under the pointer.
@@ -213,7 +309,7 @@ Item {
                 id: shown
                 objectName: "valueText"
                 property string scalarName: cell.name
-                visible: !cell.open
+                visible: !cell.open && !cell.isAggregate
                 anchors.fill: parent
                 verticalAlignment: Text.AlignVCenter
                 textFormat: Text.PlainText
@@ -222,8 +318,8 @@ Item {
                 text: cell.editorKind === "enum" && cell.optionIndex >= 0 && !cell.isAggregate
                       ? cell.options[cell.optionIndex].label : cell.value
                 color: cell.highlighted ? Theme.selectedForeground
-                    : cell.isAggregate || cell.stale ? Theme.textMuted : Theme.textPrimary
-                font.family: cell.isAggregate ? Qt.application.font.family : Type.fixedFamily
+                    : cell.stale ? Theme.textMuted : cell.changed ? Theme.info : Theme.textPrimary
+                font.family: Type.fixedFamily
                 font.italic: cell.stale
                 horizontalAlignment: cell.numeric ? Text.AlignRight : Text.AlignLeft
                 Accessible.description: cell.stale ? qsTr("From an earlier run; the values have changed since.") : ""
@@ -232,6 +328,37 @@ Item {
                     visible: shownHover.hovered && (shown.truncated || (cell.stale && cell.staleNote.length > 0))
                     text: cell.stale && cell.staleNote.length > 0 ? cell.value + " · " + cell.staleNote : cell.value
                 }
+                TextMetrics { id: shownMetrics; font: shown.font; text: shown.text }
+            }
+            // A folded branch: its members' values, right-aligned to the
+            // Value column's edge and reaching left over the Name's spare
+            // room. Never part of the column's measured width.
+            Label {
+                id: summary
+                objectName: "foldedSummary"
+                visible: cell.isAggregate && !cell.expanded && !cell.open
+                x: -cell.restRoom
+                width: parent.width + cell.restRoom
+                height: parent.height
+                verticalAlignment: Text.AlignVCenter
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                font.family: Type.fixedFamily
+                font.italic: cell.stale
+                color: cell.highlighted ? Theme.selectedForeground : cell.stale ? Theme.textMuted : Theme.textSecondary
+                readonly property real advance: summaryMetrics.advanceWidth
+                text: cell.summaryKind.length === 0 ? (cell.value.length > 0 ? cell.value : "–")
+                    : cell.summaryFor(advance > 0 ? Math.floor(width / advance) : 0)
+                Accessible.ignored: true
+                HoverHandler { id: summaryHover }
+                PlainToolTip {
+                    objectName: "foldedSummaryToolTip"
+                    delay: 700
+                    visible: summaryHover.hovered && cell.summaryKind.length > 0 && summary.text !== cell.summaryAll()
+                    text: cell.summaryAll()
+                }
+                TextMetrics { id: summaryMetrics; font: summary.font; text: "0" }
             }
             // The pencil sits in the gap after the value, so digits never move.
             Shape {
@@ -296,16 +423,30 @@ Item {
                     radius: Type.radius
                 }
                 Accessible.name: qsTr("Value for %1").arg(cell.name)
-                Accessible.description: cell.invalid ? cell.takes : cell.detail
+                Accessible.description: [cell.invalid ? (cell.draftMode && cell.checkError.length > 0 ? cell.checkError : cell.takes)
+                                                      : cell.detail, cell.extraDescription].filter(function(part) { return part.length > 0 }).join(" ")
                 // The same text as the row's writes nothing (no step to undo).
-                onTextEdited: if (typeof cell.setText === "function")
-                    cell.invalid = text === cell.editorText ? false : !cell.setText(text)
+                onTextEdited: {
+                    if (cell.draftMode) {
+                        const verdict = typeof cell.checkText === "function" ? cell.checkText(text) : ({ ok: true })
+                        cell.invalid = text === cell.startText ? false : !(verdict && verdict.ok !== false)
+                        cell.checkError = verdict && typeof verdict.error === "string" ? verdict.error : ""
+                        cell.checkPreview = verdict && typeof verdict.preview === "string" ? verdict.preview : ""
+                    } else if (typeof cell.setText === "function") {
+                        cell.invalid = text === cell.editorText ? false : !cell.setText(text)
+                    }
+                }
                 TextMetrics {
                     id: inputMetrics
                     font: input.font
                     text: input.text.length > 0 ? input.text : input.placeholderText
                 }
-                onAccepted: cell.keep(true)
+                // A TextField hands Enter on to its parents after `accepted`,
+                // and the table behind it opened the cell again with all its
+                // text selected. Enter is taken here: it keeps and closes, and
+                // only Ctrl+Enter goes on (to Apply, Execute or Call).
+                Keys.onReturnPressed: function(event) { cell.keep(true); event.accepted = !(event.modifiers & Qt.ControlModifier) }
+                Keys.onEnterPressed: function(event) { cell.keep(true); event.accepted = !(event.modifiers & Qt.ControlModifier) }
                 Keys.onEscapePressed: function(event) { cell.revert(); event.accepted = true }
                 Keys.onTabPressed: function(event) { cell.keep(); cell.tabbed(true); event.accepted = true }
                 Keys.onBacktabPressed: function(event) { cell.keep(); cell.tabbed(false); event.accepted = true }
@@ -363,8 +504,9 @@ Item {
                 model: cell.options
                 currentIndex: cell.optionIndex
                 Accessible.name: qsTr("Value for %1").arg(cell.name)
-                Accessible.description: cell.choicesTruncated
-                    ? qsTr("The list is limited. Choose Enter code to use another numeric code.") : cell.detail
+                Accessible.description: [cell.choicesTruncated
+                    ? qsTr("The list is limited. Choose Enter code to use another numeric code.") : cell.detail,
+                    cell.extraDescription].filter(function(part) { return part.length > 0 }).join(" ")
                 onActivated: function(index) {
                     const item = cell.options[index]
                     if (!item)
@@ -375,7 +517,9 @@ Item {
                         input.forceActiveFocus()
                         return
                     }
-                    if (typeof cell.setText === "function")
+                    if (cell.draftMode)
+                        cell.commitDraft(item.text)
+                    else if (typeof cell.setText === "function")
                         cell.invalid = !cell.setText(item.text)
                     currentIndex = Qt.binding(function() { return cell.optionIndex })
                     cell.keep(true)
@@ -393,27 +537,67 @@ Item {
                 onActiveFocusChanged: if (!activeFocus && visible && !popup.visible) cell.keep()
             }
         }
-        // Words only for text that is no value; floats say what they encode.
-        Label {
-            id: caption
-            objectName: "valueCaption"
-            readonly property bool encoded: cell.open && !cell.invalid && cell.floating && cell.canonicalText.length > 0
-                                            && input.text.length > 0 && input.text !== cell.canonicalText
+        // Line 2, one line across the row: what a float encodes, a preview,
+        // the owner's note, or the words for text that is no value. It takes
+        // the room the owner gives to the left and then to the right of the
+        // cell, and elides when even that is short.
+        Item {
+            id: captionBox
+            objectName: "valueCaptionBox"
+            readonly property bool encoded: cell.open && !cell.invalid && !cell.draftMode && cell.floating
+                && cell.canonicalText.length > 0 && input.text.length > 0 && input.text !== cell.canonicalText
             readonly property bool refused: !cell.open && cell.refusal.length > 0
-            visible: cell.invalid || encoded || refused
+            readonly property bool isError: cell.invalid || refused
+            readonly property string words: {
+                if (cell.open) {
+                    if (cell.invalid)
+                        return cell.draftMode && cell.checkError.length > 0 ? cell.checkError : cell.takesText
+                    const parts = []
+                    if (encoded)
+                        parts.push(qsTr("Encoded: %1 (%2)").arg(cell.canonicalText).arg(cell.typeText))
+                    if (cell.draftMode && cell.checkPreview.length > 0)
+                        parts.push("= " + cell.checkPreview)
+                    if (cell.note.length > 0)
+                        parts.push(cell.note)
+                    return parts.join(" · ")
+                }
+                return refused ? cell.refusal : ""
+            }
+            visible: words.length > 0
             Layout.fillWidth: true
-            Layout.minimumWidth: 0
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            font.pointSize: Type.caption
-            color: cell.invalid || refused ? Theme.error : Theme.textSecondary
-            horizontalAlignment: cell.numeric ? Text.AlignRight : Text.AlignLeft
-            text: cell.invalid ? cell.takesText
-                : refused ? cell.refusal
-                : encoded ? qsTr("Encoded: %1 (%2)").arg(cell.canonicalText).arg(cell.typeText) : ""
+            Layout.preferredHeight: visible ? caption.height : 0
+            Label {
+                id: caption
+                objectName: "valueCaption"
+                readonly property real natural: Math.ceil(captionMetrics.advanceWidth) + 1
+                readonly property bool nearFits: natural <= cell.width + cell.captionRoom
+                x: -cell.captionRoom
+                width: cell.width + cell.captionRoom + (nearFits ? 0 : cell.captionRightRoom)
+                textFormat: Text.PlainText
+                wrapMode: captionBox.isError ? Text.Wrap : Text.NoWrap
+                maximumLineCount: captionBox.isError ? 2 : 1
+                elide: Text.ElideRight
+                font.pointSize: Type.caption
+                horizontalAlignment: Text.AlignRight
+                color: captionBox.isError ? Theme.error : cell.highlighted ? Theme.selectedForeground : Theme.textSecondary
+                text: captionBox.words
+                Accessible.ignored: true
+                HoverHandler { id: captionHover }
+                PlainToolTip {
+                    objectName: "valueCaptionToolTip"
+                    delay: 700
+                    readonly property string tip: cell.note.length > 0 && cell.noteDetail.length > 0 && !captionBox.isError
+                        ? cell.noteDetail
+                        : captionBox.encoded ? cell.exactText(cell.canonicalText)
+                        : caption.truncated ? captionBox.words : ""
+                    visible: captionHover.hovered && tip.length > 0
+                    text: tip
+                }
+                TextMetrics { id: captionMetrics; font: caption.font; text: captionBox.words }
+            }
         }
         Button {
-            visible: cell.isAggregate && cell.childCount > 128
+            visible: cell.isAggregate && cell.expanded && cell.childCount > 128
             enabled: cell.loadedCount < cell.childCount
             text: qsTr("Load next 128 · %1/%2").arg(cell.loadedCount).arg(cell.childCount)
             onClicked: if (typeof cell.loadMore === "function") cell.loadMore()

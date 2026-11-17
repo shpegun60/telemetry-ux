@@ -357,6 +357,82 @@ int main(int argc, char** argv)
 		CHECK(QMetaObject::invokeMethod(locked, "begin", Q_RETURN_ARG(QVariant, opened)) && !opened.toBool());
 		CHECK(!locked->property("open").toBool() && !named(locked, QStringLiteral("scalarEditor"))->isVisible());
 		CHECK(!named(locked, QStringLiteral("valueCaption"))->isVisible());
+		// The caption is one line across the row (room to the left of a 60 px
+		// cell), its right edge on the cell's.
+		CHECK(QMetaObject::invokeMethod(pi, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("0.1"));
+		settle();
+		auto* piCaption = named(pi, QStringLiteral("valueCaption"));
+		CHECK(piCaption && piCaption->isVisible());
+		CHECK(text(piCaption) == QStringLiteral("Encoded: 0.100000001 (f32)"));
+		CHECK(piCaption->property("lineCount").toInt() == 1);
+		CHECK(qAbs(piCaption->mapToScene(QPointF(piCaption->width(), 0)).x() - pi->mapToScene(QPointF(pi->width(), 0)).x()) < 1.5);
+		CHECK(pi->height() <= 42 && pi->height() > rowHeight + 8);
+		// Enter closes the editor: nothing selected, the editor gone.
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(!pi->property("open").toBool() && !named(pi, QStringLiteral("scalarEditor"))->isVisible());
+		CHECK(named(pi, QStringLiteral("scalarEditor"))->property("selectedText").toString().isEmpty());
+		// The caption's tooltip gives the exact value and its bits.
+		auto* exactCell = named(content, QStringLiteral("exactCell"));
+		CHECK(QMetaObject::invokeMethod(exactCell, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("3.1415927"));
+		settle();
+		auto* exactTip = named(exactCell, QStringLiteral("valueCaption"))->findChild<QObject*>(QStringLiteral("valueCaptionToolTip"));
+		CHECK(exactTip && exactTip->property("tip").toString() == QStringLiteral("3.1415927410125732 · 0x40490FDB"));
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		// Draft mode: typing asks, never commits; Enter commits once; unchanged
+		// text and Escape commit nothing; an invalid text leaves its words.
+		auto* draft = named(content, QStringLiteral("draftCell"));
+		auto* draftLog = window->findChild<QObject*>(QStringLiteral("draftLog"));
+		CHECK(draft && draftLog);
+		auto committed = [&] { return draftLog->property("committed").toList().size(); };
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		auto* draftCaption = named(draft, QStringLiteral("valueCaption"));
+		CHECK(text(draftCaption) == QStringLiteral("Writes all 3 members of Config."));
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("42"));
+		settle();
+		CHECK(draftLog->property("checked").toInt() >= 2 && committed() == 0);
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(committed() == 1 && draftLog->property("committed").toList().first().toString() == QStringLiteral("42"));
+		CHECK(!draft->property("open").toBool());
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(committed() == 1);
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("7"));
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		CHECK(committed() == 1 && !draft->property("open").toBool());
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("300"));
+		settle();
+		CHECK(draft->property("invalid").toBool() && draftCaption->property("lineCount").toInt() <= 2);
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(committed() == 1 && text(draft, "refusal") == QStringLiteral("Not changed: Enter a number from 0 to 255."));
+		// Focus going elsewhere commits once.
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+		typeText(window, QStringLiteral("9"));
+		named(content, QStringLiteral("elsewhere"))->forceActiveFocus();
+		settle();
+		CHECK(committed() == 2 && !draft->property("open").toBool());
 		std::printf("Value cell checks=%d warnings=%d\n", checks, warnings);
 		return warnings == 0 ? 0 : 1;
 	} catch (const std::exception& error) {
