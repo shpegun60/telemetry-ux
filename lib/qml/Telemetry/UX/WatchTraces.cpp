@@ -473,8 +473,11 @@ double WatchTraces::lastReadUtcMs(const QString& path) const
 	if (it == traces_.cend())
 		return std::numeric_limits<double>::quiet_NaN();
 	for (auto reading = it->readings.crbegin(); reading != it->readings.crend(); ++reading)
-		if (!std::isnan(reading->value))
-			return double(anchor_.utcMs) + double(reading->ns - anchor_.monotonicNs) / 1e6;
+		if (!std::isnan(reading->value)) {
+			// Its own run's clock: the reading as that run recorded it.
+			const auto own = anchors_.value(path, anchor_);
+			return double(own.utcMs) + double(reading->ns - it->shift - own.monotonicNs) / 1e6;
+		}
 	return std::numeric_limits<double>::quiet_NaN();
 }
 
@@ -602,6 +605,10 @@ void WatchTraces::setRecorded(const QString& path, std::vector<TraceReading> rea
 		return;
 	auto& trace = traces_[path];
 	total_ -= trace.readings.size();
+	trace.shift = shiftNs(path);
+	if (trace.shift)
+		for (auto& reading : readings)
+			reading.ns += trace.shift;
 	trace.readings.assign(readings.begin(), readings.end());
 	total_ += trace.readings.size();
 	// A type the decoder already turned into these numbers: one that plots.
@@ -621,7 +628,8 @@ void WatchTraces::appendRecorded(const QString& path, const std::vector<TraceRea
 	if (it == traces_.end() || readings.empty())
 		return;
 	auto& kept = it->readings;
-	for (const auto& reading : readings) {
+	for (auto reading : readings) {
+		reading.ns += it->shift;
 		// No live caps: a recording keeps every reading it was given.
 		if (kept.empty() || kept.back().ns <= reading.ns)
 			kept.push_back(reading);
@@ -639,6 +647,64 @@ void WatchTraces::appendRecorded(const QString& path, const std::vector<TraceRea
 void WatchTraces::setAnchor(const WatchTimestamp& anchor)
 {
 	anchor_ = anchor;
+	rebase();
+	++revision_;
+	announce();
+}
+
+qint64 WatchTraces::shiftNs(const QString& path) const
+{
+	const auto it = anchors_.constFind(path);
+	if (it == anchors_.cend() || !anchor_.monotonicNs)
+		return 0;
+	// Its own start onto the shown run's; at its time of day, by the clocks.
+	qint64 shift = anchor_.monotonicNs - it->monotonicNs;
+	if (!axisFromStart_)
+		shift += (it->utcMs - anchor_.utcMs) * 1'000'000;
+	return shift;
+}
+
+void WatchTraces::rebase()
+{
+	for (auto it = traces_.begin(); it != traces_.end(); ++it) {
+		const auto want = shiftNs(it.key());
+		if (want == it->shift)
+			continue;
+		const auto delta = want - it->shift;
+		for (auto& reading : it->readings)
+			reading.ns += delta;
+		it->shift = want;
+	}
+	newestNs_ = 0;
+	for (const auto& trace : std::as_const(traces_))
+		if (!trace.readings.empty())
+			newestNs_ = std::max(newestNs_, trace.readings.back().ns);
+}
+
+void WatchTraces::setRecordedAnchor(const QString& path, const WatchTimestamp& anchor)
+{
+	if (anchor.monotonicNs == 0 && anchor.utcMs == 0) {
+		if (anchors_.remove(path) == 0)
+			return;
+	} else {
+		const auto it = anchors_.constFind(path);
+		if (it != anchors_.cend() && it->monotonicNs == anchor.monotonicNs && it->utcMs == anchor.utcMs)
+			return;
+		anchors_.insert(path, anchor);
+	}
+	rebase();
+	++revision_;
+	announce();
+}
+
+void WatchTraces::setAxisFromStart(bool fromStart)
+{
+	if (fromStart == axisFromStart_)
+		return;
+	axisFromStart_ = fromStart;
+	if (anchors_.isEmpty())
+		return;
+	rebase();
 	++revision_;
 	announce();
 }
