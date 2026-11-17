@@ -1578,3 +1578,21 @@ Per editor:
 - `lastReadUtcMs(path)` gives the time on the curve's own run's clock. The CSV's time of
   day column and Measure's "at" times of a curve of another run are, on "From run start",
   the shown run's clock at the aligned moment; on "Time of day" its own.
+
+## Details: one row per member before a read
+
+- The definition table that Details (and any pane whose provider offers
+  `definitions`) shows before a Field is read had two defects after PR #143:
+  the members listed twice after a second selection, and no root row.
+- Cause of the doubled rows: a filter change in the provider's definition model
+  under a TreeView that has rows open leaves the TreeView's flattened rows behind.
+  `EndpointPanel` now makes the table again for every selection
+  (`metadataFresh`), and a table made that way has its Field row opened and
+  laid out by `openDefinitionRoot`.
+- The table is rooted at the Field's parent, so the Field's root row
+  ("Config", `struct (3)`, "-" in Value) shows, open, with its members folded
+  below it. The Type column shows as in the value table.
+- No API change. New check: `tests/qml_layout/MetadataTree.cpp` selects a
+  struct Field, another Field, the struct again and once more, on the Details
+  pane and on a pane with a host's fold memory (the Batch item's), and asserts
+  one root plus three members and the Type column each time.

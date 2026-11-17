@@ -135,6 +135,7 @@ def main():
                 ('trace-plot', 'telemetry_qml_trace_plot', r'Trace plot checks=(\d+) warnings=0', 40),
                 ('value-cell', 'telemetry_qml_value_cell', r'Value cell checks=(\d+) warnings=0', 60),
                 ('details-tree', 'telemetry_qml_details_tree', r'Details tree checks=(\d+) warnings=0', 900),
+                ('metadata-tree', 'telemetry_qml_metadata_tree', r'Metadata tree checks=(\d+) warnings=0', 40),
                 ('undo-keys', 'telemetry_qml_undo_keys', r'Undo keys checks=(\d+) warnings=0', 60)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))

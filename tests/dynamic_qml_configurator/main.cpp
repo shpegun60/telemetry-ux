@@ -616,6 +616,72 @@ static void actualExampleInputJourney()
 	    "Dynamic QML actual example optIn=isolated writes=1 readbacks=1 geometry=valid warnings=0\n");
 }
 
+// The visible rows of one table of a panel, top down, as "name|type|value" lines.
+static void collectRows(QQuickItem* root, const QString& objectName, QList<QQuickItem*>& out)
+{
+	if (root->isVisible() && root->objectName() == objectName && root->width() > 0)
+		out.append(root);
+	for (auto* child : root->childItems())
+		collectRows(child, objectName, out);
+}
+
+static QStringList tableRows(QQuickItem* panel, const QString& objectName)
+{
+	QList<QQuickItem*> rows;
+	collectRows(panel, objectName, rows);
+	std::sort(rows.begin(), rows.end(), [&](QQuickItem* a, QQuickItem* b) {
+		return a->mapToItem(panel, QPointF{}).y() < b->mapToItem(panel, QPointF{}).y();
+	});
+	QStringList lines;
+	for (auto* row : rows)
+		lines << row->property("cellName").toString() + QStringLiteral("|") + row->property("cellType").toString() +
+		             QStringLiteral("|") + row->property("cellValue").toString();
+	return lines;
+}
+
+// A Service's Response, seen through the real panel: its structure before any
+// call, the value after one, the value after another, and no row twice.
+static void serviceResponseJourney()
+{
+	Harness h;
+	Provider config{h.binding.get()}, value{h.binding.get()};
+	select(config, "Config");
+	select(value, "Config");
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("configProvider"), &config);
+	engine.rootContext()->setContextProperty(QStringLiteral("valueProvider"), &value);
+	QQmlComponent component{&engine, QUrl::fromLocalFile(QStringLiteral(DYNAMIC_QML_EXAMPLE_MAIN))};
+	if (component.isError())
+		std::fprintf(stderr, "%s\n", qPrintable(component.errorString()));
+	std::unique_ptr<QObject> root{component.create()};
+	CHECK(root);
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	CHECK(window);
+	auto* panel = control(window->contentItem(), "configPanel");
+	click(*window, *control(window->contentItem(), "configMutationsCheck"));
+	CHECK(config.allowMutations());
+	select(config, "Scale");
+	const auto response = [&] {
+		events();
+		QTest::qWait(60);
+		events();
+		return tableRows(panel, QStringLiteral("responseRow"));
+	};
+	CHECK(edit(config, "value", "0"));
+	CHECK(edit(config, "factor", "0"));
+	click(*window, *control(panel, "callServiceButton"), panel);
+	h.pump();
+	CHECK(until([&] { return response() == QStringList{QStringLiteral("result|f32|0")}; }));
+	CHECK(edit(config, "value", "2"));
+	CHECK(edit(config, "factor", "4"));
+	click(*window, *control(panel, "callServiceButton"), panel);
+	h.pump();
+	CHECK(until([&] { return response() == QStringList{QStringLiteral("result|f32|8")}; }));
+	CHECK(!visibleItem(panel, QStringLiteral("emptyResponseLabel")));
+	root.reset();
+	events();
+}
+
 static void threePanelsRetirementAndReconnect()
 {
 	Harness h;
@@ -1225,6 +1291,8 @@ int main(int argc, char** argv)
 		threePanelsRetirementAndReconnect();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("example"))
 		actualExampleInputJourney();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("response"))
+		serviceResponseJourney();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("unknown"))
 		uncertainCommandFacts();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("watch"))

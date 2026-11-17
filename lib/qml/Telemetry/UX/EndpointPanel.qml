@@ -263,8 +263,16 @@ Pane {
     // and none for a Field already read. Anything the provider starts before
     // the turn ends (a Read pressed, a host's own request) takes its place.
     readonly property string selectedPath: hasSelection ? provider.selection : ""
+    // The definition table is made again for every selection. A filter change
+    // under a table that has rows open leaves the TreeView's flattened rows
+    // behind (the members listed twice, or the rows of the Field before); a
+    // table made after the change starts from the model as it is.
+    property bool metadataFresh: true
+    Timer { id: metadataRebuild; interval: 0; onTriggered: panel.metadataFresh = true }
     property bool readArmed: false
     onSelectedPathChanged: {
+        metadataFresh = false
+        metadataRebuild.restart()
         // Another endpoint: this panel's own folds are forgotten.
         if (foldMemory === null)
             ownMemory.clear()
@@ -471,6 +479,20 @@ Pane {
         view.noteBusy = true
         view.expand(0)
         view.noteBusy = false
+    }
+    // The definition table: only the Field's own row (row 0) is open.
+    function openDefinitionRoot(view) {
+        if (!view || !view.model)
+            return
+        view.noteBusy = true
+        for (let r = view.rows - 1; r >= 1; --r)
+            if (view.isExpanded(r))
+                view.collapse(r)
+        if (view.rows > 0 && rowHasChildren(view, 0) && !view.isExpanded(0))
+            view.expand(0)
+        view.noteBusy = false
+        view.scheduleActive()
+        view.forceLayout()
     }
     // After a model reset: defaults, then what the user had opened, shallowest
     // first; a path that no longer exists is dropped; last the current row.
@@ -1132,7 +1154,7 @@ Pane {
                     }
                     Loader {
                         id: metadataLoader
-                        active: panel.showMetadata; visible: active
+                        active: panel.showMetadata && panel.metadataFresh; visible: active
                         Layout.fillWidth: true; Layout.fillHeight: true
                         sourceComponent: Component {
                             DetailTree {
@@ -1141,9 +1163,11 @@ Pane {
                                 section: ""
                                 headed: true
                                 Keys.onPressed: function(event) { event.accepted = panel.treeKey(metadataTree, event) }
-                                // The Field's members, without the Field's own row. Set
-                                // on the next turn: showing them loads the tree's rows,
-                                // which must not happen inside a host's selection.
+                                // One root per table (spec A): the Field's own row, open,
+                                // its members under it and folded below that. The table's
+                                // root is the Field's parent, so the Field is row 0. Set on
+                                // the next turn: showing the rows loads them, which must not
+                                // happen inside a host's selection.
                                 readonly property var definitionRoot: panel.provider.definitionRootIndex
                                 function showDefinition() {
                                     rootIndex = definitionRoot
@@ -1152,16 +1176,22 @@ Pane {
                                 onDefinitionRootChanged: showDefinition()
                                 // Two Fields of one group share their root.
                                 Connections { target: panel; function onSelectedPathChanged() { metadataTree.showDefinition() } }
+                                // A filter change keeps the table's expanded set while the rows
+                                // under it are made again, and the members show twice: the
+                                // Field's row is opened again after every change.
+                                Connections {
+                                    target: metadataTree.model
+                                    ignoreUnknownSignals: true
+                                    function onRowsInserted() { fieldRoot.restart() }
+                                    function onRowsRemoved() { fieldRoot.restart() }
+                                    function onLayoutChanged() { fieldRoot.restart() }
+                                    function onModelReset() { fieldRoot.restart() }
+                                }
                                 Component.onCompleted: fieldRoot.restart()
                                 Timer {
                                     id: fieldRoot
                                     interval: 0
-                                    onTriggered: {
-                                        const root = metadataTree.definitionRoot
-                                        const model = metadataTree.model
-                                        const field = model ? model.index(0, 0, root) : undefined
-                                        metadataTree.rootIndex = field && field.valid && model.hasChildren(field) ? field : root
-                                    }
+                                    onTriggered: panel.openDefinitionRoot(metadataTree)
                                 }
                                 clip: true; model: panel.provider.definitions; rootIndex: definitionRoot
                                 activeFocusOnTab: true; alternatingRows: false
@@ -1179,7 +1209,7 @@ Pane {
                                     readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                                     cellName: name; cellType: typeText; cellValue: qsTr("Not read")
                                     cellHint: detail + "\n" + panel.contextHelp
-                                    container: false
+                                    container: depth === 0
                                     valueComponent: Label {
                                         objectName: "metadataValueLabel"
                                         height: Type.rowHeight
