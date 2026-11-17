@@ -105,6 +105,7 @@ Window {
         fake.readFinished(true)
     }
     function resizeTo(w) { win.width = w }
+    function expandAllAsTheClientDoes() { const v = view(); v.expand(0); v.forceLayout(); v.expandRecursively(); v.forceLayout() }
     function rowCount() { return view().rows }
     function row(r) {
         const v = view()

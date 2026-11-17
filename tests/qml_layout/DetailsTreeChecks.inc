@@ -405,6 +405,15 @@
 		rig.call("use", QStringLiteral("field"));
 		rig.call("reread");
 
+		// A host that expands everything the way the client's checks do must not
+		// double the rows of a section's table.
+		rig.call("use", QStringLiteral("service"));
+		rig.call("reread");
+		rig.call("expandAllAsTheClientDoes");
+		CHECK(rig.call("rowCount").toInt() == 4);
+		rig.call("use", QStringLiteral("field"));
+		rig.call("reread");
+
 		// 11. No horizontal scroll, at any width.
 		for (int width : {560, 360, 320, 280}) {
 			rig.resizeTo(width);

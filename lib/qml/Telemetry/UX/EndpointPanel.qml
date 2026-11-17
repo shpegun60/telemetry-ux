@@ -449,7 +449,11 @@ Pane {
         const model = view.model
         if (!view || !model)
             return
-        if (view.rows < model.rowCount(view.rootIndex)) {
+        // The table has taken the model's current root index (a reset moves it).
+        const wanted = contentRoot(model, view.headed)
+        const caughtUp = !wanted || !wanted.valid ? !view.rootIndex.valid
+                         : view.rootIndex.valid && view.rootIndex.row === wanted.row && view.rootIndex.model === wanted.model
+        if (!caughtUp || view.rows < model.rowCount(view.rootIndex)) {
             // A table not shown yet, or not caught up with its model, has no
             // rows to open; try again when it has.
             if (view.restoreTries < 8) {
