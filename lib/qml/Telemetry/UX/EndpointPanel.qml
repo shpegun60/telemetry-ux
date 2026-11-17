@@ -654,6 +654,20 @@ Pane {
                     panel.memory.noteCurrent(panel.memoryScope, tree.section, panel.pathOfRow(tree, row))
             } } }
         onRowsChanged: scheduleActive()
+        // Nothing stays open across a reset: the table's expanded set would
+        // outlive the rows it was made for and show a section's rows twice.
+        // What the user had open is kept by path and opened again afterwards.
+        Connections {
+            target: tree.model
+            ignoreUnknownSignals: true
+            function onModelAboutToBeReset() {
+                tree.noteBusy = true
+                for (let r = tree.rows - 1; r >= 0; --r)
+                    if (tree.isExpanded(r))
+                        tree.collapse(r)
+                tree.noteBusy = false
+            }
+        }
         // The root row of a Field stays in the table's expanded set; moving to
         // a section (whose root is hidden) with it open shows the rows twice.
 
