@@ -297,9 +297,9 @@ int main(int argc, char** argv)
 				auto* edited = rowShown(list, writable);
 				CHECK(edited->property("editing").toBool());
 				typeText(window, "7");
-				const auto typed = textOf(edited, "watchValueEditor");
+				const auto typed = textOf(edited, "scalarEditor");
 				click(window, header);
-				CHECK(rows.sorted() && edited->property("editing").toBool() && textOf(edited, "watchValueEditor") == typed);
+				CHECK(rows.sorted() && edited->property("editing").toBool() && textOf(edited, "scalarEditor") == typed);
 				CHECK(list->property("currentIndex").toInt() == edited->property("index").toInt());
 				key(window, Qt::Key_Escape);
 				// The menu's way to the same: checked as the list is sorted.
@@ -633,18 +633,20 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, 'x');
 			settle();
-			// Why not, on its own line; Enter keeps the text in the editor.
-			CHECK(textOf(gain, "watchValueErrorText") == QStringLiteral("x is not a number a f32 holds."));
-			CHECK(!named(gain, "watchValuePreview"));
+			// Why not, in the cell's caption; Enter closes it, writes nothing and
+			// says it was not changed.
+			CHECK(textOf(gain, "valueCaption") == QStringLiteral("x is not a number a f32 holds."));
 			key(window, Qt::Key_Return);
-			CHECK(gain->property("editing").toBool() && calls.writes == 0);
+			CHECK(!gain->property("editing").toBool() && calls.writes == 0);
+			CHECK(textOf(gain, "valueCaption") == QStringLiteral("Not changed: x is not a number a f32 holds."));
 			shot(window, argc, argv, QStringLiteral("watch-edit-refused-480"));
-			// What Enter would write, in the other form, beside the field.
+			// What Enter would write, in the other form, on the caption line.
+			key(window, Qt::Key_F2);
+			CHECK(gain->property("editing").toBool());
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, '2');
 			settle();
-			CHECK(textOf(gain, "watchValuePreview") == QStringLiteral("= 0x40000000"));
-			CHECK(!named(gain, "watchValueErrorText"));
+			CHECK(textOf(gain, "valueCaption").startsWith(QStringLiteral("= 0x40000000")));
 			shot(window, argc, argv, QStringLiteral("watch-edit-preview-480"));
 			// A row in above it: the list hands its current row the focus
 			// again, and the row keeps it in its editor.
@@ -670,7 +672,7 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(!named(gain, "watchRowNow") && gain->property("editing").toBool());
 			CHECK(rowAt(list, 4) == gain);
-			CHECK(textOf(gain, "watchValueEditor") == QStringLiteral("2"));
+			CHECK(textOf(gain, "scalarEditor") == QStringLiteral("2"));
 			key(window, Qt::Key_Return);
 			CHECK(calls.writes == 1 && calls.writeRow == 3 && calls.writeText == QStringLiteral("2"));
 			// WL-5: a write the device confirmed reads quietly; one it reads

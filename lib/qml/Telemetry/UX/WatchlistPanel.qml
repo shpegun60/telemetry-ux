@@ -53,6 +53,19 @@ Pane {
             return qsTr("A write is in progress; write %1 when it is done.").arg(name)
         return ""
     }
+    function openNextWritable(from, forward) {
+        for (let i = from + (forward ? 1 : -1); i >= 0 && i < watchList.count; i += forward ? 1 : -1) {
+            watchList.positionViewAtIndex(i, ListView.Contain)
+            watchList.forceLayout()
+            const item = watchList.itemAtIndex(i)
+            if (item && item.isValue && item.writable) {
+                item.startEdit()
+                return true
+            }
+        }
+        watchList.forceActiveFocus()
+        return false
+    }
     function sayNotWritable(item) {
         writeRefusalText = whyNotWritable(item)
         writeRefusalChanges = item.model.writable === true && provider.connected === true && provider.allowMutations === false
@@ -665,7 +678,7 @@ Pane {
     // more than half of a narrow list.
     // Room for the pencil at the value's left while rows can be written, so
     // it never sits on the digits.
-    readonly property real pencilRoom: provider.canWriteWatch === true ? Type.rowHeight : 0
+    readonly property real pencilRoom: 0
     property real numberSeen: 0
     readonly property real valueColumn: count === 0 ? 0
         : Math.max(Math.round(Type.bodyPixels * 4.2),
@@ -1677,67 +1690,42 @@ Pane {
                 // the Field; its members leave Status and rw blank.
                 readonly property bool nested: model.nested === true
                 readonly property int sourceRow: typeof model.sourceRow === "number" ? model.sourceRow : index
-                property bool editing: false
-                property bool manualCode: false
+                // The cell is open: the same ValueCell as Details'.
+                readonly property bool editing: cellLoader.item ? cellLoader.item.open : false
+                readonly property bool cellShown: cellLoader.visible
                 // A value inside a struct or array Field is written by writing
                 // its whole Field: what that covers, and why it can't be.
                 readonly property var writeScope: model.writeScope && typeof model.writeScope.field === "string"
                                                   && model.writeScope.field.length > 0 ? model.writeScope : null
                 readonly property string writeRefusal: typeof model.writeRefusal === "string" ? model.writeRefusal : ""
                 // The write reads the Field again first: the other values keep
-                // what the device holds then, not what the row last showed.
-                readonly property string scopeText: {
+                // what the device holds then, not what the row last showed. One
+                // quiet line under the cell says so, every time a member is
+                // edited; the long explanation is that line's tooltip.
+                function tail(path) { return path.substring(path.lastIndexOf(".") + 1) }
+                readonly property string scopeNote: {
                     if (!writeScope)
                         return ""
-                    const one = writeScope.others === 1
+                    const total = writeScope.others + 1
+                    const field = tail(writeScope.field)
                     switch (writeScope.kind) {
-                    case "elements":
-                        return one ? qsTr("Writes all of %1; its other element keeps its value.").arg(writeScope.field)
-                                   : qsTr("Writes all of %1; its other %L2 elements keep their values.")
-                                         .arg(writeScope.field).arg(writeScope.others)
-                    case "values":
-                        return one ? qsTr("Writes all of %1; its other value keeps its value.").arg(writeScope.field)
-                                   : qsTr("Writes all of %1; its other %L2 values keep their values.")
-                                         .arg(writeScope.field).arg(writeScope.others)
-                    default:
-                        return one ? qsTr("Writes all of %1; its other member keeps its value.").arg(writeScope.field)
-                                   : qsTr("Writes all of %1; its other %L2 members keep their values.")
-                                         .arg(writeScope.field).arg(writeScope.others)
+                    case "elements": return qsTr("Writes all %L1 elements of %2.").arg(total).arg(field)
+                    case "values": return qsTr("Writes all %L1 values of %2.").arg(total).arg(field)
+                    default: return qsTr("Writes all %L1 members of %2.").arg(total).arg(field)
                     }
                 }
-                readonly property string overwriteText: writeScope
-                    ? qsTr("If the device changes another value of %1 in between, that change is overwritten.")
-                          .arg(writeScope.field)
+                readonly property string scopeDetail: writeScope
+                    ? qsTr("Enter reads %1, sets %2 in it and writes all %L3 members back; the other %L4 keep the values the device holds then. If the device changes one of them in between, that change is overwritten.")
+                          .arg(tail(writeScope.field)).arg(watchRow.name.substring(nameCell.leafStart)).arg(writeScope.others + 1).arg(writeScope.others)
                     : ""
-                property string draftText: ""
                 readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
-                readonly property bool choices: editorKind === "bool" || editorKind === "enum"
                 readonly property bool choicesTruncated: model.editorChoicesTruncated === true
-                readonly property var choiceOptions: {
-                    const rows = []
-                    const source = model.editorChoices
-                    if (source && typeof source.length === "number") {
-                        for (let i = 0; i < source.length; ++i) {
-                            const item = source[i]
-                            if (item && typeof item.label === "string" && typeof item.text === "string")
-                                rows.push({label: item.label, text: item.text, manual: false})
-                        }
-                    }
-                    if (editorKind === "enum") {
-                        if (draftText.length > 0 && !rows.some(item => item.text === draftText))
-                            rows.unshift({label: (choicesTruncated ? qsTr("Code (%1)") : qsTr("Unknown (%1)"))
-                                .arg(draftText), text: draftText, manual: false})
-                        rows.push({label: qsTr("Enter code…"), text: "", manual: true})
-                    }
-                    return rows
-                }
-                readonly property int choiceIndex: choiceOptions.findIndex(item => !item.manual && item.text === draftText)
                 function startEdit() {
                     if (!writable && isValue) {
                         panel.sayNotWritable(watchRow)
                         return
                     }
-                    if (!writable || editing)
+                    if (!writable || editing || !cellLoader.item)
                         return
                     watchList.currentIndex = index
                     if (panel.selectable)
@@ -1745,82 +1733,14 @@ Pane {
                     panel.writeRefusalText = ""
                     panel.writeRefusalChanges = false
                     panel.writeRefusalLeft = false
-                    manualCode = false
-                    // New providers own the exact typed text, including enum codes.
-                    // Keep the legacy fallback only when the role is absent.
-                    draftText = typeof model.editorText === "string" ? model.editorText
-                        : model.sampleExact === true
-                            ? (model.sampleValue === 0 && 1 / model.sampleValue < 0 ? "-0" : String(model.sampleValue))
-                            : watchRow.text
-                    valueEditor.text = draftText
-                    startText = draftText
-                    editing = true
-                    if (choices) valueChoice.forceActiveFocus()
-                    else { valueEditor.forceActiveFocus(); valueEditor.selectAll() }
+                    cellLoader.item.begin()
                 }
-                // The text the editor opened with: left unchanged, nothing is
-                // written.
-                property string startText: ""
-                // Focus gone elsewhere (a click, Tab) commits as Enter does: a
-                // changed value is written under the same Allow changes rule.
-                // Text that is no value is not written, and the status line
-                // says why in Enter's words; the same text writes nothing.
-                function leaveEdit() {
-                    if (!editing)
-                        return
-                    if (draftText === startText) {
-                        finishEdit(false)
-                        return
-                    }
-                    if (!writable) {
-                        finishEdit(false)
-                        panel.sayNotWritable(watchRow)
-                        panel.writeRefusalLeft = true
-                        return
-                    }
-                    const refusal = editPreview.error.length > 0 ? editPreview.error
-                        : draftText.length === 0 ? qsTr("Enter a value.") : ""
-                    if (refusal.length > 0) {
-                        finishEdit(false)
-                        panel.writeRefusalText = qsTr("Not changed: %1").arg(refusal)
-                        panel.writeRefusalChanges = false
-                        panel.writeRefusalLeft = true
-                        return
-                    }
-                    const value = draftText
-                    finishEdit(false)
-                    panel.provider.writeWatch(watchRow.sourceRow, value)
-                }
-                // Enter (byKey) with the text the editor opened with writes
-                // nothing and closes it; the Write button sends it once again.
-                function commitEdit(byKey = false) {
-                    if (byKey && editing && draftText === startText) {
-                        finishEdit()
-                        return
-                    }
-                    if (!editing || !writable || draftText.length === 0)
-                        return
-                    if (editPreview.error.length > 0) {
-                        valueEditor.Accessible.announce(editPreview.error)
-                        return
-                    }
-                    const value = draftText
-                    finishEdit()
-                    panel.provider.writeWatch(watchRow.sourceRow, value)
-                }
-                // The list is a focus scope: the editor lets go of its focus
-                // first, or the list would hand it back to the hidden editor.
+                // Closes the cell without writing.
                 function finishEdit(restoreFocus = true) {
-                    editing = false
-                    valueChoice.popup.close()
-                    valueEditor.focus = false
-                    valueChoice.focus = false
-                    editorScope.focus = false
+                    if (cellLoader.item)
+                        cellLoader.item.reset()
                     if (restoreFocus) watchList.forceActiveFocus()
                 }
-                // One line of columns; a row being edited takes a second line
-                // for its editor, under its name and ×.
-                readonly property bool compact: editing
                 // A reading not yet made, and one a newer reading should have
                 // replaced (family A6).
                 readonly property bool quiet: status === "" || status === "Pending" || status === "Not read" || status === "NotRead"
@@ -1888,9 +1808,11 @@ Pane {
                 readonly property bool active: marked && (watchList.activeFocus || rowMenu.visible)
                 // Muted text steps up on the quiet fill, to stay readable.
                 readonly property color muted: marked && !active ? Theme.textSecondary : Theme.textMuted
-                readonly property bool removeShown: compact || rowHover.hovered || current
+                readonly property bool removeShown: !editing && (rowHover.hovered || current)
                 readonly property color foreground: active ? Theme.selectedForeground : Theme.textPrimary
-                readonly property real valueHeight: editing ? Math.max(Type.rowHeight, editorScope.implicitHeight) : Type.rowHeight
+                // One line, plus the cell's caption while it has something to say.
+                readonly property real valueHeight: cellLoader.visible && cellLoader.item
+                    ? Math.max(Type.rowHeight, cellLoader.item.implicitHeight) : Type.rowHeight
                 // What a keyboard or screen reader user hears: the hidden
                 // columns too, and the status the glyph only marks (spec F).
                 Accessible.role: panel.treeView ? Accessible.TreeItem : Accessible.ListItem
@@ -1920,7 +1842,7 @@ Pane {
                                          watchRow.isValue && watchRow.ownFormat.length > 0
                                              ? qsTr("shown in %1").arg(panel.formatWord(watchRow.ownFormat)) : ""]
                     .filter(part => part.length > 0).join(", ")
-                height: compact ? Type.rowHeight + valueHeight : valueHeight
+                height: valueHeight
                 Rectangle {
                     anchors.fill: parent
                     anchors.rightMargin: panel.scrollReserve
@@ -2032,10 +1954,10 @@ Pane {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.rightMargin: panel.scrollReserve
-                    anchors.verticalCenter: parent.verticalCenter
-                    columns: watchRow.compact ? 2 : 6
+                    anchors.top: parent.top
+                    columns: 6
                     rowSpacing: 0
-                    columnSpacing: watchRow.compact ? Type.spacing : panel.columnGap
+                    columnSpacing: panel.columnGap
                     // The path: its prefix muted, its last segment whole while
                     // it fits, the prefix eliding in its middle (dev…Config.Gain).
                     Item {
@@ -2079,12 +2001,18 @@ Pane {
                         // Edited while polling (WL-5): the live reading beside the
                         // name, "Now 1.48"; a failing read says its status.
                         Text {
+                            id: nowText
                             objectName: "watchRowNow"
                             anchors.left: leafText.right
                             anchors.leftMargin: Type.padding
                             anchors.verticalCenter: parent.verticalCenter
-                            width: Math.max(0, parent.width - leafText.x - leafText.width - Type.padding)
-                            visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > 0
+                            // Only the room the editor leaves; none, and its words go
+                            // into the editor's description.
+                            readonly property real room: cellLoader.item
+                                ? cellLoader.x + cellLoader.width - cellLoader.item.editorWidth - nameCell.x - leafText.x - leafText.width - 2 * Type.padding
+                                : 0
+                            width: Math.max(0, Math.min(parent.width - leafText.x - leafText.width - Type.padding, room))
+                            visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > Type.bodyPixels * 3
                             textFormat: Text.PlainText
                             text: watchRow.ok ? qsTr("Now %1").arg(watchRow.shownText) : watchRow.status
                             font.family: Type.fixedFamily
@@ -2121,7 +2049,7 @@ Pane {
                     Label {
                         id: valueText
                         objectName: "watchValueText"
-                        visible: !watchRow.editing && !watchRow.isGroup
+                        visible: !watchRow.cellShown && !watchRow.isGroup
                         Layout.row: 0
                         Layout.column: 1
                         Layout.preferredWidth: panel.valueColumn
@@ -2155,261 +2083,63 @@ Pane {
                             enabled: watchRow.writable || watchRow.writeRefusal.length > 0
                             onDoubleTapped: if (valueTap.point.modifiers === Qt.NoModifier) watchRow.startEdit()
                         }
-                        ToolButton {
-                            objectName: "watchEditButton"
-                            text: "✎"
-                            visible: watchRow.writable && (rowHover.hovered || visualFocus)
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Type.rowHeight
-                            height: Type.rowHeight
-                            padding: 0
-                            focusPolicy: Qt.NoFocus
-                            onClicked: watchRow.startEdit()
-                            Accessible.name: qsTr("Write %1").arg(watchRow.name)
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Write a new value (F2, or double-click the value)")
-                        }
                     }
-                    FocusScope {
-                        id: editorScope
-                        visible: watchRow.editing
-                        Layout.row: watchRow.compact ? 1 : 0
-                        Layout.column: watchRow.compact ? 0 : 1
-                        Layout.columnSpan: watchRow.compact ? 2 : 1
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: Type.bodyPixels * 4.5
-                        Layout.preferredHeight: implicitHeight
-                        implicitHeight: editorColumn.implicitHeight
-                        onActiveFocusChanged: if (!activeFocus && watchRow.editing) cancelEdit.restart()
-                        Timer {
-                            id: cancelEdit
-                            interval: 0
-                            onTriggered: if (watchRow.editing && !editorScope.activeFocus && !valueChoice.popup.visible)
-                                watchRow.leaveEdit()
-                        }
-                        Timer {
-                            id: manualFocus
-                            interval: 0
-                            onTriggered: if (watchRow.editing && watchRow.manualCode) {
-                                valueEditor.forceActiveFocus()
-                                valueEditor.selectAll()
+                    // The editor is Details' own cell, in the Value column: it
+                    // looks and sizes the same, grows leftwards only as far as its
+                    // text needs, and keeps the row one line plus its caption.
+                    Loader {
+                        id: cellLoader
+                        objectName: "watchValueCellLoader"
+                        active: watchRow.isValue && watchRow.writable
+                        visible: item ? (item.open || item.refusal.length > 0) : false
+                        Layout.row: 0
+                        Layout.column: 1
+                        Layout.preferredWidth: panel.valueColumn
+                        Layout.minimumWidth: 1
+                        Layout.preferredHeight: Type.rowHeight
+                        Layout.alignment: Qt.AlignTop
+                        sourceComponent: ValueCell {
+                            objectName: "valueCell"
+                            name: watchRow.name
+                            value: watchRow.shownText.length > 0 ? watchRow.shownText : "–"
+                            typeText: watchRow.typeText
+                            editable: watchRow.writable
+                            editorText: typeof watchRow.model.editorText === "string" ? watchRow.model.editorText
+                                : watchRow.model.sampleExact === true
+                                    ? (watchRow.model.sampleValue === 0 && 1 / watchRow.model.sampleValue < 0 ? "-0" : String(watchRow.model.sampleValue))
+                                    : watchRow.text
+                            editorKind: watchRow.editorKind
+                            editorChoices: watchRow.model.editorChoices !== undefined ? watchRow.model.editorChoices : []
+                            choicesTruncated: watchRow.choicesTruncated
+                            hexCodes: watchRow.formatName === "hex"
+                            highlighted: watchRow.active
+                            openOnClick: false
+                            listOpensOnBegin: false
+                            editorRoom: Math.max(0, cellLoader.x - nameCell.x - nameCell.Layout.leftMargin
+                                                    - Math.min(leafText.implicitWidth, Type.bodyPixels * 3) - Type.tight)
+                            captionRoom: Math.max(0, cellLoader.x - nameCell.x - nameCell.Layout.leftMargin)
+                            captionRightRoom: Math.max(0, rowLayout.width - cellLoader.x - cellLoader.width - panel.removeColumnWidth)
+                            note: watchRow.scopeNote
+                            noteDetail: watchRow.scopeDetail
+                            extraDescription: [watchRow.editing && !nowText.visible && nowText.text.length > 0 ? nowText.text : "",
+                                               qsTr("Enter writes; Escape cancels.")].filter(part => part.length > 0).join(" ")
+                            // Typing only checks; Enter, Tab, a click away or a choice writes.
+                            checkText: function(text) {
+                                const result = typeof panel.provider.watchEditPreview === "function"
+                                    ? panel.provider.watchEditPreview(watchRow.sourceRow, text) : null
+                                const error = result && result.error ? result.error : ""
+                                return { ok: error.length === 0 && text.length > 0,
+                                         error: error.length === 0 && text.length === 0 ? qsTr("Enter a value.") : error,
+                                         preview: !error && result && result.preview ? result.preview : "" }
                             }
-                        }
-                        ColumnLayout {
-                            id: editorColumn
-                            anchors.fill: parent
-                            spacing: 0
-                            RowLayout {
-                                id: editorLine
-                                Layout.fillWidth: true
-                                spacing: Type.tight
-                                ComboBox {
-                                    id: valueChoice
-                                    objectName: "watchValueChoice"
-                                    visible: watchRow.choices && !watchRow.manualCode
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    model: watchRow.choiceOptions
-                                    textRole: "label"
-                                    valueRole: "text"
-                                    currentIndex: watchRow.choiceIndex
-                                    displayText: currentIndex < 0 ? qsTr("Choose a value") : currentText
-                                    palette.button: Theme.buttonFill
-                                    palette.buttonText: Theme.textPrimary
-                                    palette.text: Theme.textPrimary
-                                    palette.base: Theme.surface
-                                    palette.light: Theme.stateSelected
-                                    palette.midlight: Theme.stateHover
-                                    palette.mid: Theme.buttonFillPressed
-                                    palette.dark: Theme.textSecondary
-                                    palette.highlight: Theme.stateSelected
-                                    palette.highlightedText: Theme.selectedForeground
-                                    delegate: ItemDelegate {
-                                        id: choiceOption
-                                        required property var model
-                                        required property int index
-                                        width: ListView.view ? ListView.view.width : implicitWidth
-                                        text: model.label
-                                        highlighted: valueChoice.highlightedIndex === index
-                                        font.weight: valueChoice.currentIndex === index ? Type.headingWeight : Type.bodyWeight
-                                        palette.text: Theme.textPrimary
-                                        palette.highlightedText: Theme.selectedForeground
-                                        palette.light: Theme.stateSelected
-                                        palette.midlight: Theme.stateHover
-                                        palette.highlight: Theme.stateSelected
-                                        PlainToolTip { visible: choiceOption.hovered; text: choiceOption.text; delay: 700 }
-                                    }
-                                    Accessible.name: qsTr("New value for %1").arg(watchRow.name)
-                                    Accessible.description: currentIndex < 0
-                                        ? qsTr("Choose a value, then Write or press Enter to send it to the device; Undo does not take it back. Escape cancels.")
-                                        : qsTr("%1. Choose a value, then Write or press Enter to send it to the device; Undo does not take it back. Escape cancels.").arg(currentText)
-                                    PlainToolTip {
-                                        objectName: "watchValueChoiceToolTip"
-                                        visible: (valueChoice.hovered || valueChoice.visualFocus) && !valueChoice.popup.visible
-                                        delay: 700
-                                        text: valueChoice.Accessible.description
-                                    }
-                                    onActivated: function(index) {
-                                        const item = watchRow.choiceOptions[index]
-                                        if (!item) return
-                                        if (item.manual) {
-                                            valueEditor.text = watchRow.draftText
-                                            watchRow.manualCode = true
-                                            manualFocus.restart()
-                                        } else watchRow.draftText = item.text
-                                        currentIndex = Qt.binding(() => watchRow.choiceIndex)
-                                    }
-                                    Keys.onReturnPressed: event => {
-                                        if (popup.visible) event.accepted = false
-                                        else watchRow.commitEdit(true)
-                                    }
-                                    Keys.onEnterPressed: event => {
-                                        if (popup.visible) event.accepted = false
-                                        else watchRow.commitEdit(true)
-                                    }
-                                    Keys.onEscapePressed: watchRow.finishEdit()
-                                    Connections {
-                                        target: valueChoice.popup
-                                        function onClosed() { cancelEdit.restart() }
-                                    }
-                                }
-                                TextField {
-                                    id: valueEditor
-                                    objectName: "watchValueEditor"
-                                    visible: !watchRow.choices || watchRow.manualCode
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    Layout.preferredHeight: Math.max(Type.rowHeight, implicitHeight)
-                                    font.family: Type.fixedFamily
-                                    horizontalAlignment: watchRow.compact ? TextInput.AlignLeft : TextInput.AlignRight
-                                    placeholderText: watchRow.manualCode ? qsTr("Numeric code") : ""
-                                    topPadding: Type.tight
-                                    bottomPadding: Type.tight
-                                    onTextEdited: watchRow.draftText = text
-                                    Keys.onReturnPressed: watchRow.commitEdit(true)
-                                    Keys.onEnterPressed: watchRow.commitEdit(true)
-                                    Keys.onEscapePressed: watchRow.finishEdit()
-                                    Accessible.name: qsTr("New value for %1").arg(watchRow.name)
-                                    Accessible.description: (watchRow.writeScope
-                                        ? qsTr("%1. %2 %3 Write all or press Enter to send it once; Undo does not take it back. Escape cancels.")
-                                            .arg(watchRow.draftText).arg(watchRow.scopeText).arg(watchRow.overwriteText)
-                                        : qsTr("%1. Write or press Enter to send this value once; Undo does not take it back. Escape cancels.").arg(watchRow.draftText))
-                                        + (editPreview.text.length > 0 ? " " + editPreview.text : "")
-                                    PlainToolTip {
-                                        objectName: "watchValueEditorToolTip"
-                                        visible: valueEditor.hovered || valueEditor.activeFocus
-                                        delay: 700
-                                        text: valueEditor.Accessible.description
-                                    }
-                                }
-                                // What Enter would write in the other form, "= 0x40000000",
-                                // or why not; the whole reason in the tooltip.
-                                Label {
-                                    id: editPreview
-                                    objectName: "watchValuePreview"
-                                    // Read again when the row's reading changes (its type may
-                                    // only now be known) and on every key.
-                                    readonly property var result: {
-                                        void watchRow.text
-                                        return watchRow.editing && valueEditor.visible
-                                            && typeof panel.provider.watchEditPreview === "function"
-                                            ? panel.provider.watchEditPreview(watchRow.sourceRow, watchRow.draftText) : null
-                                    }
-                                    readonly property string error: result && result.error ? result.error : ""
-                                    visible: text.length > 0
-                                    Layout.maximumWidth: Type.bodyPixels * 14
-                                    textFormat: Text.PlainText
-                                    elide: Text.ElideRight
-                                    text: error.length === 0 && result && result.preview ? result.preview : ""
-                                    font.family: Type.fixedFamily
-                                    font.pointSize: Type.caption
-                                    // The edited row is the current one: its selected colour.
-                                    color: watchRow.active ? Theme.selectedForeground : watchRow.muted
-                                    HoverHandler { id: previewHover }
-                                    PlainToolTip { visible: previewHover.hovered && editPreview.truncated; text: editPreview.text; delay: 300 }
-                                }
-                                ToolButton {
-                                    objectName: "watchValueChoiceReturn"
-                                    visible: watchRow.manualCode
-                                    text: "⌄"
-                                    Accessible.name: qsTr("Choose a named value for %1").arg(watchRow.name)
-                                    onClicked: {
-                                        watchRow.manualCode = false
-                                        valueChoice.forceActiveFocus()
-                                        valueChoice.popup.open()
-                                    }
-                                }
-                                Button {
-                                    objectName: "watchValueWrite"
-                                    Layout.preferredWidth: implicitContentWidth + leftPadding + rightPadding
-                                    text: watchRow.writeScope ? qsTr("Write all") : qsTr("Write")
-                                    Layout.minimumWidth: implicitWidth
-                                    enabled: watchRow.writable && watchRow.draftText.length > 0 && editPreview.error.length === 0
-                                    Accessible.name: qsTr("Write %1 once").arg(watchRow.name)
-                                    Accessible.description: watchRow.scopeText
-                                    onClicked: watchRow.commitEdit()
-                                }
-                            }
-                            // Line 2 of a value's editor: why the typed value can't be
-                            // written - a mark in the warning colour, the words in the
-                            // row's own - before what Write all covers.
-                            RowLayout {
-                                objectName: "watchValueError"
-                                visible: editPreview.error.length > 0
-                                Layout.fillWidth: true
-                                Layout.leftMargin: Type.padding
-                                spacing: Type.tight
-                                Text {
-                                    text: "⚠"
-                                    color: Theme.warning
-                                    font.pointSize: Type.caption
-                                    Layout.alignment: Qt.AlignTop
-                                    Accessible.ignored: true
-                                }
-                                Label {
-                                    objectName: "watchValueErrorText"
-                                    Layout.fillWidth: true
-                                    textFormat: Text.PlainText
-                                    text: editPreview.error
-                                    color: watchRow.active ? Theme.selectedForeground : Theme.textPrimary
-                                    font.pointSize: Type.caption
-                                    wrapMode: Text.Wrap
-                                    maximumLineCount: 2
-                                    elide: Text.ElideRight
-                                }
-                            }
-                            // Line 2 of a value's editor: what Write all covers.
-                            Label {
-                                objectName: "watchWriteScope"
-                                visible: watchRow.writeScope !== null
-                                Layout.fillWidth: true
-                                Layout.leftMargin: Type.padding
-                                Layout.preferredHeight: visible ? Math.max(Type.rowHeight, Math.ceil(contentHeight) + 2 * Type.tight) : 0
-                                verticalAlignment: Text.AlignVCenter
-                                textFormat: Text.PlainText
-                                text: watchRow.scopeText
-                                // The edited row is the current one: all of it in its selected colour.
-                                color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
-                                font.pointSize: Type.caption
-                                wrapMode: Text.Wrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                                HoverHandler { id: scopeHover }
-                                PlainToolTip {
-                                    visible: scopeHover.hovered && watchRow.writeScope !== null
-                                    delay: 700
-                                    text: watchRow.writeScope
-                                        ? qsTr("%1 is written whole: Write all reads it, sets %2 in it, writes all of it and reads it back. %3")
-                                            .arg(watchRow.writeScope.field).arg(watchRow.name).arg(watchRow.overwriteText)
-                                        : ""
-                                }
-                            }
+                            commitText: function(text) { panel.provider.writeWatch(watchRow.sourceRow, text) }
+                            onTabbed: function(forward) { panel.openNextWritable(watchRow.index, forward) }
+                            onFinished: function(byKey) { if (byKey) watchList.forceActiveFocus() }
                         }
                     }
                     Label {
                         objectName: "watchRowType"
-                        visible: !watchRow.editing && !watchRow.isGroup && panel.typeColumn > 0
+                        visible: !watchRow.isGroup && panel.typeColumn > 0
                         Layout.row: 0
                         Layout.column: 2
                         Layout.preferredWidth: panel.typeColumn
@@ -2427,7 +2157,7 @@ Pane {
                     // rw: each letter, a missing right as "-" in the placeholder colour.
                     Row {
                         objectName: "watchRowAccess"
-                        visible: !watchRow.editing && !watchRow.isGroup && panel.accessColumn > 0
+                        visible: !watchRow.isGroup && panel.accessColumn > 0
                         Layout.row: 0
                         Layout.column: 3
                         Layout.preferredWidth: panel.accessColumn
@@ -2457,7 +2187,7 @@ Pane {
                     // own words in the tooltip.
                     Label {
                         objectName: "watchRowStatus"
-                        visible: !watchRow.editing && !watchRow.isGroup && panel.statusColumn > 0 && !panel.statusGlyph
+                        visible: !watchRow.isGroup && panel.statusColumn > 0 && !panel.statusGlyph
                         Layout.row: 0
                         Layout.column: 4
                         Layout.minimumWidth: 1
@@ -2482,7 +2212,7 @@ Pane {
                     // Too little room: the word becomes a mark, the word in its tooltip.
                     Item {
                         objectName: "watchRowStatusGlyph"
-                        visible: !watchRow.editing && !watchRow.isGroup && panel.statusGlyph
+                        visible: !watchRow.isGroup && panel.statusGlyph
                         Layout.row: 0
                         Layout.column: 4
                         Layout.preferredWidth: panel.statusColumn
@@ -2527,7 +2257,7 @@ Pane {
                     // row; the keyboard removes with Delete.
                     Item {
                         Layout.row: 0
-                        Layout.column: watchRow.compact ? 1 : 5
+                        Layout.column: 5
                         Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                         Layout.preferredWidth: panel.removeColumnWidth
                         Layout.preferredHeight: Type.rowHeight

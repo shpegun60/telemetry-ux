@@ -57,6 +57,9 @@ Pane {
     readonly property var selectionInfo: typeof provider.selectionInfo === "object" && provider.selectionInfo ? provider.selectionInfo : ({})
     property int valueModelRevision: 0
     property int responseModelRevision: 0
+    // Moved one turn after rows come or go; the tables' root indexes follow only the resets.
+    property int valueRowsRevision: 0
+    property int responseRowsRevision: 0
     // Changes are off: what the selection would need them for, in words.
     readonly property bool changesOff: typeof provider.allowMutations === "boolean" && !provider.allowMutations
     property string refusalText: !showSelection || !hasSelection || disconnected || !changesOff ? ""
@@ -66,11 +69,13 @@ Pane {
     // A Command or Service that takes nothing: a caption, not an empty table.
     readonly property bool noArguments: {
         void valueModelRevision
+        void valueRowsRevision
         return showSelection && hasSelection && (provider.commandSelected || provider.serviceSelected) && !provider.busy
             && !!provider.values && typeof provider.values.rowCount === "function" && provider.values.rowCount() === 0
     }
     readonly property bool showMetadata: {
         void valueModelRevision
+        void valueRowsRevision
         if (!showSelection || disconnected || !hasSelection || selectedCategory !== 1 || provider.editing ||
             typeof provider.definitions !== "object" || !provider.definitions ||
             typeof provider.definitionRootIndex === "undefined")
@@ -110,6 +115,7 @@ Pane {
     // (detailsStatus) is taken at its word; otherwise it is made here.
     readonly property var statusInfo: {
         void valueModelRevision
+        void valueRowsRevision
         if (typeof provider.detailsStatus === "object" && provider.detailsStatus
             && typeof provider.detailsStatus.text === "string")
             return provider.detailsStatus
@@ -160,7 +166,7 @@ Pane {
         if (numeric && width > numberSeen) numberSeen = width
     }
     function noteType(width) { if (width > typeSeen) typeSeen = width }
-    function resetColumns() { valueSeen = 0; numberSeen = 0; typeSeen = 0 }
+    function resetColumns() { valueSeen = 0; numberSeen = 0; typeSeen = 0; ++columnEpoch }
     Connections { target: Type; function onBodyChanged() { panel.resetColumns() } }
     function valueWidth(width) {
         const most = Math.max(Math.min(Type.bodyPixels * 16.5, width * 0.4), numberSeen)
@@ -259,7 +265,11 @@ Pane {
     readonly property string selectedPath: hasSelection ? provider.selection : ""
     property bool readArmed: false
     onSelectedPathChanged: {
+        // Another endpoint: this panel's own folds are forgotten.
+        if (foldMemory === null)
+            ownMemory.clear()
         resetColumns()
+        rootFetch.restart()
         readArmed = selectedPath.length > 0
         readTimer.restart()
     }
@@ -279,24 +289,66 @@ Pane {
             return
         provider.refresh()
     }
-    // The rows a table shows: a struct's members without its root row (spec C:
-    // "no root rows"); a scalar keeps its one row.
-    function contentRoot(model) {
+    // One root per table: a section heading (Arguments, Request, Response) or
+    // the Field's own root row, never both. Under a heading the table shows the
+    // struct's members; a Field keeps its root row (spec A).
+    readonly property bool headed: {
+        // The model says what it holds at the moment it is reset; the
+        // provider's selection flags may follow a moment later.
+        void valueModelRevision
+        const values = provider.values
+        return values && typeof values.sectioned === "function" ? values.sectioned()
+            : provider.commandSelected === true || provider.serviceSelected === true
+    }
+    function contentRoot(model, withHeading) {
         if (!model || typeof model.index !== "function")
             return undefined
+        if (withHeading === false)
+            return model.index(-1, -1)
         return typeof model.contentRoot === "function" ? model.contentRoot() : model.index(-1, -1)
     }
-    function fetchRoot(model) {
-        const root = contentRoot(model)
-        if (root && root.valid && model.canFetchMore(root))
-            model.fetchMore(root)
+    // The table has taken the model's current root index (a reset moves it).
+    // The root row of a Field stays in the table's expanded set; the root
+    // index of a section is that very row, and with it open its rows show twice.
+    function closeRootRow(view, withHeading) {
+        if (withHeading && view && view.rows > 0 && view.isExpanded(0)) {
+            view.noteBusy = true
+            view.collapse(0)
+            view.noteBusy = false
+        }
     }
+    function viewCaughtUp(view) {
+        if (view.section === "value" || view.section === "request" ? view.headed !== panel.headed : false)
+            return false
+        const wanted = contentRoot(view.model, view.headed)
+        return !wanted || !wanted.valid ? !view.rootIndex.valid
+               : view.rootIndex.valid && view.rootIndex.row === wanted.row && view.rootIndex.model === wanted.model
+    }
+    function fetchRoot(model, withHeading) {
+        const root = contentRoot(model, withHeading)
+        if (root && root.valid && model.canFetchMore(root)) {
+            model.fetchMore(root)
+        }
+    }
+    // The tables are set to their defaults and what the user had opened when
+    // the model, the selection or the panel itself arrives.
+    readonly property var valuesModel: provider.values
+    onValuesModelChanged: rootFetch.restart()
+    Component.onCompleted: rootFetch.restart()
     Timer {
         id: rootFetch
         interval: 0
         onTriggered: {
-            panel.fetchRoot(panel.provider.values)
-            panel.fetchRoot(panel.provider.responses)
+            // Rows fetched under a root the table has not taken yet would be
+            // shown twice once it does.
+            if (typeof valueTree === "undefined" || !valueTree || panel.viewCaughtUp(valueTree))
+                panel.fetchRoot(panel.provider.values, panel.headed)
+            if (typeof responseTree === "undefined" || !responseTree || panel.viewCaughtUp(responseTree))
+                panel.fetchRoot(panel.provider.responses, true)
+            if (typeof valueTree !== "undefined" && valueTree && !panel.showMetadata)
+                panel.restoreFolds(valueTree)
+            if (typeof responseTree !== "undefined" && responseTree && responseSection.hasRows)
+                panel.restoreFolds(responseTree)
         }
     }
 
@@ -326,53 +378,440 @@ Pane {
         }
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.outlineVariant }
     }
+    // ---- Fold memory (spec F): what the user opened, by path ----
+    // A host's own (the Batch's, scoped by item) or this panel's, scoped by
+    // the selected endpoint and forgotten when another is selected.
+    property var foldMemory: null
+    property string foldScope: ""
+    readonly property var memory: foldMemory !== null ? foldMemory : ownMemory
+    readonly property string memoryScope: foldScope.length > 0 ? foldScope : "endpoint:" + provider.selection
+    FoldMemory { id: ownMemory }
+    // The root row of a Field's table opens by default; one constant.
+    readonly property bool rootOpenByDefault: true
+    // Bumped when the columns are measured again (zoom, another selection).
+    property int columnEpoch: 0
+
+    // The tail of a path "device.Config" -> "Config".
+    function lastSegment(path, fallback) {
+        const cut = path.lastIndexOf(".")
+        const tail = cut >= 0 ? path.substring(cut + 1) : path
+        return tail.length > 0 ? tail : fallback
+    }
+    function setCurrentRow(view, row) {
+        if (row < 0 || row >= view.rows)
+            return
+        view.selectionModel.setCurrentIndex(view.index(row, 0), ItemSelectionModel.ClearAndSelect)
+        view.positionViewAtRow(row, TableView.Contain)
+    }
+    function rowHasChildren(view, row) {
+        const model = view.model
+        return !!model && model.hasChildren(view.index(row, 0))
+    }
+    function pathOfRow(view, row) {
+        const model = view.model
+        return model && typeof model.pathOf === "function" ? model.pathOf(view.index(row, 0)) : ""
+    }
+    function isRangePath(path) { return path.indexOf("…") >= 0 }
+    // The branch's own parent row: the nearest row above at a shallower depth.
+    function parentRow(view, row) {
+        const depth = view.depth(row)
+        for (let r = row - 1; r >= 0; --r)
+            if (view.depth(r) < depth)
+                return r
+        return -1
+    }
+    // Opens everything under a row that is loaded or cheap to load: never the
+    // elements of a range, never more than 2,000 rows (spec E).
+    function expandUnder(view, row) {
+        if (row < 0 || row >= view.rows)
+            return
+        const model = view.model
+        const base = view.depth(row)
+        view.expand(row)
+        view.forceLayout()
+        for (let r = row + 1; r < view.rows && view.depth(r) > base && view.rows < 2000; ++r) {
+            if (!panel.rowHasChildren(view, r) || view.isExpanded(r))
+                continue
+            if (isRangePath(pathOfRow(view, r)) && model.rowCount(view.index(r, 0)) === 0)
+                continue
+            view.expand(r)
+            view.forceLayout()
+        }
+    }
+    function collapseUnder(view, row) {
+        if (row < 0 || row >= view.rows)
+            return
+        const path = pathOfRow(view, row)
+        view.collapseRecursively(row)
+        memory.forgetUnder(memoryScope, view.section, path)
+        memory.note(memoryScope, view.section, path, false)
+    }
+    // Back to the defaults: the root open, everything else folded.
+    function collapseAll(view) {
+        view.noteBusy = true
+        for (let r = view.rows - 1; r >= 0; --r)
+            if (view.isExpanded(r))
+                view.collapse(r)
+        view.noteBusy = false
+        memory.forgetTable(memoryScope, view.section)
+        applyDefaults(view)
+    }
+    // The rows open before the user chooses: a Field's root, a section's single branch.
+    function applyDefaults(view) {
+        if (view.rows === 0)
+            return
+        const opens = !view.headed ? rootOpenByDefault && panel.rowHasChildren(view, 0)
+                                    : view.model.rowCount(view.rootIndex) === 1 && panel.rowHasChildren(view, 0)
+        if (!opens || view.isExpanded(0))
+            return
+        const path = pathOfRow(view, 0)
+        const known = memory.entries(memoryScope, view.section).filter(function(item) { return item.path === path })
+        if (known.length > 0 && known[0].open === false)
+            return
+        view.noteBusy = true
+        view.expand(0)
+        view.noteBusy = false
+    }
+    // After a model reset: defaults, then what the user had opened, shallowest
+    // first; a path that no longer exists is dropped; last the current row.
+    function restoreFolds(view) {
+        const model = view.model
+        if (!view || !model)
+            return
+        if (!viewCaughtUp(view) || view.rows < model.rowCount(view.rootIndex)) {
+            // A table not shown yet, or not caught up with its model, has no
+            // rows to open; try again when it has.
+            if (view.restoreTries < 8) {
+                ++view.restoreTries
+                view.restoreRetry.restart()
+            }
+            return
+        }
+        view.restoreTries = 0
+        view.noteBusy = true
+        applyDefaults(view)
+        if (typeof model.indexOfPath === "function") {
+            for (const item of memory.entries(memoryScope, view.section)) {
+                const index = model.indexOfPath(item.path)
+                if (!index || !index.valid) {
+                    memory.forgetUnder(memoryScope, view.section, item.path)
+                    continue
+                }
+                const row = view.rowAtIndex(index)
+                if (row < 0)
+                    continue
+                if (item.open && !view.isExpanded(row) && panel.rowHasChildren(view, row))
+                    view.expand(row)
+                else if (!item.open && view.isExpanded(row))
+                    view.collapse(row)
+            }
+            const current = memory.currentPath(memoryScope, view.section)
+            const index = current.length > 0 || view.headed === false ? model.indexOfPath(current) : undefined
+            if (index && index.valid) {
+                const row = view.rowAtIndex(index)
+                if (row >= 0)
+                    setCurrentRow(view, row)
+            }
+        }
+        view.noteBusy = false
+        view.scheduleActive()
+    }
+    // Keys for a tree table (spec E); true when the key was taken.
+    function treeKey(view, event) {
+        const row = view.currentIndexRow()
+        if (row < 0)
+            return false
+        const branch = panel.rowHasChildren(view, row)
+        const open = view.isExpanded(row)
+        const plain = !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+        if (event.key === Qt.Key_Right && plain) {
+            if (branch && !open)
+                view.expand(row)
+            else if (branch && open)
+                setCurrentRow(view, row + 1)
+            return true
+        }
+        if (event.key === Qt.Key_Left && plain) {
+            if (branch && open)
+                view.collapse(row)
+            else
+                setCurrentRow(view, parentRow(view, row))
+            return true
+        }
+        if (event.key === Qt.Key_Asterisk || event.text === "*") {
+            expandUnder(view, row)
+            return true
+        }
+        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && plain && branch) {
+            view.toggleExpanded(row)
+            return true
+        }
+        if (event.key === Qt.Key_F2 && branch)
+            return true
+        if ((event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)) || event.key === Qt.Key_Menu) {
+            openMenu(view, row)
+            return true
+        }
+        return false
+    }
+    function openMenu(view, row) {
+        rowMenu.view = view
+        rowMenu.row = row
+        rowMenu.popup()
+    }
+    Menu {
+        id: rowMenu
+        objectName: "detailsRowMenu"
+        property var view: null
+        property int row: -1
+        MenuItem {
+            objectName: "treeMenuExpandAll"
+            text: qsTr("Expand all under\t*")
+            onTriggered: panel.expandUnder(rowMenu.view, rowMenu.row)
+        }
+        MenuItem {
+            objectName: "treeMenuCollapseUnder"
+            text: qsTr("Collapse all under")
+            onTriggered: panel.collapseUnder(rowMenu.view, rowMenu.row)
+        }
+        MenuItem {
+            objectName: "treeMenuCollapseAll"
+            text: qsTr("Collapse all")
+            onTriggered: panel.collapseAll(rowMenu.view)
+        }
+    }
+
+    // A tree table: the house tree with one indent step for the whole table
+    // (spec C), the current branch's guide, and the fold memory's hooks.
+    component DetailTree: TreeView {
+        id: tree
+        // value, request or response: the table's key in the fold memory.
+        property string section: "value"
+        // The table sits under a section heading, which is its root.
+        property bool headed: false
+        // Writes by the restore are not the user's.
+        property bool noteBusy: false
+        property int seenDeepest: 0
+        property int restoreTries: 0
+        readonly property Timer restoreRetry: Timer { interval: 40; onTriggered: panel.restoreFolds(tree) }
+        onVisibleChanged: if (visible) rootFetch.restart()
+        readonly property int modelDeepest: model && typeof model.deepest === "number" ? model.deepest - (headed ? 1 : 0) : -1
+        readonly property int deepest: Math.max(0, modelDeepest >= 0 ? modelDeepest : seenDeepest)
+        // One step for every row of the table: 16 px while the deepest level
+        // keeps 80 px for its name, then evenly less, to 8 px.
+        property real step: Type.indent
+        property int activeLevel: -1
+        property int activeFrom: 0
+        property int activeTo: -1
+        function updateStep() {
+            const room = panel.nameEnd(width) - (Type.padding + Type.indent) - 6 * Type.bodyPixels
+            step = deepest === 0 ? Type.indent
+                : Math.max(Math.floor(Type.indent / 2), Math.min(Type.indent, Math.floor(room / deepest)))
+        }
+        function noteDepth(depth) { if (depth > seenDeepest) seenDeepest = depth }
+        function currentIndexRow() {
+            const index = selectionModel ? selectionModel.currentIndex : undefined
+            return index && index.valid ? rowAtIndex(index) : -1
+        }
+        // Timers, not Qt.callLater: the table may be gone by the next turn.
+        Timer { id: activeTimer; interval: 0; onTriggered: tree.updateActive() }
+        Timer { id: stepTimer; interval: 0; onTriggered: tree.updateStep() }
+        function scheduleActive() { activeTimer.restart() }
+        function updateActive() {
+            const row = currentIndexRow()
+            if (row < 0 || row >= rows) {
+                activeLevel = -1
+                return
+            }
+            let branch = row
+            if (!(panel.rowHasChildren(tree, row) && isExpanded(row))) {
+                if (depth(row) === 0) {
+                    activeLevel = -1
+                    return
+                }
+                branch = panel.parentRow(tree, row)
+                if (branch < 0) {
+                    activeLevel = -1
+                    return
+                }
+            }
+            const level = depth(branch)
+            let last = branch
+            for (let r = branch + 1; r < rows && depth(r) > level; ++r)
+                last = r
+            activeFrom = branch + 1
+            activeTo = last
+            activeLevel = level
+        }
+        onWidthChanged: updateStep()
+        onDeepestChanged: updateStep()
+        Component.onCompleted: updateStep()
+        Connections { target: Type; function onBodyChanged() { stepTimer.restart() } }
+        // The columns settle as values are measured: valueSeen and typeSeen only grow.
+        Connections {
+            target: panel
+            function onColumnEpochChanged() { stepTimer.restart() }
+            function onValueSeenChanged() { stepTimer.restart() }
+            function onTypeSeenChanged() { stepTimer.restart() }
+        }
+        Connections { target: tree.selectionModel; function onCurrentChanged() { tree.scheduleActive()
+            if (!tree.noteBusy && tree.section.length > 0) {
+                const row = tree.currentIndexRow()
+                if (row >= 0)
+                    panel.memory.noteCurrent(panel.memoryScope, tree.section, panel.pathOfRow(tree, row))
+            } } }
+        onRowsChanged: scheduleActive()
+        // Nothing stays open across a reset: the table's expanded set would
+        // outlive the rows it was made for and show a section's rows twice.
+        // What the user had open is kept by path and opened again afterwards.
+        Connections {
+            target: tree.model
+            ignoreUnknownSignals: true
+            function onModelAboutToBeReset() {
+                tree.noteBusy = true
+                for (let r = tree.rows - 1; r >= 0; --r)
+                    if (tree.isExpanded(r))
+                        tree.collapse(r)
+                tree.noteBusy = false
+            }
+        }
+        // The root row of a Field stays in the table's expanded set; moving to
+        // a section (whose root is hidden) with it open shows the rows twice.
+
+        onExpanded: function(row, depth) {
+            scheduleActive()
+            if (noteBusy)
+                return
+            // The row and every branch now open under it.
+            const base = tree.depth(row)
+            panel.memory.note(panel.memoryScope, section, panel.pathOfRow(tree, row), true)
+            for (let r = row + 1; r < rows && tree.depth(r) > base; ++r)
+                if (isExpanded(r))
+                    panel.memory.note(panel.memoryScope, section, panel.pathOfRow(tree, r), true)
+        }
+        onCollapsed: function(row, recursively) {
+            scheduleActive()
+            if (noteBusy)
+                return
+            const path = panel.pathOfRow(tree, row)
+            if (recursively)
+                panel.memory.forgetUnder(panel.memoryScope, section, path)
+            panel.memory.note(panel.memoryScope, section, path, false)
+        }
+    }
+
     // One row of the family (spec A): Name, Value and Type at the same x at
-    // every depth, striped, 22 px tall unless a cell's caption follows.
+    // every depth, striped, 22 px tall unless a cell's caption follows; the
+    // house tree's chevron and indent guides left of the name.
     component DetailRow: TreeViewDelegate {
         id: cellRow
         property string cellName: ""
         property string cellType: ""
         property string cellValue: ""
         property string cellHint: ""
-        // A struct or array: its name in the heading weight.
+        // The row's path under the table's first level, and the words before it.
+        property string cellPath: ""
+        property string pathPrefix: ""
+        // The Field's root row, in the heading weight.
         property bool container: false
         // A value not yet sent: the accent line at the row's left.
         property bool unsent: false
+        property int unsentCount: 0
+        property string unsentWords: ""
+        // What a folded branch shows, for the accessible description.
+        readonly property string summaryShown: valueItem && typeof valueItem.summaryShown === "string" ? valueItem.summaryShown : ""
         property Component valueComponent
         // The row tooltip's name, so a host's check can find it per tree.
         property string toolTipName: ""
         readonly property var valueItem: valueCell.item
-        // How far an open value's editor may grow leftwards: over the Name
-        // column's room, short of the name's first characters.
-        readonly property real valueRoom: Math.max(0, panel.valueX(width) - Type.tight
-            - (Type.padding + nameIndent + Math.min(nameLabel.implicitWidth, Type.bodyPixels * 3)))
-        readonly property real nameIndent: Math.min((depth + 1) * Type.indent,
+        readonly property var tree: treeView
+        readonly property real step: treeView && typeof treeView.step === "number" ? treeView.step : Type.indent
+        // Where the name starts, and where the chevron goes: past the hard
+        // cap a name keeps 4 characters.
+        readonly property real nameIndent: Math.min(depth * step + Type.indent,
             Math.max(Type.indent, panel.nameEnd(width) - Type.bodyPixels * 4 - Type.padding))
+        readonly property real chevronX: Type.padding + nameIndent - Type.indent
+        readonly property real nameX: Type.padding + nameIndent
+        // The name's text end, and the room a folded summary or an editor may take left of the value.
+        readonly property real nameTextEnd: nameX + Math.min(nameLabel.implicitWidth, Math.max(0, panel.nameEnd(width) - nameX))
+        readonly property real valueRoom: Math.max(0, panel.valueX(width) - Type.tight
+            - (nameX + Math.min(nameLabel.implicitWidth, Type.bodyPixels * 3)))
+        readonly property real restRoom: Math.max(0, panel.valueX(width) - (nameTextEnd + Type.columnGap))
+        readonly property real captionRoom: Math.max(0, panel.valueX(width) - nameX)
+        readonly property real captionRightRoom: Math.max(0, width - Type.padding - panel.valueX(width) - panel.valueWidth(width))
         indentation: Type.indent
         leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
-        indicator: TreeChevron { row: cellRow; x: Type.padding + cellRow.nameIndent - Type.indent }
+        indicator: TreeChevron { row: cellRow; x: cellRow.chevronX }
         implicitWidth: treeView ? treeView.width : 0
         implicitHeight: Math.max(Type.rowHeight, valueCell.implicitHeight)
         text: cellName
         highlighted: current
+        Accessible.role: Accessible.TreeItem
         Accessible.name: cellName
-        Accessible.description: [cellType, cellValue, cellHint].filter(function(part) { return part.length > 0 }).join("\n")
+        Accessible.expandable: hasChildren
+        Accessible.expanded: expanded
+        readonly property string accessibleText: [cellType, summaryShown.length > 0 ? summaryShown : cellValue,
+            depth >= 1 && cellPath.indexOf(".") > 0 ? qsTr("in %1").arg(cellPath.substring(0, cellPath.lastIndexOf("."))) : "",
+            unsentWords, cellHint].filter(function(part) { return part.length > 0 }).join("\n")
+        Accessible.description: accessibleText
         readonly property real measuredValue: valueCell.item && typeof valueCell.item.textWidth === "number" ? valueCell.item.textWidth : 0
-        onMeasuredValueChanged: panel.noteValue(measuredValue, valueCell.item && valueCell.item.numeric === true)
+        function noteMeasured() {
+            if (valueCell.item)
+                panel.noteValue(measuredValue, valueCell.item.numeric === true)
+            if (treeView && typeof treeView.noteDepth === "function")
+                treeView.noteDepth(depth)
+        }
+        onMeasuredValueChanged: noteMeasured()
+        Component.onCompleted: noteMeasured()
+        TableView.onReused: noteMeasured()
+        readonly property int epoch: panel.columnEpoch
+        onEpochChanged: noteMeasured()
         // The row may be gone by the next turn of the event loop.
         onImplicitHeightChanged: Qt.callLater(function() { if (cellRow && cellRow.treeView) cellRow.treeView.forceLayout() })
-        PlainToolTip { objectName: cellRow.toolTipName; visible: cellRow.hovered && cellRow.cellHint.length > 0; text: cellRow.cellHint }
+        // The full path, after 700 ms, on a nested row or an elided name.
+        readonly property string pathText: {
+            if (cellPath.length === 0)
+                return pathPrefix
+            const glue = cellPath.charAt(0) === "[" || pathPrefix.endsWith(": ") ? "" : "."
+            return pathPrefix + glue + cellPath
+        }
+        HoverHandler { id: nameHover }
+        PlainToolTip {
+            objectName: cellRow.toolTipName
+            delay: 700
+            visible: nameHover.hovered && (cellRow.depth >= 1 || nameLabel.truncated) && cellRow.pathText.length > 0
+            text: cellRow.pathText + (cellRow.cellHint.length > 0 ? "\n" + cellRow.cellHint : "")
+        }
         background: Rectangle {
             color: cellRow.highlighted
                 ? (cellRow.treeView && cellRow.treeView.activeFocus ? Theme.stateSelected : Theme.stateSelectedInactive)
                 : cellRow.hovered ? Theme.stateHover
                 : cellRow.row % 2 === 1 ? Theme.surfaceAlternate : "transparent"
+            // Indent guides: one 1 px line under each ancestor's chevron.
+            Repeater {
+                model: cellRow.depth
+                Rectangle {
+                    required property int index
+                    objectName: "indentGuide"
+                    readonly property real lineX: Math.round(Type.padding + index * cellRow.step + Type.indent / 2)
+                    // Past the cap a row's chevron stands left of its deeper guides.
+                    visible: lineX <= cellRow.chevronX + 0.5
+                    x: lineX
+                    width: 1
+                    height: cellRow.height
+                    readonly property bool active: cellRow.treeView && index === cellRow.treeView.activeLevel
+                        && cellRow.row >= cellRow.treeView.activeFrom && cellRow.row <= cellRow.treeView.activeTo
+                    color: active ? Theme.outline : Theme.outlineVariant
+                    Accessible.ignored: true
+                }
+            }
         }
+        // A folded branch carries the mark when any value under it is unsent.
         Rectangle {
             objectName: "unsentMark"
             width: 2; height: parent.height
             color: Theme.accent
-            visible: cellRow.unsent
+            visible: cellRow.unsent && (!cellRow.hasChildren || !cellRow.expanded)
             Accessible.ignored: true
         }
         Rectangle {
@@ -381,11 +820,19 @@ Pane {
             visible: cellRow.current && cellRow.treeView && cellRow.treeView.activeFocus
             Accessible.ignored: true
         }
+        // A right-click opens the row's menu on the row.
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: {
+                panel.setCurrentRow(cellRow.treeView, cellRow.row)
+                panel.openMenu(cellRow.treeView, cellRow.row)
+            }
+        }
         contentItem: Item {
             Label {
                 id: nameLabel
                 objectName: "detailCellName"
-                x: Type.padding + cellRow.nameIndent
+                x: cellRow.nameX
                 width: Math.max(0, panel.nameEnd(cellRow.width) - x)
                 height: Type.rowHeight
                 verticalAlignment: Text.AlignVCenter
@@ -688,9 +1135,12 @@ Pane {
                         active: panel.showMetadata; visible: active
                         Layout.fillWidth: true; Layout.fillHeight: true
                         sourceComponent: Component {
-                            TreeView {
+                            DetailTree {
                                 id: metadataTree
                                 objectName: "metadataTree"
+                                section: ""
+                                headed: true
+                                Keys.onPressed: function(event) { event.accepted = panel.treeKey(metadataTree, event) }
                                 // The Field's members, without the Field's own row. Set
                                 // on the next turn: showing them loads the tree's rows,
                                 // which must not happen inside a host's selection.
@@ -729,7 +1179,7 @@ Pane {
                                     readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                                     cellName: name; cellType: typeText; cellValue: qsTr("Not read")
                                     cellHint: detail + "\n" + panel.contextHelp
-                                    container: hasChildren
+                                    container: false
                                     valueComponent: Label {
                                         objectName: "metadataValueLabel"
                                         height: Type.rowHeight
@@ -745,19 +1195,27 @@ Pane {
                             }
                         }
                     }
-                    TreeView {
+                    DetailTree {
                         id: valueTree
                         objectName: "valueTree"
+                        section: panel.headed ? "request" : "value"
+                        headed: panel.headed
                         visible: !panel.showMetadata
                         Layout.fillWidth: true; Layout.fillHeight: true
                         clip: true; model: panel.provider.values; alternatingRows: false
                         rootIndex: {
                             void panel.valueModelRevision
-                            return panel.contentRoot(panel.provider.values)
+                            void panel.valueRowsRevision
+                            return panel.contentRoot(panel.provider.values, panel.headed)
                         }
                         activeFocusOnTab: true
                         editTriggers: TableView.NoEditTriggers
-                        Keys.onPressed: function(event) { panel.openCurrent(valueTree, event) }
+                        Keys.onPressed: function(event) {
+                            if (panel.treeKey(valueTree, event))
+                                event.accepted = true
+                            else
+                                panel.openCurrent(valueTree, event)
+                        }
                         selectionModel: ItemSelectionModel { model: valueTree.model }
                         contentWidth: width
                         columnWidthProvider: function() { return valueTree.width }
@@ -775,6 +1233,11 @@ Pane {
                             required property int loadedCount
                             required property bool editable
                             required property string editorText
+                            readonly property var summaryParts: model.summaryParts !== undefined ? model.summaryParts : []
+                            readonly property string summaryKind: typeof model.summaryKind === "string" ? model.summaryKind : ""
+                            readonly property int itemCount: typeof model.itemCount === "number" ? model.itemCount : -1
+                            readonly property string rowPath: typeof model.path === "string" ? model.path : ""
+                            readonly property int unsentRows: typeof model.unsentCount === "number" ? model.unsentCount : (model.unsent === true ? 1 : 0)
                             readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                             readonly property string canonicalText: typeof model.canonicalText === "string" ? model.canonicalText : ""
                             readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
@@ -783,9 +1246,18 @@ Pane {
                             readonly property string takes: typeof model.takes === "string" ? model.takes : ""
                             readonly property bool stale: model.stale === true
                             readonly property string staleNote: typeof model.staleNote === "string" ? model.staleNote : ""
-                            cellName: name; cellType: typeText; cellHint: detail; cellValue: value
-                            container: isAggregate
+                            readonly property bool rootRow: isAggregate && !panel.headed && depth === 0
+                            cellName: rootRow ? panel.lastSegment(panel.provider.selection, name) : name
+                            cellType: typeText; cellHint: detail; cellValue: value
+                            cellPath: rowPath
+                            pathPrefix: panel.headed ? panel.provider.selection + (panel.provider.serviceSelected ? qsTr(" request: ") : qsTr(" arguments: "))
+                                                      : panel.provider.selection
+                            container: rootRow
                             unsent: model.unsent === true
+                            unsentCount: unsentRows
+                            unsentWords: unsentRows <= 0 ? ""
+                                : panel.headed ? (unsentRows === 1 ? qsTr("1 value not yet sent") : qsTr("%L1 values not yet sent").arg(unsentRows))
+                                : (unsentRows === 1 ? qsTr("1 value edited, not applied") : qsTr("%L1 values edited, not applied").arg(unsentRows))
                             TableView.onReused: if (valueItem && typeof valueItem.reset === "function") valueItem.reset()
                             valueComponent: ValueCell {
                                 objectName: "valueCell"
@@ -797,6 +1269,13 @@ Pane {
                                 isAggregate: valueDelegate.isAggregate
                                 childCount: valueDelegate.childCount
                                 loadedCount: valueDelegate.loadedCount
+                                expanded: valueDelegate.expanded
+                                summaryParts: valueDelegate.summaryParts
+                                summaryKind: valueDelegate.summaryKind
+                                itemCount: valueDelegate.itemCount
+                                restRoom: valueDelegate.restRoom
+                                captionRoom: valueDelegate.captionRoom
+                                captionRightRoom: valueDelegate.captionRightRoom
                                 editable: valueDelegate.editable
                                 editorText: valueDelegate.editorText
                                 editorKind: valueDelegate.editorKind
@@ -849,6 +1328,7 @@ Pane {
                 visible: panel.showResponse
                 readonly property bool hasRows: {
                     void panel.responseModelRevision
+                    void panel.responseRowsRevision
                     return !!panel.provider.responses && typeof panel.provider.responses.rowCount === "function"
                         && panel.provider.responses.rowCount() > 0
                 }
@@ -890,16 +1370,19 @@ Pane {
                     visible: responseSection.hasRows
                     spacing: 0
                     TableHeading { id: responseTableHeader; objectName: "responseTableHeader"; Layout.fillWidth: true; view: responseTree }
-                    TreeView {
+                    DetailTree {
                         id: responseTree
                         objectName: "responseTree"
+                        section: "response"
+                        headed: true
                         Layout.fillWidth: true; Layout.fillHeight: true
                         clip: true; model: panel.provider.responses; alternatingRows: false
                         rootIndex: {
                             void panel.responseModelRevision
-                            return panel.contentRoot(panel.provider.responses)
+                            return panel.contentRoot(panel.provider.responses, true)
                         }
                         activeFocusOnTab: true
+                        Keys.onPressed: function(event) { event.accepted = panel.treeKey(responseTree, event) }
                         selectionModel: ItemSelectionModel { model: responseTree.model }
                         contentWidth: width
                         columnWidthProvider: function() { return responseTree.width }
@@ -915,12 +1398,17 @@ Pane {
                             required property bool isAggregate
                             required property int childCount
                             required property int loadedCount
+                            readonly property var summaryParts: model.summaryParts !== undefined ? model.summaryParts : []
+                            readonly property string summaryKind: typeof model.summaryKind === "string" ? model.summaryKind : ""
+                            readonly property int itemCount: typeof model.itemCount === "number" ? model.itemCount : -1
                             readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
                             readonly property bool stale: model.stale === true
                             readonly property string staleNote: typeof model.staleNote === "string" ? model.staleNote : ""
                             cellName: name; cellType: typeText; cellHint: stale && staleNote.length > 0 ? staleNote : detail
                             cellValue: value
-                            container: isAggregate
+                            cellPath: typeof model.path === "string" ? model.path : ""
+                            pathPrefix: panel.provider.selection + qsTr(" response: ")
+                            container: false
                             valueComponent: ValueCell {
                                 objectName: "responseCell"
                                 name: responseDelegate.name
@@ -930,6 +1418,13 @@ Pane {
                                 isAggregate: responseDelegate.isAggregate
                                 childCount: responseDelegate.childCount
                                 loadedCount: responseDelegate.loadedCount
+                                expanded: responseDelegate.expanded
+                                summaryParts: responseDelegate.summaryParts
+                                summaryKind: responseDelegate.summaryKind
+                                itemCount: responseDelegate.itemCount
+                                restRoom: responseDelegate.restRoom
+                                captionRoom: responseDelegate.captionRoom
+                                captionRightRoom: responseDelegate.captionRightRoom
                                 stale: responseDelegate.stale
                                 staleNote: responseDelegate.staleNote
                                 highlighted: responseDelegate.highlighted
@@ -968,6 +1463,8 @@ Pane {
         color: Theme.textMuted
         text: panel.categoryFilter === 1 ? qsTr("Select a Field") : panel.categoryFilter === 2 ? qsTr("Select a Command") : qsTr("Select a Service")
     }
+    Timer { id: valueRevision; interval: 0; onTriggered: ++panel.valueRowsRevision }
+    Timer { id: responseRevision; interval: 0; onTriggered: ++panel.responseRowsRevision }
     Connections {
         target: panel.provider.values
         function onModelReset() {
@@ -975,8 +1472,10 @@ Pane {
             rootFetch.restart()
             Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
         }
-        function onRowsInserted() { ++panel.valueModelRevision }
-        function onRowsRemoved() { ++panel.valueModelRevision }
+        // After the change settles: a view that fetches rows while it takes its
+        // root index would otherwise re-evaluate that very binding.
+        function onRowsInserted() { valueRevision.restart() }
+        function onRowsRemoved() { valueRevision.restart() }
     }
     Connections {
         target: panel.provider.responses
@@ -985,8 +1484,8 @@ Pane {
             rootFetch.restart()
             Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
         }
-        function onRowsInserted() { ++panel.responseModelRevision }
-        function onRowsRemoved() { ++panel.responseModelRevision }
+        function onRowsInserted() { responseRevision.restart() }
+        function onRowsRemoved() { responseRevision.restart() }
     }
     Connections {
         target: panel.provider

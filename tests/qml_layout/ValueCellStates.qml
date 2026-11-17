@@ -9,7 +9,7 @@ import Telemetry.UX
 ApplicationWindow {
     id: window
     width: 420
-    height: 340
+    height: 480
     visible: true
     color: Theme.surfaceWindow
 
@@ -110,9 +110,37 @@ ApplicationWindow {
                 editorRoom: parent.width - width - Type.bodyPixels * 2
                 name: "Pi"; typeText: "f32"; editable: true
                 value: piRow.text; editorText: piRow.text
+                canonicalText: piRow.text === "0.1" ? "0.100000001" : piRow.text
                 takes: "Enter a number."
                 setText: function(text) { return piRow.set(text) }
             }
+        }
+        QtObject { id: draftLog; objectName: "draftLog"; property var committed: []; property int checked: 0; property string shown: "3" }
+        // The Watchlist's cell: a draft, written only when kept.
+        ValueCell {
+            id: draftCell
+            objectName: "draftCell"
+            width: parent.width
+            name: "Gain"; typeText: "u8"; editable: true
+            value: draftLog.shown; editorText: draftLog.shown
+            takes: "Enter a number from 0 to 255."
+            note: "Writes all 3 members of Config."
+            noteDetail: "Enter reads Config, sets Gain in it and writes all 3 members back."
+            commitText: function(text) { draftLog.committed = draftLog.committed.concat([text]); draftLog.shown = text }
+            checkText: function(text) {
+                draftLog.checked++
+                return /^\d+$/.test(text) && Number(text) <= 255 ? ({ ok: true, preview: "" })
+                    : ({ ok: false, error: "Enter a number from 0 to 255." })
+            }
+        }
+        // A float whose exact value and bits the caption's tooltip gives.
+        ValueCell {
+            objectName: "exactCell"
+            width: parent.width
+            name: "Pi"; typeText: "f32"; editable: true
+            value: "3.14159274"; editorText: "3.14159274"
+            canonicalText: "3.14159274"
+            setText: function(text) { return true }
         }
         // A choice in that narrow column, its codes in hex.
         Item {

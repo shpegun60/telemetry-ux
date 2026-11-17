@@ -1489,6 +1489,45 @@ Per editor:
   no step in the UndoHistory (a step merged back to where it started is
   dropped; `tests/dynamic_batch` now holds this); a real change stays one step.
 
+## Details and the Batch pane as a tree; the Watchlist edits in place; the cell editor closes on Enter (November 2026)
+
+- `EndpointPanel` draws its value tables as a tree: one root per table (a
+  section heading, or the Field's own root row, open by default), a chevron and
+  indent guides, one indent step per table (16 px, down to 8 px when the
+  deepest level needs its 80 px), folded branches that show their values
+  (`{Gain 1.5, Enabled true, ...}`, `[0, 0, 1, ... 64 items]`), keys (Left,
+  Right, `*`, Enter, Shift+F10) and a row menu (Expand all under, Collapse all
+  under, Collapse all). The root row's name is the Field's last path segment;
+  a nested struct's name is no longer bold.
+- Fold memory: `EndpointPanel.foldMemory` / `foldScope`. Details keeps the folds
+  per selected endpoint; `BatchPanel` owns one `FoldMemory` for its life and
+  scopes it by item uid. New `FoldMemory.qml` (exported with the module).
+- A provider's value models should offer the new `ValueModel` roles: `path`,
+  `summaryParts`, `summaryKind`, `itemCount`, `unsentCount`, and `pathOf(index)`,
+  `indexOfPath(path)` and `deepest`; a model without them still draws, without
+  summaries, memory or the compressed step. A branch's `unsent` is true when any
+  value under it is. The "3 children" text is gone from aggregate rows.
+- Arrays longer than 128 elements show ranges `[0...127]`, `[128...255]` (each
+  folded, fetched when opened) instead of "Load next 128"; their paths are
+  `Samples[128...255]`; an element's path stays `Samples[129]`.
+- `ValueCell`: Enter closes the editor and leaves nothing selected (the table
+  behind it no longer opens the cell again); the "Encoded" caption is one line
+  across the row (`captionRoom`, `captionRightRoom`, `restRoom`) with the exact
+  value and its bits in its tooltip (`3.1415927410125732 · 0x40490FDB`); the
+  Value column's width is measured from the text and follows the pane's width;
+  new draft mode (`commitText`, `checkText`, `note`, `noteDetail`,
+  `openOnClick`, `listOpensOnBegin`, `changed`, `extraDescription`,
+  `editorWidth`).
+- `WatchlistPanel` edits in place with `ValueCell`: no two-line editor, no
+  "Write all" (`watchValueWrite` is gone); Enter, Tab, a click away or a choice
+  writes, Escape and an unchanged text write nothing; a member's write is
+  announced on one quiet line ("Writes all 3 members of Config."). Gone object
+  names: `watchValueEditor` (now `scalarEditor`), `watchValueChoice`
+  (`valueChoice`), `watchValuePreview`, `watchValueError`, `watchWriteScope`,
+  `watchValueEditorToolTip`, `watchValueChoiceToolTip`, `watchEditButton`.
+- The panel's row-count bumps (`valueModelRevision`, `responseModelRevision`)
+  follow `rowsInserted` / `rowsRemoved` one turn later.
+
 ### The Plot's later list: Measure tooltips, warnings, pins, gaps, keys
 
 - Measure: the Δ, Mean, Pk-pk and Std dev titles carry a tooltip saying what the

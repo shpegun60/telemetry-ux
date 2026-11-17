@@ -932,7 +932,7 @@ int main(int argc, char** argv)
             // without permission.
             {
                 auto* okValue = item(okRow, QStringLiteral("watchValueText"));
-                auto* editor = item(okRow, QStringLiteral("watchValueEditor"));
+                auto* editor = item(okRow, QStringLiteral("scalarEditor"));
                 CHECK(okValue && editor && !editor->isVisible());
                 const auto doubleClick = [&](QQuickItem* target) {
                     QTest::mouseDClick(narrowWindow, Qt::LeftButton, Qt::NoModifier,
@@ -972,7 +972,7 @@ int main(int argc, char** argv)
                 CHECK(narrowProvider->property("writes").toStringList().size() == 1);
                 auto* readOnlyValue = item(failedRow, QStringLiteral("watchValueText"));
                 doubleClick(readOnlyValue);
-                CHECK(!item(failedRow, QStringLiteral("watchValueEditor"))->isVisible());
+                { auto* readOnlyEditor = item(failedRow, QStringLiteral("scalarEditor")); CHECK(!readOnlyEditor || !readOnlyEditor->isVisible()); }
                 CHECK(narrowProvider->setProperty("canWriteWatch", false));
                 settle();
                 doubleClick(okValue);

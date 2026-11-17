@@ -7,6 +7,8 @@ import QtQuick.Shapes
 Pane {
     id: panel
     required property var provider
+    // The folds of every item's values, by item (uid), for the panel's life.
+    FoldMemory { id: batchFolds }
     property int providerRevision: 0
     objectName: "batchPane"
     implicitHeight: batchLayout.implicitHeight + topPadding + bottomPadding
@@ -543,6 +545,12 @@ Pane {
                 SplitView.preferredHeight: Type.rowHeight * 13
                 SplitView.minimumHeight: batchSplit.sideBySide ? 0 : Type.rowHeight * 6
                 framed: false
+                // What was opened in each item's values stays open for as long as
+                // this panel exists: moving, running, removing and undoing an
+                // item, or collapsing the Batch in its dock, forget nothing.
+                foldMemory: batchFolds
+                foldScope: items.currentItem && items.currentItem.model && items.currentItem.model.uid !== undefined
+                           ? "item:" + items.currentItem.model.uid : ""
                 readonly property var item: panel.provider.batchItem
                 provider: item
                 infoPrefix: item && item.item > 0 ? qsTr("Item %L1 \u00b7 ").arg(item.item) : ""
