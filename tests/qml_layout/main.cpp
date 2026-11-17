@@ -437,6 +437,39 @@ int main(int argc, char** argv)
 				CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) +
 				                                     QStringLiteral("/service-request-narrow-%1.png").arg(height)));
 			}
+			// The pane of the Batch's item scrolls: in a dock too short for both
+			// tables nothing is clipped or overlaps, and the Response's last
+			// row can be scrolled into view.
+			CHECK(statePanel->setProperty("scrolls", true));
+			stateWindow->setWidth(300);
+			stateWindow->setHeight(260);
+			settle();
+			auto* body = item(statePanel, QStringLiteral("endpointBodyScroll"));
+			CHECK(body && body->property("contentHeight").toReal() > body->height() + 1 && body->property("interactive").toBool());
+			auto* requestTree = item(statePanel, QStringLiteral("valueTree"));
+			auto* responseTree = item(statePanel, QStringLiteral("responseTree"));
+			auto* responseHeading = item(statePanel, QStringLiteral("responseSectionHeading"));
+			CHECK(requestTree && responseTree && responseHeading && responseTree->isVisible());
+			const auto bottomOf = [](QQuickItem* it) { return it->mapToScene(QPointF(0, it->height())).y(); };
+			const auto topOf = [](QQuickItem* it) { return it->mapToScene(QPointF()).y(); };
+			// The tables do not overlap one another, whatever the scroll.
+			CHECK(bottomOf(requestTree) <= topOf(responseHeading) + 0.5);
+			QQuickItem* lastResponse = nullptr;
+			CHECK(QMetaObject::invokeMethod(responseTree, "itemAtCell", Q_RETURN_ARG(QQuickItem*, lastResponse), Q_ARG(QPoint, QPoint(0, 1))));
+			CHECK(lastResponse && responseTree->property("contentHeight").toReal() <= responseTree->height() + 1);
+			body->setProperty("contentY", 0);
+			settle();
+			const auto panelBottom = rectangle(statePanel).bottom();
+			CHECK(bottomOf(lastResponse) > panelBottom);
+			body->setProperty("contentY", body->property("contentHeight").toReal() - body->height());
+			settle();
+			CHECK(bottomOf(lastResponse) <= panelBottom + 0.5 && topOf(lastResponse) >= rectangle(statePanel).top());
+			CHECK(stateWindow->grabWindow().save(QString::fromUtf8(argv[1]) + QStringLiteral("/service-pane-scrolled.png")));
+			// A tall pane has nothing to scroll.
+			stateWindow->setHeight(900);
+			settle();
+			CHECK(!body->property("interactive").toBool());
+			CHECK(statePanel->setProperty("scrolls", false));
 			stateWindow->setHeight(640);
 			settle();
 		}
