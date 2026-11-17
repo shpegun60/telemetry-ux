@@ -1803,7 +1803,7 @@ ApplicationWindow {
 			list->forceActiveFocus(Qt::TabFocusReason);
 			CHECK(await([&] { return list->hasActiveFocus(); }));
 			QTest::keyClick(window, Qt::Key_F2);
-			auto* editor = control(window->contentItem(), QStringLiteral("watchValueEditor"));
+			auto* editor = control(window->contentItem(), QStringLiteral("scalarEditor"));
 			CHECK(editor->hasActiveFocus());
 			return editor;
 		};
