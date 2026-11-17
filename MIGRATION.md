@@ -1488,3 +1488,14 @@ Per editor:
 - Typing a value and then the value the cell had when it was entered leaves
   no step in the UndoHistory (a step merged back to where it started is
   dropped; `tests/dynamic_batch` now holds this); a real change stays one step.
+
+### A dropped struct or member is one Batch item, the Field
+
+- `addBatchPaths` maps every path to the Field that holds it, keeps the first
+  appearance of each Field and adds one item per Field: a struct, any of its
+  members, or the struct with all its members is one read. A group named as a
+  path adds one item per Field in it. Commands and Services stay one item each.
+- New `DynamicConfiguratorProvider::batchItemCount(lines)` gives that count;
+  the Batch list's drop notice uses it ("Drop to add 1 item to the Batch")
+  where it exists and falls back to the number of paths.
+

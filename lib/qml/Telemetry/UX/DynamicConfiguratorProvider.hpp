@@ -253,6 +253,9 @@ public:
 	// new item); items: [{path, operation, what}]; refused: [{line, path,
 	// reason}]; message; serial (the step's, 0 when none was recorded)}.
 	Q_INVOKABLE QVariantMap addBatchPaths(const QStringList& lines);
+	// How many items addBatchPaths would add for these lines: a Field once
+	// however many of its members are named, a group as its Fields.
+	Q_INVOKABLE int batchItemCount(const QStringList& lines) const;
 	QAbstractItemModel* watchlist() const;
 	QObject* watchRows() const;
 	QObject* watchTraces() const;

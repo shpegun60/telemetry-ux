@@ -2097,6 +2097,58 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 	return out;
 }
 
+namespace {
+// What a list of dropped or typed lines asks the Batch for. A Field is read
+// and written whole, so a struct, any of its members, or the struct with all
+// its members is one item; the first appearance fixes the order. A group
+// names every Field in it. Commands and Services are one item each.
+struct BatchLine {
+	QString text;
+	int line = 0;
+};
+
+QVector<BatchLine> planBatchLines(const QStringList& lines, const QVector<EndpointEntry>& list, int& total)
+{
+	QVector<BatchLine> out;
+	QSet<QString> seen;
+	total = 0;
+	for (const auto& text : lines) {
+		if (text.trimmed().isEmpty())
+			continue;
+		++total;
+		const auto pick = endpoint_paths::resolve(text, list);
+		if (pick.status == QStringLiteral("adds") && pick.matches.size() == 1) {
+			const auto& entry = pick.matches.first();
+			if (entry.category == 1) {
+				if (seen.contains(entry.path))
+					continue;
+				seen.insert(entry.path);
+			}
+			out.push_back({text, total});
+			continue;
+		}
+		const auto group = text.trimmed();
+		if (pick.status == QStringLiteral("missing")) {
+			bool any = false;
+			for (const auto& entry : list)
+				if (entry.category == 1 && (entry.group.compare(group, Qt::CaseInsensitive) == 0 ||
+				                            entry.path.startsWith(group + QLatin1Char('.'), Qt::CaseInsensitive))) {
+					any = true;
+					if (!seen.contains(entry.path)) {
+						seen.insert(entry.path);
+						out.push_back({entry.path, total});
+					}
+				}
+			if (any)
+				continue;
+		}
+		out.push_back({text, total});
+	}
+	return out;
+}
+
+} // namespace
+
 QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 {
 	auto p = d;
@@ -2107,10 +2159,11 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 	QVariantList refused, items;
 	int line = 0, firstRefused = 0;
 	QString firstPath, firstReason;
-	for (const auto& text : lines) {
-		if (text.trimmed().isEmpty())
-			continue;
-		++line;
+	int total = 0;
+	const auto plan = planBatchLines(lines, p->endpoints.endpointList(), total);
+	for (const auto& step : plan) {
+		const auto& text = step.text;
+		line = step.line;
 		// Each line is read as it would be checked, so a line says the same in
 		// both places.
 		const auto check = checkBatchPath(text);
@@ -2140,7 +2193,7 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 	result[QStringLiteral("refused")] = refused;
 	// Every line or none: a Batch is a recipe, and one step left out changes it.
 	if (!refused.isEmpty()) {
-		auto message = line == 1 ? firstReason
+		auto message = total == 1 ? firstReason
 		                         : batchWords("Nothing added: line %L1, %2: %3").arg(firstRefused).arg(firstPath, firstReason);
 		if (refused.size() == 2)
 			message += batchWords(" (and one more line)");
@@ -2169,6 +2222,13 @@ QVariantMap DynamicConfiguratorProvider::addBatchPaths(const QStringList& lines)
 	result[QStringLiteral("first")] = first;
 	result[QStringLiteral("serial")] = p->batch.lastSerial();
 	return result;
+}
+
+int DynamicConfiguratorProvider::batchItemCount(const QStringList& lines) const
+{
+	auto p = d;
+	int total = 0;
+	return int(planBatchLines(lines, p->endpoints.endpointList(), total).size());
 }
 
 bool DynamicConfiguratorProvider::removeBatch(int row)
