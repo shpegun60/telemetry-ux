@@ -1549,3 +1549,14 @@ Per editor:
   no reading existed). When the reference and end chips would collide, or would
   not fit beside the axis switch (320 px), one chip, the end's ("Δ 0.4 s ·
   14:14:17.875"), stands for both.
+
+### A dropped struct or member is one Batch item, the Field
+
+- `addBatchPaths` maps every path to the Field that holds it, keeps the first
+  appearance of each Field and adds one item per Field: a struct, any of its
+  members, or the struct with all its members is one read. A group named as a
+  path adds one item per Field in it. Commands and Services stay one item each.
+- New `DynamicConfiguratorProvider::batchItemCount(lines)` gives that count;
+  the Batch list's drop notice uses it ("Drop to add 1 item to the Batch")
+  where it exists and falls back to the number of paths.
+

@@ -985,6 +985,16 @@ void batchPaths()
 	CHECK(added.value("message") ==
 	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
 	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
+	// A Field is read whole: a struct, any of its members, or the struct with
+	// all of them is one item; a group is one per Field; a Command one.
+	const auto items = [provider](const QStringList& lines) { return provider->batchItemCount(lines); };
+	CHECK(items({QStringLiteral("device.Config")}) == 1);
+	CHECK(items({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Config.Matrix[1][0]")}) == 1);
+	CHECK(items({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Config"), QStringLiteral("device.Config.Matrix[1][0]")}) == 1);
+	const auto groupItems = items({QStringLiteral("device")});
+	CHECK(groupItems > 2 && items({QStringLiteral("device"), QStringLiteral("device.Config.Gain")}) == groupItems);
+	CHECK(items({QStringLiteral("device.Setpoint"), QStringLiteral("device.Config.Gain")}) == 2);
+	CHECK(items({QStringLiteral("command control.Ping")}) == 1);
 	connection.disconnect();
 
 	// A Command that takes input, on the demo whose control.Calibrate takes
