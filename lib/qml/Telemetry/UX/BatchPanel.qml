@@ -466,7 +466,8 @@ Pane {
                                 drag.accepted = false
                                 return
                             }
-                            count = paths.length
+                            count = typeof panel.provider.batchItemCount === "function"
+                                    ? panel.provider.batchItemCount(paths) : paths.length
                         }
                         onExited: count = 0
                         onDropped: drop => {
