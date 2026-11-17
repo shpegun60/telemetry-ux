@@ -91,6 +91,9 @@ class TraceView : public QQuickPaintedItem {
 	// Bands the last paint drew where nothing was read, and the open circles
 	// that end a value no longer watched.
 	Q_PROPERTY(int drawnGaps READ drawnGaps NOTIFY drawn)
+	// The words of the too-narrow gap band under the pointer, and where.
+	Q_PROPERTY(QString hoverGap READ hoverGap NOTIFY hoverGapChanged)
+	Q_PROPERTY(qreal hoverGapX READ hoverGapX NOTIFY hoverGapChanged)
 	Q_PROPERTY(int drawnEnds READ drawnEnds NOTIFY drawn)
 	// A band where the Watchlist was stopped or the device gone.
 	Q_PROPERTY(QColor gapColor READ gapColor WRITE setGapColor NOTIFY styleChanged)
@@ -197,6 +200,8 @@ public:
 	QRectF valuesArea() const { return valuesArea_; }
 	int drawnDots() const { return drawnDots_; }
 	int drawnGaps() const { return drawnGaps_; }
+	QString hoverGap() const { return hoverGap_; }
+	qreal hoverGapX() const { return hoverGapX_; }
 	int drawnEnds() const { return drawnEnds_; }
 	QColor gapColor() const { return gapColor_; }
 	void setGapColor(const QColor& color);
@@ -279,7 +284,12 @@ public:
 	// The range measured, copied and saved: the reference to the end when
 	// both are pinned, else the time in view - {fromUtcMs, toUtcMs, seconds,
 	// pinned, readings}.
+	// Also {failed, keptFromUtcMs}: the failed reads in it, and when a pinned
+	// range starts before the oldest reading kept, the time of that reading.
 	Q_INVOKABLE QVariantMap measureRange() const;
+	// The words of a gap band too narrow to carry its caption, at x (the
+	// view's own pixels); empty elsewhere.
+	Q_INVOKABLE QString gapCaptionAt(qreal x) const;
 	// A plotted value over that range, from its readings as read (never
 	// k x value + b). A number: {count, failed, min, max, minUtcMs, maxUtcMs,
 	// mean, peakToPeak, deviation}; a state: {count, failed, changes,
@@ -341,6 +351,7 @@ Q_SIGNALS:
 	void cursorChanged();
 	void styleChanged();
 	void drawn();
+	void hoverGapChanged();
 
 private:
 	struct Range {
@@ -372,6 +383,8 @@ private:
 	QHash<QString, double> referenceValues_;
 	qreal cursorX_ = -1, referenceX_ = -1;
 	QPointF hoverAt_{-1, -1};
+	QString hoverGap_;
+	qreal hoverGapX_ = 0;
 	qreal bottomInset_ = 0, laneHeight_ = 22;
 	QColor laneFillColor_{0x2a, 0x2f, 0x37}, laneTextColor_{0xe6, 0xed, 0xf3};
 	QStringList laneLabels_, laneStates_;
@@ -397,6 +410,8 @@ private:
 	QString focusedPath_;
 	QRectF valuesArea_;
 	int drawnDots_ = 0, drawnGaps_ = 0, drawnEnds_ = 0;
+	struct NarrowGap { qreal x0, x1; QString words; };
+	std::vector<NarrowGap> narrowGaps_;
 	QColor gapColor_{0x15, 0x1d, 0x27};
 	qint64 narrowSinceNs_ = 0;
 	// Per path: drawn per pixel rather than raw, for the hysteresis.
