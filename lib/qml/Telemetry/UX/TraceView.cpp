@@ -499,9 +499,29 @@ QVariantMap TraceView::measureRange() const
 	const auto [from, to] = measuredNs();
 	const auto anchor = traces_ ? traces_->anchor() : WatchTimestamp{};
 	const auto utc = [&](qint64 ns) { return double(anchor.utcMs) + double(ns - anchor.monotonicNs) / 1e6; };
-	return {{QStringLiteral("fromUtcMs"), utc(from)}, {QStringLiteral("toUtcMs"), utc(to)},
-	        {QStringLiteral("seconds"), double(to - from) / 1e9}, {QStringLiteral("pinned"), referenceShown_ && endShown_},
-	        {QStringLiteral("readings"), readingsInRange()}};
+	const bool pinned = referenceShown_ && endShown_;
+	// Failed reads in the range (a read that gave no number), and the time
+	// the oldest kept reading is from when the pinned range starts before it.
+	int failed = 0;
+	for (const auto& path : traces_ ? traces_->plotted() : QStringList{}) {
+		const auto* readings = traces_->readings(path);
+		if (!readings)
+			continue;
+		auto it = std::lower_bound(readings->begin(), readings->end(), from,
+		                           [](const TraceReading& r, qint64 at) { return r.ns < at; });
+		for (; it != readings->end() && it->ns <= to; ++it)
+			if (std::isnan(it->value))
+				++failed;
+	}
+	QVariantMap range{{QStringLiteral("fromUtcMs"), utc(from)}, {QStringLiteral("toUtcMs"), utc(to)},
+	                  {QStringLiteral("seconds"), double(to - from) / 1e9}, {QStringLiteral("pinned"), pinned},
+	                  {QStringLiteral("readings"), readingsInRange()}, {QStringLiteral("failed"), failed}};
+	if (pinned) {
+		const auto oldest = kept().first;
+		if (oldest && from < oldest)
+			range.insert(QStringLiteral("keptFromUtcMs"), utc(oldest));
+	}
+	return range;
 }
 
 QVariantMap TraceView::statistics(const QString& path) const
@@ -692,6 +712,13 @@ void TraceView::hoverMoveEvent(QHoverEvent* event)
 	// pointer that moved in the window moves the cursor, so the keys' cursor
 	// stays where they put it.
 	pointerY_ = event->position().y();
+	// A gap band too narrow for its caption says it under the pointer.
+	const auto gapWords = plotArea_.contains(event->position()) ? gapCaptionAt(event->position().x()) : QString();
+	if (gapWords != hoverGap_) {
+		hoverGap_ = gapWords;
+		hoverGapX_ = event->position().x();
+		Q_EMIT hoverGapChanged();
+	}
 	if (event->scenePosition() == hoverAt_)
 		return;
 	hoverAt_ = event->scenePosition();
@@ -705,6 +732,10 @@ void TraceView::hoverLeaveEvent(QHoverEvent*)
 {
 	hoverAt_ = QPointF(-1, -1);
 	pointerY_ = -1;
+	if (!hoverGap_.isEmpty()) {
+		hoverGap_.clear();
+		Q_EMIT hoverGapChanged();
+	}
 	hideCursor();
 }
 
@@ -1704,6 +1735,7 @@ void TraceView::paint(QPainter* painter)
 	// Where the Watchlist was stopped or the device gone: a band under the
 	// curves, captioned with what and when where the words fit (LP-1g).
 	int gaps = 0, ends = 0;
+	narrowGaps_.clear();
 	if (traces_) {
 		painter->save();
 		painter->setClipRect(area);
@@ -1724,6 +1756,8 @@ void TraceView::paint(QPainter* painter)
 				painter->setPen(labelColor_);
 				painter->setFont(font_);
 				painter->drawText(QPointF(x0 + pad, area.top() + pad + metrics.ascent()), words);
+			} else {
+				narrowGaps_.push_back({x0, x1, words});
 			}
 		}
 		painter->restore();
@@ -2147,5 +2181,12 @@ void TraceView::paint(QPainter* painter)
 		QMetaObject::invokeMethod(this, &TraceView::viewChanged, Qt::QueuedConnection);
 	if (changed || following_ || behindChanged || linesMoved || dotsChanged || lanesChanged)
 		QMetaObject::invokeMethod(this, &TraceView::drawn, Qt::QueuedConnection);
+}
+QString TraceView::gapCaptionAt(qreal x) const
+{
+	for (const auto& gap : narrowGaps_)
+		if (x >= gap.x0 && x <= gap.x1)
+			return gap.words;
+	return {};
 }
 } // namespace telemetry::ux
