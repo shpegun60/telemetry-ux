@@ -536,6 +536,7 @@ Pane {
             EndpointPanel {
                 id: itemPane
                 objectName: "batchItemPane"
+                scrolls: true
                 SplitView.preferredWidth: 400
                 SplitView.minimumWidth: batchSplit.sideBySide ? 220 : 0
                 SplitView.preferredHeight: Type.rowHeight * 13

@@ -23,6 +23,10 @@ Pane {
     // Kept for hosts that set it: the panel has no card any more, only its
     // padding follows.
     property bool framed: true
+    // The pane scrolls when its Request and Response together are taller than
+    // it (the Batch item's pane in a narrow dock): every row keeps its height
+    // and a vertical scroll bar shows as needed. Details fills its area.
+    property bool scrolls: false
     padding: framed ? Type.groupSpacing : Type.padding
     // What Details sends is never undone (UR-1). A host with an UndoRouter
     // gives these words to the area that holds the panel -
@@ -413,8 +417,20 @@ Pane {
             }
         }
     }
-    ColumnLayout {
+    Flickable {
+        id: bodyScroll
+        objectName: "endpointBodyScroll"
         anchors.fill: parent
+        clip: panel.scrolls
+        interactive: panel.scrolls && contentHeight > height + 0.5
+        boundsBehavior: Flickable.StopAtBounds
+        contentWidth: width
+        contentHeight: panel.scrolls ? Math.max(height, bodyColumn.implicitHeight) : height
+        ScrollBar.vertical: ScrollBar { policy: panel.scrolls ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff }
+    ColumnLayout {
+        id: bodyColumn
+        width: bodyScroll.width
+        height: bodyScroll.contentHeight
         spacing: Type.groupSpacing
         // The host's own header and footer follow the selection, not the
         // connection: they are its chrome, shown while the panel shows its
@@ -594,7 +610,21 @@ Pane {
             Layout.fillHeight: !panel.showResponse || responseSection.hasRows
             columns: panel.showResponse && responseSection.hasRows && width >= panel.minimumTableWidth * 2 + Type.groupSpacing ? 2 : 1
             columnSpacing: Type.groupSpacing; rowSpacing: Type.groupSpacing
+            // What the two tables need to show every row: side by side the
+            // taller, over each other both.
+            readonly property real requestWhole: requestColumn.headingsHeight + (panel.noArguments || panel.showMetadata ? 0
+                : valueHeading.implicitHeight + valueTree.contentHeight)
+            readonly property real responseWhole: !panel.showResponse ? 0
+                : !responseSection.hasRows ? responseSection.Layout.preferredHeight
+                : responseHeading.implicitHeight + responseSection.spacing
+                  + (responseNote.visible ? responseNote.implicitHeight + responseSection.spacing : 0)
+                  + responseTableHeader.implicitHeight + responseTree.contentHeight
+            readonly property real wholeHeight: columns === 1 ? requestWhole + (panel.showResponse ? rowSpacing + responseWhole : 0)
+                                                              : Math.max(requestWhole, responseWhole)
+            Layout.minimumHeight: panel.scrolls ? wholeHeight : -1
+            Layout.preferredHeight: panel.scrolls ? wholeHeight : -1
             ColumnLayout {
+                id: requestColumn
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Layout.minimumWidth: 160
                 // A Service's request over its response (one column) takes its
@@ -826,16 +856,18 @@ Pane {
                 readonly property bool stale: !!panel.provider.responses && panel.provider.responses.stale === true
                 Layout.fillWidth: true; Layout.fillHeight: hasRows
                 Layout.minimumWidth: 160
-                Layout.minimumHeight: hasRows ? Type.rowHeight * 3 : Type.rowHeight
-                Layout.preferredHeight: hasRows ? Type.rowHeight * 8 : Type.rowHeight
+                Layout.minimumHeight: panel.scrolls && hasRows ? valueColumns.responseWhole : hasRows ? Type.rowHeight * 3 : Type.rowHeight
+                Layout.preferredHeight: panel.scrolls && hasRows ? valueColumns.responseWhole : hasRows ? Type.rowHeight * 8 : Type.rowHeight
                 Layout.preferredWidth: valueColumns.width / valueColumns.columns
                 spacing: Type.tight
                 SectionHeading {
+                    id: responseHeading
                     objectName: "responseSectionHeading"
                     text: qsTr("Response")
                     Accessible.description: panel.provider.serviceResponseEndpoint
                 }
                 Label {
+                    id: responseNote
                     objectName: "responseStaleNote"
                     visible: responseSection.hasRows && responseSection.stale
                     Layout.fillWidth: true
@@ -857,7 +889,7 @@ Pane {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     visible: responseSection.hasRows
                     spacing: 0
-                    TableHeading { objectName: "responseTableHeader"; Layout.fillWidth: true; view: responseTree }
+                    TableHeading { id: responseTableHeader; objectName: "responseTableHeader"; Layout.fillWidth: true; view: responseTree }
                     TreeView {
                         id: responseTree
                         objectName: "responseTree"
@@ -927,6 +959,7 @@ Pane {
         }
         Loader { Layout.fillWidth: true; active: panel.selectionMatches && panel.footerComponent !== null; sourceComponent: panel.footerComponent }
         Item { visible: !panel.showSelection; Layout.fillHeight: true }
+    }
     }
     Label {
         anchors.centerIn: parent

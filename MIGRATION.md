@@ -1476,3 +1476,15 @@ Per editor:
   f32 f64`, and `enum (i16)`. They were `uint8 ... float64` and `enum (int16)`.
   A host that compares the `typeText` role with the long names must use the
   short ones. The Inspector's device check does.
+
+### The Batch item pane scrolls; an edit back to its value is no step
+
+- `EndpointPanel` has a new `scrolls` property (default false). When true its
+  content lives in a Flickable with a vertical scroll bar shown as needed, and
+  a Service's Request and Response each keep every row's height (one column or
+  side by side), so a dock shorter than both scrolls instead of overflowing at
+  the bottom. `BatchPanel` sets it on the item pane; Details is unchanged.
+  The scrolling area is `endpointBodyScroll`.
+- Typing a value and then the value the cell had when it was entered leaves
+  no step in the UndoHistory (a step merged back to where it started is
+  dropped; `tests/dynamic_batch` now holds this); a real change stays one step.

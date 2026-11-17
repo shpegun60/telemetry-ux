@@ -455,6 +455,36 @@ QModelIndex itemValue(ux::DynamicBatch& batch, const QString& name)
 	return {};
 }
 
+// A value typed and then typed back to what it was when its cell was entered
+// leaves no step; a real change stays one step, and the next cell visit that
+// ends where it began adds none either.
+void itemValueBackToStart()
+{
+	Peer peer;
+	ux::DynamicBatch batch;
+	peer.attach(batch);
+	ux::UndoHistory history;
+	qint64 now = 0;
+	history.setClock([&now] { return now; });
+	batch.setHistory(&history);
+	CHECK(batch.add(serviceRow(peer)));
+	const auto multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(multiplier.isValid() && batch.canEdit());
+	const auto base = history.count();
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("7")) && history.count() == base + 1);
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("0")) && history.count() == base);
+	batch.closeValue();
+	CHECK(history.count() == base);
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("5")) && history.count() == base + 1);
+	batch.closeValue();
+	// Entered at 5: 9 then 5 again is no step; 9 then 6 is one.
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("9")) && history.count() == base + 2);
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("5")) && history.count() == base + 1);
+	CHECK(batch.setScalarText(multiplier, QStringLiteral("6")) && history.count() == base + 2);
+	batch.closeValue();
+	CHECK(history.undo() && history.count() == base + 2);
+}
+
 // BA-4a: the selected item as Details shows it - its request's values,
 // edited live into the item as one step per value, the line from its bytes,
 // what Execute sent and what changed since, and Read | Write as one step.
@@ -680,6 +710,7 @@ int main(int argc, char** argv)
 	QCoreApplication app(argc, argv);
 	requestArguments();
 	itemValues();
+	itemValueBackToStart();
 	orderedOwnedResults();
 	boundedAdmissionAndHistory();
 	reentrantDetach();
