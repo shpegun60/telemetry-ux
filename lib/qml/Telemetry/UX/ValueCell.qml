@@ -76,6 +76,8 @@ Item {
     property string summaryKind: ""
     // Elements or members under a branch (an array shown as ranges holds more than childCount); -1: childCount.
     property int itemCount: -1
+    // The width of what the cell shows now: its editor grows leftwards over the owner's room.
+    readonly property real editorWidth: !open ? width : (choices && !manualCode ? choice.width : input.width)
     // The words a folded branch shows now, for the row's accessible description.
     readonly property string summaryShown: summary.visible ? summary.text : ''
     // Draft mode (see above): null keeps the live setText.
@@ -87,6 +89,8 @@ Item {
     property string noteDetail: ""
     // False: the owner calls begin() itself (the Watchlist's double-click).
     property bool openOnClick: true
+    // A choice opens with its list shown (Details); false: closed, Space or a click opens it.
+    property bool listOpensOnBegin: true
     // The value changed on the device since it was last shown: Theme.info.
     property bool changed: false
     // Words added to the editor's accessible description.
@@ -142,7 +146,8 @@ Item {
         input.text = editorText
         if (choices) {
             choice.forceActiveFocus()
-            choice.popup.open()
+            if (listOpensOnBegin)
+                choice.popup.open()
         } else {
             input.forceActiveFocus()
             input.selectAll()
@@ -513,6 +518,8 @@ Item {
                     const item = cell.options[index]
                     if (!item)
                         return
+                    // The box shows the cell's value again, not the entry just picked.
+                    currentIndex = Qt.binding(function() { return cell.optionIndex })
                     if (item.manual) {
                         cell.manualCode = true
                         input.text = ""
@@ -558,7 +565,7 @@ Item {
                     if (encoded)
                         parts.push(qsTr("Encoded: %1 (%2)").arg(cell.canonicalText).arg(cell.typeText))
                     if (cell.draftMode && cell.checkPreview.length > 0)
-                        parts.push("= " + cell.checkPreview)
+                        parts.push(cell.checkPreview.charAt(0) === "=" ? cell.checkPreview : "= " + cell.checkPreview)
                     if (cell.note.length > 0)
                         parts.push(cell.note)
                     return parts.join(" · ")
