@@ -439,6 +439,7 @@ Pane {
         const known = memory.entries(memoryScope, view.section).filter(function(item) { return item.path === path })
         if (known.length > 0 && known[0].open === false)
             return
+        console.warn("DEFAULT-EXPAND", view.section, view.rows, view.rootIndex.valid)
         view.noteBusy = true
         view.expand(0)
         view.noteBusy = false
@@ -446,6 +447,7 @@ Pane {
     // After a model reset: defaults, then what the user had opened, shallowest
     // first; a path that no longer exists is dropped; last the current row.
     function restoreFolds(view) {
+        console.warn("RESTORE", view.section, view.rows, view.restoreTries)
         const model = view.model
         if (!view || !model)
             return
