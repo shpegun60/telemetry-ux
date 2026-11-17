@@ -296,7 +296,14 @@ int main(int argc, char** argv)
 		single.leaf(cfg, "Enable", "bool", "true", "cfg.Enable", "bool");
 		single.leaf(cfg, "Gain", "f32", "1.5", "cfg.Gain");
 		single.settle(cfg);
+		// Values that need the room the pane has: the Value column follows its width.
+		TreeModel wide(1);
+		auto* wideRoot = wide.branch(nullptr, "Config", "struct (2)", "struct", 2, "");
+		wide.leaf(wideRoot, "Pi", "f32", "3.1415927410125732", "Pi");
+		wide.leaf(wideRoot, "Gain", "f32", "1.5", "Gain");
+		wide.settle(wideRoot);
 		QStandardItemModel empty;
+		engine.rootContext()->setContextProperty(QStringLiteral("wideModel"), &wide);
 		engine.rootContext()->setContextProperty(QStringLiteral("fieldModel"), &field);
 		engine.rootContext()->setContextProperty(QStringLiteral("deepModel"), &deep);
 		engine.rootContext()->setContextProperty(QStringLiteral("serviceModel"), &service);

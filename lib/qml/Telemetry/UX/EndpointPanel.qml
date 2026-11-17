@@ -441,8 +441,17 @@ Pane {
     // first; a path that no longer exists is dropped; last the current row.
     function restoreFolds(view) {
         const model = view.model
-        if (!view || !model || view.rows === 0)
+        if (!view || !model)
             return
+        if (view.rows === 0) {
+            // A table not shown yet has no rows to open; try again when it has.
+            if (model.rowCount(view.rootIndex) > 0 && view.restoreTries < 8) {
+                ++view.restoreTries
+                view.restoreRetry.restart()
+            }
+            return
+        }
+        view.restoreTries = 0
         view.noteBusy = true
         applyDefaults(view)
         if (typeof model.indexOfPath === "function") {
@@ -547,6 +556,9 @@ Pane {
         // Writes by the restore are not the user's.
         property bool noteBusy: false
         property int seenDeepest: 0
+        property int restoreTries: 0
+        readonly property Timer restoreRetry: Timer { interval: 40; onTriggered: panel.restoreFolds(tree) }
+        onVisibleChanged: if (visible) rootFetch.restart()
         readonly property int modelDeepest: model && typeof model.deepest === "number" ? model.deepest - (headed ? 1 : 0) : -1
         readonly property int deepest: Math.max(0, modelDeepest >= 0 ? modelDeepest : seenDeepest)
         // One step for every row of the table: 16 px while the deepest level
@@ -1393,6 +1405,8 @@ Pane {
         color: Theme.textMuted
         text: panel.categoryFilter === 1 ? qsTr("Select a Field") : panel.categoryFilter === 2 ? qsTr("Select a Command") : qsTr("Select a Service")
     }
+    Timer { id: valueRevision; interval: 0; onTriggered: ++panel.valueModelRevision }
+    Timer { id: responseRevision; interval: 0; onTriggered: ++panel.responseModelRevision }
     Connections {
         target: panel.provider.values
         function onModelReset() {
@@ -1400,8 +1414,10 @@ Pane {
             rootFetch.restart()
             Qt.callLater(function() { if (valueTree) valueTree.forceLayout() })
         }
-        function onRowsInserted() { ++panel.valueModelRevision }
-        function onRowsRemoved() { ++panel.valueModelRevision }
+        // After the change settles: a view that fetches rows while it takes its
+        // root index would otherwise re-evaluate that very binding.
+        function onRowsInserted() { valueRevision.restart() }
+        function onRowsRemoved() { valueRevision.restart() }
     }
     Connections {
         target: panel.provider.responses
@@ -1410,8 +1426,8 @@ Pane {
             rootFetch.restart()
             Qt.callLater(function() { if (responseTree) responseTree.forceLayout() })
         }
-        function onRowsInserted() { ++panel.responseModelRevision }
-        function onRowsRemoved() { ++panel.responseModelRevision }
+        function onRowsInserted() { responseRevision.restart() }
+        function onRowsRemoved() { responseRevision.restart() }
     }
     Connections {
         target: panel.provider

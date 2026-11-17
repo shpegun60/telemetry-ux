@@ -95,6 +95,9 @@ Window {
         } else if (kind === "single") {
             fake.commandSelected = false; fake.serviceSelected = true
             fake.selection = "control.Configure"; fake.values = singleModel
+        } else if (kind === "wide") {
+            fake.commandSelected = false; fake.serviceSelected = false
+            fake.selection = "device.Wide"; fake.values = wideModel
         } else if (kind === "other") {
             fake.commandSelected = false; fake.serviceSelected = false
             fake.selection = "device.Other"; fake.values = fieldModel

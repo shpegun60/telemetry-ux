@@ -242,14 +242,37 @@ static void exactAndOwnedValues()
 	CHECK(provider.responses()->data(serial, ValueModel::ValueRole) == expected);
 	const auto samples = member(provider.responses(), "samples");
 	CHECK(samples.isValid());
+	// An array longer than 128 shows ranges, each folded; opening one fetches it.
 	CHECK(provider.responses()->canFetchMore(samples));
 	provider.responses()->fetchMore(samples);
-	CHECK(provider.responses()->rowCount(samples) == 128);
-	provider.responses()->fetchMore(samples);
-	CHECK(provider.responses()->rowCount(samples) == 256);
+	CHECK(provider.responses()->rowCount(samples) == 3);
+	CHECK(provider.responses()->data(provider.responses()->index(2, 0, samples), ValueModel::NameRole).toString() == QStringLiteral("[256…299]"));
+	CHECK(provider.responses()->data(provider.responses()->index(2, 0, samples), ValueModel::ItemCountRole).toInt() == 44);
+	const auto first = provider.responses()->index(0, 0, samples);
+	const auto second = provider.responses()->index(1, 0, samples);
+	CHECK(provider.responses()->data(first, ValueModel::NameRole).toString() == QStringLiteral("[0…127]"));
+	CHECK(provider.responses()->data(second, ValueModel::NameRole).toString() == QStringLiteral("[128…255]"));
+	CHECK(provider.responses()->data(second, ValueModel::ItemCountRole).toInt() == 128);
+	CHECK(provider.responses()->data(samples, ValueModel::ItemCountRole).toInt() == 300);
+	CHECK(provider.responses()->data(second, ValueModel::SummaryKindRole).toString() == QStringLiteral("array"));
+	CHECK(provider.responses()->data(second, ValueModel::SummaryPartsRole).toStringList().size() == 8);
+	CHECK(provider.responses()->data(second, ValueModel::PathRole).toString() == QStringLiteral("samples[128…255]"));
+	CHECK(provider.responses()->rowCount(second) == 0 && provider.responses()->canFetchMore(second));
+	provider.responses()->fetchMore(second);
+	CHECK(provider.responses()->rowCount(second) == 128);
+	CHECK(provider.responses()->data(provider.responses()->index(0, 0, second), ValueModel::NameRole).toString() ==
+	      QStringLiteral("[128]"));
+	CHECK(provider.responses()->data(provider.responses()->index(127, 0, second), ValueModel::NameRole).toString() ==
+	      QStringLiteral("[255]"));
 	CHECK(provider.responses()
-	          ->data(provider.responses()->index(129, 0, samples), ValueModel::ValueRole)
+	          ->data(provider.responses()->index(1, 0, second), ValueModel::ValueRole)
 	          .toString() == QStringLiteral("31337"));
+	// A path finds its row, through the range when it is an element's.
+	auto* responses = qobject_cast<ValueModel*>(provider.responses());
+	CHECK(responses);
+	CHECK(responses->indexOfPath(QStringLiteral("samples[129]")) == responses->index(1, 0, second));
+	CHECK(responses->pathOf(responses->index(1, 0, second)) == QStringLiteral("samples[129]"));
+	CHECK(responses->deepest() >= 2);
 	select(provider, "Ping");
 	CHECK(provider.callService());
 	h.pump();

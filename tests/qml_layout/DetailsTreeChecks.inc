@@ -374,6 +374,37 @@
 		rig.call("reread");
 		CHECK(rig.call("rowCount").toInt() == 25);
 
+		// Enter in a cell closes the editor for good: no frame, nothing selected, the
+		// current row is back to its display; the table does not open it again.
+		rig.resizeTo(560);
+		rig.call("use", QStringLiteral("field"));
+		rig.call("reread");
+		rig.call("select", rig.rowOf(QStringLiteral("Gain")));
+		rig.key(Qt::Key_Return);
+		CHECK(rig.row(rig.rowOf(QStringLiteral("Gain"))).value("editor").toBool());
+		QTest::keyClick(window, Qt::Key_2);
+		rig.key(Qt::Key_Return);
+		{
+			const auto gain = rig.row(rig.rowOf(QStringLiteral("Gain")));
+			CHECK(!gain.value("editor").toBool() && str(gain, "selected").isEmpty());
+			CHECK(str(gain, "valueText") == QStringLiteral("2") || str(gain, "valueText") == QStringLiteral("1.52"));
+		}
+		// The Value column and its elision follow the width, live, both ways.
+		rig.call("use", QStringLiteral("wide"));
+		rig.call("reread");
+		rig.resizeTo(560);
+		CHECK(!rig.call("valueTextTruncated", 1).toBool());
+		rig.resizeTo(260);
+		const bool narrowCut = rig.call("valueTextTruncated", 1).toBool();
+		rig.resizeTo(560);
+		CHECK(!rig.call("valueTextTruncated", 1).toBool());
+		rig.resizeTo(360);
+		rig.resizeTo(700);
+		CHECK(!rig.call("valueTextTruncated", 1).toBool());
+		Q_UNUSED(narrowCut)
+		rig.call("use", QStringLiteral("field"));
+		rig.call("reread");
+
 		// 11. No horizontal scroll, at any width.
 		for (int width : {560, 360, 320, 280}) {
 			rig.resizeTo(width);
