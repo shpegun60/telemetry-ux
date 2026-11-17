@@ -245,9 +245,9 @@ def main():
         typed_watch_checks = re.search(r'Typed Watch checks=(\d+) warnings=0', typed_watch_log)
         if not typed_watch_checks or int(typed_watch_checks[1]) < 52:
             raise RuntimeError('Typed Watch editing did not reach its warning-free assertion floor')
-        typed_watch_images = [typed_watch_output / (name + '-' + str(width) + '.png')
-                              for name in ('watch-typed', 'watch-enum-popup', 'watch-enum-manual')
-                              for width in (320, 480)]
+        typed_watch_images = [typed_watch_output / ('watch-enum-popup-' + str(width) + '.png') for width in (320, 480)]
+        typed_watch_images += [typed_watch_output / ('watch-edit-' + str(width) + '-' + kind + '.png')
+                               for width in (1900, 560, 360) for kind in ('member', 'field', 'error')]
         report['typed_watch'] = dict(checks=int(typed_watch_checks[1]), warnings=0,
             executable_sha256=digest(typed_watch_executable),
             screenshots_sha256={image.relative_to(output).as_posix(): digest(image)
