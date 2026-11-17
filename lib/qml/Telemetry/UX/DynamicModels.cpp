@@ -1232,12 +1232,22 @@ struct ValueModel::Impl {
 	// a branch is unsent when any loaded value under it is.
 	bool unsent(const Row& row) const
 	{
+		return unsentCount(row) > 0;
+	}
+
+	int unsentCount(const Row& row) const
+	{
 		if (row.aggregate) {
+			int count = 0;
 			for (const auto& child : row.children)
-				if (unsent(*child))
-					return true;
-			return false;
+				count += unsentCount(*child);
+			return count;
 		}
+		return unsentLeaf(row) ? 1 : 0;
+	}
+
+	bool unsentLeaf(const Row& row) const
+	{
 		if (!row.scalar)
 			return false;
 		if (!baseline.isEmpty()) {
@@ -1564,6 +1574,8 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return impl_->editable(*row);
 		case UnsentRole:
 			return impl_->unsent(*row);
+		case UnsentCountRole:
+			return impl_->unsentCount(*row);
 		case PathRole:
 			return Impl::pathKey(row->valuePath) + (row->valueRange ? row->name : QString{});
 		case SummaryKindRole:
@@ -1618,6 +1630,7 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {AggregateRole, "isAggregate"},
 	        {ChildCountRole, "childCount"},
 	        {ItemCountRole, "itemCount"},
+	        {UnsentCountRole, "unsentCount"},
 	        {LoadedCountRole, "loadedCount"},
 	        {EditableRole, "editable"},
 	        {EditorTextRole, "editorText"},
@@ -1660,7 +1673,7 @@ void ValueModel::setBaseline(const QHash<QString, QString>& sent)
 		if (!alive)
 			return;
 		if (impl_->tree.at(this, index))
-			Q_EMIT dataChanged(index, index, {UnsentRole, SummaryPartsRole});
+			Q_EMIT dataChanged(index, index, {UnsentRole, UnsentCountRole, SummaryPartsRole});
 	}
 }
 
@@ -1741,6 +1754,12 @@ QModelIndex ValueModel::contentRoot() const
 	if (impl_->tree.roots.size() != 1 || !impl_->tree.roots.front()->aggregate || !impl_->current())
 		return {};
 	return createIndex(0, 0, impl_->tree.roots.front()->token);
+}
+
+QString ValueModel::pathOf(const QModelIndex& index) const
+{
+	const auto* row = impl_->tree.at(this, index);
+	return row ? Impl::pathKey(row->valuePath) + (row->valueRange ? row->name : QString{}) : QString{};
 }
 
 int ValueModel::deepest() const noexcept
@@ -1861,7 +1880,7 @@ void ValueModel::updateScalar(const QModelIndex& index)
 	const QPointer<ValueModel> alive(this);
 	for (const auto* up = row->parent; up && alive; up = up->parent) {
 		const auto ancestor = createIndex(up->row, 0, up->token);
-		Q_EMIT dataChanged(ancestor, ancestor, {UnsentRole, SummaryPartsRole});
+		Q_EMIT dataChanged(ancestor, ancestor, {UnsentRole, UnsentCountRole, SummaryPartsRole});
 	}
 }
 

@@ -190,7 +190,9 @@ public:
 		SummaryKindRole,
 		// How many elements or members a branch holds: an array's length
 		// even when it is shown as ranges (ChildCountRole counts the ranges).
-		ItemCountRole
+		ItemCountRole,
+		// How many values under a row are not yet sent (0 or 1 on a leaf).
+		UnsentCountRole
 	};
 	Q_ENUM(Role)
 	static constexpr int fetchBatch = 128;
@@ -237,6 +239,8 @@ public:
 	// The row at a dotted path (see PathRole), fetching the batches of members
 	// it lies in; invalid when the path no longer exists.
 	Q_INVOKABLE QModelIndex indexOfPath(const QString& path);
+	// What PathRole holds; empty for an invalid or stale index.
+	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
 	[[nodiscard]] int deepest() const noexcept;
 	void clear();
 	[[nodiscard]] bool changing() const noexcept;

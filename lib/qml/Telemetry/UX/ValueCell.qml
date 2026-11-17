@@ -76,6 +76,8 @@ Item {
     property string summaryKind: ""
     // Elements or members under a branch (an array shown as ranges holds more than childCount); -1: childCount.
     property int itemCount: -1
+    // The words a folded branch shows now, for the row's accessible description.
+    readonly property string summaryShown: summary.visible ? summary.text : ''
     // Draft mode (see above): null keeps the live setText.
     property var commitText: null
     // {ok, preview, error} for a typed text, in draft mode.

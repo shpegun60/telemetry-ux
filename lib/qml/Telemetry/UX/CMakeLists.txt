@@ -11,7 +11,7 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
               Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFileAccessLetter.qml DeviceFilesPanel.qml FileViewer.qml
               HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
               ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
-              JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml
+              JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml FoldMemory.qml
               UndoNotice.qml UndoButtons.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
@@ -56,7 +56,7 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     Theme.qml Type.qml ProgressLine.qml LinkButton.qml DeviceFileRow.qml DeviceFileAccessLetter.qml DeviceFilesPanel.qml FileViewer.qml
     HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
     ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
-    JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml
+    JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml FoldMemory.qml
     UndoNotice.qml UndoButtons.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"

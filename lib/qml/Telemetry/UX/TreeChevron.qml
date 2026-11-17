@@ -21,6 +21,7 @@ Item {
         height: Type.iconSize
         open: chevron.row.expanded
         mirrored: chevron.row.mirrored
-        color: chevron.row.highlighted ? chevron.row.palette.highlightedText : Theme.textSecondary
+        color: chevron.row.highlighted ? chevron.row.palette.highlightedText
+               : chevron.row.hovered ? Theme.textPrimary : Theme.textSecondary
     }
 }
