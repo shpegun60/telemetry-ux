@@ -124,6 +124,8 @@ void TraceView::setTraces(QObject* traces)
 	if (traces_)
 		disconnect(traces_, nullptr, this, nullptr);
 	traces_ = typed;
+	if (traces_)
+		traces_->setAxisFromStart(fromStart_);
 	// Other readings: the values fit them afresh, and nothing pinned on the
 	// old ones stays.
 	range_ = {};
@@ -1018,6 +1020,9 @@ void TraceView::setFromStart(bool fromStart)
 	if (fromStart == fromStart_)
 		return;
 	fromStart_ = fromStart;
+	// Curves of other runs are lined up on this axis.
+	if (traces_)
+		traces_->setAxisFromStart(fromStart);
 	Q_EMIT viewChanged();
 	update();
 }

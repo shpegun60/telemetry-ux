@@ -135,6 +135,25 @@ public:
 	// the newest joins at its place. Nothing for a path it never gave.
 	void appendRecorded(const QString& path, const std::vector<TraceReading>& readings);
 	void setAnchor(const WatchTimestamp& anchor);
+	// A recorded curve of another run has its own anchor (its run's steady
+	// clock origin and start, as setAnchor gives them for the run shown): its
+	// readings are given to setRecorded as that run recorded them, and kept
+	// where the axis puts them - counted from its own start (axisFromStart,
+	// which lines it up with the run shown) or at its own time of day - so
+	// every reader of readings() (the cursor, Measure, the pins, find, the
+	// CSV, box zoom, the lanes) sees one time base. A zero anchor takes the
+	// path back to the shared one. A path with none is as it always was.
+	void setRecordedAnchor(const QString& path, const WatchTimestamp& anchor);
+	[[nodiscard]] WatchTimestamp recordedAnchor(const QString& path) const { return anchors_.value(path, anchor_); }
+	// What is added to a reading's own time to get the one readings() holds:
+	// 0 for a path with no anchor of its own; subtract it to get a reading's
+	// own time back.
+	[[nodiscard]] qint64 shiftNs(const QString& path) const;
+	// Whether a path with an anchor of its own is lined up on its start (true)
+	// or kept at its time of day (the default: the Plot's axis). The view
+	// that draws the traces sets it with its own axis.
+	void setAxisFromStart(bool fromStart);
+	[[nodiscard]] bool axisFromStart() const noexcept { return axisFromStart_; }
 
 	// A curve's look (LP-1f), kept for its path whether it is plotted or not:
 	// its own colour ("#rrggbb", or "" for its palette place), and the
@@ -200,7 +219,11 @@ private:
 		std::deque<TraceReading> readings;
 		WatchValueType type;
 		bool categorical = false;
+		qint64 shift = 0; // already added to every reading's ns (setRecordedAnchor)
 	};
+	// Moves the readings of every path with an anchor of its own to where
+	// shiftNs() puts them now.
+	void rebase();
 	void push(Trace& trace, const TraceReading& reading);
 	// A curve on the Plot as a "plot.curves" fragment, and a look as a
 	// "plot.look" one ({color, k, b, points}; none for a plain look).
@@ -216,6 +239,8 @@ private:
 	void announce();
 
 	QHash<QString, Trace> traces_;
+	QHash<QString, WatchTimestamp> anchors_;
+	bool axisFromStart_ = false;
 	QHash<quint64, QString> paths_;
 	QSet<QString> watched_;
 	std::deque<Pause> pauses_;
