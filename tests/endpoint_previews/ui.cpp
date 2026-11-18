@@ -292,9 +292,9 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	CHECK(provider.selectionInfo().value(QStringLiteral("readable")).toBool());
 	ui.page("details", 320, 820);
 	auto* tree = control(ui.details, "metadataTree");
-	// The Field's members are the top rows: no root row (family spec C).
+	// The Field's own row is the table's root, open, with its members under it (spec A).
 	CHECK(await([&] { return visual(tree, QStringLiteral("endpointRow"), QStringLiteral("name"), QStringLiteral("Gain")); }));
-	CHECK(!visual(tree, QStringLiteral("endpointRow"), QStringLiteral("name"), QStringLiteral("Config")));
+	CHECK(visual(tree, QStringLiteral("endpointRow"), QStringLiteral("name"), QStringLiteral("Config")));
 	CHECK(control(tree, "endpointRow", "name", QStringLiteral("Gain"))->property("typeText").toString() == "f32");
 	const auto root = provider.definitions()->index(0, 0, provider.definitionRootIndex());
 	CHECK(root.isValid());

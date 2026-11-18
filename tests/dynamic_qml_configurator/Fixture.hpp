@@ -59,6 +59,15 @@ struct Request {
 	std::uint32_t multiplier = 0;
 };
 
+struct ScaleRequest {
+	float value = 0;
+	float factor = 0;
+};
+
+struct ScaleResult {
+	float result = 0;
+};
+
 struct Empty {};
 
 struct Device {
@@ -108,6 +117,12 @@ struct Device {
 		});
 	}
 
+	telemetry::ServiceResult<ScaleResult> scale(const ScaleRequest& request) noexcept
+	{
+		++services;
+		return telemetry::ServiceResult<ScaleResult>::success({request.value * request.factor});
+	}
+
 	telemetry::ServiceResult<void> ping() noexcept
 	{
 		++services;
@@ -131,7 +146,8 @@ inline constexpr telemetry::CommandTable localCommands{
 inline constexpr telemetry::ServiceTable localServices{
     telemetry::service<&Device::inspect>("Inspect", device),
     telemetry::service<&Device::ping>("Ping", device),
-    telemetry::service<&Device::empty>("Empty", device)};
+    telemetry::service<&Device::empty>("Empty", device),
+    telemetry::service<&Device::scale>("Scale", device)};
 inline constexpr telemetry::FieldCatalogTable fields{telemetry::group("device", localFields)};
 inline constexpr telemetry::CommandCatalogTable commands{telemetry::group("device", localCommands)};
 inline constexpr telemetry::ServiceCatalogTable services{telemetry::group("device", localServices)};
