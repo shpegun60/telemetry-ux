@@ -646,6 +646,11 @@ Pane {
         const model = view.model
         if (!view || !model)
             return
+        // A table counts its rows when it is laid out, once per frame: lay
+        // it out now, or the root would show closed for the frames until a
+        // retry (the first Read of a struct Field showed its root alone).
+        if (viewCaughtUp(view) && view.rows < model.rowCount(view.rootIndex))
+            view.forceLayout()
         if (!viewCaughtUp(view) || view.rows < model.rowCount(view.rootIndex)) {
             // A table not shown yet, or not caught up with its model, has no
             // rows to open; try again when it has.

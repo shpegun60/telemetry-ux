@@ -651,6 +651,45 @@ static QStringList tableRows(QQuickItem* panel, const QString& objectName)
 	return lines;
 }
 
+// Every frame the window draws while watched, read after polish and before
+// the scene is synced: a frame is right when it shows the Field's definition
+// (as it was before the read) or its values (`values`), and the other table
+// nothing. Settled looks alone miss a state a few frames long: the first Read
+// of a struct Field drew its root closed for 87 ms before the fold restore
+// laid the table out at once.
+struct FrameWatch {
+	QQuickItem* panel;
+	QStringList values, definition;
+	int frames = 0, wrong = 0;
+	QMetaObject::Connection connection;
+	FrameWatch(QQuickWindow& window, QQuickItem* watched, QStringList shownValues, QStringList shownDefinition)
+	    : panel(watched), values(std::move(shownValues)), definition(std::move(shownDefinition))
+	{
+		connection = QObject::connect(&window, &QQuickWindow::afterAnimating, &window, [this] {
+			const auto names = [this](const QString& rowName) {
+				QStringList out;
+				for (const auto& line : tableRows(panel, rowName))
+					out << line.section(QLatin1Char('|'), 0, 0);
+				return out;
+			};
+			const auto shownValues = names(QStringLiteral("valueRow"));
+			const auto shownDefinition = names(QStringLiteral("endpointRow"));
+			++frames;
+			if (!(shownValues == values && shownDefinition.isEmpty()) &&
+			    !(shownDefinition == definition && shownValues.isEmpty()) && ++wrong == 1)
+				std::fprintf(stderr, "frame %d: values [%s] definition [%s]\n", frames,
+				             qPrintable(shownValues.join(QStringLiteral(", "))),
+				             qPrintable(shownDefinition.join(QStringLiteral(", "))));
+		});
+	}
+	bool rightThroughout()
+	{
+		QObject::disconnect(connection);
+		return frames > 0 && wrong == 0;
+	}
+	~FrameWatch() { QObject::disconnect(connection); }
+};
+
 // The Details panel (EndpointPanel) inside a host: the pane that holds its
 // one scroll.
 static QQuickItem* detailsOf(QQuickItem* scope)
@@ -816,17 +855,19 @@ static void fieldReadJourney()
 	}
 	auto* read = control(panel, "refreshButton");
 	CHECK(device.reads == 0);
+	FrameWatch firstPress{*window, details, once, once};
 	click(*window, *read, panel);
 	// In flight: "Reading…", off, and the same message on the status line.
 	CHECK(read->property("text").toString() == QStringLiteral("Reading\u2026") && !read->isEnabled());
 	CHECK(status() == QStringLiteral("Reading\u2026"));
 	h.pump();
 	// The first press: the root and its members, each once, in the table
-	// of values that takes the definition's place.
+	// of values that takes the definition's place - in every frame drawn.
 	CHECK(until([&] { return names(settled(QStringLiteral("valueRow"))) == once; }));
 	for (int round = 0; round < 6; ++round)
 		CHECK(names(settled(QStringLiteral("valueRow"))) == once);
 	CHECK(settled(QStringLiteral("endpointRow")).isEmpty());
+	CHECK(firstPress.rightThroughout());
 	static const QRegularExpression readWords(QStringLiteral("^Read (\\d\\d:\\d\\d:\\d\\d) \u00b7 took \\d+ ms$"));
 	const auto first = readWords.match(status());
 	CHECK(first.hasMatch());
@@ -898,13 +939,17 @@ static void fieldReadFromDefinition()
 	const QStringList once{QStringLiteral("Config"), QStringLiteral("serial"), QStringLiteral("offset"),
 	                       QStringLiteral("gain"), QStringLiteral("precise"), QStringLiteral("limit"),
 	                       QStringLiteral("mode"), QStringLiteral("samples")};
+	const auto definition = settled(QStringLiteral("endpointRow"));
 	for (int press = 0; press < 2; ++press) {
+		// Every frame drawn: the definition as it was, or the values.
+		FrameWatch watch{*window, details, once, press == 0 ? definition : once};
 		click(*window, *control(details, "refreshButton"), details);
 		h.pump();
 		CHECK(until([&] { return settled(QStringLiteral("valueRow")) == once; }));
 		for (int round = 0; round < 6; ++round)
 			CHECK(settled(QStringLiteral("valueRow")) == once);
 		CHECK(settled(QStringLiteral("endpointRow")).isEmpty());
+		CHECK(watch.rightThroughout());
 	}
 	root.reset();
 	events();
