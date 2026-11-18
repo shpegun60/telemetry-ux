@@ -27,6 +27,9 @@ struct BatchRow {
 	// The request's values in one line, "value=2 factor=0.1", and when the
 	// item last ran, "14:02:11".
 	QString line, at;
+	// What a write's request started from when it was made: "read" (the
+	// value last read), "zero" (the type's initial values) or "" (unknown).
+	QString startsFrom;
 	bool operator==(const BatchRow&) const = default;
 };
 
@@ -49,7 +52,11 @@ public:
 		UidRole,
 		// Whether the item's outcome is a failure: a refusal, or no checked
 		// outcome after a run (BA-4c).
-		FailedRole
+		FailedRole,
+		// The Outcome column's words: "–" before a run, "Read", "Written",
+		// "Executed", "Done", "Accepted, not confirmed", "Refused", "No
+		// reply", with ", changed since" when the values changed after it.
+		OutcomeRole
 	};
 	Q_ENUM(Role)
 	int rowCount(const QModelIndex& parent = {}) const override;
@@ -175,9 +182,24 @@ public:
 	bool execute();
 	int count() const;
 	int selection() const;
-	// The status line: "Sending 3 items in one request…", "Executed at
-	// 14:02:11 - 3 of 3 done.", or why a run failed, in words (BA-4c).
+	// The status line, never empty (Details layout §8): "Add Fields,
+	// Commands and Services; …" for an empty Batch, "Not executed yet",
+	// "Sending 3 items in one request…", "Executed 14:02:11 · 3 of 3 done",
+	// "Executed 14:02:11 · 2 of 3 done · item 3 refused its arguments", or
+	// why a run failed as a whole, in words (BA-4c).
 	QString status() const;
+	// Why an item that ran was not done, in words: whether the device
+	// refused it; the item pane's words ("arguments refused"), the status
+	// line's after "item 3 " ("refused its arguments"), and the Outcome
+	// column's ("No reply") when it was not refused.
+	struct Why {
+		bool refused = false;
+		QString words, sentence, outcome;
+	};
+	[[nodiscard]] static Why why(const BatchRow& row);
+	// Whether an item that ran was not done: a refusal, an unreadable value,
+	// no checked outcome (the Outcome column's failure).
+	[[nodiscard]] static bool itemFailed(const BatchRow& row);
 	// The status line asks for attention: a run that failed as a whole, or an
 	// item that was not done.
 	bool attention() const;

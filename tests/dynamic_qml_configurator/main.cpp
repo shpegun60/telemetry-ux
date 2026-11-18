@@ -6,6 +6,8 @@
 #include <Telemetry/UX/WatchLeaves.hpp>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QTime>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
@@ -18,6 +20,13 @@
 #include <stdexcept>
 
 using namespace dynamic_qml_fixture;
+
+// The device's schema for the tables' structure before anything is read or
+// called, as a host gives it to its binding.
+static void giveSchema(Harness& h)
+{
+	h.binding->setSchemaSource([backing = h.storage.get()] { return backing->schema; });
+}
 
 static std::vector<std::byte> selectedDraftPayload(bool reselect)
 {
@@ -603,11 +612,14 @@ static void actualExampleInputJourney()
 	CHECK(value.canEdit() && value.values()->rowCount() == 1);
 	select(config, "Ping");
 	events();
-	// A Service that takes nothing says so in a caption, with no empty table.
-	CHECK(control(configPanel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("Takes no request values."));
-	// Before a call the Response heading says how to fill it, on its own line.
-	CHECK(control(configPanel, "emptyResponseLabel")->property("text").toString() ==
-	      QStringLiteral("Call to see the response."));
+	// A Service that takes nothing says so on one quiet line under its
+	// heading, and line 2 no longer does.
+	CHECK(control(configPanel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("No request values."));
+	CHECK(!control(configPanel, "endpointSelectionInfo")->property("text").toString().contains(QStringLiteral("no arguments")));
+	// No sentence tells how to fill the response: its heading stands, and
+	// without the schema (this host gives none) nothing under it.
+	CHECK(control(configPanel, "responseTableHeader"));
+	CHECK(!visibleItem(configPanel, QStringLiteral("emptyResponseLabel")));
 	CHECK(!config.canCallService());
 	root.reset();
 	events();
@@ -639,11 +651,65 @@ static QStringList tableRows(QQuickItem* panel, const QString& objectName)
 	return lines;
 }
 
+// Every frame the window draws while watched, read after polish and before
+// the scene is synced: a frame is right when it shows the Field's definition
+// (as it was before the read) or its values (`values`), and the other table
+// nothing. Settled looks alone miss a state a few frames long: the first Read
+// of a struct Field drew its root closed for 87 ms before the fold restore
+// laid the table out at once.
+struct FrameWatch {
+	QQuickItem* panel;
+	QStringList values, definition;
+	int frames = 0, wrong = 0;
+	QMetaObject::Connection connection;
+	FrameWatch(QQuickWindow& window, QQuickItem* watched, QStringList shownValues, QStringList shownDefinition)
+	    : panel(watched), values(std::move(shownValues)), definition(std::move(shownDefinition))
+	{
+		connection = QObject::connect(&window, &QQuickWindow::afterAnimating, &window, [this] {
+			const auto names = [this](const QString& rowName) {
+				QStringList out;
+				for (const auto& line : tableRows(panel, rowName))
+					out << line.section(QLatin1Char('|'), 0, 0);
+				return out;
+			};
+			const auto shownValues = names(QStringLiteral("valueRow"));
+			const auto shownDefinition = names(QStringLiteral("endpointRow"));
+			++frames;
+			if (!(shownValues == values && shownDefinition.isEmpty()) &&
+			    !(shownDefinition == definition && shownValues.isEmpty()) && ++wrong == 1)
+				std::fprintf(stderr, "frame %d: values [%s] definition [%s]\n", frames,
+				             qPrintable(shownValues.join(QStringLiteral(", "))),
+				             qPrintable(shownDefinition.join(QStringLiteral(", "))));
+		});
+	}
+	bool rightThroughout()
+	{
+		QObject::disconnect(connection);
+		return frames > 0 && wrong == 0;
+	}
+	~FrameWatch() { QObject::disconnect(connection); }
+};
+
+// The Details panel (EndpointPanel) inside a host: the pane that holds its
+// one scroll.
+static QQuickItem* detailsOf(QQuickItem* scope)
+{
+	auto* body = control(scope, "endpointBodyScroll");
+	for (auto* item = body; item; item = item->parentItem())
+		if (item->property("statusFlashes").isValid())
+			return item;
+	CHECK(false);
+	return nullptr;
+}
+
 // A Service's Response, seen through the real panel: its structure before any
-// call, the value after one, the value after another, and no row twice.
+// call, the value after one, the value after another, and no row twice; the
+// button and the status line while it runs, the time and a changed value
+// flashing once.
 static void serviceResponseJourney()
 {
 	Harness h;
+	giveSchema(h);
 	Provider config{h.binding.get()}, value{h.binding.get()};
 	select(config, "Config");
 	select(value, "Config");
@@ -667,19 +733,228 @@ static void serviceResponseJourney()
 		events();
 		return tableRows(panel, QStringLiteral("responseRow"));
 	};
+	auto* details = detailsOf(panel);
+	const auto status = [&] { return control(panel, "endpointStatusLine")->property("text").toString(); };
+	// Before any call the Response shows its whole structure, "–" for the
+	// value; the status line says the state, once.
+	const bool shaped = until([&] { return response() == QStringList{QStringLiteral("result|f32|\u2013")}; });
+	if (!shaped)
+		std::fprintf(stderr, "Response before a call: %s (rows %d)\n", qPrintable(response().join(QStringLiteral("; "))),
+		             config.responses()->rowCount());
+	CHECK(shaped);
+	CHECK(status() == QStringLiteral("Not called yet"));
+	CHECK(!visibleItem(panel, QStringLiteral("emptyResponseLabel")));
+	CHECK(control(panel, "endpointSelectionInfo")->property("text").toString() ==
+	      QStringLiteral("Service \u00b7 (f32, f32) -> (f32) \u00b7 8-byte request"));
 	CHECK(edit(config, "value", "0"));
 	CHECK(edit(config, "factor", "0"));
-	click(*window, *control(panel, "callServiceButton"), panel);
+	auto* call = control(panel, "callServiceButton");
+	const int flashesBefore = details->property("statusFlashes").toInt();
+	click(*window, *call, panel);
+	// In flight: the button and the status line say so, the button is off,
+	// and the tables stay as they were.
+	CHECK(call->property("text").toString() == QStringLiteral("Calling\u2026") && !call->isEnabled());
+	CHECK(status() == QStringLiteral("Calling\u2026"));
+	CHECK(response() == QStringList{QStringLiteral("result|f32|\u2013")});
+	CHECK(tableRows(panel, QStringLiteral("valueRow")).size() == 2);
 	h.pump();
 	CHECK(until([&] { return response() == QStringList{QStringLiteral("result|f32|0")}; }));
+	CHECK(call->property("text").toString() == QStringLiteral("Call"));
+	static const QRegularExpression called(QStringLiteral("^Called \\d\\d:\\d\\d:\\d\\d \u00b7 took \\d+ ms$"));
+	CHECK(called.match(status()).hasMatch());
+	CHECK(details->property("statusFlashes").toInt() == flashesBefore + 1);
+	// The first value after "–" is new, not changed: nothing flashes.
+	CHECK(control(panel, "responseCell", "result")->property("flashes").toInt() == 0);
 	CHECK(edit(config, "value", "2"));
 	CHECK(edit(config, "factor", "4"));
 	click(*window, *control(panel, "callServiceButton"), panel);
 	h.pump();
 	CHECK(until([&] { return response() == QStringList{QStringLiteral("result|f32|8")}; }));
+	// 0 became 8: the cell flashes once.
+	CHECK(until([&] { return control(panel, "responseCell", "result")->property("flashes").toInt() == 1; }));
+	// The same call again: the time flashes, the unchanged value does not.
+	const int flashesAgain = details->property("statusFlashes").toInt();
+	click(*window, *control(panel, "callServiceButton"), panel);
+	h.pump();
+	CHECK(until([&] { return details->property("statusFlashes").toInt() == flashesAgain + 1; }));
+	events();
+	QTest::qWait(60);
+	CHECK(control(panel, "responseCell", "result")->property("flashes").toInt() == 0);
 	CHECK(!visibleItem(panel, QStringLiteral("emptyResponseLabel")));
+	// A Service that takes nothing and returns nothing: each heading with
+	// one quiet line, and line 2 says only its signature.
+	select(config, "Ping");
+	events();
+	CHECK(control(panel, "noArgumentsLabel")->property("text").toString() == QStringLiteral("No request values."));
+	CHECK(control(panel, "noResponseLabel")->property("text").toString() == QStringLiteral("No response values."));
+	CHECK(control(panel, "endpointSelectionInfo")->property("text").toString() == QStringLiteral("Service \u00b7 () -> ()"));
+	CHECK(!visibleItem(panel, QStringLiteral("responseRow")) && !visibleItem(panel, QStringLiteral("valueRow")));
+	CHECK(status() == QStringLiteral("Not called yet"));
 	root.reset();
 	events();
+}
+
+// A struct Field before and after its first Read, through the real panel:
+// its whole structure with "–" before; on the first press of Read exactly
+// its root and its members, once each, and the same on the second (the
+// owner saw the members doubled around the first press); the button and
+// the status line while it runs; the time and the changed value flashing.
+static void fieldReadJourney()
+{
+	Harness h;
+	giveSchema(h);
+	Provider config{h.binding.get()}, value{h.binding.get()};
+	select(config, "Config");
+	select(value, "Config");
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("configProvider"), &config);
+	engine.rootContext()->setContextProperty(QStringLiteral("valueProvider"), &value);
+	QQmlComponent component{&engine, QUrl::fromLocalFile(QStringLiteral(DYNAMIC_QML_EXAMPLE_MAIN))};
+	if (component.isError())
+		std::fprintf(stderr, "%s\n", qPrintable(component.errorString()));
+	std::unique_ptr<QObject> root{component.create()};
+	CHECK(root);
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	CHECK(window);
+	auto* panel = control(window->contentItem(), "configPanel");
+	auto* details = detailsOf(panel);
+	const QStringList members{QStringLiteral("serial"), QStringLiteral("offset"), QStringLiteral("gain"),
+	                          QStringLiteral("precise"), QStringLiteral("limit"), QStringLiteral("mode"),
+	                          QStringLiteral("samples")};
+	const auto settled = [&](const QString& rowName) {
+		events();
+		QTest::qWait(60);
+		events();
+		return tableRows(details, rowName);
+	};
+	const auto names = [](const QStringList& lines) {
+		QStringList out;
+		for (const auto& line : lines)
+			out << line.section(QLatin1Char('|'), 0, 0);
+		return out;
+	};
+	const auto status = [&] { return control(panel, "endpointStatusLine")->property("text").toString(); };
+	// Not read: the Field's definition - its root open and every member
+	// under it, "–" where each value will be - and the status line says it
+	// once. Its members come from the host's schema (no previews here).
+	const QStringList once = QStringList{QStringLiteral("Config")} + members;
+	CHECK(until([&] { return names(settled(QStringLiteral("endpointRow"))) == once; }));
+	CHECK(settled(QStringLiteral("valueRow")).isEmpty());
+	CHECK(status() == QStringLiteral("Not read yet"));
+	CHECK(config.values()->rowCount() == 0);
+	{
+		QList<QQuickItem*> labels;
+		collectRows(details, QStringLiteral("metadataValueLabel"), labels);
+		int dashes = 0, blanks = 0;
+		for (auto* label : labels) {
+			dashes += label->property("text").toString() == QStringLiteral("\u2013") ? 1 : 0;
+			blanks += label->property("text").toString().isEmpty() ? 1 : 0;
+		}
+		// Every member "–"; the open root row nothing.
+		CHECK(dashes == int(members.size()) && blanks == 1);
+	}
+	auto* read = control(panel, "refreshButton");
+	CHECK(device.reads == 0);
+	FrameWatch firstPress{*window, details, once, once};
+	click(*window, *read, panel);
+	// In flight: "Reading…", off, and the same message on the status line.
+	CHECK(read->property("text").toString() == QStringLiteral("Reading\u2026") && !read->isEnabled());
+	CHECK(status() == QStringLiteral("Reading\u2026"));
+	h.pump();
+	// The first press: the root and its members, each once, in the table
+	// of values that takes the definition's place - in every frame drawn.
+	CHECK(until([&] { return names(settled(QStringLiteral("valueRow"))) == once; }));
+	for (int round = 0; round < 6; ++round)
+		CHECK(names(settled(QStringLiteral("valueRow"))) == once);
+	CHECK(settled(QStringLiteral("endpointRow")).isEmpty());
+	CHECK(firstPress.rightThroughout());
+	static const QRegularExpression readWords(QStringLiteral("^Read (\\d\\d:\\d\\d:\\d\\d) \u00b7 took \\d+ ms$"));
+	const auto first = readWords.match(status());
+	CHECK(first.hasMatch());
+	CHECK(read->property("text").toString() == QStringLiteral("Read") && read->isEnabled());
+	const int flashes = details->property("statusFlashes").toInt();
+	CHECK(flashes >= 1);
+	// A second press a second later, with gain changed on the device: the
+	// same rows once each, a new time that flashes, gain flashing and limit not.
+	const auto second = QTime::currentTime().second();
+	CHECK(until([&] { return QTime::currentTime().second() != second; }));
+	device.config.gain = 2.5f;
+	click(*window, *control(panel, "refreshButton"), panel);
+	h.pump();
+	CHECK(until([&] { return scalar(config.values(), "gain") == QStringLiteral("2.5"); }));
+	for (int round = 0; round < 6; ++round)
+		CHECK(names(settled(QStringLiteral("valueRow"))) == once);
+	const auto again = readWords.match(status());
+	CHECK(again.hasMatch() && again.captured(1) != first.captured(1));
+	CHECK(details->property("statusFlashes").toInt() == flashes + 1);
+	CHECK(until([&] { return control(panel, "valueCell", "gain")->property("flashes").toInt() == 1; }));
+	CHECK(control(panel, "valueCell", "limit")->property("flashes").toInt() == 0);
+	// Another Field and back: no row is current that the user did not choose.
+	select(config, "Serial");
+	events();
+	select(config, "Config");
+	CHECK(until([&] { return names(settled(QStringLiteral("endpointRow"))) == once; }));
+	{
+		QList<QQuickItem*> rows;
+		collectRows(details, QStringLiteral("endpointRow"), rows);
+		for (auto* row : rows)
+			CHECK(!row->property("current").toBool());
+	}
+	root.reset();
+	events();
+	CHECK(warnings == 0);
+	std::printf("Dynamic QML Field read journey rows=%d reads=%u warnings=0\n", int(once.size()), device.reads);
+}
+
+// The same first Read where the host gives no schema: Details shows the
+// Field's definition, then the table of values in its place - one row per
+// member on the first press and on the second, never twice.
+static void fieldReadFromDefinition()
+{
+	Harness h;
+	Provider config{h.binding.get()}, value{h.binding.get()};
+	select(config, "Config");
+	select(value, "Config");
+	QQmlEngine engine;
+	engine.rootContext()->setContextProperty(QStringLiteral("configProvider"), &config);
+	engine.rootContext()->setContextProperty(QStringLiteral("valueProvider"), &value);
+	QQmlComponent component{&engine, QUrl::fromLocalFile(QStringLiteral(DYNAMIC_QML_EXAMPLE_MAIN))};
+	std::unique_ptr<QObject> root{component.create()};
+	CHECK(root);
+	auto* window = qobject_cast<QQuickWindow*>(root.get());
+	CHECK(window);
+	auto* panel = control(window->contentItem(), "configPanel");
+	auto* details = detailsOf(panel);
+	const auto settled = [&](const QString& rowName) {
+		events();
+		QTest::qWait(60);
+		events();
+		QStringList names;
+		for (const auto& line : tableRows(details, rowName))
+			names << line.section(QLatin1Char('|'), 0, 0);
+		return names;
+	};
+	CHECK(!config.values()->property("shape").toBool());
+	CHECK(until([&] { return settled(QStringLiteral("endpointRow")).value(0) == QStringLiteral("Config"); }));
+	const QStringList once{QStringLiteral("Config"), QStringLiteral("serial"), QStringLiteral("offset"),
+	                       QStringLiteral("gain"), QStringLiteral("precise"), QStringLiteral("limit"),
+	                       QStringLiteral("mode"), QStringLiteral("samples")};
+	const auto definition = settled(QStringLiteral("endpointRow"));
+	for (int press = 0; press < 2; ++press) {
+		// Every frame drawn: the definition as it was, or the values.
+		FrameWatch watch{*window, details, once, press == 0 ? definition : once};
+		click(*window, *control(details, "refreshButton"), details);
+		h.pump();
+		CHECK(until([&] { return settled(QStringLiteral("valueRow")) == once; }));
+		for (int round = 0; round < 6; ++round)
+			CHECK(settled(QStringLiteral("valueRow")) == once);
+		CHECK(settled(QStringLiteral("endpointRow")).isEmpty());
+		CHECK(watch.rightThroughout());
+	}
+	root.reset();
+	events();
+	CHECK(warnings == 0);
+	std::printf("Dynamic QML Field read from its definition rows=%d warnings=0\n", int(once.size()));
 }
 
 static void threePanelsRetirementAndReconnect()
@@ -1293,6 +1568,10 @@ int main(int argc, char** argv)
 		actualExampleInputJourney();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("response"))
 		serviceResponseJourney();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("read"))
+		fieldReadJourney();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("read-definition"))
+		fieldReadFromDefinition();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("unknown"))
 		uncertainCommandFacts();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("watch"))

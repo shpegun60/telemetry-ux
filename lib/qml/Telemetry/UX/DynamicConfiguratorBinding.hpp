@@ -2,6 +2,7 @@
 #pragma once
 #include "DynamicModels.hpp"
 #include <QtCore/QObject>
+#include <functional>
 #include <memory>
 
 namespace telemetry::ux {
@@ -29,6 +30,15 @@ public:
 	// Direct/headless owner mutations must call this after accepted submission.
 	// This invalidates presentation data, without revoking core admission.
 	void invalidateData();
+	// The admitted schema, for the tables' structure before anything is read
+	// or called (a Field's members, a Service's response, "–" in every
+	// value). A host gives it when its providers have neither a Batch source
+	// nor previews (QtConnectionBinding's have both); without any, a Field
+	// shows its definition and a response nothing until its call. Called on
+	// the owner thread while the binding is current; an invalid schema means
+	// none.
+	void setSchemaSource(std::function<runtime::RuntimeSchema()> source);
+	[[nodiscard]] runtime::RuntimeSchema schema() const;
 
 Q_SIGNALS:
 	void changed();

@@ -17,7 +17,9 @@
 #include <QtCore/QVariantMap>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 
 namespace telemetry::ux {
 
@@ -108,6 +110,11 @@ public:
 	// descriptor views are retained, and metadata publication never sends I/O.
 	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
 	void setPreviews(EndpointPreviews* previews);
+	// Where the types come from when no previews give them: a Field's rows
+	// under it (its members, as Details shows its definition) are made from
+	// this schema. Previews, when set, take precedence. Nothing is retained
+	// from it between calls.
+	void setSchemaSource(std::function<telemetry::runtime::RuntimeSchema()> source);
 	// Invalid QVariant means no demand; Field ID zero is a valid demand.
 	Q_INVOKABLE QVariant previewDemandField(const QModelIndex& index) const;
 	Q_INVOKABLE bool previewOnlyChange(const QList<int>& roles) const;
@@ -155,6 +162,9 @@ class ValueModel final : public QAbstractItemModel {
 	// 0), counting the first element of every array: what a tree table needs
 	// to choose its indent step. 0 for a scalar and while nothing is shown.
 	Q_PROPERTY(int deepest READ deepest NOTIFY deepestChanged)
+	// The rows are a structure-only state (resetShape): a table that is not
+	// read or called yet, or one kept as it was while an action runs.
+	Q_PROPERTY(bool shape READ shape NOTIFY shapeChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -192,10 +202,20 @@ public:
 		// even when it is shown as ranges (ChildCountRole counts the ranges).
 		ItemCountRole,
 		// How many values under a row are not yet sent (0 or 1 on a leaf).
-		UnsentCountRole
+		UnsentCountRole,
+		// The value differs from the one the table showed before the action
+		// that just finished (noteUpdate()): the cell flashes once. False on
+		// a branch, and on every row of a table shown for the first time.
+		UpdatedRole
 	};
 	Q_ENUM(Role)
+	// Which table a structure-only state is shown in: a Field's value (with
+	// its root row), or a section's rows (a request's, a response's).
+	enum class Section { Value, Request, Response };
 	static constexpr int fetchBatch = 128;
+	// The most rows a structure-only state holds; a larger type keeps its
+	// first rows, shallowest first.
+	static constexpr std::size_t shapeRowLimit = 4096;
 
 	explicit ValueModel(QObject* parent = nullptr);
 	~ValueModel() override;
@@ -210,6 +230,31 @@ public:
 	// through the editor and updateScalar() shows it.
 	void resetDraft(const telemetry::integration::workbench::RequestEditor& editor);
 	void resetServiceResponse(const WorkbenchView& view);
+	// A structure-only state: the rows of a type from the schema alone, no
+	// bytes and nothing borrowed afterwards. Each value shows `shown`'s text
+	// for its path (see shownTexts()) or "–" when it has none; nothing takes
+	// text. What a table holds while nothing is read or called yet (a
+	// Service's response before its call), or while an action runs (the
+	// values it was sent with, "as they were").
+	void resetShape(const telemetry::runtime::RuntimeSchema& schema, TypeId type, Section section,
+	                const QHash<QString, QString>& shown = {});
+	// Whether the rows are a structure-only state.
+	[[nodiscard]] bool shape() const noexcept;
+	// The table the next rows are shown in, when their source does not say
+	// it: a Batch write's draft is a Field's value (with its root row), a
+	// request shown from a snapshot is a section's. Kept until changed;
+	// nullopt follows the source (a request editor's rows are a section's).
+	void setSection(std::optional<Section> section);
+	// The values as they show now, by path (PathRole): what resetShape()
+	// takes to keep a table as it was. Scalars only; "–" is left out. The
+	// first level under the root is loaded first: a table shows it at once.
+	[[nodiscard]] QHash<QString, QString> shownTexts();
+	// The next reset shows the same thing again, newer (a read, a call, a
+	// run that just finished): its rows say which values changed
+	// (UpdatedRole). Any other reset compares nothing.
+	void noteUpdate();
+	// What noteUpdate() kept, forgotten when no reset took it.
+	void dropUpdate();
 	[[nodiscard]] telemetry::integration::inspector::NodeResult
 	node(const QModelIndex& index) const;
 	void updateScalar(const QModelIndex& index);
@@ -265,6 +310,7 @@ public:
 Q_SIGNALS:
 	void staleChanged();
 	void deepestChanged();
+	void shapeChanged();
 
 private:
 	struct Impl;

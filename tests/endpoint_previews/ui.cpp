@@ -3,6 +3,7 @@
 #include <Telemetry/UX/EndpointPreviews.hpp>
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
+#include <QtCore/QRegularExpression>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPersistentModelIndex>
@@ -307,7 +308,8 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 		CHECK(!provider.definitions()->data(child, ux::EndpointModel::TypeTextRole).toString().isEmpty());
 		CHECK(!provider.definitions()->data(child, ux::EndpointModel::IsEndpointRole).toBool());
 	}
-	geometry(*ui.window, tree, 200);
+	// The table is as tall as its rows (Details layout §2), not the pane.
+	geometry(*ui.window, tree, tree->property("rows").toInt() * 20);
 	geometry(*ui.window, control(ui.details, "endpointSelectionInfo"));
 	geometry(*ui.window, control(ui.details, "endpointStatusLine"));
 	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString() == QStringLiteral("Not read yet"));
@@ -318,7 +320,7 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	}
 	CHECK(peer.fieldReads() == 0 && provider.values()->rowCount() == 0);
 	ui.capture("details-unread-320");
-	ui.page("details", 480, 820); geometry(*ui.window, tree, 200); ui.capture("details-unread-480");
+	ui.page("details", 480, 820); geometry(*ui.window, tree, tree->property("rows").toInt() * 20); ui.capture("details-unread-480");
 	provider.setAllowMutations(true);
 }
 
@@ -474,8 +476,23 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	CHECK(provider.selectEndpoint(endpoint(provider.endpoints(), QStringLiteral("Config"))));
 	settle(200);
 	CHECK(peer.fieldReads() == readsBefore + 1);
-	click(*ui.window, control(ui.details, "refreshButton"));
+	// A slow device: while the read is in flight the button says "Reading…"
+	// and takes no second press, and the status line says it too; then the
+	// time and how long it took (the action's result seen).
+	peer.setReplyDelay(300);
+	auto* readButton = control(ui.details, "refreshButton");
+	click(*ui.window, readButton);
+	CHECK(provider.busy() && readButton->property("text").toString() == QStringLiteral("Reading\u2026") &&
+	      !readButton->isEnabled());
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString() == QStringLiteral("Reading\u2026"));
 	CHECK(await([&] { return !provider.busy() && provider.values()->rowCount() == 1; }));
+	peer.setReplyDelay(0);
+	CHECK(readButton->property("text").toString() == QStringLiteral("Read") && readButton->isEnabled());
+	{
+		static const QRegularExpression took(QStringLiteral("^Read \\d\\d:\\d\\d:\\d\\d \u00b7 took (\\d+) ms$"));
+		const auto words = took.match(control(ui.details, "endpointStatusLine")->property("text").toString());
+		CHECK(words.hasMatch() && words.captured(1).toInt() >= 250);
+	}
 	// No Edit button: the cells are the editor, and the draft opens with the
 	// first change (BA-4).
 	CHECK(!visual(ui.details, QStringLiteral("editButton")) && !provider.editing());
@@ -554,11 +571,22 @@ void editorsAndActualCalls(Window& ui, ux::DynamicConfiguratorProvider& provider
 	QTest::keyClick(ui.window, Qt::Key_Return); settle();
 	CHECK(value(provider, "OperatingMode") == "-123");
 	const auto services = peer.nativeServices();
-	click(*ui.window, control(ui.details, "callServiceButton"));
+	// Slow again: "Calling…" on the button and the status line while the call
+	// is in flight, the request and the response's structure still in view.
+	peer.setReplyDelay(300);
+	auto* callButton = control(ui.details, "callServiceButton");
+	click(*ui.window, callButton);
+	CHECK(provider.busy() && callButton->property("text").toString() == QStringLiteral("Calling\u2026") &&
+	      !callButton->isEnabled());
+	CHECK(control(ui.details, "endpointStatusLine")->property("text").toString() == QStringLiteral("Calling\u2026"));
+	CHECK(visual(ui.details, QStringLiteral("valueTree")) && visual(ui.details, QStringLiteral("responseTree")));
 	CHECK(await([&] { return !provider.busy() && peer.nativeServices() == services + 1 && provider.responses()->rowCount() == 1; }));
+	peer.setReplyDelay(0);
+	CHECK(callButton->property("text").toString() == QStringLiteral("Call"));
 	auto* requestTree = control(ui.details, "valueTree");
 	auto* responseTree = control(ui.details, "responseTree");
-	geometry(*ui.window, requestTree, 180); geometry(*ui.window, responseTree, 180);
+	geometry(*ui.window, requestTree, requestTree->property("rows").toInt() * 20);
+	geometry(*ui.window, responseTree, responseTree->property("rows").toInt() * 20);
 	CHECK(await([&] { return visual(responseTree, QStringLiteral("responseRow"), QStringLiteral("name"), QStringLiteral("Enabled")); }));
 	CHECK(control(responseTree, "responseRow", "name", QStringLiteral("Enabled"))->property("value").toString() == "false");
 	CHECK(control(responseTree, "responseRow", "name", QStringLiteral("OperatingMode"))->property("value").toString() == "-123 (unknown)");

@@ -168,9 +168,14 @@ void orderedOwnedResults()
 	      peer.finishes == 0);
 	batch.poll();
 	CHECK(!batch.pending() && peer.finishes == 1 && resets.count() == 1);
-	// "Executed at 14:02:11 - 3 of 3 done.", or the first item not done.
-	CHECK(batch.status().startsWith(QStringLiteral("Executed at ")) && batch.status().contains(QStringLiteral(" of 3 done")) &&
-	      batch.attention() == !batch.status().contains(QStringLiteral(" - 3 of 3 done.")));
+	// "Executed 14:02:11 · 3 of 3 done", or the first item not done and why.
+	CHECK(batch.status().startsWith(QStringLiteral("Executed ")) && batch.status().contains(QStringLiteral(" of 3 done")) &&
+	      batch.attention() == !batch.status().endsWith(QStringLiteral(" \u00b7 3 of 3 done")));
+	CHECK(!batch.status().contains(QStringLiteral("Executed at")) && !batch.status().endsWith(QLatin1Char('.')));
+	// The Outcome column in words: a read "Read", an accepted Command
+	// "Accepted, not confirmed".
+	CHECK(role(batch, 0, ux::BatchListModel::OutcomeRole).toString() == QStringLiteral("Read"));
+	CHECK(role(batch, 2, ux::BatchListModel::OutcomeRole).toString() == QStringLiteral("Accepted, not confirmed"));
 	CHECK(role(batch, 2, ux::BatchListModel::StatusRole)
 	          .toString()
 	          .contains(QStringLiteral("Accepted")));
@@ -498,7 +503,25 @@ void itemValues()
 	history.setClock([&now] { return now; });
 	batch.setHistory(&history);
 	const auto line = [&batch](int row) { return role(batch, row, ux::BatchListModel::LineRole).toString(); };
+	// The status line is never empty: what to do with an empty Batch, then
+	// that it has not run.
+	CHECK(batch.status() == QStringLiteral("Add Fields, Commands and Services; Execute Batch sends them in one request, in order."));
 	CHECK(batch.add(serviceRow(peer)));
+	CHECK(batch.status() == QStringLiteral("Not executed yet"));
+	// Before its run the item's outcome is "–", and its response shows its
+	// whole structure with "–" in every value.
+	CHECK(role(batch, 0, ux::BatchListModel::OutcomeRole).toString() == QStringLiteral("\u2013"));
+	CHECK(batch.responses()->property("shape").toBool() && batch.responses()->rowCount() == 1);
+	{
+		auto* responses = batch.responses();
+		const auto root = responses->index(0, 0);
+		CHECK(responses->rowCount(root) == 7);
+		for (int at = 0; at < responses->rowCount(root); ++at) {
+			const auto index = responses->index(at, 0, root);
+			if (!responses->data(index, ux::ValueModel::AggregateRole).toBool())
+				CHECK(responses->data(index, ux::ValueModel::ValueRole).toString() == QStringLiteral("\u2013"));
+		}
+	}
 	// A new item is shown at once, its line made from its bytes.
 	CHECK(batch.selection() == 0 && batch.selectedRow() && line(0) == QStringLiteral("multiplier=0"));
 	auto multiplier = itemValue(batch, QStringLiteral("multiplier"));
@@ -526,19 +549,31 @@ void itemValues()
 	// Execute sends each item as it stands, and keeps what it sent.
 	CHECK(batch.execute() && peer.submitted.size() == 1 && peer.submitted[0].request.toHex() == "05000000");
 	CHECK(!batch.canEdit());
+	// While it runs the item's tables stay as they were, taking no text.
+	CHECK(batch.values()->property("shape").toBool() && batch.responses()->property("shape").toBool());
 	multiplier = itemValue(batch, QStringLiteral("multiplier"));
+	CHECK(batch.values()->data(multiplier, ux::ValueModel::ValueRole).toString() == QStringLiteral("5"));
+	CHECK(!batch.values()->data(multiplier, ux::ValueModel::EditableRole).toBool());
 	CHECK(!batch.setScalarText(multiplier, QStringLiteral("6")) && !batch.setRequest(0, QByteArray::fromHex("06000000")));
 	peer.finish();
 	batch.poll();
 	f::events();
 	CHECK(!role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
 	      !role(batch, 0, ux::BatchListModel::AtRole).toString().isEmpty());
+	CHECK(role(batch, 0, ux::BatchListModel::OutcomeRole).toString() == QStringLiteral("Done"));
+	// This fixture's Service returns no value: its response keeps its
+	// structure, "–" in every value.
+	CHECK(batch.status().endsWith(QStringLiteral(" \u00b7 1 of 1 done")) && batch.responses()->property("shape").toBool());
 	// A change after the run: changed since, and the value is marked unsent.
 	CHECK(batch.select(0));
 	multiplier = itemValue(batch, QStringLiteral("multiplier"));
 	CHECK(batch.setScalarText(multiplier, QStringLiteral("6")));
 	CHECK(role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
 	      batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
+	// The outcome says the values changed since the run; a structure with
+	// no values has nothing to go stale.
+	CHECK(role(batch, 0, ux::BatchListModel::OutcomeRole).toString() == QStringLiteral("Done, changed since"));
+	CHECK(!batch.responses()->property("stale").toBool());
 	CHECK(batch.setScalarText(multiplier, QStringLiteral("5")) && !role(batch, 0, ux::BatchListModel::ChangedRole).toBool() &&
 	      !batch.values()->data(multiplier, ux::ValueModel::UnsentRole).toBool());
 	// A read made a write and back: one step each, the same uid, undone whole.

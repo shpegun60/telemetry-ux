@@ -119,7 +119,126 @@ bool failed(const BatchRow& row)
 		return code != 0;
 	return true;
 }
+
+// The Outcome column's words (Details layout §8): "–" before a run, the
+// kind's word when done, the failure's in short; ", changed since" when the
+// values changed after the run.
+QString outcomeWords(const BatchRow& row)
+{
+	if (row.historical)
+		return batchSaid("earlier connection");
+	if (row.status == QStringLiteral("Draft") || row.sent.isNull())
+		return QString(QChar(0x2013));
+	if (row.status == QStringLiteral("Pending"))
+		return batchSaid("Sending…");
+	QString word;
+	const auto& result = row.result;
+	if (failed(row)) {
+		const auto why = DynamicBatch::why(row);
+		word = why.refused ? batchSaid("Refused") : why.outcome;
+	} else if (result.value(QStringLiteral("accepted")).toBool()) {
+		word = batchSaid("Accepted, not confirmed");
+	} else {
+		switch (row.operation) {
+			case client::Operation::FieldRead:
+				word = batchSaid("Read");
+				break;
+			case client::Operation::FieldWrite:
+				word = batchSaid("Written");
+				break;
+			case client::Operation::Command:
+				word = batchSaid("Executed");
+				break;
+			default:
+				word = batchSaid("Done");
+				break;
+		}
+	}
+	return row.sent != row.request ? batchSaid("%1, changed since").arg(word) : word;
+}
 } // namespace
+
+bool DynamicBatch::itemFailed(const BatchRow& row)
+{
+	return failed(row);
+}
+
+DynamicBatch::Why DynamicBatch::why(const BatchRow& row)
+{
+	Why out;
+	const auto& result = row.result;
+	if (result.isEmpty()) {
+		// The run failed as a whole: the item's word says how ("No reply").
+		out.words = row.status.toLower();
+		out.sentence = batchSaid("has no checked outcome");
+		out.outcome = row.status == batchSaid("No checked outcome") ? batchSaid("No outcome") : row.status;
+		return out;
+	}
+	const auto valueStatus = result.value(QStringLiteral("valueStatus")).toString();
+	if (valueStatus == QStringLiteral("InvalidPayload") || valueStatus == QStringLiteral("TypeMismatch")) {
+		out.words = batchSaid("the reply could not be read");
+		out.sentence = batchSaid("returned a value that could not be read");
+		out.outcome = batchSaid("Unreadable");
+		return out;
+	}
+	out.refused = true;
+	if (result.value(QStringLiteral("dispatch")).toUInt() != 0) {
+		out.words = batchSaid("refused by the device");
+		out.sentence = batchSaid("was refused");
+		return out;
+	}
+	const auto code = result.value(QStringLiteral("endpointStatus")).toUInt();
+	const auto set = [&out](const char* words, const char* sentence) {
+		out.words = batchSaid(words);
+		out.sentence = batchSaid(sentence);
+	};
+	switch (row.operation) {
+		case client::Operation::Command:
+			if (code == 4 || code == 5)
+				set("arguments refused", "refused its arguments");
+			else if (code == 6)
+				set("the device was busy", "found the device busy");
+			else if (code == 3)
+				set("unavailable", "was unavailable");
+			else if (code == 7)
+				set("failed on the device", "failed on the device");
+			else if (code == 2)
+				set("not found on the device", "was not found on the device");
+			else
+				set("refused by the device", "was refused");
+			break;
+		case client::Operation::Service:
+			if (code == 1)
+				set("request values refused", "refused its request values");
+			else if (code == 3)
+				set("the device was busy", "found the device busy");
+			else if (code == 2)
+				set("unavailable", "was unavailable");
+			else if (code == 4)
+				set("failed on the device", "failed on the device");
+			else
+				set("refused by the device", "was refused");
+			break;
+		case client::Operation::FieldWrite:
+			if (code == 3)
+				set("value refused", "refused its value");
+			else if (code == 2)
+				set("read-only on the device", "is read-only on the device");
+			else if (code == 4)
+				set("the device was busy", "found the device busy");
+			else if (code == 5)
+				set("unavailable", "was unavailable");
+			else if (code == 1)
+				set("not found on the device", "was not found on the device");
+			else
+				set("refused by the device", "was refused");
+			break;
+		default:
+			set("read refused", "was not read");
+			break;
+	}
+	return out;
+}
 
 int BatchListModel::rowCount(const QModelIndex& parent) const
 {
@@ -158,6 +277,8 @@ QVariant BatchListModel::data(const QModelIndex& index, int role) const
 			return QString::number(row.uid);
 		case FailedRole:
 			return failed(row);
+		case OutcomeRole:
+			return outcomeWords(row);
 		default:
 			return {};
 	}
@@ -168,7 +289,8 @@ QHash<int, QByteArray> BatchListModel::roleNames() const
 	return {{NameRole, "name"},     {OperationRole, "operation"}, {EndpointIdRole, "endpointId"},
 	        {StatusRole, "status"}, {HasValueRole, "hasValue"},   {HistoricalRole, "historical"},
 	        {ResultRole, "result"},  {LineRole, "line"},           {ChangedRole, "changed"},
-	        {AtRole, "at"},          {UidRole, "uid"},             {FailedRole, "failed"}};
+	        {AtRole, "at"},          {UidRole, "uid"},             {FailedRole, "failed"},
+	        {OutcomeRole, "outcome"}};
 }
 
 bool BatchListModel::changing() const noexcept
@@ -345,6 +467,8 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		publishing = true;
 		model.update(at, std::move(row));
 		finishPublication();
+		if (at == selected)
+			staleResponse();
 		if (!words.isEmpty() && history && target) {
 			QVector<UndoPart> parts;
 			parts.push_back(UndoPart{target.get(), QStringLiteral("batch.request"),
@@ -550,8 +674,14 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 			return;
 		const auto schema = source.schema();
 		values.setSchemaMetadata(schema);
+		// A Field's value keeps its root row, a write's too; a Command's
+		// and a Service's request is a section's.
+		const bool field = row.operation == client::Operation::FieldRead ||
+		                   row.operation == client::Operation::FieldWrite;
+		values.setSection(field ? ValueModel::Section::Value : ValueModel::Section::Request);
 		if (row.operation == client::Operation::FieldRead) {
-			// The value read is the item's values; it has no response.
+			// The value read is the item's values; it has no response. Before
+			// its run the pane shows the Field's definition (the provider's).
 			if (row.hasValue && snapshot.isCurrent()) {
 				responses.clear();
 				values.resetSnapshot(snapshot);
@@ -614,9 +744,15 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		    selected >= int(model.rows().size()))
 			return;
 		const auto& row = model.rows()[std::size_t(selected)];
-		if (!row.hasValue || row.historical || row.session != source.session() || !source.schema)
+		if (row.historical || row.session != source.session() || !source.schema)
 			return;
 		const auto schema = source.schema();
+		if (!row.hasValue) {
+			// A Service's response before its run: its structure with "–".
+			if (row.operation == client::Operation::Service && schema.type(row.responseType))
+				responses.resetShape(schema, row.responseType, ValueModel::Section::Response);
+			return;
+		}
 		if (snapshot.admit(schema, row.session) != integration::inspector::ModelStatus::Ok)
 			return;
 		const auto category = row.operation == client::Operation::Service
@@ -632,6 +768,20 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		if (snapshot.publish(bytes, identity.admission, identity.revision) ==
 		    integration::inspector::ModelStatus::Ok)
 			responses.resetSnapshot(snapshot);
+		staleResponse();
+	}
+
+	// A Service's response from a run whose request changed since: muted,
+	// with the note under it.
+	void staleResponse()
+	{
+		if (selected < 0 || selected >= int(model.rows().size()))
+			return;
+		const auto& row = model.rows()[std::size_t(selected)];
+		const bool changed = row.operation == client::Operation::Service && row.hasValue && !row.sent.isNull() &&
+		                     row.sent != row.request && responses.rowCount() > 0 && !responses.shape();
+		responses.setStale(changed, changed ? batchSaid("From the run at %1; the values changed since.").arg(row.at)
+		                                    : QString{});
 	}
 
 	void deferInvalidation()
@@ -791,7 +941,6 @@ bool DynamicBatch::add(BatchRow row)
 	auto p = d;
 	if (!canAdd(row))
 		return false;
-	const bool fieldDraft = row.operation == client::Operation::FieldWrite;
 	row.request = QByteArray(row.request.constData(), row.request.size());
 	if (row.line.isEmpty())
 		row.line = lineOf(schema(), row.requestType, row.request);
@@ -807,11 +956,9 @@ bool DynamicBatch::add(BatchRow row)
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
 	p->showItem();
-	p->status =
-	    fieldDraft
-	        ? QStringLiteral(
-	              "Field draft captured. Cancel closes the current editor; the Batch keeps its copy. Execute sends one ordered request.")
-	        : QStringLiteral("Draft - Execute sends one ordered Batch");
+	// The Batch as it is now has not run: the status line says so.
+	p->status.clear();
+	p->attention = false;
 	p->finishPublication();
 	p->recordAdded(first);
 	p->signal();
@@ -1027,10 +1174,26 @@ bool DynamicBatch::execute()
 		row.response.clear();
 		row.hasValue = false;
 	}
+	// The selected item's tables stay as they were while the Batch runs.
+	const auto valuesShown = p->values.shownTexts();
+	const auto responsesShown = p->responses.shownTexts();
+	const bool valuesHeld = p->values.rowCount() > 0;
 	p->responses.clear();
 	p->clearItem();
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
+	if (p->selected >= 0 && p->selected < int(p->model.rows().size())) {
+		const auto& row = p->model.rows()[std::size_t(p->selected)];
+		const auto schema = p->source.schema ? p->source.schema() : runtime::RuntimeSchema{};
+		const bool field = row.operation == client::Operation::FieldRead ||
+		                   row.operation == client::Operation::FieldWrite;
+		const auto type = row.operation == client::Operation::FieldRead ? row.responseType : row.requestType;
+		if (valuesHeld && schema.type(type))
+			p->values.resetShape(schema, type, field ? ValueModel::Section::Value : ValueModel::Section::Request,
+			                     valuesShown);
+		if (row.operation == client::Operation::Service && schema.type(row.responseType))
+			p->responses.resetShape(schema, row.responseType, ValueModel::Section::Response, responsesShown);
+	}
 	p->status = request->rows.size() == 1 ? batchSaid("Sending 1 item in one request…")
 	                                        : batchSaid("Sending %L1 items in one request…").arg(request->rows.size());
 	p->attention = false;
@@ -1082,8 +1245,13 @@ void DynamicBatch::poll()
 	}
 	p->model.replace(std::move(rows));
 	p->request.reset();
+	// The values the item pane showed while it ran, for the cells that changed.
+	p->values.noteUpdate();
+	p->responses.noteUpdate();
 	p->showItem();
-	// "Executed at 14:02:11 - 3 of 3 done.", or the first item not done.
+	p->values.dropUpdate();
+	p->responses.dropUpdate();
+	// "Executed 14:02:11 · 3 of 3 done", or the first item not done and why.
 	if (completion.status == client::Status::Ok && completion.succeeded && checked) {
 		const auto& held = p->model.rows();
 		int done = 0, first = -1;
@@ -1093,13 +1261,12 @@ void DynamicBatch::poll()
 			else if (first < 0)
 				first = int(i);
 		const auto at = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
-		p->status = batchSaid("Executed at %1 - %L2 of %L3 done").arg(at).arg(done).arg(int(held.size()));
+		p->status = batchSaid("Executed %1 · %L2 of %L3 done").arg(at).arg(done).arg(int(held.size()));
 		if (first >= 0)
-			p->status += batchSaid("; item %L1: %2").arg(first + 1).arg(held[std::size_t(first)].status.toLower());
-		p->status += QLatin1Char('.');
+			p->status += batchSaid(" · item %L1 %2").arg(first + 1).arg(why(held[std::size_t(first)]).sentence);
 		if (completion.valueStatus == QStringLiteral("InvalidPayload") ||
 		    completion.valueStatus == QStringLiteral("TypeMismatch"))
-			p->status += batchSaid(" Some values in the reply could not be read.");
+			p->status += batchSaid(" · some values in the reply could not be read");
 		p->attention = first >= 0;
 	} else {
 		p->status = completion.status == client::Status::Ok ? batchSaid("The reply checked no item; the items may have run.")
@@ -1124,7 +1291,12 @@ int DynamicBatch::selection() const
 
 QString DynamicBatch::status() const
 {
-	return d->status;
+	// Never empty: what to do with an empty Batch, and that it has not run.
+	if (!d->status.isEmpty())
+		return d->status;
+	return d->model.rows().empty()
+	           ? batchSaid("Add Fields, Commands and Services; Execute Batch sends them in one request, in order.")
+	           : batchSaid("Not executed yet");
 }
 
 bool DynamicBatch::attention() const

@@ -21,7 +21,7 @@
 			CHECK(!calibRow.value("expanded").toBool());
 			rig.call("use", QStringLiteral("service"));
 			CHECK(rig.names() == (QStringList{QStringLiteral("value"), QStringLiteral("limits")}));
-			CHECK(rig.call("headingCount", QStringLiteral("valueSectionHeading")).toInt() == 1);
+			CHECK(rig.call("headingCount", QStringLiteral("valueTableHeader")).toInt() == 1);
 			CHECK(!rig.row(0).value("heading").toBool());
 			rig.call("use", QStringLiteral("single"));
 			CHECK(rig.call("rowCount").toInt() == 3 && rig.row(0).value("expanded").toBool());

@@ -159,9 +159,13 @@ int main(int argc, char** argv)
 			auto* tree = item(view, QStringLiteral("endpointTree"));
 			auto* valueTree = item(view, QStringLiteral("valueTree"));
 			auto* values = item(view, QStringLiteral("emptyEndpointLabel"));
+			// Details' one scroll fills its area; the empty sentence is one
+			// line at its top (Details layout §6).
+			auto* details = item(view, QStringLiteral("endpointBodyScroll"));
 			auto* watchToggle = item(view, QStringLiteral("watchlistExpanded"));
 			auto* batchToggle = item(view, QStringLiteral("batchToggle"));
-			CHECK(tree && valueTree && values && watchToggle && batchToggle);
+			CHECK(tree && valueTree && values && details && watchToggle && batchToggle);
+			CHECK(rectangle(values).top() - rectangle(details).top() <= 12 && values->height() < 60);
 			// This real Session is disconnected and has no selection. Its primary
 			// Details viewport is the empty state, not an invisible value table.
 			CHECK(provider->selection().isEmpty() && !valueTree->isVisible() && values->isVisible());
@@ -180,7 +184,7 @@ int main(int argc, char** argv)
 			const auto collapsedWatchHeight = watchPanel->property("implicitHeight").toReal();
 			// Both collapsed and expanded must preserve a usable primary workspace.
 			CHECK(tree->height() >= 200);
-			CHECK(values->height() >= 200);
+			CHECK(details->height() >= 200);
 			CHECK(window->grabWindow().save(
 			    QString::fromUtf8(argv[1]) +
 			    QStringLiteral("/%1x%2-collapsed.png").arg(size.width()).arg(size.height())));
@@ -189,9 +193,9 @@ int main(int argc, char** argv)
 			settle();
 			CHECK(watchPanel->property("implicitHeight").toReal() >= collapsedWatchHeight + 120);
 			std::printf("Layout %dx%d expanded endpoint=%.1f values=%.1f\n", size.width(),
-			            size.height(), tree->height(), values->height());
+			            size.height(), tree->height(), details->height());
 			CHECK(tree->height() >= 200);
-			CHECK(values->height() >= 200);
+			CHECK(details->height() >= 200);
 			auto* scroll = item(view, QStringLiteral("configuratorScroll"));
 			CHECK(scroll != nullptr);
 			auto* flick =
@@ -302,7 +306,12 @@ int main(int argc, char** argv)
 				const auto frame = rectangle(statePanel);
 				const auto left = frame.left() + statePanel->property("leftPadding").toReal();
 				const auto right = frame.right() - statePanel->property("rightPadding").toReal();
-				CHECK(rectangle(title).bottom() <= rectangle(actions).top() + 1);
+				// The title and the actions share the row while the title keeps
+				// six characters (Details layout §4); the actions go under it
+				// only below that. Never over each other.
+				const bool oneRow = std::abs(rectangle(title).center().y() - rectangle(actions).center().y()) < 2;
+				CHECK(oneRow ? rectangle(title).right() <= rectangle(actions).left() + 1
+				             : rectangle(title).bottom() <= rectangle(actions).top() + 1);
 				// The title and the value tree stay inside too: a fixed minimum
 				// width on the tree once pushed the whole panel past a 300 px dock.
 				CHECK(rectangle(title).left() >= left - 1 && rectangle(title).right() <= right + 1);
@@ -426,7 +435,7 @@ int main(int argc, char** argv)
 				stateWindow->setHeight(height);
 				settle();
 				auto* tree = item(statePanel, QStringLiteral("valueTree"));
-				auto* heading = item(statePanel, QStringLiteral("responseSectionHeading"));
+				auto* heading = item(statePanel, QStringLiteral("responseTableHeader"));
 				CHECK(tree && heading && heading->isVisible() && tree->property("rows").toInt() == 2);
 				QQuickItem* last = nullptr;
 				CHECK(QMetaObject::invokeMethod(tree, "itemAtCell", Q_RETURN_ARG(QQuickItem*, last), Q_ARG(QPoint, QPoint(0, 1))));
@@ -442,13 +451,15 @@ int main(int argc, char** argv)
 			// row can be scrolled into view.
 			CHECK(statePanel->setProperty("scrolls", true));
 			stateWindow->setWidth(300);
-			stateWindow->setHeight(260);
+			// The one stack from the top is compact: 200 px holds the header
+			// and the Request, not the Response.
+			stateWindow->setHeight(200);
 			settle();
 			auto* body = item(statePanel, QStringLiteral("endpointBodyScroll"));
 			CHECK(body && body->property("contentHeight").toReal() > body->height() + 1 && body->property("interactive").toBool());
 			auto* requestTree = item(statePanel, QStringLiteral("valueTree"));
 			auto* responseTree = item(statePanel, QStringLiteral("responseTree"));
-			auto* responseHeading = item(statePanel, QStringLiteral("responseSectionHeading"));
+			auto* responseHeading = item(statePanel, QStringLiteral("responseTableHeader"));
 			CHECK(requestTree && responseTree && responseHeading && responseTree->isVisible());
 			const auto bottomOf = [](QQuickItem* it) { return it->mapToScene(QPointF(0, it->height())).y(); };
 			const auto topOf = [](QQuickItem* it) { return it->mapToScene(QPointF()).y(); };

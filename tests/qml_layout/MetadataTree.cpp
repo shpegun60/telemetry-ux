@@ -161,10 +161,11 @@ int main(int argc, char** argv)
 			}
 			for (const auto& item : shown) {
 				const auto row = item.toMap();
-				// The Type column is shown, and "-" stands where a value would be.
+				// The Type column is shown, and "-" stands where a value would be;
+				// the open root row shows nothing there (Details layout §9).
 				CHECK(row.value("typeShown").toBool());
 				CHECK(!row.value("type").toString().isEmpty());
-				CHECK(row.value("value").toString() == dash);
+				CHECK(row.value("value").toString() == (row.value("expanded").toBool() ? QString{} : dash));
 			}
 		};
 		control.pick(QStringLiteral("Config"));
