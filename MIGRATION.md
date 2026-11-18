@@ -1596,3 +1596,15 @@ Per editor:
   struct Field, another Field, the struct again and once more, on the Details
   pane and on a pane with a host's fold memory (the Batch item's), and asserts
   one root plus three members and the Type column each time.
+
+## Trend: a data update never undoes the user's time zoom
+
+- No API change. `TracePlot`/`TraceView` state for the time axis (`showAll`, `spanSeconds`,
+  the held right edge) is changed only by the user: wheel, drag, box, keys, presets, Back,
+  Follow, or a host choosing another run (`choosePreset`). `WatchTraces::setRecorded`,
+  `appendRecorded` and `setRecordedAnchor` never touch it.
+- qml_layout now holds this: after a wheel zoom from All, on a recording and on an overlaid
+  curve an hour away, setting and appending readings again leaves the span and right edge
+  as they were, and a step sideways still pans.
+- Known, left to the gesture redesign: at All (or a span longer than what is kept) the
+  right-edge clamp in `TraceView::hold` leaves a sideways drag nowhere to go.

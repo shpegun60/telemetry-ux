@@ -1876,6 +1876,37 @@ int main(int argc, char** argv)
 			recorded.appendRecorded(QStringLiteral("run.Missing"), {{last, 1}});
 			CHECK(recorded.count(QStringLiteral("run.Speed")) == before + 2 && recorded.latest(QStringLiteral("run.Speed")).toDouble() == 4.5 &&
 			      !recorded.readings(QStringLiteral("run.Missing")) && recorded.newestNs() == last + 200'000'000);
+			// A data update never undoes the user's time zoom: wheel in, then the
+			// host sets and appends readings again.
+			{
+				QCoreApplication::processEvents();
+				CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+				settle(150);
+				const auto area = view->property("plotArea").toRectF();
+				const QPointF at(area.left() + area.width() * 0.5, area.center().y());
+				for (int i = 0; i < 3; ++i) {
+					QWheelEvent wheel(at, view->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+					                  Qt::NoScrollPhase, false);
+					QCoreApplication::sendEvent(view, &wheel);
+				}
+				settle(150);
+				const double zoomed = view->property("spanSeconds").toDouble();
+				const double zoomedRight = view->property("rightUtcMs").toDouble();
+				CHECK(!view->property("showAll").toBool() && view->property("preset").toInt() != 0 && zoomed < 7000 * 0.6);
+				const auto* now = recorded.readings(QStringLiteral("run.Speed"));
+				std::vector<ux::TraceReading> again(now->begin(), now->end());
+				recorded.setRecorded(QStringLiteral("run.Speed"), again, false);
+				settle(150);
+				const auto tail = again.back().ns;
+				recorded.appendRecorded(QStringLiteral("run.Speed"), {{tail + 100'000'000, 1.0}});
+				settle(150);
+				CHECK(!view->property("showAll").toBool() && view->property("spanSeconds").toDouble() == zoomed &&
+				      view->property("rightUtcMs").toDouble() == zoomedRight);
+				// Zoomed in, a step sideways pans and keeps the span.
+				QTest::keyClick(window, Qt::Key_Left);
+				settle(150);
+				CHECK(view->property("spanSeconds").toDouble() == zoomed && view->property("rightUtcMs").toDouble() < zoomedRight);
+			}
 			// The host's word over the graph.
 			trend->setProperty("message", QStringLiteral("No readings here. Press All to see the whole run."));
 			settle(100);
@@ -2007,6 +2038,29 @@ int main(int argc, char** argv)
 			CHECK(vb.toDouble() == 104.0);
 			CHECK(QMetaObject::invokeMethod(view, "statistics", Q_RETURN_ARG(QVariantMap, stats), Q_ARG(QString, earlier)));
 			CHECK(stats.value(QStringLiteral("minUtcMs")).toDouble() == double(utcB));
+			// All, on the time of day with a curve an hour away: the wheel zooms the
+			// time, and the host's next readings never undo it.
+			{
+				CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+				settle(200);
+				const double allSpan = view->property("spanSeconds").toDouble();
+				const auto area = view->property("plotArea").toRectF();
+				const QPointF at(area.left() + area.width() * 0.5, area.center().y());
+				for (int i = 0; i < 4; ++i) {
+					QWheelEvent wheel(at, view->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+					                  Qt::NoScrollPhase, false);
+					QCoreApplication::sendEvent(view, &wheel);
+				}
+				settle(150);
+				const double zoomed = view->property("spanSeconds").toDouble(), zoomedRight = view->property("rightUtcMs").toDouble();
+				CHECK(!view->property("showAll").toBool() && zoomed < allSpan && view->property("preset").toInt() != 0);
+				overlay.setRecorded(here, std::vector<ux::TraceReading>(ra->begin(), ra->end()), false);
+				overlay.appendRecorded(here, {{startA + 11'000'000'000, 11.0}});
+				overlay.appendRecorded(earlier, {{startB + 11'000'000'000, 111.0}});
+				settle(300);
+				CHECK(!view->property("showAll").toBool() && view->property("spanSeconds").toDouble() == zoomed &&
+				      view->property("rightUtcMs").toDouble() == zoomedRight);
+			}
 			// The axis toggled back moves it back; the curve as given never changed.
 			view->setProperty("fromStart", true);
 			settle(100);
