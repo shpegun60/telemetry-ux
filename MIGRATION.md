@@ -1609,6 +1609,62 @@ Per editor:
 - Known, left to the gesture redesign: at All (or a span longer than what is kept) the
   right-edge clamp in `TraceView::hold` leaves a sideways drag nowhere to go.
 
+## Plot and Trend: drag, wheel and axes move and zoom; All is never a lock (November 2026)
+
+How the user pans, zooms and fits the graph, on the live Plot and on the Trend, after
+QCustomPlot's habits. The design is the designer's "Graph interaction" spec of 17 November.
+
+- **Mouse.** `TraceView` now takes the left, middle and right buttons.
+  - A left drag in the graph moves the picture; how it starts picks the axis: sideways the
+    time, up or down the values, diagonal both. The other axis joins once the pointer has
+    gone 24 px along it. A press stays a click (and pins) only within 4 px either way, so a
+    vertical drag no longer pins a reference.
+  - A middle drag moves both, no lock. A right drag zooms to a box, as Ctrl and a drag do;
+    a box under 8 px wide zooms only the values and keeps Follow ("3.10 tall").
+  - Over the value labels a drag, the wheel and a double-click act on the values; over the
+    time labels on the time. A drag across the time labels, up or down, stretches or
+    squeezes the time about the press (a hundred pixels double or halve it): the owner's
+    "a drag on the time axis zooms X".
+  - A double-click in the graph, F, or the graph menu's "Fit all" fit everything: All,
+    following where Follow is offered, every value fitted, no curve focused; one step back,
+    which brings the focus back too. A double-click puts back the pins its first click
+    moved. A double-click on the time labels is All.
+  - Esc during a press cancels it: the view as it was at the press, no step back. A grab
+    lost mid-gesture keeps a move where it got to and drops a box. A second button, and the
+    wheel, are ignored while a button is held.
+- **Wheel.** Alone it zooms the time about the pointer; Ctrl the values; Shift, Alt or a
+  sideways wheel move instead (a tenth a notch); Ctrl+Shift moves the values. The handler
+  reads whichever delta came, fractional notches in proportion, a run as one step back. A
+  `ZoomNativeGesture` (macOS, Wayland pinch) zooms the values as Ctrl and the wheel. The
+  wheel is always accepted over the view.
+- **All is a starting view, never a lock.** `hold()` keeps the right edge between the oldest
+  reading kept and the newest plus one span, so a drag at All, or with a span longer than
+  what is kept, moves at once, and the picture may run into time with no readings until one
+  reading is left in view. Any time move by hand at All leaves All for the span of
+  everything kept (the span button reads it); Space and H keep All. Zooming out at All
+  (wheel, minus, the header's button) changes nothing and leaves Follow as it was. Panning
+  far back now stops the right edge at the oldest reading, no longer the left edge; Home
+  still puts the oldest reading at the left edge.
+- **Auto** never narrows while a button is held or a run of wheel steps goes on (600 ms), and
+  narrows at once when it ends. While a button is held the value-label column keeps its
+  width, so the plot never slides under the pointer.
+- **Stacked lanes** each have their own "Auto" chip (`plotLaneAuto_<path>`, after the lane's
+  name); the shared "Auto (A)" chip is for the shared axis only.
+- **API.** `TraceView`: `fitAll()`, `autoLane(path)`, `followable` (Space and H toggle only
+  where Follow is offered; `TracePlot` binds it), `hoverRegion` ("graph", "values", "time",
+  "laneName", ""), `valueLow`/`valueHigh` (the shared axis), `boxCaption`, `manual` in each
+  `numberLanes` entry, and the signal `contextMenuRequested(QPointF)`. `TracePlot` opens its
+  graph menu from that signal; its right-button `TapHandler` is gone. A host that drew its
+  own menu on the graph should use the signal.
+- **Cursor shapes.** A cross on the graph, ↕ on the value labels, ↔ on the time labels, a
+  pointing hand on a stacked lane's name, a closed hand while the picture is dragged.
+- **Words.** The empty Plot says "On the graph: drag to move, wheel to zoom, double-click to
+  fit all." Each axis has a tooltip; the graph menu adds "Fit all" (F) and "Fit values" (A);
+  Follow's tooltip and description, and the graph's description, name the new gestures.
+- qml_layout: the TracePlot check runs every one of the spec's 43 checks with real mouse and
+  wheel events through the window, on a live fixture, on the Trend's recording and on its
+  overlaid runs.
+
 ## Details and the Batch: one layout from the top (November 2026)
 
 The Details layout spec: one stack from the top at natural height in one

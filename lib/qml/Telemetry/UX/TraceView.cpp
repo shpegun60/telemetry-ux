@@ -10,6 +10,7 @@
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QNativeGestureEvent>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
@@ -99,7 +100,7 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 {
 	setAntialiasing(true);
 	setOpaquePainting(false);
-	setAcceptedMouseButtons(Qt::LeftButton);
+	setAcceptedMouseButtons(Qt::LeftButton | Qt::MiddleButton | Qt::RightButton);
 	setAcceptHoverEvents(true);
 	setActiveFocusOnTab(true);
 	setCursor(Qt::CrossCursor);
@@ -108,6 +109,10 @@ TraceView::TraceView(QQuickItem* parent) : QQuickPaintedItem(parent)
 	frames_.setInterval(50);
 	frames_.setSingleShot(true);
 	connect(&frames_, &QTimer::timeout, this, &TraceView::tick);
+	// A run of wheel steps ends after 600 ms of quiet: Auto may narrow again.
+	wheelQuiet_.setInterval(600);
+	wheelQuiet_.setSingleShot(true);
+	connect(&wheelQuiet_, &QTimer::timeout, this, [this] { update(); });
 	connect(this, &QQuickItem::visibleChanged, this, [this] { update(); });
 }
 
@@ -232,6 +237,33 @@ void TraceView::setShowAll(bool all)
 	if (all == showAll_)
 		return;
 	showAll_ = all;
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::setFollowable(bool followable)
+{
+	if (followable == followable_)
+		return;
+	followable_ = followable;
+	Q_EMIT viewChanged();
+}
+
+void TraceView::fitAll()
+{
+	// Already everything, following, fitted and unfocused: nothing to step back from.
+	if (showAll_ && following_ && valueAuto_ && laneManual_.isEmpty() && focusedPath_.isEmpty())
+		return;
+	// One step of its own, which brings the focus back too.
+	remember(true, true);
+	showAll_ = true;
+	heldAllNs_ = 0;
+	following_ = true;
+	valueAuto_ = true;
+	range_ = {};
+	laneManual_.clear();
+	laneRange_.clear();
+	focusedPath_.clear();
 	Q_EMIT viewChanged();
 	update();
 }
@@ -427,7 +459,7 @@ void TraceView::stepCursor(int direction)
 	// Stepping out of the picture brings the picture along.
 	const auto right = rightNs(), span = spanNs();
 	if (next > right || next < right - span)
-		hold(next + span / 2);
+		moveTime(next + span / 2);
 	Q_EMIT cursorChanged();
 	update();
 }
@@ -610,7 +642,7 @@ void TraceView::putCursorAt(qreal utcMs)
 	// Out of view: centred, held.
 	if (ns < left || ns > right) {
 		remember();
-		hold(ns + spanNs() / 2);
+		moveTime(ns + spanNs() / 2);
 	}
 	cursorShown_ = true;
 	cursorNs_ = ns;
@@ -714,6 +746,15 @@ void TraceView::hoverMoveEvent(QHoverEvent* event)
 	// pointer that moved in the window moves the cursor, so the keys' cursor
 	// stays where they put it.
 	pointerY_ = event->position().y();
+	// Each part says by its shape what it moves: a cross on the graph, ↕ on
+	// the value labels, ↔ on the time labels, a hand on a lane's name.
+	if (gesture_ == Gesture::None) {
+		const auto region = regionAt(event->position());
+		setHoverRegion(region);
+		const auto shape = shapeOf(region);
+		if (cursor().shape() != shape)
+			setCursor(shape);
+	}
 	// A gap band too narrow for its caption says it under the pointer.
 	const auto gapWords = plotArea_.contains(event->position()) ? gapCaptionAt(event->position().x()) : QString();
 	if (gapWords != hoverGap_) {
@@ -734,6 +775,7 @@ void TraceView::hoverLeaveEvent(QHoverEvent*)
 {
 	hoverAt_ = QPointF(-1, -1);
 	pointerY_ = -1;
+	setHoverRegion(QString());
 	if (!hoverGap_.isEmpty()) {
 		hoverGap_.clear();
 		Q_EMIT hoverGapChanged();
@@ -772,40 +814,63 @@ void TraceView::hold(qint64 right)
 {
 	if (following_ && showAll_)
 		heldAllNs_ = spanNs();
-	// The right edge never past the newest reading, and the left edge never
-	// before the oldest while more is kept than the span: there is nothing
-	// to see out there.
+	// The picture may run past either end of the readings, into time with
+	// none, but one reading always stays in view: the right edge between the
+	// oldest reading kept and the newest plus one span. A span longer than
+	// what is kept, All included, moves freely within that.
 	const auto [oldest, newest] = kept();
 	if (newest)
-		right = std::clamp(right, std::min(newest, oldest + spanNs()), newest);
+		right = std::clamp(right, oldest, newest + spanNs());
 	frozenNs_ = right;
 	following_ = false;
 	Q_EMIT viewChanged();
 	update();
 }
 
-void TraceView::remember()
+void TraceView::leaveAll()
+{
+	// All moved by hand is All no more: the span of everything kept now, which
+	// new readings no longer widen.
+	if (!showAll_)
+		return;
+	const auto span = spanNs();
+	showAll_ = false;
+	heldAllNs_ = 0;
+	spanSeconds_ = double(span) / 1e9;
+}
+
+void TraceView::moveTime(qint64 right)
+{
+	leaveAll();
+	hold(right);
+}
+
+TraceView::ViewState TraceView::viewState() const
+{
+	return {following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high,
+	        laneManual_, std::nullopt};
+}
+
+bool TraceView::remember(bool alone, bool withFocus)
 {
 	// A run of wheel steps or keys is one step back: 600 ms of quiet closes it.
 	const auto now = QDateTime::currentMSecsSinceEpoch();
-	const bool sameGesture = rememberedAtMs_ && now - rememberedAtMs_ < 600;
-	rememberedAtMs_ = now;
+	const bool sameGesture = !alone && rememberedAtMs_ && now - rememberedAtMs_ < 600;
+	rememberedAtMs_ = alone ? 0 : now;
 	if (sameGesture && !back_.empty())
-		return;
-	back_.push_back({following_, showAll_, valueAuto_, heldAllNs_, following_ ? 0 : rightNs(), spanSeconds_, manual_.low, manual_.high,
-	                 laneManual_});
+		return false;
+	auto state = viewState();
+	if (withFocus)
+		state.focus = focusedPath_;
+	back_.push_back(std::move(state));
 	if (back_.size() > 50)
 		back_.erase(back_.begin());
 	Q_EMIT viewChanged();
+	return true;
 }
 
-void TraceView::goBack()
+void TraceView::applyState(const ViewState& state)
 {
-	if (back_.empty())
-		return;
-	const auto state = back_.back();
-	back_.pop_back();
-	rememberedAtMs_ = 0;
 	following_ = state.following;
 	showAll_ = state.showAll;
 	heldAllNs_ = state.heldAllNs;
@@ -815,8 +880,20 @@ void TraceView::goBack()
 	valueAuto_ = state.valueAuto;
 	manual_ = {state.manualLow, state.manualHigh};
 	laneManual_ = state.laneManual;
+	if (state.focus)
+		focusedPath_ = *state.focus;
 	if (valueAuto_)
 		range_ = {};
+}
+
+void TraceView::goBack()
+{
+	if (back_.empty())
+		return;
+	const auto state = back_.back();
+	back_.pop_back();
+	rememberedAtMs_ = 0;
+	applyState(state);
 	Q_EMIT viewChanged();
 	update();
 }
@@ -929,19 +1006,12 @@ void TraceView::zoomToBox(QPointF from, QPointF to)
 	const QRectF drawn = QRectF(from, to).normalized();
 	const QRectF box(QPointF(std::max(drawn.left(), plotArea_.left()), std::max(drawn.top(), plotArea_.top())),
 	                 QPointF(std::min(drawn.right(), plotArea_.right()), std::min(drawn.bottom(), plotArea_.bottom())));
-	if (box.width() < 4 || plotArea_.width() <= 0)
+	if (plotArea_.width() <= 0)
 		return;
-	remember();
-	const auto span = spanNs();
-	const auto right = rightNs();
-	const auto left = right - span;
-	const auto nsAt = [&](qreal x) { return left + qint64(double(span) * (x - plotArea_.left()) / plotArea_.width()); };
-	const auto newLeft = nsAt(box.left()), newRight = nsAt(box.right());
-	showAll_ = false;
-	heldAllNs_ = 0;
-	spanSeconds_ = std::max(0.01, double(newRight - newLeft) / 1e9);
-	// The values too, from a box over the numbers at least 8 px tall:
-	// stacked, the values of the lane it starts in.
+	// The values, from a box over the numbers at least 8 px tall: stacked,
+	// the values of the lane it starts in.
+	QString lanePath;
+	Range values;
 	if (!numberLanes_.empty()) {
 		if (const int at = laneAt(from.y()); at >= 0) {
 			const auto& lane = numberLanes_[std::size_t(at)];
@@ -950,24 +1020,43 @@ void TraceView::zoomToBox(QPointF from, QPointF to)
 				const auto valueAt = [&](qreal y) {
 					return lane.shown.high - (y - lane.valueRect.top()) / lane.valueRect.height() * (lane.shown.high - lane.shown.low);
 				};
-				const double high = valueAt(inLane.top()), low = valueAt(inLane.bottom());
-				if (high > low)
-					laneManual_.insert(lane.path, {low, high});
+				values = {valueAt(inLane.bottom()), valueAt(inLane.top())};
+				lanePath = lane.path;
 			}
 		}
-	} else if (box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
-	    box.top() <= valuesArea_.bottom()) {
+	} else if (hasNumbers_ && box.height() >= 8 && shown_.valid() && valuesArea_.height() > 0 && box.top() >= valuesArea_.top() - 1 &&
+	           box.top() <= valuesArea_.bottom()) {
 		const auto valueAt = [&](qreal y) {
 			return shown_.high - (y - valuesArea_.top()) / valuesArea_.height() * (shown_.high - shown_.low);
 		};
-		const double high = valueAt(std::max(box.top(), valuesArea_.top())), low = valueAt(std::min(box.bottom(), valuesArea_.bottom()));
-		if (high > low) {
+		values = {valueAt(std::min(box.bottom(), valuesArea_.bottom())), valueAt(std::max(box.top(), valuesArea_.top()))};
+	}
+	// The time from a box at least 8 px wide; a narrower one zooms only the
+	// values and keeps following; smaller both ways, nothing.
+	const bool wide = box.width() >= 8;
+	if (!wide && !values.valid())
+		return;
+	remember();
+	if (values.valid()) {
+		if (!lanePath.isEmpty()) {
+			laneManual_.insert(lanePath, values);
+		} else {
 			valueAuto_ = false;
-			manual_ = {low, high};
+			manual_ = values;
 		}
 	}
-	following_ = false;
-	frozenNs_ = newRight;
+	if (wide) {
+		const auto span = spanNs();
+		const auto right = rightNs();
+		const auto left = right - span;
+		const auto nsAt = [&](qreal x) { return left + qint64(double(span) * (x - plotArea_.left()) / plotArea_.width()); };
+		const auto newLeft = nsAt(box.left()), newRight = nsAt(box.right());
+		showAll_ = false;
+		heldAllNs_ = 0;
+		spanSeconds_ = std::max(0.01, double(newRight - newLeft) / 1e9);
+		hold(newRight);
+		return;
+	}
 	Q_EMIT viewChanged();
 	update();
 }
@@ -975,6 +1064,10 @@ void TraceView::zoomToBox(QPointF from, QPointF to)
 void TraceView::zoom(qreal factor, qreal at)
 {
 	if (!(factor > 0))
+		return;
+	// All is as far out as it goes: zooming out there changes nothing, and
+	// leaves Follow as it was.
+	if (showAll_ && factor > 1)
 		return;
 	remember();
 	const auto span = spanNs();
@@ -1003,7 +1096,7 @@ void TraceView::zoom(qreal factor, qreal at)
 void TraceView::pan(qreal part)
 {
 	remember();
-	hold(rightNs() + qint64(double(spanNs()) * part));
+	moveTime(rightNs() + qint64(double(spanNs()) * part));
 }
 
 void TraceView::toOldest()
@@ -1012,6 +1105,7 @@ void TraceView::toOldest()
 	if (!newest)
 		return;
 	remember();
+	leaveAll();
 	hold(oldest + spanNs());
 }
 
@@ -1081,6 +1175,9 @@ void TraceView::setFocusedPath(const QString& path)
 
 void TraceView::zoomValues(qreal factor, qreal at)
 {
+	// Only bools and enums: there are no values to zoom.
+	if (!hasNumbers_)
+		return;
 	if (!numberLanes_.empty()) {
 		// Stacked: each aimed lane about the same point of its height.
 		const auto aimed = valueLanes();
@@ -1109,6 +1206,8 @@ void TraceView::zoomValues(qreal factor, qreal at)
 
 void TraceView::panValues(qreal part)
 {
+	if (!hasNumbers_)
+		return;
 	if (!numberLanes_.empty()) {
 		const auto aimed = valueLanes();
 		if (aimed.isEmpty())
@@ -1147,161 +1246,569 @@ void TraceView::autoValues()
 	update();
 }
 
+void TraceView::autoLane(const QString& path)
+{
+	if (!laneManual_.contains(path))
+		return;
+	remember();
+	laneManual_.remove(path);
+	laneRange_.remove(path);
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::zoomValuesAt(qreal factor, QPointF at)
+{
+	pointerY_ = at.y();
+	// Stacked: the lane under the pointer; between lanes or over a bool or
+	// an enum, nothing.
+	if (!numberLanes_.empty()) {
+		if (const int lane = laneAt(at.y()); lane >= 0) {
+			const auto& rect = numberLanes_[std::size_t(lane)].valueRect;
+			zoomValues(factor, (at.y() - rect.top()) / std::max<qreal>(1, rect.height()));
+		}
+		return;
+	}
+	zoomValues(factor, (at.y() - valuesArea_.top()) / std::max<qreal>(1, valuesArea_.height()));
+}
+
+void TraceView::panValuesAt(qreal part, QPointF at)
+{
+	pointerY_ = at.y();
+	if (!numberLanes_.empty() && laneAt(at.y()) < 0)
+		return;
+	panValues(part);
+}
+
+QString TraceView::regionAt(QPointF at) const
+{
+	if (plotArea_.width() <= 0 || at.x() < 0 || at.y() < 0 || at.x() > width() || at.y() > height())
+		return {};
+	// Under the plot, the time labels; the corner under the value labels is
+	// neither.
+	if (at.y() > plotArea_.bottom())
+		return at.x() >= plotArea_.left() ? QStringLiteral("time") : QString();
+	// Left of it, the value labels: beside the numbers only, not a bool's or
+	// an enum's name.
+	if (at.x() < plotArea_.left())
+		return hasNumbers_ && at.y() >= valuesArea_.top() && at.y() <= valuesArea_.bottom() ? QStringLiteral("values") : QString();
+	for (const auto& lane : numberLanes_)
+		if (lane.nameRect.contains(at))
+			return QStringLiteral("laneName");
+	return QStringLiteral("graph");
+}
+
+Qt::CursorShape TraceView::shapeOf(const QString& region)
+{
+	if (region == QLatin1String("graph"))
+		return Qt::CrossCursor;
+	if (region == QLatin1String("values"))
+		return Qt::SizeVerCursor;
+	if (region == QLatin1String("time"))
+		return Qt::SizeHorCursor;
+	if (region == QLatin1String("laneName"))
+		return Qt::PointingHandCursor;
+	return Qt::ArrowCursor;
+}
+
+void TraceView::setHoverRegion(const QString& region)
+{
+	if (region == hoverRegion_)
+		return;
+	hoverRegion_ = region;
+	Q_EMIT hoverRegionChanged();
+}
+
+TraceView::Pins TraceView::pins() const
+{
+	return {referenceShown_, endShown_, referenceNs_, endNs_, referenceValues_, focusedPath_};
+}
+
+void TraceView::restorePins(const Pins& pins)
+{
+	referenceShown_ = pins.reference;
+	endShown_ = pins.end;
+	referenceNs_ = pins.referenceNs;
+	endNs_ = pins.endNs;
+	referenceValues_ = pins.referenceValues;
+	// A lane's name toggles the focus only while stacked, where each lane
+	// keeps its own Auto: put back as it was, nothing refitted.
+	focusedPath_ = pins.focus;
+	Q_EMIT cursorChanged();
+	Q_EMIT viewChanged();
+	update();
+}
+
+bool TraceView::gestureHolds() const
+{
+	return gesture_ != Gesture::None || (lastWheelMs_ && QDateTime::currentMSecsSinceEpoch() - lastWheelMs_ < 600);
+}
+
+void TraceView::takeStep()
+{
+	if (stepTaken_)
+		return;
+	stepTaken_ = true;
+	stepPushed_ = remember();
+}
+
 void TraceView::mousePressEvent(QMouseEvent* event)
 {
-	forceActiveFocus(Qt::MouseFocusReason);
-	pressX_ = event->position().x();
-	pressY_ = event->position().y();
-	pressRightNs_ = rightNs();
-	pressRange_ = shown_;
-	pointerY_ = pressY_;
-	valueDrag_ = event->position().x() < plotArea_.left();
-	// Stacked, a drag over the labels pans the lane it starts in.
-	pressLane_.clear();
-	if (const int at = valueDrag_ ? laneAt(pressY_) : -1; at >= 0) {
-		pressLane_ = numberLanes_[std::size_t(at)].path;
-		pressRange_ = numberLanes_[std::size_t(at)].shown;
-	}
-	dragging_ = false;
-	boxing_ = !valueDrag_ && (event->modifiers() & Qt::ControlModifier) && plotArea_.contains(event->position());
-	boxFrom_ = boxTo_ = event->position();
 	event->accept();
+	const auto button = event->button();
+	// Only this button down: whatever an earlier press left (a release that
+	// never came) is over.
+	if (event->buttons() == button) {
+		ignoreUntilUp_ = false;
+		if (gesture_ != Gesture::None)
+			endGesture(lastPointer_);
+	}
+	// A second button during a gesture: nothing until every button is up.
+	if (gesture_ != Gesture::None || ignoreUntilUp_)
+		return;
+	forceActiveFocus(Qt::MouseFocusReason);
+	const auto at = event->position();
+	const auto region = regionAt(at);
+	const bool inGraph = region == QLatin1String("graph") || region == QLatin1String("laneName");
+	// The kind is fixed here; modifiers changed later change nothing.
+	Gesture kind = Gesture::None;
+	if (button == Qt::RightButton) {
+		kind = inGraph ? Gesture::Box : Gesture::MenuOnly;
+	} else if (button == Qt::LeftButton || button == Qt::MiddleButton) {
+		if (region == QLatin1String("values"))
+			kind = Gesture::ValueAxis;
+		else if (region == QLatin1String("time"))
+			kind = Gesture::TimeAxis;
+		else if (inGraph)
+			kind = button == Qt::MiddleButton                     ? Gesture::Middle
+			       : (event->modifiers() & Qt::ControlModifier) ? Gesture::Box
+			                                                      : Gesture::Plain;
+	}
+	// What the pins were, for a double-click to put back.
+	if (button == Qt::LeftButton) {
+		previousPins_ = pressPins_;
+		pressPins_ = pins();
+	}
+	if (kind == Gesture::None)
+		return;
+	gesture_ = kind;
+	gestureButton_ = button;
+	pressAt_ = lastPointer_ = at;
+	pointerY_ = at.y();
+	pressRightNs_ = rightNs();
+	pressSpanNs_ = spanNs();
+	pressAll_ = showAll_;
+	pressState_ = viewState();
+	dragging_ = timeEngaged_ = valuesEngaged_ = timeStretch_ = false;
+	stepTaken_ = stepPushed_ = false;
+	boxing_ = false;
+	boxFrom_ = boxTo_ = at;
+	columnFrozen_ = true;
+	frozenLeft_ = plotArea_.left();
+	// The values this press can move: the lane it began in while stacked,
+	// the shared axis over the numbers; none over a bool or an enum.
+	pressLane_.clear();
+	pressHasValues_ = false;
+	if (hasNumbers_ && kind != Gesture::TimeAxis && kind != Gesture::MenuOnly) {
+		if (!numberLanes_.empty()) {
+			if (const int lane = laneAt(at.y()); lane >= 0) {
+				pressLane_ = numberLanes_[std::size_t(lane)].path;
+				pressHasValues_ = true;
+			}
+		} else {
+			pressHasValues_ = at.y() >= valuesArea_.top() && at.y() <= valuesArea_.bottom();
+		}
+	}
+	setHoverRegion(QString());
+	if (kind == Gesture::ValueAxis)
+		setCursor(Qt::SizeVerCursor);
+	else if (kind == Gesture::TimeAxis)
+		setCursor(Qt::SizeHorCursor);
 }
 
 void TraceView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-	// On the value labels: fitted again - stacked, the lane there.
-	if (event->position().x() < plotArea_.left()) {
+	event->accept();
+	if (event->button() != Qt::LeftButton)
+		return;
+	const auto at = event->position();
+	const auto region = regionAt(at);
+	// The rest of this press does nothing, even if it then moves.
+	if (gesture_ != Gesture::None) {
+		if (boxing_) {
+			boxing_ = false;
+			Q_EMIT cursorChanged();
+		}
+		dragging_ = timeEngaged_ = valuesEngaged_ = timeStretch_ = false;
+		gesture_ = Gesture::Cancelled;
+	}
+	if (region == QLatin1String("values")) {
+		// On the value labels: fitted again - stacked, the lane there.
 		if (numberLanes_.empty()) {
 			autoValues();
-		} else if (const int at = laneAt(event->position().y()); at >= 0) {
-			const auto path = numberLanes_[std::size_t(at)].path;
-			if (laneManual_.contains(path)) {
-				remember();
-				laneManual_.remove(path);
-				Q_EMIT viewChanged();
-				update();
-			}
+		} else if (const int lane = laneAt(at.y()); lane >= 0) {
+			autoLane(numberLanes_[std::size_t(lane)].path);
 		}
+	} else if (region == QLatin1String("time")) {
+		// On the time labels: the time to All, following where Follow is
+		// offered; the values as they are.
+		choosePreset(0);
+	} else if (region == QLatin1String("graph") || region == QLatin1String("laneName")) {
+		// In the graph: its first click undone - a pin moved, pinned or
+		// removed, a lane's focus - and everything fitted.
+		restorePins(previousPins_);
+		fitAll();
 	}
-	event->accept();
 }
 
 void TraceView::mouseMoveEvent(QMouseEvent* event)
 {
-	if (boxing_) {
-		boxTo_ = event->position();
-		Q_EMIT cursorChanged();
-		update();
-		event->accept();
-		return;
-	}
-	if (valueDrag_) {
-		// Over the value labels: the values follow the pointer up and down.
-		const qreal down = event->position().y() - pressY_;
-		if (!dragging_ && std::abs(down) < 4)
-			return;
-		if (!dragging_) {
-			setCursor(Qt::ClosedHandCursor);
-			remember();
-		}
-		dragging_ = true;
-		if (!numberLanes_.empty()) {
-			const auto* lane = numberLane(pressLane_);
-			if (lane && pressRange_.valid() && lane->valueRect.height() > 0) {
-				const double shift = (pressRange_.high - pressRange_.low) * down / lane->valueRect.height();
-				laneManual_.insert(pressLane_, {pressRange_.low + shift, pressRange_.high + shift});
-				Q_EMIT viewChanged();
-				update();
-			}
-		} else if (pressRange_.valid() && valuesArea_.height() > 0) {
-			const double shift = (pressRange_.high - pressRange_.low) * down / valuesArea_.height();
-			valueAuto_ = false;
-			manual_ = {pressRange_.low + shift, pressRange_.high + shift};
-			Q_EMIT viewChanged();
-			update();
-		}
-		event->accept();
-		return;
-	}
-	const qreal moved = event->position().x() - pressX_;
-	// A drag of more than a few pixels pans; less is a click.
-	if (!dragging_ && std::abs(moved) < 4)
-		return;
-	if (!dragging_) {
-		setCursor(Qt::ClosedHandCursor);
-		remember();
-	}
-	dragging_ = true;
-	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
-	hold(pressRightNs_ - qint64(double(spanNs()) * moved / widthPx));
 	event->accept();
+	if (gesture_ == Gesture::None || gesture_ == Gesture::Cancelled)
+		return;
+	const auto at = event->position();
+	lastPointer_ = at;
+	pointerY_ = at.y();
+	if (!dragging_) {
+		const QPointF moved = at - pressAt_;
+		// A press stays a click until the pointer is 4 px away either way.
+		if (std::max(std::abs(moved.x()), std::abs(moved.y())) < 4)
+			return;
+		dragging_ = true;
+		startDrag(moved);
+	}
+	dragTo(at);
+}
+
+void TraceView::startDrag(QPointF moved)
+{
+	const qreal dx = std::abs(moved.x()), dy = std::abs(moved.y());
+	switch (gesture_) {
+		case Gesture::Box:
+			boxing_ = true;
+			setCursor(Qt::CrossCursor);
+			break;
+		case Gesture::Plain: {
+			// The axis by how the drag starts: sideways the time, up or down
+			// the values, diagonal both. A wobble never stops Follow or Auto.
+			const bool sideways = dx >= 2 * dy, upright = dy >= 2 * dx;
+			setCursor(Qt::ClosedHandCursor);
+			if (!upright)
+				engageTime(pressAt_.x(), pressRightNs_);
+			if (!sideways)
+				engageValues(pressAt_.y());
+			break;
+		}
+		case Gesture::Middle:
+			// Free, no lock.
+			setCursor(Qt::ClosedHandCursor);
+			engageTime(pressAt_.x(), pressRightNs_);
+			engageValues(pressAt_.y());
+			break;
+		case Gesture::ValueAxis:
+			engageValues(pressAt_.y());
+			break;
+		case Gesture::TimeAxis:
+			// Along the time labels the time moves; across them, up or down,
+			// it is stretched or squeezed about the press.
+			timeStretch_ = dy >= 2 * dx;
+			if (!timeStretch_)
+				engageTime(pressAt_.x(), pressRightNs_);
+			break;
+		default:
+			break;
+	}
+}
+
+void TraceView::engageTime(qreal baseX, qint64 baseRight)
+{
+	// The moment the time takes hold: one step back, All given way to the
+	// span of everything kept, Follow off.
+	takeStep();
+	leaveAll();
+	timeEngaged_ = true;
+	timeBaseX_ = baseX;
+	timeBaseRightNs_ = baseRight;
+	hold(baseRight);
+}
+
+void TraceView::engageValues(qreal baseY)
+{
+	if (!pressHasValues_)
+		return;
+	Range base;
+	if (!pressLane_.isEmpty()) {
+		const auto* lane = numberLane(pressLane_);
+		if (!lane || !lane->shown.valid())
+			return;
+		base = lane->shown;
+	} else {
+		if (!shown_.valid())
+			return;
+		base = shown_;
+	}
+	takeStep();
+	valuesEngaged_ = true;
+	valueBaseY_ = baseY;
+	valueBase_ = base;
+	// Manual from the values drawn now, so nothing jumps; Auto (A) at once.
+	if (!pressLane_.isEmpty()) {
+		laneManual_.insert(pressLane_, base);
+	} else {
+		valueAuto_ = false;
+		manual_ = base;
+	}
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::dragTo(QPointF at)
+{
+	switch (gesture_) {
+		case Gesture::Box:
+			boxTo_ = at;
+			Q_EMIT cursorChanged();
+			update();
+			return;
+		case Gesture::Plain: {
+			// A locked axis joins once the pointer has gone 24 px along it, and
+			// follows from that point on, so the picture does not jump.
+			const QPointF moved = at - pressAt_;
+			if (!timeEngaged_ && std::abs(moved.x()) >= 24)
+				engageTime(pressAt_.x() + std::copysign(24.0, moved.x()), rightNs());
+			if (!valuesEngaged_ && pressHasValues_ && std::abs(moved.y()) >= 24)
+				engageValues(pressAt_.y() + std::copysign(24.0, moved.y()));
+			break;
+		}
+		case Gesture::TimeAxis:
+			if (timeStretch_) {
+				// Up stretches the time, down squeezes it, about the time at
+				// the press: a hundred pixels double or halve it. Out as far as
+				// All and no further; at All, squeezing changes nothing.
+				const double factor = std::pow(2.0, (at.y() - pressAt_.y()) / 100.0);
+				const auto [oldest, newest] = kept();
+				const double next = std::clamp(double(pressSpanNs_) * factor, 1e7, 86400e9);
+				if (pressAll_ && factor >= 1) {
+					if (stepTaken_) {
+						applyState(pressState_);
+						if (stepPushed_ && !back_.empty())
+							back_.pop_back();
+						stepTaken_ = stepPushed_ = false;
+						rememberedAtMs_ = 0;
+						Q_EMIT viewChanged();
+						update();
+					}
+					return;
+				}
+				takeStep();
+				if (newest && factor > 1 && next >= double(newest - oldest)) {
+					showAll_ = true;
+					heldAllNs_ = std::max<qint64>(1'000'000'000, newest - oldest);
+					frozenNs_ = newest;
+					following_ = false;
+					Q_EMIT viewChanged();
+					update();
+					return;
+				}
+				const qreal widthPx = std::max<qreal>(1, plotArea_.width());
+				const double across = std::clamp<double>((pressAt_.x() - plotArea_.left()) / widthPx, 0, 1);
+				const qint64 pinned = pressRightNs_ - pressSpanNs_ + qint64(double(pressSpanNs_) * across);
+				showAll_ = false;
+				heldAllNs_ = 0;
+				spanSeconds_ = next / 1e9;
+				hold(pinned + qint64(double(pressRightNs_ - pinned) * next / double(pressSpanNs_)));
+				return;
+			}
+			break;
+		default:
+			break;
+	}
+	// While an axis is engaged, the point grabbed stays under the pointer.
+	if (timeEngaged_) {
+		const qreal widthPx = std::max<qreal>(1, plotArea_.width());
+		hold(timeBaseRightNs_ - qint64(double(spanNs()) * (at.x() - timeBaseX_) / widthPx));
+	}
+	if (valuesEngaged_) {
+		const auto* lane = pressLane_.isEmpty() ? nullptr : numberLane(pressLane_);
+		const qreal heightPx = std::max<qreal>(1, lane ? lane->valueRect.height() : valuesArea_.height());
+		const double shift = (valueBase_.high - valueBase_.low) * (at.y() - valueBaseY_) / heightPx;
+		const Range moved{valueBase_.low + shift, valueBase_.high + shift};
+		if (lane) {
+			laneManual_.insert(pressLane_, moved);
+		} else {
+			valueAuto_ = false;
+			manual_ = moved;
+		}
+		Q_EMIT viewChanged();
+		update();
+	}
+}
+
+void TraceView::endGesture(QPointF at)
+{
+	gesture_ = Gesture::None;
+	gestureButton_ = Qt::NoButton;
+	dragging_ = timeEngaged_ = valuesEngaged_ = timeStretch_ = false;
+	stepTaken_ = stepPushed_ = false;
+	// The label column refits, and Auto may narrow again.
+	columnFrozen_ = false;
+	if (boxing_) {
+		boxing_ = false;
+		Q_EMIT cursorChanged();
+	}
+	lastPointer_ = at;
+	const auto region = regionAt(at);
+	setCursor(shapeOf(region));
+	setHoverRegion(region);
+	update();
+}
+
+void TraceView::cancelGesture()
+{
+	// The view as it was at the press: a snapshot, not a step back.
+	if (stepTaken_) {
+		applyState(pressState_);
+		if (stepPushed_ && !back_.empty())
+			back_.pop_back();
+		rememberedAtMs_ = 0;
+	}
+	stepTaken_ = stepPushed_ = false;
+	dragging_ = timeEngaged_ = valuesEngaged_ = timeStretch_ = false;
+	if (boxing_) {
+		boxing_ = false;
+		Q_EMIT cursorChanged();
+	}
+	gesture_ = Gesture::Cancelled;
+	setCursor(shapeOf(regionAt(lastPointer_)));
+	Q_EMIT viewChanged();
+	update();
+}
+
+void TraceView::mouseUngrabEvent()
+{
+	// The grab lost mid-gesture (a popup, another window): a move keeps where
+	// it got to, a box is dropped without zooming.
+	if (gesture_ != Gesture::None)
+		endGesture(lastPointer_);
 }
 
 void TraceView::mouseReleaseEvent(QMouseEvent* event)
 {
-	if (boxing_) {
-		boxing_ = false;
-		zoomToBox(boxFrom_, event->position());
-		Q_EMIT cursorChanged();
-		update();
-		event->accept();
+	event->accept();
+	if (gesture_ == Gesture::None || event->button() != gestureButton_) {
+		if (event->buttons() == Qt::NoButton)
+			ignoreUntilUp_ = false;
 		return;
 	}
-	if (dragging_) {
-		setCursor(Qt::CrossCursor);
-	} else if (!valueDrag_ && plotArea_.contains(event->position())) {
-		// A click: on a lane's name focuses its curve (again: unfocuses), on
-		// the reference takes it away, anywhere else pins it where the cursor
-		// snapped.
-		const auto named = std::find_if(numberLanes_.begin(), numberLanes_.end(),
-		                                [&](const NumberLane& lane) { return lane.nameRect.contains(event->position()); });
-		if (named != numberLanes_.end()) {
-			setFocusedPath(focusedPath_ == named->path ? QString() : named->path);
-		} else {
-			setCursorAt(event->position().x());
-			if (endShown_ && std::abs(event->position().x() - endX_) <= 4)
-				clearEnd();
-			else if (referenceShown_ && std::abs(event->position().x() - referenceX_) <= 4)
-				clearReference();
-			else if (event->modifiers() & Qt::ShiftModifier)
-				pinEnd();
-			else
-				pinReference();
-		}
+	const auto kind = gesture_;
+	const bool dragged = dragging_;
+	const auto at = event->position();
+	const auto from = boxFrom_;
+	endGesture(at);
+	if (event->buttons() != Qt::NoButton)
+		ignoreUntilUp_ = true;
+	switch (kind) {
+		case Gesture::Box:
+			// A right click, under 4 px: the graph's menu. Ctrl and a click: nothing.
+			if (dragged)
+				zoomToBox(from, at);
+			else if (event->button() == Qt::RightButton)
+				Q_EMIT contextMenuRequested(at);
+			break;
+		case Gesture::MenuOnly:
+			if (!dragged)
+				Q_EMIT contextMenuRequested(at);
+			break;
+		case Gesture::Plain:
+			if (!dragged && plotArea_.contains(at)) {
+				// A click: on a lane's name focuses its curve (again:
+				// unfocuses), on the reference takes it away, anywhere else
+				// pins it where the cursor snapped.
+				const auto named = std::find_if(numberLanes_.begin(), numberLanes_.end(),
+				                                [&](const NumberLane& lane) { return lane.nameRect.contains(at); });
+				if (named != numberLanes_.end()) {
+					setFocusedPath(focusedPath_ == named->path ? QString() : named->path);
+				} else {
+					setCursorAt(at.x());
+					if (endShown_ && std::abs(at.x() - endX_) <= 4)
+						clearEnd();
+					else if (referenceShown_ && std::abs(at.x() - referenceX_) <= 4)
+						clearReference();
+					else if (event->modifiers() & Qt::ShiftModifier)
+						pinEnd();
+					else
+						pinReference();
+				}
+			}
+			break;
+		default:
+			break;
 	}
-	dragging_ = false;
-	valueDrag_ = false;
-	event->accept();
 }
 
 void TraceView::wheelEvent(QWheelEvent* event)
 {
-	const qreal steps = event->angleDelta().y() / 120.0;
-	if (steps == 0) {
-		event->ignore();
-		return;
-	}
-	// Ctrl over the graph, or over the value labels: the values - stacked,
-	// the lane's under the pointer.
-	pointerY_ = event->position().y();
-	if (((event->modifiers() & Qt::ControlModifier) || event->position().x() < plotArea_.left()) && !numberLanes_.empty()) {
-		if (const int at = laneAt(pointerY_); at >= 0) {
-			const auto& rect = numberLanes_[std::size_t(at)].valueRect;
-			zoomValues(std::pow(0.8, steps), (pointerY_ - rect.top()) / std::max<qreal>(1, rect.height()));
-		}
-		event->accept();
-		return;
-	}
-	if ((event->modifiers() & Qt::ControlModifier) || event->position().x() < plotArea_.left()) {
-		const qreal heightPx = std::max<qreal>(1, valuesArea_.height());
-		zoomValues(std::pow(0.8, steps), (event->position().y() - valuesArea_.top()) / heightPx);
-		event->accept();
-		return;
-	}
-	const qreal widthPx = std::max<qreal>(1, plotArea_.width());
-	zoom(std::pow(0.8, steps), (event->position().x() - plotArea_.left()) / widthPx);
+	// Every wheel over the graph is the Plot's: nothing behind it scrolls.
 	event->accept();
+	// While a button is held, the wheel does nothing.
+	if (gesture_ != Gesture::None || event->buttons() != Qt::NoButton)
+		return;
+	QPoint delta = event->angleDelta();
+	if (delta.isNull())
+		delta = event->pixelDelta();
+	const qreal up = delta.y(), sideways = delta.x();
+	if (up == 0 && sideways == 0)
+		return;
+	const auto at = event->position();
+	const auto region = regionAt(at);
+	const auto modifiers = event->modifiers();
+	// Ctrl means the values; Shift, Alt or a sideways wheel mean move instead
+	// of zoom - whichever delta came, 120 a notch, fractions in proportion.
+	const bool values = modifiers & Qt::ControlModifier;
+	const bool move = (modifiers & (Qt::ShiftModifier | Qt::AltModifier)) || up == 0;
+	const qreal notches = (up != 0 ? up : sideways) / 120.0;
+	lastWheelMs_ = QDateTime::currentMSecsSinceEpoch();
+	wheelQuiet_.start();
+	pointerY_ = at.y();
+	const qreal across = (at.x() - plotArea_.left()) / std::max<qreal>(1, plotArea_.width());
+	if (region == QLatin1String("time")) {
+		// The time alone: Ctrl changes nothing here.
+		if (move)
+			pan(-0.1 * notches);
+		else
+			zoom(std::pow(0.8, notches), across);
+	} else if (region == QLatin1String("values")) {
+		if (move)
+			panValuesAt(0.1 * notches, at);
+		else
+			zoomValuesAt(std::pow(0.8, notches), at);
+	} else if (region == QLatin1String("graph") || region == QLatin1String("laneName")) {
+		if (values && move)
+			panValuesAt(0.1 * notches, at);
+		else if (values)
+			zoomValuesAt(std::pow(0.8, notches), at);
+		else if (move)
+			pan(-0.1 * notches);
+		else
+			zoom(std::pow(0.8, notches), across);
+	}
+}
+
+bool TraceView::event(QEvent* event)
+{
+	// A pinch where the platform gives one (macOS, Wayland): as Ctrl and the
+	// wheel, the values about the fingers. Rotation and swipe are not used.
+	if (event->type() == QEvent::NativeGesture) {
+		auto* gesture = static_cast<QNativeGestureEvent*>(event);
+		if (gesture->gestureType() == Qt::ZoomNativeGesture && gesture_ == Gesture::None) {
+			const double value = gesture->value();
+			if (value > -1)
+				zoomValuesAt(1.0 / (1.0 + value), gesture->position());
+			event->accept();
+			return true;
+		}
+	}
+	return QQuickPaintedItem::event(event);
 }
 
 void TraceView::keyPressEvent(QKeyEvent* event)
@@ -1355,8 +1862,13 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 				pinReference();
 			break;
 		case Qt::Key_Escape:
-			// The end first, then the reference, then the keyboard's cursor.
-			if (endShown_)
+			// During a gesture, the gesture: the view as it was at the press.
+			// Else the end first, then the reference, then the keyboard's cursor.
+			if (gesture_ == Gesture::Cancelled)
+				break;
+			if (gesture_ != Gesture::None)
+				cancelGesture();
+			else if (endShown_)
 				clearEnd();
 			else if (referenceShown_)
 				clearReference();
@@ -1383,10 +1895,20 @@ void TraceView::keyPressEvent(QKeyEvent* event)
 			break;
 		case Qt::Key_Space:
 		case Qt::Key_H:
+			// A finished run has no Follow to toggle.
+			if (!followable_)
+				break;
 			if (following_)
 				hold(rightNs());
 			else
 				follow();
+			break;
+		case Qt::Key_F:
+			if (control || (event->modifiers() & Qt::AltModifier)) {
+				event->ignore();
+				return;
+			}
+			fitAll();
 			break;
 		case Qt::Key_1:
 			choosePreset(10);
@@ -1465,6 +1987,7 @@ void TraceView::tick()
 
 void TraceView::paint(QPainter* painter)
 {
+	const Range shownBefore = shown_;
 	const QFontMetricsF metrics(font_);
 	const qreal pad = std::max<qreal>(4, std::round(metrics.height() * 0.3));
 	const qreal ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
@@ -1499,7 +2022,10 @@ void TraceView::paint(QPainter* painter)
 
 	// The values of paths in view, drawn as k x value + b, into range: five
 	// per cent above and below them (a flat line gets a band around it),
-	// wider at once, narrower once it has been so for two seconds, or held.
+	// wider at once, narrower once it has been so for two seconds, or held -
+	// never while a button is held or a run of wheel steps goes on, so the
+	// curves do not jump under the pointer; at once when it ends.
+	const bool holdsRange = gestureHolds();
 	const auto fit = [&](const QStringList& paths, Range& range, qint64& narrowSince) {
 		Range wanted;
 		bool any = false;
@@ -1536,6 +2062,8 @@ void TraceView::paint(QPainter* painter)
 			range = wanted;
 		} else if (wanted.low < range.low || wanted.high > range.high) {
 			range = {std::min(range.low, wanted.low), std::max(range.high, wanted.high)};
+			narrowSince = 0;
+		} else if (holdsRange) {
 			narrowSince = 0;
 		} else if (wanted.high - wanted.low < (range.high - range.low) * 0.8) {
 			if (!narrowSince)
@@ -1600,11 +2128,18 @@ void TraceView::paint(QPainter* painter)
 		}
 	}
 	// At least a usual label's width, so the plot does not move sideways
-	// whenever the range gains a digit.
+	// whenever the range gains a digit. While a button is held the column
+	// keeps its width from the press, so the plot never slides under the
+	// pointer; a wider label is cut at the item's edge until the release.
 	qreal labelWidth = metrics.horizontalAdvance(QStringLiteral("-000.00"));
 	for (const auto& text : std::as_const(valueLabels))
 		labelWidth = std::max(labelWidth, metrics.horizontalAdvance(text));
-	const QRectF area(QPointF(std::ceil(labelWidth + pad * 2), top), QPointF(std::max<qreal>(labelWidth + pad * 3, width() - pad), bottom));
+	qreal areaLeft = std::ceil(labelWidth + pad * 2), areaRight = std::max<qreal>(labelWidth + pad * 3, width() - pad);
+	if (columnFrozen_ && frozenLeft_ > 0) {
+		areaLeft = frozenLeft_;
+		areaRight = std::max<qreal>(areaLeft + pad, width() - pad);
+	}
+	const QRectF area(QPointF(areaLeft, top), QPointF(areaRight, bottom));
 	const auto xOf = [&](qint64 ns) { return area.left() + (double(ns - left) / double(span)) * area.width(); };
 	// The numbers' part of the area, above the lanes.
 	const QRectF numbersArea(area.topLeft(), QPointF(area.right(), lanesTop));
@@ -1745,7 +2280,9 @@ void TraceView::paint(QPainter* painter)
 		painter->save();
 		painter->setClipRect(area);
 		for (const auto& pause : traces_->pauses()) {
-			const qint64 to = pause.toNs ? pause.toNs : std::max(right, pause.fromNs);
+			// A pause still on runs to now: time after now, panned into, is
+			// blank on the grid, no band.
+			const qint64 to = pause.toNs ? pause.toNs : std::max(pause.fromNs, std::min(right, WatchTraces::nowNs()));
 			if (to <= left || pause.fromNs >= right)
 				continue;
 			const qreal x0 = xOf(std::max(pause.fromNs, left)), x1 = xOf(std::min(to, right));
@@ -2081,6 +2618,7 @@ void TraceView::paint(QPainter* painter)
 	// The box being drawn (Ctrl and a drag): its frame, and its size in time
 	// and values.
 	QRectF boxCaption;
+	QString boxWords;
 	if (boxing_) {
 		const QRectF box = QRectF(boxFrom_, boxTo_).normalized().intersected(area);
 		painter->save();
@@ -2101,8 +2639,11 @@ void TraceView::paint(QPainter* painter)
 		const Range sized = boxLane ? boxLane->shown : shown_;
 		const qreal sizedHeight = boxLane ? boxLane->valueRect.height() : valuesArea_.height();
 		const qreal boxHeight = boxLane ? box.intersected(boxLane->valueRect).height() : box.height();
-		if ((boxLane || numberLanes.empty()) && boxHeight >= 8 && sized.valid() && sizedHeight > 0)
-			size += QStringLiteral(" × ") + QString::number((sized.high - sized.low) * boxHeight / sizedHeight, 'g', 3);
+		if ((boxLane || numberLanes.empty()) && !numbers.isEmpty() && boxHeight >= 8 && sized.valid() && sizedHeight > 0) {
+			const auto tall = QString::number((sized.high - sized.low) * boxHeight / sizedHeight, 'g', 3);
+			// Narrower than 8 px, the box zooms only the values.
+			size = box.width() >= 8 ? size + QStringLiteral(" × ") + tall : tr("%1 tall").arg(tall);
+		}
 		// On a chip, as the cursor's time is: framed in the reference colour,
 		// at the corner under the pointer - outside the box where it fits,
 		// always inside the plot area - where the eye already is.
@@ -2132,10 +2673,14 @@ void TraceView::paint(QPainter* painter)
 		painter->drawText(chip, Qt::AlignCenter, size);
 		painter->restore();
 		boxCaption = chip;
+		boxWords = size;
 	}
-	changed = changed || boxCaption != boxCaptionRect_;
+	changed = changed || boxCaption != boxCaptionRect_ || boxWords != boxCaption_ || shownBefore.low != shown_.low ||
+	          shownBefore.high != shown_.high;
 	boxCaptionRect_ = boxCaption;
+	boxCaption_ = boxWords;
 	plotArea_ = area;
+	hasNumbers_ = !numbers.isEmpty();
 	const bool dotsChanged = dots != drawnDots_ || gaps != drawnGaps_ || ends != drawnEnds_;
 	drawnDots_ = dots;
 	drawnGaps_ = gaps;
@@ -2174,7 +2719,8 @@ void TraceView::paint(QPainter* painter)
 		lanesShown << QVariantMap{{QStringLiteral("path"), lane.path}, {QStringLiteral("rect"), lane.rect},
 		                          {QStringLiteral("valueRect"), lane.valueRect}, {QStringLiteral("nameRect"), lane.nameRect},
 		                          {QStringLiteral("low"), lane.shown.low}, {QStringLiteral("high"), lane.shown.high},
-		                          {QStringLiteral("labels"), labels}, {QStringLiteral("cursorY"), lane.cursorY}};
+		                          {QStringLiteral("labels"), labels}, {QStringLiteral("cursorY"), lane.cursorY},
+		                          {QStringLiteral("manual"), laneManual_.contains(lane.path)}};
 	}
 	const bool lanesChanged = lanesShown != numberLanesShown_ || fits != stackFits_;
 	// Stacked or not decides what Auto means: a view change.

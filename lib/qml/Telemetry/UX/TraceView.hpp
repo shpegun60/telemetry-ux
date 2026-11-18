@@ -12,6 +12,7 @@
 #include <QtGui/QFont>
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickPaintedItem>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,11 +28,21 @@ class WatchTraces;
 // stays where it was. Painted by QPainter, so it draws alike on every Qt Quick
 // backend, the software one included.
 //
-// Moving it (LP-1b): a drag pans, the wheel zooms about the pointer, Left and
-// Right pan a tenth, + and - zoom about the middle, Home goes to the oldest
-// reading kept, End follows again, Space and H hold or follow, 1 to 4 choose
-// 10 s, 1 min, 10 min or All. Panning, zooming and Home stop following;
-// reading goes on.
+// Moving it (LP-1b, the gestures slice): a left drag moves the picture in
+// time and values - sideways only the time, up or down only the values,
+// diagonal both, the other axis joining once the pointer has gone 24 px along
+// it; a middle drag moves both with no lock; a right drag or Ctrl and a drag
+// zoom to a box; over the value labels or the time labels a drag, the wheel
+// and a double-click act on that axis alone (a drag across the time labels,
+// up or down, stretches or squeezes the time). The wheel zooms the time about
+// the pointer, Ctrl and the wheel the values; Shift, Alt or a sideways wheel
+// move instead of zoom. A double-click, or F, fits everything. Esc cancels a
+// gesture. Left and Right pan a tenth, + and - zoom about the middle, Home
+// goes to the oldest reading kept, End follows again, Space and H hold or
+// follow, 1 to 4 choose 10 s, 1 min, 10 min or All. Moving the time by hand
+// stops following, and at All leaves All for the span of everything kept;
+// reading goes on. The picture may run past either end of the readings until
+// only one reading is in view.
 //
 // The cursor (LP-1c): under the pointer, snapped to the nearest reading within
 // 8 px, else free; Shift+Left and Shift+Right step it reading by reading. A
@@ -48,9 +59,11 @@ class WatchTraces;
 // The values (LP-1e): Auto fits every number in view, or only the focused
 // curve while one is focused; Manual starts with a value zoom or pan - Ctrl
 // and the wheel over the graph, or the wheel over the value labels, zoom about
-// the pointer; a drag over the labels pans; Up and Down pan a tenth, Ctrl+Up
-// and Ctrl+Down zoom - and stays through Follow, the presets and time zoom.
-// A double-click on the labels, or A, returns to Auto.
+// the pointer; a drag over the labels or up and down on the graph pans; Up
+// and Down pan a tenth, Ctrl+Up and Ctrl+Down zoom - and stays through
+// Follow, the presets and time zoom. A double-click on the labels, or A,
+// returns to Auto. Auto widens at once and never narrows while a button is
+// held or a run of wheel steps goes on.
 //
 // A curve's look (LP-1f): its own colour, if it has one, and its multiplier
 // and offset - a number is drawn and fitted as k x value + b, while every
@@ -65,9 +78,10 @@ class WatchTraces;
 // numbers share one axis as before. A value zoom or pan - Ctrl and the wheel,
 // the wheel or a drag over a lane's labels, Up and Down, a box - acts on the
 // lane under the pointer (the keys: else the focused curve's, else every
-// lane); A fits every lane, a double-click on a lane's labels that lane. A
-// click on a lane's name focuses its curve. The cursor's dot on each number is
-// in that number's lane.
+// lane), a drag on the lane it began in; each lane is Auto or Manual on its
+// own; A fits every lane, a double-click on a lane's labels that lane, its
+// Auto chip (autoLane) that lane. A click on a lane's name focuses its curve.
+// The cursor's dot on each number is in that number's lane.
 class TraceView : public QQuickPaintedItem {
 	Q_OBJECT
 	QML_ELEMENT
@@ -141,8 +155,9 @@ class TraceView : public QQuickPaintedItem {
 	// one fixed moment whatever the view or a stop - whose time of day is
 	// originUtcMs.
 	Q_PROPERTY(bool fromStart READ fromStart WRITE setFromStart NOTIFY viewChanged)
-	// Box zoom and Back (analysis): Ctrl and a drag draw a box whose width
-	// becomes the time in view and whose height the values; every move of the
+	// Box zoom and Back (analysis): a right drag, or Ctrl and a drag, draw a
+	// box whose width becomes the time in view and whose height the values;
+	// a right click opens the host's menu (contextMenuRequested); every move of the
 	// view by hand can be gone back on (Backspace, Alt+Left), one gesture a
 	// step, the last 50. Not the Undo of edits: views are not changes.
 	Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY viewChanged)
@@ -168,7 +183,20 @@ class TraceView : public QQuickPaintedItem {
 	// while the numbers share one axis.
 	Q_PROPERTY(bool stacked READ stacked NOTIFY viewChanged)
 	Q_PROPERTY(bool stackFits READ stackFits NOTIFY drawn)
+	// Each entry also says whether that lane's values are by hand (manual).
 	Q_PROPERTY(QVariantList numberLanes READ numberLanes NOTIFY drawn)
+	// Follow is offered (the live Plot, a run being written): Space and H
+	// hold or follow only then.
+	Q_PROPERTY(bool followable READ followable WRITE setFollowable NOTIFY viewChanged)
+	// The part under the pointer: "graph", "values" (the labels beside the
+	// numbers), "time" (the labels under the plot), "laneName" (a stacked
+	// lane's name), or "" (elsewhere, and while a button is held).
+	Q_PROPERTY(QString hoverRegion READ hoverRegion NOTIFY hoverRegionChanged)
+	// The shared axis' values as last drawn.
+	Q_PROPERTY(qreal valueLow READ valueLow NOTIFY drawn)
+	Q_PROPERTY(qreal valueHigh READ valueHigh NOTIFY drawn)
+	// The words on the box's chip while a box is drawn; empty with none.
+	Q_PROPERTY(QString boxCaption READ boxCaption NOTIFY drawn)
 public:
 	explicit TraceView(QQuickItem* parent = nullptr);
 
@@ -193,6 +221,15 @@ public:
 	// The oldest reading kept at the left edge; stops following.
 	Q_INVOKABLE void toOldest();
 	Q_INVOKABLE void follow() { setFollowing(true); }
+	// Fit all (double-click, F): the time to All, following again, every
+	// value fitted, no curve focused; one step back. Pins stay.
+	Q_INVOKABLE void fitAll();
+	bool followable() const { return followable_; }
+	void setFollowable(bool followable);
+	QString hoverRegion() const { return hoverRegion_; }
+	qreal valueLow() const { return shown_.low; }
+	qreal valueHigh() const { return shown_.high; }
+	QString boxCaption() const { return boxCaption_; }
 
 	bool valueAuto() const { return numberLanes_.empty() ? valueAuto_ : laneManual_.isEmpty(); }
 	QString focusedPath() const { return focusedPath_; }
@@ -214,6 +251,8 @@ public:
 	Q_INVOKABLE void panValues(qreal part);
 	// Fitted again: Auto.
 	Q_INVOKABLE void autoValues();
+	// One stacked lane fitted again (its Auto chip).
+	Q_INVOKABLE void autoLane(const QString& path);
 
 	bool cursorShown() const { return cursorShown_; }
 	qreal cursorUtcMs() const;
@@ -313,9 +352,9 @@ public:
 	Q_INVOKABLE int readingsInRange() const;
 	// Writes valuesText(true) to the file at url; empty, or why not.
 	Q_INVOKABLE QString saveValues(const QUrl& url) const;
-	// Zooms to the box between two points of the item: the time to its width,
-	// the values to its height when it is at least 8 px tall and over the
-	// numbers.
+	// Zooms to the box between two points of the item: the time to its width
+	// when it is at least 8 px wide, the values to its height when it is at
+	// least 8 px tall and over the numbers. A box only tall keeps following.
 	Q_INVOKABLE void zoomToBox(QPointF from, QPointF to);
 	void setFromStart(bool fromStart);
 	qreal originUtcMs() const { return originUtcMs_; }
@@ -332,16 +371,22 @@ public:
 	void paint(QPainter* painter) override;
 
 protected:
+	bool event(QEvent* event) override;
 	void mousePressEvent(QMouseEvent* event) override;
 	void mouseMoveEvent(QMouseEvent* event) override;
 	void mouseReleaseEvent(QMouseEvent* event) override;
 	void mouseDoubleClickEvent(QMouseEvent* event) override;
+	void mouseUngrabEvent() override;
 	void wheelEvent(QWheelEvent* event) override;
 	void keyPressEvent(QKeyEvent* event) override;
 	void hoverMoveEvent(QHoverEvent* event) override;
 	void hoverLeaveEvent(QHoverEvent* event) override;
 
 Q_SIGNALS:
+	// A right click (under 4 px) at position, in item coordinates: the host
+	// opens the graph's menu there.
+	void contextMenuRequested(QPointF position);
+	void hoverRegionChanged();
 	void tracesChanged();
 	// A find that found nothing, in words for the host to say; one that found
 	// its change, so the host can take those words away.
@@ -365,8 +410,14 @@ private:
 	qint64 spanNs() const;
 	// The oldest and newest reading of the plotted values; 0 when none.
 	std::pair<qint64, qint64> kept() const;
-	// Stops following with the right edge at right, inside what is kept.
+	// Stops following with the right edge at right: between the oldest
+	// reading kept and the newest plus one span, so one reading stays in view.
+	// All stays All (Space and H).
 	void hold(qint64 right);
+	// A time move by hand: leaves All for the span of everything kept, then
+	// holds at right.
+	void moveTime(qint64 right);
+	void leaveAll();
 	void tick();
 	void schedule();
 
@@ -390,13 +441,69 @@ private:
 	QStringList laneLabels_, laneStates_;
 	QColor cursorColor_{0x8b, 0x94, 0x9e}, referenceColor_{0x58, 0xa6, 0xff}, dotRingColor_{0x0d, 0x11, 0x17};
 	qreal behindSeconds_ = 0;
-	// A drag: where it started and the right edge then.
-	qreal pressX_ = 0;
-	qint64 pressRightNs_ = 0;
+	// A press, from the press to the release of its button. Its kind is fixed
+	// at the press: a plain left drag, a box (right, or Ctrl and left), a
+	// middle drag, a drag on an axis' labels, a right press off the graph (the
+	// menu only), or one cancelled (Esc, a double-click) whose rest does
+	// nothing.
+	enum class Gesture { None, Plain, Box, Middle, ValueAxis, TimeAxis, MenuOnly, Cancelled };
+	Gesture gesture_ = Gesture::None;
+	Qt::MouseButton gestureButton_ = Qt::NoButton;
+	// A second button pressed during a gesture: nothing until every one is up.
+	bool ignoreUntilUp_ = false;
+	QPointF pressAt_, lastPointer_;
+	qint64 pressRightNs_ = 0, pressSpanNs_ = 0;
+	bool pressAll_ = false;
+	// Past the 4 px that tell a drag from a click.
 	bool dragging_ = false;
-	// A press on the value labels pans the values.
-	bool valueDrag_ = false;
-	qreal pressY_ = 0;
+	// The axes the drag moves, and where each took hold: the pointer's x or y
+	// then, the right edge or the values then.
+	bool timeEngaged_ = false, valuesEngaged_ = false;
+	// Across the time labels, up or down: the time stretched or squeezed.
+	bool timeStretch_ = false;
+	qreal timeBaseX_ = 0, valueBaseY_ = 0;
+	qint64 timeBaseRightNs_ = 0;
+	// The values a press can move: the lane it began in while stacked, or
+	// the shared axis over the numbers; none over a bool or enum lane.
+	bool pressHasValues_ = false;
+	// The gesture's one step back, taken when the view first changes.
+	bool stepTaken_ = false, stepPushed_ = false;
+	void takeStep();
+	void startDrag(QPointF moved);
+	void dragTo(QPointF at);
+	void engageTime(qreal baseX, qint64 baseRight);
+	void engageValues(qreal baseY);
+	void endGesture(QPointF at);
+	void cancelGesture();
+	// While a button is held the value-label column keeps its width.
+	bool columnFrozen_ = false;
+	qreal frozenLeft_ = 0;
+	// A run of wheel steps: Auto does not narrow until 600 ms of quiet.
+	qint64 lastWheelMs_ = 0;
+	QTimer wheelQuiet_;
+	bool gestureHolds() const;
+	// The pins and the focus at the last press and the one before: a
+	// double-click puts back what its first click changed.
+	struct Pins {
+		bool reference = false, end = false;
+		qint64 referenceNs = 0, endNs = 0;
+		QHash<QString, double> referenceValues;
+		QString focus;
+	};
+	Pins pressPins_, previousPins_;
+	Pins pins() const;
+	void restorePins(const Pins& pins);
+	bool followable_ = true;
+	QString hoverRegion_;
+	void setHoverRegion(const QString& region);
+	QString regionAt(QPointF at) const;
+	static Qt::CursorShape shapeOf(const QString& region);
+	// The values under a point by the wheel, Ctrl and the wheel, or a pinch:
+	// stacked, the lane there; otherwise the shared axis.
+	void zoomValuesAt(qreal factor, QPointF at);
+	void panValuesAt(qreal part, QPointF at);
+	bool hasNumbers_ = false;
+	QString boxCaption_;
 	qint64 frozenNs_ = 0;
 	QVariantList colors_;
 	QColor gridColor_{0x3a, 0x3f, 0x47}, labelColor_{0x9a, 0xa4, 0xb0};
@@ -404,9 +511,9 @@ private:
 	// The value axis widens at once and narrows after two seconds, so a
 	// following plot does not jump with every reading.
 	Range range_;
-	// Manual values, the range last drawn, the one at a press.
+	// Manual values, the range last drawn, the one a value drag moves from.
 	bool valueAuto_ = true;
-	Range manual_, shown_, pressRange_;
+	Range manual_, shown_, valueBase_;
 	QString focusedPath_;
 	QRectF valuesArea_;
 	int drawnDots_ = 0, drawnGaps_ = 0, drawnEnds_ = 0;
@@ -421,18 +528,25 @@ private:
 	QRectF plotArea_;
 	qreal rightUtcMs_ = 0;
 	bool fromStart_ = false;
-	// What a view by hand was, to go back to.
+	// What a view by hand was, to go back to. The focus only from Fit all,
+	// which unfocuses.
 	struct ViewState {
 		bool following = true, showAll = false, valueAuto = true;
 		qint64 heldAllNs = 0, frozenNs = 0;
 		qreal spanSeconds = 60;
 		double manualLow = 0, manualHigh = 0;
 		QHash<QString, Range> laneManual;
+		std::optional<QString> focus;
 	};
 	std::vector<ViewState> back_;
 	qint64 rememberedAtMs_ = 0;
-	// Before a view changes by hand: what it was, once a gesture.
-	void remember();
+	ViewState viewState() const;
+	void applyState(const ViewState& state);
+	// The view at the press, for Esc.
+	ViewState pressState_;
+	// Before a view changes by hand: what it was, once a gesture (alone: a
+	// step of its own, never merged with a run). True when a step was taken.
+	bool remember(bool alone = false, bool withFocus = false);
 	bool boxing_ = false;
 	bool endShown_ = false;
 	qint64 endNs_ = 0;
@@ -468,7 +582,7 @@ private:
 	int laneAt(qreal y) const;
 	// The lanes a value zoom or pan by the keys acts on.
 	QStringList valueLanes() const;
-	// The lane a press on the value labels pans; the pointer's item y.
+	// The lane a press moves the values of; the pointer's item y.
 	QString pressLane_;
 	qreal pointerY_ = -1;
 };

@@ -18,9 +18,12 @@
 #include <QtGui/QWheelEvent>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
+#include <QtGui/QNativeGestureEvent>
+#include <QtGui/QPointingDevice>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
+#include <QtQml/QQmlExpression>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
@@ -32,11 +35,15 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace ux = telemetry::ux;
 
 namespace {
 int checks = 0, warnings = 0;
+// A drag carried far past the window on purpose: the grab follows the pointer
+// out of it, and QTest's note that the event is outside is no warning then.
+bool pastTheWindow = false;
 void check(bool condition, const char* expression, int line)
 {
 	++checks;
@@ -159,7 +166,8 @@ int main(int argc, char** argv)
 	// TraceView is a C++ type of the module: its registration is linked in.
 	ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
-		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+		const bool expected = pastTheWindow && text.contains(QStringLiteral("occurs outside target window"));
+		if ((type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) && !expected)
 			++warnings;
 		std::fprintf(stderr, "%s\n", qPrintable(text));
 	});
@@ -434,17 +442,25 @@ int main(int argc, char** argv)
 		traces.append(frame(ux::WatchTraces::nowNs(), {{3, 1, bits(S::S16, 2, 5)}}));
 		settle(150);
 		CHECK(view->property("rightUtcMs").toDouble() == heldRight && view->property("behindSeconds").toDouble() > 0);
-		// A pan never leaves empty time at the left: back a long way, the
-		// left edge stops at the oldest reading kept.
+		// A pan may run into time with no readings, but one reading always
+		// stays in view: back a long way, the right edge stops at the oldest
+		// reading kept; Home puts that reading at the left edge.
 		click(window, shown(content, "plotPreset_60"));
 		settle(150);
 		for (int i = 0; i < 200; ++i)
 			QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -0.5));
 		settle(150);
-		const double oldestRight = view->property("rightUtcMs").toDouble();
+		const auto oldestUtc = [&] {
+			qint64 oldest = 0;
+			for (const auto& path : traces.plotted())
+				if (const auto* kept = traces.readings(path); kept && !kept->empty())
+					oldest = oldest ? std::min(oldest, kept->front().ns) : kept->front().ns;
+			return double(traces.anchor().utcMs) + double(oldest - traces.anchor().monotonicNs) / 1e6;
+		};
+		CHECK(std::abs(view->property("rightUtcMs").toDouble() - oldestUtc()) < 2);
 		QMetaObject::invokeMethod(view, "toOldest");
 		settle(150);
-		CHECK(std::abs(view->property("rightUtcMs").toDouble() - oldestRight) < 2);
+		CHECK(std::abs(view->property("rightUtcMs").toDouble() - (oldestUtc() + 60'000)) < 2);
 		// The keys' focus frame is round the graph.
 		view->forceActiveFocus(Qt::TabFocusReason);
 		settle();
@@ -1247,9 +1263,13 @@ int main(int argc, char** argv)
 			// The first lane still fits its own readings, now in the boxed time.
 			CHECK(!view->property("valueAuto").toBool() && secondSpan < secondBeforeBox * 0.6 && secondSpan > secondBeforeBox * 0.4 &&
 			      fitted(0));
-			// Auto (A) stands after the first lane's name, not over it.
-			auto* autoButton = shown(content, "plotAuto");
-			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(0).value(QStringLiteral("nameRect")).toRectF().right());
+			// Stacked, the lane boxed says it is by hand on its own Auto chip,
+			// after its name, not over it; the shared "Auto (A)" is not shown.
+			const auto secondAuto = QStringLiteral("plotLaneAuto_") + lane(1).value(QStringLiteral("path")).toString();
+			auto* autoButton = shown(content, qPrintable(secondAuto));
+			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(1).value(QStringLiteral("nameRect")).toRectF().right() &&
+			      !named(content, "plotAuto") && lane(1).value(QStringLiteral("manual")).toBool() &&
+			      !lane(0).value(QStringLiteral("manual")).toBool());
 			view->forceActiveFocus(Qt::TabFocusReason);
 			QTest::keyClick(window, Qt::Key_Backspace);
 			settle(250);
@@ -1803,6 +1823,787 @@ int main(int argc, char** argv)
 			shot(window, argc, argv, QStringLiteral("trace-plot-not-read-760"));
 		}
 
+		// The gestures slice: how the user moves, zooms and fits the graph,
+		// with real mouse and wheel events through the window. A drag moves
+		// the time and the values by its direction, the axes' labels each move
+		// their own axis, the wheel zooms the time (Ctrl the values, Shift
+		// moves), a right drag zooms to a box, a double-click or F fits all,
+		// Esc and a lost grab end a gesture, and All is a starting view, never
+		// a lock. Five minutes of a voltage (a spike at 4:30), a current and a
+		// bool, two a second; each check starts from 1 min following, Auto and
+		// no pins unless it says otherwise.
+		{
+			ux::WatchTraces rig;
+			const QString volts = QStringLiteral("rig.Voltage"), ready = QStringLiteral("rig.Ready"), amps = QStringLiteral("rig.Current"),
+			              extra = QStringLiteral("rig.Extra");
+			rig.setPaths(1, {{1, volts}, {2, ready}, {3, amps}, {4, extra}}, {{ready, true}});
+			const qint64 rigStart = ux::WatchTraces::nowNs() - 300'000'000'000;
+			const auto rigFrame = [&](int i) {
+				const float voltage = i == 540 ? 400.0f : 10.0f + 5.0f * float(std::sin(i / 20.0));
+				rig.append(frame(rigStart + qint64(i) * 500'000'000,
+				                 {{1, 0, bits(S::F32, 4, floatBits(voltage))}, {2, 0, bits(S::Boolean, 1, quint64((i / 20) % 2))},
+				                  {3, 0, bits(S::F32, 4, floatBits(100.0f + float(i % 50)))}, {4, 0, bits(S::F32, 4, floatBits(-float(i % 7)))}}));
+			};
+			for (int i = 0; i < 600; ++i)
+				rigFrame(i);
+			CHECK(rig.plot(volts).isEmpty() && rig.plot(ready).isEmpty() && rig.plot(amps).isEmpty());
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &rig);
+			settle(300);
+			auto* graphMenu = window->findChild<QObject*>(QStringLiteral("plotGraphMenu"));
+			CHECK(graphMenu && view->isVisible());
+			const auto prop = [&](const char* name) { return view->property(name); };
+			const auto plotRect = [&] { return view->property("plotArea").toRectF(); };
+			const auto numbersRect = [&] { return view->property("valuesArea").toRectF(); };
+			// A point of the graph over the numbers, by parts of its width and of
+			// the numbers' height; of the value labels; of the time labels.
+			const auto inGraph = [&](double across, double down) {
+				const auto area = plotRect(), numbers = numbersRect();
+				return view->mapToScene(QPointF(area.left() + area.width() * across, numbers.top() + numbers.height() * down)).toPoint();
+			};
+			const auto onValueLabels = [&](double down = 0.5) {
+				const auto numbers = numbersRect();
+				return view->mapToScene(QPointF(numbers.left() - 10, numbers.top() + numbers.height() * down)).toPoint();
+			};
+			const auto onTimeLabels = [&](double across = 0.3) {
+				const auto area = plotRect();
+				return view->mapToScene(QPointF(area.left() + area.width() * across, area.bottom() + 6)).toPoint();
+			};
+			const auto drag = [&](Qt::MouseButton button, QPoint from, std::initializer_list<QPoint> moves,
+			                      Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+				QTest::mousePress(window, button, modifiers, from);
+				QPoint to = from;
+				for (const auto& move : moves) {
+					to = from + move;
+					QTest::mouseMove(window, to);
+				}
+				QTest::mouseRelease(window, button, modifiers, to);
+				settle(120);
+			};
+			// A wheel through the window, so Qt Quick picks the item and the
+			// chips on top are in its path.
+			const auto wheel = [&](QPoint at, QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+				const QPointF scene(at);
+				QWheelEvent event(scene, window->mapToGlobal(scene), QPoint(), angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+				QCoreApplication::sendEvent(window, &event);
+				settle(80);
+			};
+			const auto rightMs = [&] { return view->property("rightUtcMs").toDouble(); };
+			const auto low = [&] { return view->property("valueLow").toDouble(); };
+			const auto high = [&] { return view->property("valueHigh").toDouble(); };
+			const auto utcOf = [&](qint64 ns) { return double(rig.anchor().utcMs) + double(ns - rig.anchor().monotonicNs) / 1e6; };
+			const auto about = [](double value, double expected, double share) {
+				return std::abs(value - expected) <= std::abs(expected) * share + 1e-6;
+			};
+			const auto evaluate = [](QObject* target, const char* source) {
+				QQmlExpression code(qmlContext(target), target, QString::fromLatin1(source));
+				return code.evaluate();
+			};
+			const auto fresh = [&] {
+				QTest::mouseMove(window, QPoint(4, 4));
+				view->setProperty("focusedPath", QString());
+				QMetaObject::invokeMethod(view, "clearReference");
+				QMetaObject::invokeMethod(view, "hideCursor");
+				QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 60));
+				QMetaObject::invokeMethod(view, "autoValues");
+				view->forceActiveFocus(Qt::TabFocusReason);
+				settle(150);
+			};
+
+			// 1. Sideways with a wobble: the time only; Follow off at once.
+			fresh();
+			{
+				const double before = rightMs(), width = plotRect().width();
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{20, 3}, {120, 3}});
+				CHECK(!following() && prop("valueAuto").toBool() && about(before - rightMs(), 120 / width * 60'000, 0.02) &&
+				      !prop("referenceShown").toBool() && shown(content, "plotBehind"));
+			}
+			// 2. Up or down: the values only, Manual at once; Follow stays and no
+			// reference is pinned.
+			fresh();
+			{
+				const double low0 = low(), high0 = high(), height = numbersRect().height();
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{2, 20}, {2, 70}});
+				const double shift = (high0 - low0) * 70 / height;
+				CHECK(following() && prop("preset").toInt() == 60 && !prop("valueAuto").toBool() && shown(content, "plotAuto") &&
+				      about(low() - low0, shift, 0.02) && about(high() - high0, shift, 0.02) && !prop("referenceShown").toBool());
+				CHECK(evaluate(shown(content, "plotAuto"), "Accessible.description").toString() ==
+				      QStringLiteral("A, or a double-click on the value labels"));
+			}
+			// 3. Diagonal: both.
+			fresh();
+			drag(Qt::LeftButton, inGraph(0.5, 0.4), {{30, 30}, {80, 80}});
+			CHECK(!following() && !prop("valueAuto").toBool());
+			// 4. Sideways, then 24 px down: the values join from there.
+			fresh();
+			{
+				const auto from = inGraph(0.5, 0.3);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(30, 0));
+				QTest::mouseMove(window, from + QPoint(60, 10));
+				settle(120);
+				CHECK(!following() && prop("valueAuto").toBool());
+				const double low1 = low(), high1 = high(), height = numbersRect().height();
+				QTest::mouseMove(window, from + QPoint(60, 40));
+				settle(120);
+				const double shift = (high1 - low1) * (40 - 24) / height;
+				CHECK(!prop("valueAuto").toBool() && about(low() - low1, shift, 0.02) && about(high() - high1, shift, 0.02));
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(60, 40));
+				settle(120);
+			}
+			// 5. Under 4 px either way is a click and pins; 4 px is a drag and
+			// does not.
+			fresh();
+			{
+				const auto at = inGraph(0.4, 0.5);
+				QTest::mouseMove(window, at + QPoint(-6, 0));
+				QTest::mouseMove(window, at);
+				drag(Qt::LeftButton, at, {{3, 3}});
+				CHECK(prop("referenceShown").toBool());
+				const double pinned = prop("referenceUtcMs").toDouble();
+				drag(Qt::LeftButton, inGraph(0.7, 0.5), {{4, 0}});
+				CHECK(prop("referenceShown").toBool() && prop("referenceUtcMs").toDouble() == pinned);
+				QMetaObject::invokeMethod(view, "clearReference");
+			}
+			// 6. A drag that begins in a bool's lane: no values to move, so an
+			// upright start moves nothing until the time joins at 24 px.
+			fresh();
+			{
+				const auto area = plotRect(), numbers = numbersRect();
+				CHECK(area.bottom() - numbers.bottom() > 8);
+				const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.5, (numbers.bottom() + area.bottom()) / 2)).toPoint();
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(5, 60));
+				settle(120);
+				CHECK(prop("valueAuto").toBool() && following());
+				QTest::mouseMove(window, from + QPoint(40, 60));
+				settle(120);
+				CHECK(!following() && prop("valueAuto").toBool());
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(40, 60));
+				settle(120);
+			}
+			// 7. The value labels: the values, Follow kept.
+			fresh();
+			drag(Qt::LeftButton, onValueLabels(), {{0, 30}, {0, 60}});
+			CHECK(!prop("valueAuto").toBool() && following());
+			// 8. The time labels: the time, never the values.
+			fresh();
+			drag(Qt::LeftButton, onTimeLabels(), {{50, 20}, {100, 40}});
+			CHECK(!following() && prop("valueAuto").toBool());
+			// 9. The middle button: both, no lock; a middle click does nothing.
+			fresh();
+			drag(Qt::MiddleButton, inGraph(0.5, 0.4), {{50, 20}, {100, 40}});
+			CHECK(!following() && !prop("valueAuto").toBool());
+			fresh();
+			QTest::mouseClick(window, Qt::MiddleButton, Qt::NoModifier, inGraph(0.5, 0.4));
+			settle(200);
+			CHECK(!graphMenu->property("visible").toBool() && !prop("referenceShown").toBool() && following());
+			// 10. Esc mid-drag: the view as it was at the press, not a step back,
+			// and the rest of the press does nothing.
+			fresh();
+			{
+				while (prop("canGoBack").toBool())
+					QMetaObject::invokeMethod(view, "goBack");
+				view->setProperty("showAll", false);
+				view->setProperty("spanSeconds", 60.0);
+				view->setProperty("following", true);
+				// Focus and unfocus: Auto again with no step taken.
+				view->setProperty("focusedPath", volts);
+				view->setProperty("focusedPath", QString());
+				settle(150);
+				CHECK(!prop("canGoBack").toBool() && following() && prop("valueAuto").toBool());
+				const double before = rightMs();
+				const auto from = inGraph(0.5, 0.5);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(60, 0));
+				QTest::mouseMove(window, from + QPoint(120, 0));
+				settle(100);
+				CHECK(!following() && rightMs() < before && prop("canGoBack").toBool() && window->cursor().shape() == Qt::ClosedHandCursor);
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle(100);
+				CHECK(following() && rightMs() == before && !prop("canGoBack").toBool() && !named(content, "plotBehind"));
+				QTest::mouseMove(window, from + QPoint(200, 0));
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(200, 0));
+				settle(100);
+				CHECK(following() && rightMs() == before && !prop("canGoBack").toBool() && !prop("referenceShown").toBool());
+				// Esc during a box: the box goes, nothing is zoomed.
+				QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+				QTest::mouseMove(window, from + QPoint(40, 30));
+				QTest::mouseMove(window, from + QPoint(80, 60));
+				settle(100);
+				CHECK(prop("boxShown").toBool());
+				QTest::keyClick(window, Qt::Key_Escape);
+				settle(100);
+				CHECK(!prop("boxShown").toBool());
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, from + QPoint(80, 60));
+				settle(100);
+				CHECK(span() == 60 && following() && prop("valueAuto").toBool() && !prop("canGoBack").toBool());
+			}
+			// 11. The grab lost mid-box (a popup, Alt+Tab): the box dropped,
+			// nothing zoomed.
+			fresh();
+			{
+				const auto from = inGraph(0.3, 0.3);
+				QTest::mousePress(window, Qt::LeftButton, Qt::ControlModifier, from);
+				QTest::mouseMove(window, from + QPoint(40, 30));
+				QTest::mouseMove(window, from + QPoint(80, 60));
+				settle(100);
+				CHECK(prop("boxShown").toBool() && prop("boxCaption").toString().contains(QStringLiteral(" s × ")));
+				view->ungrabMouse();
+				settle(100);
+				CHECK(!prop("boxShown").toBool() && span() == 60);
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::ControlModifier, from + QPoint(80, 60));
+				settle(100);
+				CHECK(!prop("boxShown").toBool() && span() == 60 && following());
+			}
+			// A second button during a drag is ignored until every button is up;
+			// the wheel is ignored while a button is held.
+			fresh();
+			{
+				const double before = rightMs(), width = plotRect().width();
+				const auto from = inGraph(0.5, 0.5);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(50, 0));
+				QTest::mousePress(window, Qt::RightButton, Qt::NoModifier, from + QPoint(50, 0));
+				QTest::mouseMove(window, from + QPoint(100, 0));
+				wheel(from + QPoint(100, 0), {0, 120});
+				QTest::mouseRelease(window, Qt::RightButton, Qt::NoModifier, from + QPoint(100, 0));
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(100, 0));
+				settle(200);
+				CHECK(span() == 60 && !graphMenu->property("visible").toBool() && !prop("boxShown").toBool() &&
+				      about(before - rightMs(), 100 / width * 60'000, 0.02));
+			}
+
+			// 12. All is a starting view, never a lock (the owner's word): a
+			// sideways drag moves the time at once, by the time dragged, and
+			// leaves All for the span of everything kept; the picture runs past
+			// either end until one reading is left in view.
+			fresh();
+			{
+				QTest::keyClick(window, Qt::Key_4);
+				settle(150);
+				const double newest = utcOf(rig.newestNs()), oldest = utcOf(rigStart), allMs = newest - oldest, width = plotRect().width();
+				CHECK(prop("showAll").toBool() && following() && std::abs(rightMs() - newest) < 1);
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{100, 0}, {200, 0}});
+				CHECK(rightMs() < newest && prop("preset").toInt() != 0 && !prop("showAll").toBool() && !following() &&
+				      about(newest - rightMs(), 200 / width * allMs, 0.02) && about(span() * 1000, allMs, 0.001));
+				// Far past the window either way (the grab follows the pointer).
+				pastTheWindow = true;
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{100, 0}, {5000, 0}});
+				CHECK(std::abs(rightMs() - oldest) < 1);
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{-100, 0}, {-5000, 0}});
+				pastTheWindow = false;
+				CHECK(std::abs(rightMs() - (newest + span() * 1000)) < 1 &&
+				      shown(content, "plotBehind")->property("text").toString() == QStringLiteral("Follow (End)"));
+			}
+			// The wheel at All narrows the span about the pointer.
+			fresh();
+			{
+				QTest::keyClick(window, Qt::Key_4);
+				settle(150);
+				const double allMs = utcOf(rig.newestNs()) - utcOf(rigStart);
+				const auto area = plotRect();
+				const auto at = inGraph(0.25, 0.5);
+				const double part = (view->mapFromScene(QPointF(at)).x() - area.left()) / area.width();
+				const double timeAt = rightMs() - allMs + allMs * part;
+				wheel(at, {0, 120});
+				const double narrowed = span() * 1000;
+				CHECK(!prop("showAll").toBool() && prop("preset").toInt() == -1 && about(narrowed, allMs * 0.8, 0.001) &&
+				      std::abs(rightMs() - narrowed + narrowed * part - timeAt) <= allMs / area.width());
+			}
+			// A drag on the time axis at All: along it the time moves and All gives
+			// way to the span of everything kept; across it, up, the time is
+			// stretched (half the span for a hundred pixels); down at All, nothing.
+			fresh();
+			{
+				QTest::keyClick(window, Qt::Key_4);
+				settle(150);
+				const double newest = rightMs(), allMs = utcOf(rig.newestNs()) - utcOf(rigStart);
+				drag(Qt::LeftButton, onTimeLabels(0.4), {{60, 0}, {150, 0}});
+				CHECK(!prop("showAll").toBool() && prop("preset").toInt() == -1 && rightMs() < newest - 1 && about(span() * 1000, allMs, 0.001) &&
+				      !following());
+				QTest::keyClick(window, Qt::Key_4);
+				settle(150);
+				drag(Qt::LeftButton, onTimeLabels(0.4), {{0, -20}, {0, -100}});
+				CHECK(!prop("showAll").toBool() && about(span() * 1000, allMs / 2, 0.01) && !following());
+				QTest::keyClick(window, Qt::Key_4);
+				settle(150);
+				drag(Qt::LeftButton, onTimeLabels(0.4), {{0, 10}, {0, 40}});
+				CHECK(prop("showAll").toBool() && following());
+			}
+			// 13. A span longer than what is kept moves too: 20 s kept, 1 min shown.
+			{
+				ux::WatchTraces brief;
+				brief.setPaths(1, {{1, volts}});
+				const qint64 briefStart = ux::WatchTraces::nowNs() - 20'000'000'000;
+				for (int i = 0; i <= 40; ++i)
+					brief.append(frame(briefStart + qint64(i) * 500'000'000, {{1, 0, bits(S::F32, 4, floatBits(float(i % 5)))}}));
+				CHECK(brief.plot(volts).isEmpty());
+				engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &brief);
+				settle(300);
+				fresh();
+				const double before = rightMs();
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{50, 0}, {100, 0}});
+				CHECK(rightMs() < before - 1000 && !following() && span() == 60);
+				// One reading kept: at All everything clamps, and dragged either
+				// way the reading stays in view.
+				ux::WatchTraces single;
+				single.setPaths(1, {{1, volts}});
+				const qint64 only = ux::WatchTraces::nowNs() - 5'000'000'000;
+				single.append(frame(only, {{1, 0, bits(S::F32, 4, floatBits(2.0f))}}));
+				CHECK(single.plot(volts).isEmpty());
+				engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &single);
+				settle(300);
+				QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0));
+				settle(150);
+				const double reading = double(single.anchor().utcMs) + double(only - single.anchor().monotonicNs) / 1e6;
+				// A second of span: three hundred pixels either way more than
+				// reach both ends.
+				bool clampedLeft = false, clampedRight = false;
+				for (const int dx : {200, 300, 300, -300, -300, -300}) {
+					drag(Qt::LeftButton, inGraph(0.5, 0.5), {{dx / 4, 0}, {dx, 0}});
+					const double right = rightMs(), left = right - span() * 1000;
+					CHECK(!following() && left <= reading + 1 && right >= reading - 1);
+					clampedLeft = clampedLeft || std::abs(right - reading) < 1;
+					clampedRight = clampedRight || std::abs(left - reading) < 1;
+				}
+				CHECK(clampedLeft && clampedRight);
+				engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &rig);
+				settle(300);
+			}
+			// 14. Zooming out at All changes nothing and leaves Follow on: the
+			// wheel and the header's minus alike.
+			fresh();
+			QTest::keyClick(window, Qt::Key_4);
+			settle(150);
+			wheel(inGraph(0.5, 0.5), {0, -120});
+			CHECK(following() && prop("showAll").toBool());
+			click(window, shown(content, "plotZoomOut"));
+			settle(150);
+			CHECK(following() && prop("showAll").toBool());
+
+			// 15. The wheel zooms the time about the pointer.
+			fresh();
+			{
+				const auto area = plotRect();
+				const auto at = inGraph(0.25, 0.5);
+				const double part = (view->mapFromScene(QPointF(at)).x() - area.left()) / area.width();
+				const double timeAt = rightMs() - 60'000 + 60'000 * part;
+				wheel(at, {0, 120});
+				CHECK(std::abs(span() - 48) < 1e-6 && !following() &&
+				      std::abs(rightMs() - 48'000 + 48'000 * part - timeAt) <= 48'000 / area.width());
+			}
+			// 16. Shift and the wheel, a sideways wheel, Alt and a sideways wheel:
+			// the time moves a tenth a notch, wheel down later.
+			for (const auto& [angle, modifiers] : std::initializer_list<std::pair<QPoint, Qt::KeyboardModifiers>>{
+			         {QPoint(0, -120), Qt::ShiftModifier}, {QPoint(-120, 0), Qt::NoModifier}, {QPoint(-120, 0), Qt::AltModifier}}) {
+				fresh();
+				const double before = rightMs();
+				wheel(inGraph(0.5, 0.5), angle, modifiers);
+				CHECK(span() == 60 && about(rightMs() - before, 6'000, 0.001) && !following());
+			}
+			// 17. Ctrl and the wheel: the values about the pointer, Follow kept.
+			fresh();
+			{
+				const auto numbers = numbersRect();
+				const auto at = inGraph(0.5, 0.3);
+				const double part = (view->mapFromScene(QPointF(at)).y() - numbers.top()) / numbers.height();
+				const double valueAt = high() - (high() - low()) * part;
+				wheel(at, {0, 120}, Qt::ControlModifier);
+				CHECK(span() == 60 && following() && !prop("valueAuto").toBool() &&
+				      std::abs(high() - (high() - low()) * part - valueAt) <= (high() - low()) / numbers.height());
+			}
+			// 18. Ctrl, Shift and the wheel: the values move a tenth, wheel down lower.
+			fresh();
+			{
+				const double low0 = low(), high0 = high(), tenth = (high0 - low0) * 0.1;
+				wheel(inGraph(0.5, 0.5), {0, -120}, Qt::ControlModifier | Qt::ShiftModifier);
+				CHECK(following() && !prop("valueAuto").toBool() && about(low0 - low(), tenth, 0.001) && about(high0 - high(), tenth, 0.001));
+			}
+			// 19. Over the value labels the wheel zooms the values, Shift moves them.
+			fresh();
+			{
+				const double range0 = high() - low();
+				wheel(onValueLabels(), {0, 120});
+				CHECK(!prop("valueAuto").toBool() && about(high() - low(), range0 * 0.8, 0.001) && span() == 60 && following());
+				const double low1 = low(), range1 = high() - low();
+				wheel(onValueLabels(), {0, -120}, Qt::ShiftModifier);
+				CHECK(about(low1 - low(), range1 * 0.1, 0.001) && about(high() - low(), range1, 0.001) && span() == 60);
+			}
+			// 20. Over the time labels the wheel zooms the time; Ctrl changes nothing there.
+			fresh();
+			wheel(onTimeLabels(), {0, 120});
+			CHECK(std::abs(span() - 48) < 1e-6 && prop("valueAuto").toBool());
+			fresh();
+			wheel(onTimeLabels(), {0, 120}, Qt::ControlModifier);
+			CHECK(std::abs(span() - 48) < 1e-6 && prop("valueAuto").toBool());
+			// 21. A touchpad's run of fractional notches: one zoom, one step back.
+			fresh();
+			QTest::qWait(700);
+			for (int i = 0; i < 4; ++i)
+				wheel(inGraph(0.5, 0.5), {0, 30});
+			CHECK(std::abs(span() - 48) < 1e-6);
+			QTest::keyClick(window, Qt::Key_Backspace);
+			settle(150);
+			CHECK(span() == 60 && following());
+			// 22. A native pinch: the values about the fingers, as Ctrl and the wheel.
+			fresh();
+			{
+				const QPointF at(inGraph(0.5, 0.5));
+				QNativeGestureEvent pinch(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, at, at, window->mapToGlobal(at), 0.25,
+				                          QPointF());
+				QCoreApplication::sendEvent(window, &pinch);
+				settle(100);
+				const bool delivered = !prop("valueAuto").toBool();
+				if (!delivered) {
+					// This platform's window passes no pinch on: to the view, as
+					// Qt Quick would.
+					QNativeGestureEvent direct(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, view->mapFromScene(at), at,
+					                           window->mapToGlobal(at), 0.25, QPointF());
+					QCoreApplication::sendEvent(view, &direct);
+					settle(100);
+				}
+				std::fprintf(stderr, "Native pinch through the window: %s\n", delivered ? "delivered" : "not delivered, sent to the view");
+				CHECK(!prop("valueAuto").toBool() && span() == 60 && following());
+			}
+
+			// 23. A right click opens the graph's menu at the pointer; a right
+			// drag zooms to a box, as Ctrl and a drag do, and opens no menu.
+			fresh();
+			{
+				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, inGraph(0.5, 0.5));
+				settle(300);
+				CHECK(graphMenu->property("visible").toBool() &&
+				      shown(content, "plotMenuFitAll")->property("text").toString() == QStringLiteral("Fit all\tF"));
+				QMetaObject::invokeMethod(graphMenu, "close");
+				settle(200);
+				const auto from = inGraph(0.3, 0.3), to = inGraph(0.6, 0.7);
+				const double boxed = double(to.x() - from.x()) / plotRect().width() * 60;
+				drag(Qt::RightButton, from, {(to - from) / 2, to - from});
+				CHECK(about(span(), boxed, 0.02) && !prop("valueAuto").toBool() && !following() && !graphMenu->property("visible").toBool());
+			}
+			// 24. A box narrower than 8 px: only the values, and Follow stays.
+			fresh();
+			{
+				const auto from = inGraph(0.5, 0.15);
+				QTest::mousePress(window, Qt::RightButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(2, 40));
+				QTest::mouseMove(window, from + QPoint(3, 80));
+				settle(100);
+				CHECK(prop("boxShown").toBool() && prop("boxCaption").toString().endsWith(QStringLiteral(" tall")) &&
+				      window->cursor().shape() == Qt::CrossCursor);
+				QTest::mouseRelease(window, Qt::RightButton, Qt::NoModifier, from + QPoint(3, 80));
+				settle(150);
+				CHECK(span() == 60 && following() && !prop("valueAuto").toBool() && !graphMenu->property("visible").toBool());
+			}
+			// 26. A double-click fits all and keeps the pins: its own first click
+			// (which moved the reference) is undone.
+			const auto voltsChip = [&] {
+				for (auto* name : all(content, "plotChipName"))
+					if (name->property("text").toString() == volts)
+						return name;
+				throw std::runtime_error("no chip for rig.Voltage");
+			};
+			const auto pinZoomFocus = [&] {
+				fresh();
+				const auto pin = inGraph(0.3, 0.5);
+				QTest::mouseMove(window, pin + QPoint(-6, 0));
+				QTest::mouseMove(window, pin);
+				QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pin);
+				settle(120);
+				wheel(inGraph(0.5, 0.5), {0, 120});
+				click(window, voltsChip());
+				settle(120);
+				wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+				CHECK(prop("referenceShown").toBool() && !following() && std::abs(span() - 48) < 1e-6 && !prop("valueAuto").toBool() &&
+				      prop("focusedPath").toString() == volts);
+				return prop("referenceUtcMs").toDouble();
+			};
+			{
+				const double reference = pinZoomFocus();
+				const auto at = inGraph(0.6, 0.5);
+				QTest::mouseMove(window, at);
+				QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, at);
+				settle(150);
+				CHECK(prop("referenceShown").toBool() && prop("referenceUtcMs").toDouble() == reference && prop("showAll").toBool() &&
+				      following() && prop("valueAuto").toBool() && prop("focusedPath").toString().isEmpty());
+			}
+			// 27. F does the same; Backspace brings back the view before it,
+			// the focus too.
+			{
+				const double reference = pinZoomFocus();
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_F);
+				settle(150);
+				CHECK(prop("referenceShown").toBool() && prop("referenceUtcMs").toDouble() == reference && prop("showAll").toBool() &&
+				      following() && prop("valueAuto").toBool() && prop("focusedPath").toString().isEmpty());
+				QTest::keyClick(window, Qt::Key_Backspace);
+				settle(150);
+				CHECK(!prop("showAll").toBool() && std::abs(span() - 48) < 1e-6 && !following() && !prop("valueAuto").toBool() &&
+				      prop("focusedPath").toString() == volts && prop("referenceUtcMs").toDouble() == reference);
+				QMetaObject::invokeMethod(view, "clearReference");
+			}
+			// 28. A double-click on the value labels fits only the values.
+			fresh();
+			wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+			CHECK(!prop("valueAuto").toBool());
+			QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, onValueLabels());
+			settle(150);
+			CHECK(prop("valueAuto").toBool() && span() == 60 && following());
+			// 29. A double-click on the time labels: the time to All, following;
+			// Manual values kept.
+			fresh();
+			wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+			wheel(inGraph(0.5, 0.5), {0, 120});
+			CHECK(!following() && std::abs(span() - 48) < 1e-6 && !prop("valueAuto").toBool());
+			QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, onTimeLabels());
+			settle(150);
+			CHECK(prop("showAll").toBool() && following() && !prop("valueAuto").toBool() && !prop("referenceShown").toBool());
+
+			// 30. After a zoom no segment is lit; End follows at the span in
+			// view; a preset sets its span and follows, Manual values kept.
+			fresh();
+			{
+				wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+				wheel(inGraph(0.5, 0.5), {0, 120});
+				bool lit = false;
+				for (const char* name : {"plotPreset_10", "plotPreset_60", "plotPreset_600", "plotPreset_0"})
+					lit = lit || shown(content, name)->property("checked").toBool();
+				CHECK(!lit && std::abs(span() - 48) < 1e-6 && !following());
+				QTest::keyClick(window, Qt::Key_End);
+				settle(150);
+				CHECK(following() && std::abs(span() - 48) < 1e-6);
+				click(window, shown(content, "plotPreset_60"));
+				settle(150);
+				CHECK(span() == 60 && following() && !prop("valueAuto").toBool());
+			}
+			// 31. After a pan the span's segment stays lit; clicked again, it follows.
+			fresh();
+			drag(Qt::LeftButton, inGraph(0.5, 0.5), {{50, 0}, {100, 0}});
+			CHECK(!following() && shown(content, "plotPreset_60")->property("checked").toBool());
+			click(window, shown(content, "plotPreset_60"));
+			settle(150);
+			CHECK(following() && span() == 60);
+			// 32. Nothing but the user moves the view: held after a pan, new
+			// readings and another curve leave the span, the edge, Follow and
+			// Manual values as they were.
+			fresh();
+			{
+				wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+				drag(Qt::LeftButton, inGraph(0.5, 0.5), {{50, 0}, {100, 0}});
+				const double right = rightMs(), held = span(), low0 = low(), high0 = high();
+				CHECK(!following() && !prop("valueAuto").toBool());
+				for (int i = 600; i < 650; ++i)
+					rigFrame(i);
+				CHECK(rig.plot(extra).isEmpty());
+				settle(300);
+				CHECK(rightMs() == right && span() == held && !following() && !prop("valueAuto").toBool() && low() == low0 && high() == high0);
+				rig.unplot(extra);
+				settle(150);
+			}
+			// 33. Auto never narrows while a button is held: the time dragged so
+			// the spike leaves the view, the values stand until the release.
+			fresh();
+			{
+				CHECK(high() >= 400);
+				const double range0 = high() - low(), width = plotRect().width();
+				const auto from = inGraph(0.95, 0.5);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(-20, 0));
+				QTest::mouseMove(window, from + QPoint(-int(width * 0.9), 0));
+				settle(250);
+				CHECK(!following() && high() - low() >= range0 - 1e-9);
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(-int(width * 0.9), 0));
+				settle(250);
+				CHECK(high() - low() < range0 * 0.8);
+			}
+			// 34. While a button is held the value-label column keeps its width:
+			// the labels gain a digit, the plot does not slide; it refits on the
+			// release.
+			fresh();
+			{
+				rig.unplot(volts);
+				CHECK(rig.setAppearance(amps, QString(), 1, 9'999'840));
+				settle(300);
+				fresh();
+				const auto longest = [&] {
+					qsizetype most = 0;
+					for (const auto& label : prop("valueLabels").toStringList())
+						most = std::max(most, label.size());
+					return most;
+				};
+				CHECK(longest() <= 7);
+				const double left = plotRect().left();
+				const int down = int(numbersRect().height());
+				const auto from = inGraph(0.5, 0.3);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(2, 20));
+				QTest::mouseMove(window, from + QPoint(2, down));
+				settle(250);
+				CHECK(longest() >= 8 && plotRect().left() == left && following());
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(2, down));
+				settle(250);
+				CHECK(plotRect().left() > left);
+				CHECK(rig.setAppearance(amps, QString(), 1, 0) && rig.plot(volts).isEmpty());
+				settle(300);
+			}
+			// 35-36. Stacked: each lane is Auto or Manual on its own, with its own
+			// Auto chip after its name; A fits every lane. A drag up or down in a
+			// lane moves that lane alone, Follow kept.
+			fresh();
+			{
+				QTest::keyClick(window, Qt::Key_L);
+				settle(300);
+				const auto lane = [&](int i) { return view->property("numberLanes").toList().value(i).toMap(); };
+				const auto chipOf = [&](int i) { return (QStringLiteral("plotLaneAuto_") + lane(i).value(QStringLiteral("path")).toString()).toUtf8(); };
+				const auto laneCentre = [&](int i) {
+					const auto rect = lane(i).value(QStringLiteral("valueRect")).toRectF();
+					return view->mapToScene(rect.center()).toPoint();
+				};
+				CHECK(rig.stacked() && prop("numberLanes").toList().size() == 2 && !named(content, chipOf(0).constData()) &&
+				      !named(content, chipOf(1).constData()));
+				wheel(laneCentre(1), {0, 120}, Qt::ControlModifier);
+				CHECK(named(content, chipOf(1).constData()) && !named(content, chipOf(0).constData()) && !named(content, "plotAuto") &&
+				      !prop("valueAuto").toBool() && lane(1).value(QStringLiteral("manual")).toBool());
+				auto* laneChip = shown(content, chipOf(1).constData());
+				CHECK(laneChip->property("text").toString() == QStringLiteral("Auto") &&
+				      evaluate(laneChip, "Accessible.name").toString() ==
+				          QStringLiteral("Fit the values of %1 again").arg(lane(1).value(QStringLiteral("path")).toString()) &&
+				      evaluate(laneChip, "ToolTip.text").toString() == QStringLiteral("Fit this lane's values again. A fits every lane.") &&
+				      laneChip->mapToItem(view, QPointF(0, 0)).x() >= lane(1).value(QStringLiteral("nameRect")).toRectF().right());
+				click(window, laneChip);
+				settle(150);
+				CHECK(!lane(1).value(QStringLiteral("manual")).toBool() && prop("valueAuto").toBool() && !named(content, chipOf(1).constData()));
+				wheel(laneCentre(0), {0, 120}, Qt::ControlModifier);
+				wheel(laneCentre(1), {0, 120}, Qt::ControlModifier);
+				CHECK(named(content, chipOf(0).constData()) && named(content, chipOf(1).constData()));
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_A);
+				settle(150);
+				CHECK(prop("valueAuto").toBool() && !named(content, chipOf(0).constData()) && !named(content, chipOf(1).constData()));
+				// 36.
+				const double firstLow = lane(0).value(QStringLiteral("low")).toDouble();
+				const auto second = lane(1);
+				drag(Qt::LeftButton, laneCentre(0), {{2, 20}, {2, 50}});
+				CHECK(lane(0).value(QStringLiteral("low")).toDouble() > firstLow && lane(0).value(QStringLiteral("manual")).toBool() &&
+				      lane(1).value(QStringLiteral("low")) == second.value(QStringLiteral("low")) &&
+				      lane(1).value(QStringLiteral("high")) == second.value(QStringLiteral("high")) && following());
+				// 37, on a lane's name: the pointing hand.
+				const auto name = view->mapToScene(lane(1).value(QStringLiteral("nameRect")).toRectF().center()).toPoint();
+				QTest::mouseMove(window, name + QPoint(-2, 0));
+				QTest::mouseMove(window, name);
+				settle(100);
+				CHECK(window->cursor().shape() == Qt::PointingHandCursor && prop("hoverRegion").toString() == QStringLiteral("laneName"));
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_L);
+				settle(300);
+				CHECK(!rig.stacked() && prop("numberLanes").toList().isEmpty());
+			}
+			// 37. Each part's shape: a cross on the graph, ↕ on the value labels,
+			// ↔ on the time labels, a closed hand while the picture is dragged,
+			// the axis' own shape while an axis is dragged, and the part's shape
+			// again on the release.
+			fresh();
+			{
+				const auto hover = [&](QPoint at) {
+					QTest::mouseMove(window, at + QPoint(-3, 0));
+					QTest::mouseMove(window, at);
+					settle(100);
+					return window->cursor().shape();
+				};
+				CHECK(hover(inGraph(0.5, 0.5)) == Qt::CrossCursor && prop("hoverRegion").toString() == QStringLiteral("graph"));
+				CHECK(hover(onValueLabels()) == Qt::SizeVerCursor && prop("hoverRegion").toString() == QStringLiteral("values"));
+				CHECK(hover(onTimeLabels()) == Qt::SizeHorCursor && prop("hoverRegion").toString() == QStringLiteral("time"));
+				const auto from = inGraph(0.5, 0.5);
+				hover(from);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(30, 0));
+				QTest::mouseMove(window, from + QPoint(60, 0));
+				settle(100);
+				CHECK(window->cursor().shape() == Qt::ClosedHandCursor && prop("hoverRegion").toString().isEmpty());
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(60, 0));
+				settle(100);
+				CHECK(window->cursor().shape() == Qt::CrossCursor);
+				const auto labels = onValueLabels();
+				hover(labels);
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, labels);
+				QTest::mouseMove(window, labels + QPoint(0, 30));
+				settle(100);
+				CHECK(window->cursor().shape() == Qt::SizeVerCursor);
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, labels + QPoint(0, 30));
+				settle(100);
+				CHECK(window->cursor().shape() == Qt::SizeVerCursor);
+			}
+			// 38. Each axis says on hover what it does.
+			fresh();
+			{
+				const auto tipFor = [&](QPoint at, const QString& words) {
+					QTest::mouseMove(window, at + QPoint(0, -3));
+					QTest::mouseMove(window, at);
+					settle(900);
+					auto* tip = withText(content, words);
+					return tip && tip->property("text").toString() == words;
+				};
+				CHECK(tipFor(onValueLabels(), QStringLiteral("Drag to move the values, wheel to zoom them, double-click to fit them (A).")));
+				CHECK(tipFor(onTimeLabels(),
+				             QStringLiteral("Drag to move the time, wheel to zoom it, double-click to show everything kept (4).")));
+				QTest::mouseMove(window, QPoint(4, 4));
+				settle(100);
+			}
+			// 39. The words: the graph's description, Follow's, the graph's menu
+			// in its order, and the hint on the empty Plot.
+			fresh();
+			{
+				CHECK(evaluate(view, "Accessible.description").toString() ==
+				      QStringLiteral("Drag moves the picture; the wheel zooms the time, Control and the wheel the values; Shift and the wheel move "
+				                     "the time; a right-drag or Control and a drag zoom to a box; a double-click or F fits everything. Arrows pan, "
+				                     "plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, "
+				                     "End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits "
+				                     "them again; L stacks the numbers in lanes of their own."));
+				auto* followBox = shown(content, "plotFollow");
+				CHECK(evaluate(followBox, "ToolTip.text").toString() ==
+				          QStringLiteral("Keep the newest readings in view. Moving or zooming the time stops it; End brings it back.") &&
+				      evaluate(followBox, "Accessible.description").toString() ==
+				          QStringLiteral("Keep the newest readings in view (End). Moving or zooming the time stops following; reading goes on."));
+				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, inGraph(0.5, 0.5));
+				settle(300);
+				const auto item = [&](const char* name) { return shown(content, name); };
+				const auto y = [&](const char* name) { return item(name)->mapToScene(QPointF(0, 0)).y(); };
+				CHECK(item("plotMenuFollow")->property("text").toString() == QStringLiteral("Follow\tEnd") &&
+				      item("plotMenuFitAll")->property("text").toString() == QStringLiteral("Fit all\tF") &&
+				      item("plotMenuFitValues")->property("text").toString() == QStringLiteral("Fit values\tA") &&
+				      item("plotMenuBack")->property("text").toString() == QStringLiteral("Go back\tBackspace") &&
+				      y("plotMenuFollow") < y("plotMenuFitAll") && y("plotMenuFitAll") < y("plotMenuFitValues") &&
+				      y("plotMenuFitValues") < y("plotMenuBack"));
+				// Fit values is there while any values are by hand.
+				CHECK(!item("plotMenuFitValues")->property("enabled").toBool());
+				QMetaObject::invokeMethod(graphMenu, "close");
+				settle(200);
+				wheel(inGraph(0.5, 0.5), {0, 120}, Qt::ControlModifier);
+				QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, inGraph(0.5, 0.5));
+				settle(300);
+				CHECK(item("plotMenuFitValues")->property("enabled").toBool());
+				QMetaObject::invokeMethod(item("plotMenuFitAll"), "triggered");
+				QMetaObject::invokeMethod(graphMenu, "close");
+				settle(200);
+				CHECK(prop("showAll").toBool() && following() && prop("valueAuto").toBool());
+				// The empty Plot names the three gestures.
+				const auto order = rig.plotted();
+				rig.unplotMany(order);
+				settle(300);
+				CHECK(shown(content, "plotGestureHint")->property("text").toString() ==
+				      QStringLiteral("On the graph: drag to move, wheel to zoom, double-click to fit all."));
+				for (const auto& path : order)
+					CHECK(rig.plot(path).isEmpty());
+				settle(300);
+			}
+			// Back to the fixture the rest of the checks use, following at 1 min.
+			fresh();
+			engine.rootContext()->setContextProperty(QStringLiteral("fixtureTraces"), &traces);
+			settle(300);
+			QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 60));
+			settle(150);
+		}
+
 		// TR-2. A recording shown with the same view: two hours of one run,
 		// set by the host - past the live ten minutes and 65,536 readings -
 		// with a time of day from its anchor, drawn per pixel, its chip never
@@ -1906,6 +2707,81 @@ int main(int argc, char** argv)
 				QTest::keyClick(window, Qt::Key_Left);
 				settle(150);
 				CHECK(view->property("spanSeconds").toDouble() == zoomed && view->property("rightUtcMs").toDouble() < zoomedRight);
+			}
+			// 40-42. The gestures on the Trend. The owner's case: opened at All, the
+			// first drag moves the time at once, by the time dragged; a
+			// double-click shows the whole run again. A finished run: End puts
+			// its end at the right edge at the span in view, Space and H do
+			// nothing, Home puts its start at the left edge. A run being written
+			// follows as the Plot does, and its next readings leave a held frame.
+			{
+				const auto area = view->property("plotArea").toRectF();
+				const auto at = [&](double across) {
+					return view->mapToScene(QPointF(area.left() + area.width() * across, view->property("valuesArea").toRectF().center().y())).toPoint();
+				};
+				const auto right = [&] { return view->property("rightUtcMs").toDouble(); };
+				const double runStart = double(recorded.anchor().utcMs);
+				const auto runEnd = [&] { return runStart + double(recorded.newestNs() - recorded.anchor().monotonicNs) / 1e6; };
+				const auto dragBy = [&](int dx) {
+					const auto from = at(0.5);
+					QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+					QTest::mouseMove(window, from + QPoint(dx / 2, 0));
+					QTest::mouseMove(window, from + QPoint(dx, 0));
+					QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(dx, 0));
+					settle(200);
+				};
+				CHECK(QMetaObject::invokeMethod(view, "choosePreset", Q_ARG(int, 0)));
+				settle(200);
+				const double allMs = runEnd() - runStart, before = right();
+				CHECK(view->property("showAll").toBool() && std::abs(before - runEnd()) < 1 && !view->property("followable").toBool());
+				dragBy(200);
+				const double moved = before - right(), expected = 200 / area.width() * allMs;
+				CHECK(std::abs(moved - expected) <= expected * 0.02 && !view->property("showAll").toBool() && !named(content, "plotFollow") &&
+				      !named(content, "plotBehind"));
+				QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, at(0.4));
+				settle(200);
+				CHECK(view->property("showAll").toBool() && std::abs(right() - runEnd()) < 1 && !view->property("referenceShown").toBool());
+				// 41. A finished run's keys.
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_Plus);
+				QTest::keyClick(window, Qt::Key_Left);
+				settle(150);
+				const double zoomed = view->property("spanSeconds").toDouble();
+				CHECK(!view->property("showAll").toBool() && right() < runEnd() - 1);
+				QTest::keyClick(window, Qt::Key_End);
+				settle(150);
+				CHECK(std::abs(right() - runEnd()) < 1 && view->property("spanSeconds").toDouble() == zoomed);
+				const bool followed = view->property("following").toBool();
+				const double rightNow = right();
+				for (const auto key : {Qt::Key_Space, Qt::Key_H}) {
+					QTest::keyClick(window, key);
+					settle(100);
+					CHECK(view->property("following").toBool() == followed && right() == rightNow);
+				}
+				QTest::keyClick(window, Qt::Key_Home);
+				settle(150);
+				CHECK(std::abs(right() - zoomed * 1000 - runStart) < 1);
+				// 42. A run being written: Follow offered; the first time move stops
+				// it; new readings leave the held frame; End follows again.
+				trend->setProperty("writing", true);
+				settle(150);
+				CHECK(view->property("followable").toBool());
+				QTest::keyClick(window, Qt::Key_End);
+				settle(150);
+				CHECK(view->property("following").toBool() && shown(content, "plotFollow"));
+				dragBy(100);
+				CHECK(!view->property("following").toBool() && shown(content, "plotBehind"));
+				const double held = right();
+				const auto newest = recorded.newestNs();
+				recorded.appendRecorded(QStringLiteral("run.Speed"), {{newest + 100'000'000, 2.0}, {newest + 200'000'000, 2.5}});
+				settle(200);
+				CHECK(right() == held && !view->property("following").toBool());
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_End);
+				settle(150);
+				CHECK(view->property("following").toBool() && std::abs(right() - runEnd()) < 1);
+				trend->setProperty("writing", false);
+				settle(150);
 			}
 			// The host's word over the graph.
 			trend->setProperty("message", QStringLiteral("No readings here. Press All to see the whole run."));
@@ -2065,6 +2941,44 @@ int main(int argc, char** argv)
 			view->setProperty("fromStart", true);
 			settle(100);
 			CHECK(rb->front().ns == ra->front().ns);
+			// 43. Overlaid runs share one time axis and one value axis, and every
+			// gesture moves them together: Fit all spans the longer run, a drag
+			// at All moves the time and keeps both drawn, Ctrl and the wheel zoom
+			// the shared axis, the earlier run's curve with it.
+			{
+				overlay.appendRecorded(earlier, {{startB + 13'000'000'000, 113.0}, {startB + 15'000'000'000, 115.0}});
+				settle(200);
+				view->forceActiveFocus(Qt::TabFocusReason);
+				QTest::keyClick(window, Qt::Key_F);
+				settle(200);
+				const qint64 first = std::min(ra->front().ns, rb->front().ns), last = std::max(ra->back().ns, rb->back().ns);
+				QVariantMap range;
+				CHECK(QMetaObject::invokeMethod(view, "measureRange", Q_RETURN_ARG(QVariantMap, range)));
+				CHECK(view->property("showAll").toBool() && last - first == rb->back().ns - rb->front().ns && rb->back().ns > ra->back().ns &&
+				      std::abs(range.value(QStringLiteral("seconds")).toDouble() - double(last - first) / 1e9) < 1e-6 &&
+				      view->property("drawnCurves").toInt() == 2);
+				const auto area = view->property("plotArea").toRectF(), numbers = view->property("valuesArea").toRectF();
+				const auto from = view->mapToScene(QPointF(area.left() + area.width() * 0.5, numbers.center().y())).toPoint();
+				const double before = view->property("rightUtcMs").toDouble();
+				QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, from);
+				QTest::mouseMove(window, from + QPoint(50, 0));
+				QTest::mouseMove(window, from + QPoint(100, 0));
+				QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, from + QPoint(100, 0));
+				settle(200);
+				CHECK(view->property("rightUtcMs").toDouble() < before && !view->property("showAll").toBool() &&
+				      view->property("drawnCurves").toInt() == 2);
+				const double shared = view->property("valueHigh").toDouble() - view->property("valueLow").toDouble();
+				CHECK(view->property("valueAuto").toBool() && shared > 100);
+				QWheelEvent zoomIn(QPointF(from), window->mapToGlobal(QPointF(from)), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::ControlModifier,
+				                   Qt::NoScrollPhase, false);
+				QCoreApplication::sendEvent(window, &zoomIn);
+				settle(200);
+				CHECK(!view->property("valueAuto").toBool() &&
+				      std::abs(view->property("valueHigh").toDouble() - view->property("valueLow").toDouble() - shared * 0.8) < shared * 0.001 &&
+				      view->property("drawnCurves").toInt() == 2);
+				QMetaObject::invokeMethod(view, "autoValues");
+				settle(100);
+			}
 			// Taking the anchor off puts it back on the shared one.
 			overlay.setRecordedAnchor(earlier, {});
 			CHECK(overlay.shiftNs(earlier) == 0 && rb->front().ns == startB);
