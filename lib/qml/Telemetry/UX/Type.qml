@@ -69,6 +69,10 @@ QtObject {
     property int spacing: Math.round(bodyPixels * 0.3)
     property int groupSpacing: Math.round(bodyPixels * 0.6)
     property int tight: Math.max(2, Math.round(bodyPixels * 0.2))
+    // Between the sections of a panel that stacks them from the top (Details'
+    // Request and Response, 16 px; 20 at 125 %): twice the room between groups,
+    // so a section's heading sits with its own table.
+    property int sectionSpacing: groupSpacing * 2
     // Between two columns of a table (12 px): groupSpacing is too tight
     // between a right-aligned number and a left-aligned type, "230 f32".
     property int columnGap: Math.round(bodyPixels * 0.9)

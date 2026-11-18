@@ -123,6 +123,9 @@ struct Row {
 	// A value row's scalar: its code, and whether it is an enum's.
 	Code code = Code::Bool;
 	bool scalar = false, enumeration = false;
+	// A structure-only row's type in words ("struct (3)", "u16[300]"), made
+	// from the schema when the rows were; empty on other rows.
+	QString label;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
@@ -176,11 +179,10 @@ QString endpointDetail(const Row& row)
 		parts << (service ? QCoreApplication::translate("EndpointModel", "Service")
 		                  : QCoreApplication::translate("EndpointModel", "Command"));
 		// Until its types are known a Command says nothing of its arguments.
+		// With none, "Command · ()": the section under it says "No arguments."
 		if (!row.signature.isEmpty()) {
 			parts << row.signature;
-			if (row.wireBytes == 0)
-				parts << QCoreApplication::translate("EndpointModel", "no arguments");
-			else
+			if (row.wireBytes != 0)
 				parts << (service ? bytes(row.wireBytes, "1-byte request", "%1-byte request")
 				                  : bytes(row.wireBytes, "1-byte argument", "%1-byte argument"));
 		}
@@ -1218,6 +1220,117 @@ struct ValueModel::Impl {
 	int deepestDepth = 0;
 	// The values sent last, by path ("" for a scalar root, "factor", "a.b[2]").
 	QHash<QString, QString> baseline;
+	// A structure-only state (resetShape): Qt-owned rows, always current,
+	// nothing to fetch; and which table it is shown in.
+	bool shape = false;
+	ValueModel::Section shapeSection = ValueModel::Section::Value;
+	// The table the rows are shown in when their source does not say (setSection).
+	std::optional<ValueModel::Section> sectionOverride;
+	// The values shown before the action that just finished (noteUpdate),
+	// by path, for UpdatedRole; empty when the rows compare nothing.
+	QHash<QString, QString> previous;
+	bool updatePending = false;
+
+	// Takes the values noted by noteUpdate() for the rows about to be made;
+	// any other reset compares nothing.
+	void beginRows()
+	{
+		if (!std::exchange(updatePending, false))
+			previous.clear();
+	}
+
+	bool updated(const Row& row) const
+	{
+		if (!row.scalar || previous.isEmpty())
+			return false;
+		const auto found = previous.constFind(pathKey(row.valuePath));
+		return found != previous.cend() && *found != row.value;
+	}
+
+	static QString dash()
+	{
+		return QString(QChar(0x2013));
+	}
+
+	// One row of a type and everything under it, from the schema alone,
+	// appended under parent; budget counts the rows still allowed.
+	void shapeRows(const telemetry::runtime::RuntimeSchema& schema, TypeId id, QString name, QVariantList path,
+	               Row* parent, const QHash<QString, QString>& shown, std::size_t& budget, int depth)
+	{
+		const auto* type = schema.type(id);
+		if (!type || budget == 0)
+			return;
+		--budget;
+		auto made = std::make_unique<Row>();
+		made->typeId = id;
+		made->name = std::move(name);
+		made->valuePath = std::move(path);
+		made->label = schema_text::typeText(schema, id);
+		made->detail = made->label;
+		deepestDepth = (std::max)(deepestDepth, depth);
+		if (type->kind == Kind::Struct || type->kind == Kind::Array) {
+			made->aggregate = true;
+			made->type = type->kind == Kind::Struct ? QStringLiteral("struct") : QStringLiteral("array");
+			made->elements = type->kind == Kind::Struct ? type->memberCount : type->elementCount;
+		} else if (type->kind == Kind::Void) {
+			made->type = QStringLiteral("void");
+		} else {
+			const auto* underlying = type->kind == Kind::Enum ? schema.type(type->relatedTypeId) : type;
+			made->scalar = true;
+			made->enumeration = type->kind == Kind::Enum;
+			made->code = underlying ? underlying->scalarCode : Code::Bool;
+			made->type = made->enumeration ? QStringLiteral("enum (") + scalarType(made->code) + QLatin1Char(')')
+			                               : scalarType(made->code);
+			made->editorKind = made->enumeration ? QStringLiteral("enum")
+			                   : made->code == Code::Bool ? QStringLiteral("bool") : QStringLiteral("text");
+			const auto found = shown.constFind(pathKey(made->valuePath));
+			made->value = found != shown.cend() ? *found : dash();
+		}
+		auto* row = tree.append(std::move(made), parent);
+		if (!row || !row->aggregate)
+			return;
+		if (type->kind == Kind::Struct) {
+			for (const auto& member : schema.members(id)) {
+				auto steps = row->valuePath;
+				steps.append(text(member.name));
+				shapeRows(schema, member.typeId, text(member.name), std::move(steps), row, shown, budget, depth + 1);
+			}
+		} else if (row->elements > 128) {
+			// As the values show a long array: ranges of 128, then their elements.
+			for (std::uint32_t first = 0; first < row->elements && budget > 0; first += 128) {
+				--budget;
+				auto range = std::make_unique<Row>();
+				range->typeId = id;
+				range->aggregate = true;
+				range->valueRange = true;
+				range->type = QStringLiteral("array");
+				range->rangeFirst = first;
+				range->rangeCount = (std::min)(std::uint32_t{128}, row->elements - first);
+				range->elements = range->rangeCount;
+				range->name = QStringLiteral("[%1…%2]").arg(first).arg(first + range->rangeCount - 1);
+				range->valuePath = row->valuePath;
+				range->detail = range->name;
+				auto* held = tree.append(std::move(range), row);
+				if (!held)
+					break;
+				for (std::uint32_t at = 0; at < held->rangeCount; ++at) {
+					auto steps = row->valuePath;
+					steps.append(QVariant::fromValue(first + at));
+					shapeRows(schema, type->relatedTypeId, QStringLiteral("[%1]").arg(first + at), std::move(steps),
+					          held, shown, budget, depth + 2);
+				}
+				held->totalChildren = std::uint32_t(held->children.size());
+			}
+		} else {
+			for (std::uint32_t at = 0; at < row->elements; ++at) {
+				auto steps = row->valuePath;
+				steps.append(QVariant::fromValue(at));
+				shapeRows(schema, type->relatedTypeId, QStringLiteral("[%1]").arg(at), std::move(steps), row, shown,
+				          budget, depth + 1);
+			}
+		}
+		row->totalChildren = std::uint32_t(row->children.size());
+	}
 
 	static QString pathKey(const QVariantList& path)
 	{
@@ -1248,7 +1361,7 @@ struct ValueModel::Impl {
 
 	bool unsentLeaf(const Row& row) const
 	{
-		if (!row.scalar)
+		if (!row.scalar || shape)
 			return false;
 		if (!baseline.isEmpty()) {
 			const auto found = baseline.constFind(pathKey(row.valuePath));
@@ -1264,7 +1377,7 @@ struct ValueModel::Impl {
 	// while its owner offers an edit.
 	bool editable(const Row& row) const
 	{
-		if (row.aggregate || row.type.isEmpty() || row.type == QStringLiteral("void"))
+		if (shape || row.aggregate || row.type.isEmpty() || row.type == QStringLiteral("void"))
 			return false;
 		return inspector.editing() ||
 		       (offer && !inspector.response && !inspector.snapshot && !inspector.requestEditor());
@@ -1272,6 +1385,9 @@ struct ValueModel::Impl {
 
 	bool current() const
 	{
+		// A structure-only state owns its rows: nothing to go stale under them.
+		if (shape)
+			return true;
 		if (!inspector.isCurrent())
 			return false;
 		const auto snapshot = inspector.snapshotInfo();
@@ -1310,14 +1426,31 @@ struct ValueModel::Impl {
 		return scalarText(scalar.value);
 	}
 
+	// A structure-only row's summary: from the rows themselves; none while
+	// no value under it is known, so a folded branch reads "–".
+	bool shapeKnown(const Row& row) const
+	{
+		if (!row.aggregate)
+			return row.scalar && row.value != dash();
+		return std::any_of(row.children.cbegin(), row.children.cend(),
+		                   [this](const auto& child) { return shapeKnown(*child); });
+	}
+
 	QString summaryKind(const Row& row) const
 	{
 		if (!row.aggregate)
+			return {};
+		if (shape && !shapeKnown(row))
 			return {};
 		if (row.type == QStringLiteral("struct"))
 			return QStringLiteral("struct");
 		if (row.elements == 0)
 			return QStringLiteral("array");
+		if (shape) {
+			const auto* first = row.children.empty() ? nullptr : row.children.front().get();
+			return first && first->aggregate && !first->valueRange ? QStringLiteral("arrayOfAggregates")
+			                                                       : QStringLiteral("array");
+		}
 		const auto first = inspector.child(row.handle, row.valueRange ? row.rangeFirst : 0);
 		if (!first)
 			return QStringLiteral("array");
@@ -1332,6 +1465,21 @@ struct ValueModel::Impl {
 		const auto kind = summaryKind(row);
 		if (kind.isEmpty() || kind == QStringLiteral("arrayOfAggregates"))
 			return parts;
+		if (shape) {
+			// A long array's elements lie under its first range.
+			const auto* held = &row;
+			if (!row.children.empty() && row.children.front()->valueRange)
+				held = row.children.front().get();
+			for (const auto& child : held->children) {
+				if (parts.size() == 8)
+					break;
+				const auto shown = child->aggregate ? (child->type == QStringLiteral("struct") ? QStringLiteral("{…}")
+				                                                                                : QStringLiteral("[…]"))
+				                                    : child->value;
+				parts << (kind == QStringLiteral("struct") ? child->name + QLatin1Char(' ') + shown : shown);
+			}
+			return parts;
+		}
 		const auto count = (std::min)(row.elements, std::uint32_t{8});
 		const auto base = row.valueRange ? row.rangeFirst : 0;
 		for (std::uint32_t at = 0; at < count; ++at) {
@@ -1378,15 +1526,22 @@ void ValueModel::clear()
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
 	const bool wasStale = impl_->stale;
+	const bool wasShape = impl_->shape;
 	beginResetModel();
 	impl_->tree.clear();
 	impl_->inspector = {};
 	impl_->baseline.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
+	impl_->shape = false;
+	// What noteUpdate() kept waits for the rows it was noted for.
+	if (!impl_->updatePending)
+		impl_->previous.clear();
 	endResetModel();
 	if (wasStale)
 		Q_EMIT staleChanged();
+	if (wasShape)
+		Q_EMIT shapeChanged();
 	if (impl_->deepestDepth != 0) {
 		impl_->deepestDepth = 0;
 		Q_EMIT deepestChanged();
@@ -1480,11 +1635,14 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
 	const bool wasStale = impl_->stale;
+	const bool wasShape = impl_->shape;
 	beginResetModel();
 	impl_->tree.clear();
 	impl_->baseline.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
+	impl_->shape = false;
+	impl_->beginRows();
 	impl_->inspector = {inspector, workbench, !response, response, view, snapshotSource, draft};
 	const auto snapshot = impl_->inspector.snapshotInfo();
 	impl_->admission = snapshot.admission;
@@ -1494,9 +1652,13 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 		if (root) {
 			auto row = valueRow(impl_->inspector, root.value);
 			if (row) {
-				if (response)
+				const auto section = impl_->sectionOverride ? *impl_->sectionOverride
+				                     : response                        ? Section::Response
+				                     : impl_->inspector.requestEditor() ? Section::Request
+				                                                       : Section::Value;
+				if (section == Section::Response)
 					row->name = QStringLiteral("Response");
-				else if (impl_->inspector.requestEditor())
+				else if (section == Section::Request)
 					row->name = QStringLiteral("Request");
 				impl_->tree.append(std::move(row));
 			}
@@ -1505,6 +1667,8 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 	endResetModel();
 	if (wasStale)
 		Q_EMIT staleChanged();
+	if (wasShape)
+		Q_EMIT shapeChanged();
 	int deepest = 0;
 	if (!impl_->tree.roots.empty() && impl_->current())
 		deepest = impl_->depthBelow(impl_->tree.roots.front()->handle, 32);
@@ -1512,6 +1676,70 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 		impl_->deepestDepth = deepest;
 		Q_EMIT deepestChanged();
 	}
+}
+
+void ValueModel::resetShape(const telemetry::runtime::RuntimeSchema& schema, TypeId type, Section section,
+                            const QHash<QString, QString>& shown)
+{
+	if (changing())
+		return;
+	const ChangeGuard guard{impl_->tree.changing};
+	const bool wasStale = impl_->stale;
+	const bool wasShape = impl_->shape;
+	const int deepestBefore = impl_->deepestDepth;
+	beginResetModel();
+	impl_->tree.clear();
+	impl_->baseline.clear();
+	impl_->stale = false;
+	impl_->staleNote.clear();
+	impl_->beginRows();
+	impl_->inspector = {};
+	impl_->shape = true;
+	impl_->shapeSection = section;
+	impl_->deepestDepth = 0;
+	if (const auto* root = schema.type(type); root && root->kind != Kind::Void) {
+		std::size_t budget = shapeRowLimit;
+		// The root row is named as the live rows name it.
+		const auto name = section == Section::Response  ? QStringLiteral("Response")
+		                  : section == Section::Request ? QStringLiteral("Request")
+		                                                : QString{};
+		impl_->shapeRows(schema, type, name, {}, nullptr, shown, budget, 0);
+	}
+	endResetModel();
+	if (wasStale)
+		Q_EMIT staleChanged();
+	if (!wasShape)
+		Q_EMIT shapeChanged();
+	if (deepestBefore != impl_->deepestDepth)
+		Q_EMIT deepestChanged();
+}
+
+bool ValueModel::shape() const noexcept
+{
+	return impl_->shape;
+}
+
+QHash<QString, QString> ValueModel::shownTexts() const
+{
+	// The rows hold their texts: what showed stays readable after the
+	// snapshot under them was replaced.
+	QHash<QString, QString> out;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->scalar && row->value != Impl::dash())
+			out.insert(Impl::pathKey(row->valuePath), row->value);
+	return out;
+}
+
+void ValueModel::noteUpdate()
+{
+	impl_->previous = shownTexts();
+	impl_->updatePending = true;
+}
+
+void ValueModel::dropUpdate()
+{
+	if (std::exchange(impl_->updatePending, false))
+		impl_->previous.clear();
 }
 
 QModelIndex ValueModel::index(int row, int column, const QModelIndex& parent) const
@@ -1554,14 +1782,18 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 		case DetailRole:
 			return hints.displayDetail(row->name, row->detail);
 		case ValueRole:
-			return row->aggregate ? row->value : hints.displayValue(row->value);
+			// "–" stands for no value, never with a unit after it.
+			return row->aggregate || (impl_->shape && row->value == Impl::dash()) ? row->value
+			                                                                       : hints.displayValue(row->value);
+		case UpdatedRole:
+			return impl_->updated(*row);
 		case TypeRole:
 		case TypeTextRole:
 			if (row->valueRange)
 				return QString{};
 			if (const auto* type = impl_->metadataCurrent() ? impl_->metadata.type(row->typeId) : nullptr)
 				return type->label;
-			return row->type;
+			return row->label.isEmpty() ? row->type : row->label;
 		case AggregateRole:
 			return row->aggregate;
 		case ChildCountRole:
@@ -1645,13 +1877,15 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {StaleNoteRole, "staleNote"},
 	        {PathRole, "path"},
 	        {SummaryPartsRole, "summaryParts"},
-	        {SummaryKindRole, "summaryKind"}};
+	        {SummaryKindRole, "summaryKind"},
+	        {UpdatedRole, "updated"}};
 }
 
 QHash<QString, QString> ValueModel::texts() const
 {
 	QHash<QString, QString> out;
-	if (!impl_->current())
+	// A structure-only state holds no editor's texts.
+	if (!impl_->current() || impl_->shape)
 		return out;
 	for (const auto* row : std::as_const(impl_->tree.rows))
 		if (row->scalar)
@@ -1764,7 +1998,16 @@ QString ValueModel::pathOf(const QModelIndex& index) const
 
 bool ValueModel::sectioned() const
 {
+	if (impl_->shape)
+		return impl_->shapeSection != Section::Value;
+	if (impl_->sectionOverride)
+		return *impl_->sectionOverride != Section::Value;
 	return impl_->inspector.requestEditor() || impl_->inspector.response;
+}
+
+void ValueModel::setSection(std::optional<Section> section)
+{
+	impl_->sectionOverride = section;
 }
 
 int ValueModel::deepest() const noexcept
@@ -1859,7 +2102,7 @@ bool ValueModel::editOffer() const noexcept
 ins::NodeResult ValueModel::node(const QModelIndex& index) const
 {
 	const auto* row = impl_->tree.at(this, index);
-	if (!row || !impl_->current())
+	if (!row || !impl_->current() || impl_->shape)
 		return {ins::ModelStatus::Stale, {}};
 	const auto checked = impl_->inspector.info(row->handle);
 	return checked ? ins::NodeResult{ins::ModelStatus::Ok, row->handle}
@@ -1868,7 +2111,7 @@ ins::NodeResult ValueModel::node(const QModelIndex& index) const
 
 void ValueModel::updateScalar(const QModelIndex& index)
 {
-	if (changing() || !impl_->current())
+	if (changing() || !impl_->current() || impl_->shape)
 		return;
 	const ChangeGuard guard{impl_->tree.changing};
 	auto* row = impl_->tree.at(this, index);

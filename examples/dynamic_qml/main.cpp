@@ -118,6 +118,9 @@ int main(int argc, char** argv)
 	try {
 		auto connection = std::make_shared<DeviceConnection>();
 		ux::DynamicConfiguratorBinding binding{connection->workbench, connection};
+		// The admitted schema, so Details shows every table's structure
+		// before anything is read or called ("–" in each value).
+		binding.setSchemaSource([connection] { return connection->schema; });
 		NativeCleanup cleanup{binding, *connection};
 		binding.setMutationsAllowed(true); // Host policy; each panel also requires user opt-in.
 		ux::DynamicConfiguratorProvider configProvider{&binding}, valueProvider{&binding};

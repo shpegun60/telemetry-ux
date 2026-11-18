@@ -49,6 +49,14 @@ class BatchItemDetails final : public QObject {
 	Q_PROPERTY(bool canEdit READ canEdit NOTIFY stateChanged)
 	// The pane's status line, as DynamicConfiguratorProvider::detailsStatus.
 	Q_PROPERTY(QVariantMap detailsStatus READ detailsStatus NOTIFY stateChanged)
+	// A Field item's definition, as Details' provider has it: its row under
+	// its group and its members from the schema, for its structure before
+	// the Batch has read it. No row while the item is not a Field.
+	Q_PROPERTY(QAbstractItemModel* definitions READ definitions CONSTANT)
+	Q_PROPERTY(QModelIndex definitionRootIndex READ definitionRootIndex NOTIFY stateChanged)
+	// What the values start from, under a write's table: "Starts from the
+	// last value read." / "Starts at zero; …"; empty on other items.
+	Q_PROPERTY(QString valueNote READ valueNote NOTIFY stateChanged)
 public:
 	explicit BatchItemDetails(DynamicConfiguratorProvider* provider);
 	QString selection() const;
@@ -70,6 +78,9 @@ public:
 	bool switchable() const;
 	bool canEdit() const;
 	QVariantMap detailsStatus() const;
+	QAbstractItemModel* definitions() const;
+	QModelIndex definitionRootIndex() const;
+	QString valueNote() const;
 	// A value's text into the item, live; false for text that is no value.
 	Q_INVOKABLE bool setScalarText(const QModelIndex& index, const QString& text);
 	// A cell was left: the next change of it is a new step.
@@ -188,11 +199,12 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(bool commandOutcomeNeedsAttention READ commandOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(bool serviceOutcomeNeedsAttention READ serviceOutcomeNeedsAttention NOTIFY stateChanged)
 	Q_PROPERTY(QString statusText READ statusText NOTIFY stateChanged)
-	// Details' status line for the selection (family spec C): {text, failed,
-	// tip}. "Read 12:04:31", "Edited, not applied · 2 changes", "Applied
-	// 12:05:02 · read back", "Executed 12:05:10 · accepted", "Called 12:05:21 ·
-	// took 3 ms", "Reading…", "Not called yet", or "Couldn't read: <why>."
-	// with failed true. Empty with nothing selected.
+	// Details' status line for the selection (family spec C, Details layout
+	// §4): {text, failed, tip}. "Read 12:04:31 · took 9 ms", "Edited, not
+	// applied · 2 changes", "Applied 12:05:02 · read back", "Executed
+	// 12:05:10 · took 4 ms", "Executed 12:05:10 · accepted · took 4 ms",
+	// "Called 12:05:21 · took 3 ms", "Reading…", "Not called yet", or "Read
+	// failed 12:06:07 · <why>" with failed true. Empty with nothing selected.
 	Q_PROPERTY(QVariantMap detailsStatus READ detailsStatus NOTIFY stateChanged)
 	Q_PROPERTY(QString presentationError READ presentationError NOTIFY stateChanged)
 public:

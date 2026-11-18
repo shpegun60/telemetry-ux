@@ -93,6 +93,35 @@ Item {
     property bool listOpensOnBegin: true
     // The value changed on the device since it was last shown: Theme.info.
     property bool changed: false
+    // The value differs from the one shown before the action that just
+    // ended (a read, a call, a run): the cell flashes once, a fading accent
+    // fill of 600 ms, so the user sees what changed. updatedAt is when the
+    // owner's rows were made again; a cell made later than a second after
+    // (a branch opened afterwards) does not flash.
+    property bool updated: false
+    property double updatedAt: 0
+    // No fading: the value simply shows.
+    property bool reducedMotion: false
+    // How many times the cell has flashed, for a host's check.
+    property int flashes: 0
+    readonly property bool flashing: flashAnimation.running
+    function flash() {
+        if (reducedMotion)
+            return
+        ++flashes
+        flashAnimation.restart()
+    }
+    // Once for each time the owner's rows were made again, however the cell
+    // came to show the row (made, or reused from the rows before).
+    property double flashedFor: 0
+    function maybeFlash() {
+        if (updated && !isAggregate && updatedAt > 0 && updatedAt !== flashedFor && Date.now() - updatedAt < 1000) {
+            flashedFor = updatedAt
+            flash()
+        }
+    }
+    onUpdatedChanged: maybeFlash()
+    Component.onCompleted: maybeFlash()
     // Words added to the editor's accessible description.
     property string extraDescription: ""
     // Room to the cell's left up to the name's x, to its right up to the
@@ -311,6 +340,25 @@ Item {
                 visible: hover.hovered && !cell.highlighted
                 color: Theme.stateHover
                 Accessible.ignored: true
+            }
+            // A value that changed with the action just ended: the accent,
+            // fading out once.
+            Rectangle {
+                id: flashFill
+                objectName: "valueFlash"
+                anchors.fill: parent
+                radius: Type.radius
+                color: Theme.accent
+                opacity: 0
+                Accessible.ignored: true
+                OpacityAnimator {
+                    id: flashAnimation
+                    target: flashFill
+                    from: 0.4
+                    to: 0
+                    duration: 600
+                    easing.type: Easing.OutQuad
+                }
             }
             Label {
                 id: shown

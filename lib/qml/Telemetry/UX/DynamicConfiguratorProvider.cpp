@@ -81,6 +81,8 @@ struct DynamicConfiguratorBinding::Impl {
 	std::uint32_t session;
 	QString fingerprint;
 	bool retired = false, allowed = false, notifying = false;
+	// The host's admitted schema, for the tables' structure (setSchemaSource).
+	std::function<runtime::RuntimeSchema()> schema;
 
 	Impl(Workbench& value, std::shared_ptr<void> token, QString identity)
 	    : owner(value), storage(std::move(token)), admission(value.snapshotInfo().admission),
@@ -119,6 +121,17 @@ bool DynamicConfiguratorBinding::current() const
 QString DynamicConfiguratorBinding::fingerprint() const
 {
 	return current() ? d->fingerprint : QString{};
+}
+
+void DynamicConfiguratorBinding::setSchemaSource(std::function<runtime::RuntimeSchema()> source)
+{
+	Q_ASSERT(thread() == QThread::currentThread());
+	d->schema = std::move(source);
+}
+
+runtime::RuntimeSchema DynamicConfiguratorBinding::schema() const
+{
+	return current() && d->schema ? d->schema() : runtime::RuntimeSchema{};
 }
 
 bool DynamicConfiguratorBinding::drained() const
@@ -376,6 +389,8 @@ struct DynamicConfiguratorProvider::Impl {
 	bool watchWroteLast = false;
 	EndpointModel endpoints;
 	EndpointDefinitionModel definitions;
+	// The selected Batch item's Field, for its structure before it is read.
+	EndpointDefinitionModel itemDefinitions;
 	QPointer<EndpointPreviews> previews;
 	QList<QPointer<QObject>> previewViews;
 	QMetaObject::Connection previewSourceChanged;
@@ -489,6 +504,68 @@ struct DynamicConfiguratorProvider::Impl {
 			outcomes[std::size_t(category - 1)] = {state ? state->endpointId : 0, state ? state->view.session() : 0,
 			                                       std::move(text), std::move(tip), failed};
 	}
+	// How long the action under way has taken, for "Read 22:35:47 · took 9 ms".
+	QElapsedTimer actionTimer;
+	qint64 took() const
+	{
+		return actionTimer.isValid() ? actionTimer.elapsed() : 0;
+	}
+	// The selected endpoint's types: a Field's value or a request, and a
+	// Service's response; for the tables' structure before anything is read
+	// or called, and while an action runs.
+	TypeId valueType = 0, responseType = 0;
+	// When the values and the response on show were read or called,
+	// "22:35:47"; and whether the last try since failed, so what shows is
+	// from before it.
+	QString valuesAt, responseAt;
+	bool valuesFailed = false, responseFailed = false;
+	// The current device's schema, for the tables' structure: the Batch's
+	// source has it, and the previews' registry; invalid when neither does.
+	runtime::RuntimeSchema schema() const
+	{
+		if (binding) {
+			if (const auto given = binding->schema(); given.valid())
+				return given;
+		}
+		if (const auto own = batch.schema(); own.valid())
+			return own;
+		return previews && current() ? previews->schema() : runtime::RuntimeSchema{};
+	}
+	// The response's structure with "–" (before a call), or with the values
+	// it showed (while a call runs, after one failed).
+	void shapeResponse(const QHash<QString, QString>& shown = {})
+	{
+		if (category != 3)
+			return;
+		const auto known = schema();
+		if (known.type(responseType))
+			responses.resetShape(known, responseType, ValueModel::Section::Response, shown);
+		else
+			responses.clear();
+	}
+	// A Field not read yet: its structure, "–" in every value (or the values
+	// from before a read that failed). Without a schema the table stays empty
+	// and Details shows the Field's definition instead.
+	void shapeValues(const QHash<QString, QString>& shown = {})
+	{
+		if (category != 1 || values.rowCount() > 0)
+			return;
+		const auto known = schema();
+		if (known.type(valueType))
+			values.resetShape(known, valueType, ValueModel::Section::Value, shown);
+	}
+	// The values as they show now, kept while an action runs: nothing in
+	// them takes text, and they do not go away.
+	void freezeValues()
+	{
+		const auto known = schema();
+		if (!known.type(valueType) || values.rowCount() == 0) {
+			values.clear();
+			return;
+		}
+		values.resetShape(known, valueType, category == 1 ? ValueModel::Section::Value : ValueModel::Section::Request,
+		                  values.shownTexts());
+	}
 	// The request sent last, for its unsent marks and a stale response.
 	struct Sent {
 		int category = 0;
@@ -524,6 +601,11 @@ struct DynamicConfiguratorProvider::Impl {
 	}
 	void staleResponse()
 	{
+		// A response from a call before the one that failed.
+		if (category == 3 && responseFailed && responses.rowCount() > 0 && !responseAt.isEmpty()) {
+			responses.setStale(true, said("From the call at %1.").arg(responseAt));
+			return;
+		}
 		const bool changed = category == 3 && sentHere() && values.unsentCount() > 0;
 		responses.setStale(changed, changed ? said("From the call at %1, with %2; the values changed since.")
 		                                          .arg(sent.at, values.baselineLine())
@@ -1031,6 +1113,7 @@ struct DynamicConfiguratorProvider::Impl {
 			row.operation = cl::Operation::FieldWrite;
 			row.requestType = bound.endpoint.responseType();
 			row.request = initialRequest(row.requestType, bound.endpoint.responseBytes());
+			row.startsFrom = QStringLiteral("zero");
 			if (std::size_t(row.request.size()) != bound.endpoint.responseBytes())
 				return {};
 		} else if (entry.category == 2) {
@@ -1097,6 +1180,12 @@ struct DynamicConfiguratorProvider::Impl {
 	{
 		values.setEditOffer(editOffered());
 		definitions.setSelection(current() ? QModelIndex(selectedIndex) : QModelIndex{});
+		const auto* itemRow = batch.selectedRow();
+		itemDefinitions.setSelection(current() && itemRow && !itemRow->historical &&
+		                                     (itemRow->operation == cl::Operation::FieldRead ||
+		                                      itemRow->operation == cl::Operation::FieldWrite)
+		                                 ? endpoints.endpointIndex(1, itemRow->id)
+		                                 : QModelIndex{});
 		const bool now = current() && !updating && !endpoints.changing() && watch.canTellHoldable();
 		if (now != available) {
 			available = now;
@@ -1172,10 +1261,14 @@ struct DynamicConfiguratorProvider::Impl {
 				           snapshot.revision == result.revision;
 				status =
 				    *readDone ? QStringLiteral("Read complete") : operationText(result.operation);
-				if (*readDone)
-					finished(said("Read %1").arg(clockText()), false);
-				else if (!result.operation.succeeded())
-					finished(said("Couldn't read: %1.").arg(whyText(result.operation)), true);
+				if (*readDone) {
+					valuesAt = clockText();
+					valuesFailed = false;
+					finished(said("Read %1 · took %L2 ms").arg(valuesAt).arg(took()), false);
+				} else if (!result.operation.succeeded()) {
+					valuesFailed = true;
+					finished(said("Read failed %1 · %2").arg(clockText(), whyText(result.operation)), true);
+				}
 			}
 			if (state->applied) {
 				const auto result = *state->applied;
@@ -1190,12 +1283,15 @@ struct DynamicConfiguratorProvider::Impl {
 				            ? QStringLiteral("Applied - readback unconfirmed")
 				            : operationText(result.write);
 				status = write;
-				if (*applyDone)
-					finished(said("Applied %1 · read back").arg(clockText()), false);
-				else if (result.writeCompleted && result.write.succeeded())
+				if (*applyDone) {
+					valuesAt = clockText();
+					valuesFailed = false;
+					finished(said("Applied %1 · read back").arg(valuesAt), false);
+				} else if (result.writeCompleted && result.write.succeeded()) {
 					finished(said("Applied %1 · not read back").arg(clockText()), false);
-				else
-					finished(said("Couldn't write: %1.").arg(whyText(result.write)), true);
+				} else {
+					finished(said("Write failed %1 · %2").arg(clockText(), whyText(result.write)), true);
+				}
 			}
 			if (state->commanded) {
 				const auto result = *state->commanded;
@@ -1205,23 +1301,26 @@ struct DynamicConfiguratorProvider::Impl {
 				commandAttention = !result.executed();
 				commandDone = {result.executed(), result.accepted()};
 				if (result.executed())
-					finished(said("Executed %1").arg(clockText()), false);
+					finished(said("Executed %1 · took %L2 ms").arg(clockText()).arg(took()), false);
 				else if (result.accepted())
-					finished(said("Executed %1 · accepted").arg(clockText()), false,
+					finished(said("Executed %1 · accepted · took %L2 ms").arg(clockText()).arg(took()), false,
 					         said("Accepted means the device took the Command, not that it finished."));
 				else
-					finished(said("Couldn't execute: %1.").arg(whyText(result)), true);
+					finished(said("Execute failed %1 · %2").arg(clockText(), whyText(result)), true);
 			}
 			if (state->serviced) {
 				const auto result = *state->serviced;
 				state->serviced.reset();
 				state->action = DynamicViewState::Action::None;
 				serviceDone = {result.operation.succeeded(), result.published};
-				if (result.operation.succeeded())
-					finished(said("Called %1 · took %L2 ms").arg(clockText()).arg(sent.timer.isValid() ? sent.timer.elapsed() : 0),
-					         false);
-				else
-					finished(said("Couldn't call: %1.").arg(whyText(result.operation)), true);
+				if (result.operation.succeeded()) {
+					responseAt = clockText();
+					responseFailed = false;
+					finished(said("Called %1 · took %L2 ms").arg(responseAt).arg(took()), false);
+				} else {
+					responseFailed = true;
+					finished(said("Call failed %1 · %2").arg(clockText(), whyText(result.operation)), true);
+				}
 				serviceAttention = !result.operation.succeeded() ||
 				                   (!result.published &&
 				                    (result.valueStatus != integration::dynamic::ValueStatus::NoValue ||
@@ -1260,8 +1359,16 @@ struct DynamicConfiguratorProvider::Impl {
 					// shows its values as stale.
 					watch.dataChanged();
 					batch.invalidateValues();
+					// The structure stays: a Field's from its definition, a
+					// request's and a response's with "–".
 					values.clear();
-					responses.clear();
+					if (category == 2 || category == 3) {
+						const auto known = schema();
+						if (known.type(valueType))
+							values.resetShape(known, valueType, ValueModel::Section::Request);
+					}
+					shapeValues();
+					shapeResponse();
 					invalid.clear();
 					status = watchWroteLast
 					             ? QStringLiteral("A Watchlist write changed device data - read again")
@@ -1269,8 +1376,29 @@ struct DynamicConfiguratorProvider::Impl {
 					                   "Data changed in another panel - read or prepare arguments again");
 					watchWroteLast = false;
 				} else {
+					// What showed before, for the cells that changed and for
+					// a failed action's table, which keeps it.
+					const auto valuesBefore = values.shownTexts();
+					const auto responseBefore = responses.shownTexts();
+					if (readDone.value_or(false) || applyDone.value_or(false))
+						values.noteUpdate();
+					if (serviceDone && serviceDone->first)
+						responses.noteUpdate();
 					values.resetSnapshot(state->view);
 					responses.resetServiceResponse(state->view);
+					values.dropUpdate();
+					responses.dropUpdate();
+					if (category == 1 && valuesFailed && !valuesAt.isEmpty() && !valuesBefore.isEmpty()) {
+						// A read that failed: the values from before, marked so.
+						shapeValues(valuesBefore);
+						if (values.rowCount() > 0)
+							values.setStale(true, said("From the read at %1.").arg(valuesAt));
+					}
+					// Not read (or not since this selection): the structure.
+					shapeValues();
+					if (category == 3 && (responseId != state->endpointId || responses.rowCount() == 0))
+						shapeResponse(responseFailed && responseId == state->endpointId ? responseBefore
+						                                                                 : QHash<QString, QString>{});
 					markSent();
 				}
 			}
@@ -1442,6 +1570,7 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 {
 	d->item = new BatchItemDetails(this);
 	d->definitions.setSourceModel(&d->endpoints);
+	d->itemDefinitions.setSourceModel(&d->endpoints);
 	std::weak_ptr<Impl> weak = d;
 	d->watchTarget = std::make_unique<UndoFunctions>(
 	    [weak](const QString& kind, const QVariantMap& state, const QStringList& keys) {
@@ -1614,6 +1743,17 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 		});
 		if (p->state)
 			p->endpoints.rebuild(p->state->view);
+		// A host's own schema (setSchemaSource, given before its providers
+		// are made) where no previews give one: the endpoints' types and
+		// sizes, so line 2 and the tables know them.
+		if (p->state && !p->previews) {
+			const auto given = target->schema();
+			if (given.valid()) {
+				p->endpoints.setSchemaMetadata(given);
+				p->values.setSchemaMetadata(given);
+				p->responses.setSchemaMetadata(given);
+			}
+		}
 	}
 	// Connected and idle, the status says nothing: the panels say what to do.
 	p->status = p->current() ? QString() : QStringLiteral("Not connected");
@@ -3556,7 +3696,7 @@ QVariantMap DynamicConfiguratorProvider::detailsStatus() const
 		return line(said("Not executed yet"));
 	if (p.category == 3)
 		return line(said("Not called yet"));
-	return line(p.values.rowCount() > 0 ? said("Read") : said("Not read yet"));
+	return line(p.values.rowCount() > 0 && !p.values.shape() ? said("Read") : said("Not read yet"));
 }
 
 bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
@@ -3601,8 +3741,17 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	p->present(false);
 	p->invalid.clear();
 	p->state->staleData = false;
+	p->valueType = endpoint.value(QStringLiteral("typeId")).toUInt();
+	p->responseType = endpoint.value(QStringLiteral("responseTypeId")).toUInt();
+	p->valuesAt.clear();
+	p->responseAt.clear();
+	p->valuesFailed = p->responseFailed = false;
 	p->values.resetSnapshot(p->state->view);
+	// A Field not read yet and a Service's response before any call show
+	// their structure, "–" in every value.
+	p->shapeValues();
 	p->responses.clear();
+	p->shapeResponse();
 	p->markSent();
 	p->present();
 	p->status = category == 1
@@ -3633,11 +3782,11 @@ bool DynamicConfiguratorProvider::refresh()
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
 	state->eventReported = false;
+	p->actionTimer.start();
 	if (p->binding)
 		p->binding->requestSubmitted();
-	p->updating = true;
-	p->values.clear();
-	p->updating = false;
+	// The values read before stay while the read runs: the snapshot they
+	// show is replaced only when the reply is published.
 	p->status = QStringLiteral("Read pending");
 	p->notify();
 	return true;
@@ -3697,12 +3846,15 @@ bool DynamicConfiguratorProvider::apply()
 		p->binding->requestSubmitted();
 	p->write = p->status = QStringLiteral("Write pending");
 	p->writeAttention = false;
+	p->actionTimer.start();
 	// Never a step: the first Ctrl+Z says so instead (UR-1).
 	if (p->undoHistory)
 		p->undoHistory->noteIrreversible(
 		    tr("The write to %1 is not undone; apply the old value to go back.").arg(p->selection));
+	// The draft as it was sent stays in view, taking no text, until the
+	// read-back replaces it.
 	p->updating = true;
-	p->values.clear();
+	p->freezeValues();
 	p->responses.clear();
 	p->updating = false;
 	if (p->binding)
@@ -3738,10 +3890,12 @@ bool DynamicConfiguratorProvider::executeCommand()
 		p->binding->requestSubmitted();
 	p->command = p->status = QStringLiteral("Command pending");
 	p->commandAttention = false;
+	p->actionTimer.start();
 	if (p->undoHistory)
 		p->undoHistory->noteIrreversible(tr("The Command %1 was sent; Undo does not take it back.").arg(p->selection));
+	// The arguments as they were sent stay in view while it runs.
 	p->updating = true;
-	p->values.clear();
+	p->freezeValues();
 	p->responses.clear();
 	p->updating = false;
 	if (p->binding)
@@ -3780,12 +3934,15 @@ bool DynamicConfiguratorProvider::callService()
 		p->binding->requestSubmitted();
 	p->service = p->status = QStringLiteral("Service pending");
 	p->serviceAttention = false;
+	p->actionTimer.start();
 	if (p->undoHistory)
 		p->undoHistory->noteIrreversible(tr("The request to %1 was sent; Undo does not take it back.").arg(p->selection));
+	// The request as it was sent and the response from before stay in view
+	// while the call runs.
 	p->updating = true;
 	p->present(false);
-	p->values.clear();
-	p->responses.clear();
+	p->freezeValues();
+	p->shapeResponse(p->responses.shownTexts());
 	p->present();
 	p->updating = false;
 	if (p->binding)
@@ -3980,26 +4137,66 @@ QVariantMap BatchItemDetails::detailsStatus() const
 		return line(said("From an earlier connection; never sent again."));
 	if (p.batch.pending())
 		return line(said("Sending\u2026"));
-	const bool read = row->operation == cl::Operation::FieldRead;
-	if (row->sent.isNull())
-		return line(read ? said("Not read yet. Execute the Batch to read it.")
-		                 : said("Not run yet. Execute the Batch to run it."));
-	const bool changed = row->sent != row->request;
-	const auto since = changed ? said(" \u00b7 changed since") : QString{};
-	const auto& status = row->status;
-	if (status.startsWith(QStringLiteral("Accepted")))
-		return line(said("Executed %1 \u00b7 accepted").arg(row->at) + since, false,
-		            said("Accepted means the device took the Command, not that it finished."));
-	if (status.startsWith(QStringLiteral("Executed")))
-		return line(said("Executed %1").arg(row->at) + since);
-	if (status.startsWith(QStringLiteral("Applied")))
-		return line(said("Written %1").arg(row->at) + since);
-	if (status.startsWith(QStringLiteral("Completed")) || status.startsWith(QStringLiteral("Ok")))
-		return line((read ? said("Read %1") : row->operation == cl::Operation::Service ? said("Called %1")
-		                                                                                  : said("Done %1"))
-		                .arg(row->at) +
-		            since);
-	return line(said("Couldn't run at %1: %2.").arg(row->at, status) + since, true);
+	// Before the first run: what Execute Batch will do with it.
+	if (row->sent.isNull()) {
+		switch (row->operation) {
+			case cl::Operation::FieldRead:
+				return line(said("Not read yet \u00b7 Execute Batch reads it"));
+			case cl::Operation::FieldWrite:
+				return line(said("Not written yet \u00b7 Execute Batch writes it"));
+			case cl::Operation::Command:
+				return line(said("Not executed yet \u00b7 Execute Batch runs it"));
+			default:
+				return line(said("Not called yet \u00b7 Execute Batch calls it"));
+		}
+	}
+	if (row->sent != row->request)
+		return line(said("Changed since the run %1").arg(row->at));
+	if (DynamicBatch::itemFailed(*row)) {
+		const auto why = DynamicBatch::why(*row);
+		return line((why.refused ? said("Refused %1 \u00b7 %2") : said("Failed %1 \u00b7 %2")).arg(row->at, why.words),
+		            true);
+	}
+	switch (row->operation) {
+		case cl::Operation::FieldRead:
+			return line(said("Read %1 \u00b7 in the Batch").arg(row->at));
+		case cl::Operation::FieldWrite:
+			return line(said("Written %1 \u00b7 in the Batch").arg(row->at));
+		case cl::Operation::Command:
+			if (row->result.value(QStringLiteral("accepted")).toBool())
+				return line(said("Executed %1 \u00b7 in the Batch \u00b7 accepted").arg(row->at), false,
+				            said("Accepted means the device took the Command, not that it finished."));
+			return line(said("Executed %1 \u00b7 in the Batch").arg(row->at));
+		default:
+			return line(said("Called %1 \u00b7 in the Batch").arg(row->at));
+	}
+}
+
+QAbstractItemModel* BatchItemDetails::definitions() const
+{
+	return &provider_->d->itemDefinitions;
+}
+
+QModelIndex BatchItemDetails::definitionRootIndex() const
+{
+	return provider_->d->itemDefinitions.rootIndex();
+}
+
+QString BatchItemDetails::valueNote() const
+{
+	const auto& p = *provider_->d;
+	const auto* row = p.batch.selectedRow();
+	if (!row || row->historical || row->operation != cl::Operation::FieldWrite)
+		return {};
+	if (row->startsFrom == QStringLiteral("read"))
+		return said("Starts from the last value read.");
+	if (row->startsFrom != QStringLiteral("zero"))
+		return {};
+	// A Field that can be read can start from the device's value instead.
+	const auto info = p.current() ? p.endpoints.endpoint(p.endpoints.endpointIndex(1, row->id)) : QVariantMap{};
+	return info.value(QStringLiteral("readable")).toBool()
+	           ? said("Starts at zero; read it first to start from the device's value.")
+	           : said("Starts at zero.");
 }
 
 bool BatchItemDetails::setScalarText(const QModelIndex& index, const QString& text)
@@ -4046,7 +4243,9 @@ bool BatchItemDetails::setOperation(const QString& operation)
 		// From the value last read, else from the type's initial value.
 		if (row->hasValue && std::size_t(row->response.size()) == bytes) {
 			next.request = row->response;
+			next.startsFrom = QStringLiteral("read");
 		} else {
+			next.startsFrom = QStringLiteral("zero");
 			next.request = QByteArray(qsizetype(bytes), '\0');
 			const auto schema = p->batch.schema();
 			if (wb::RequestEditor::initialize(schema, type,

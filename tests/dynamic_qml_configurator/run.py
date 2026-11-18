@@ -146,6 +146,13 @@ def main():
             raise RuntimeError('Native/QML acceptance did not reach its warning-free assertion floor')
         if 'Dynamic QML actual example optIn=isolated writes=1 readbacks=1 geometry=valid warnings=0' not in log:
             raise RuntimeError('Actual shipped example did not complete its real input and readback journey')
+        # A struct Field's root and seven members, once each, before and after
+        # its first and second Read (the owner's doubled members), from its
+        # structure-only rows and from its definition.
+        if 'Dynamic QML Field read journey rows=8 reads=2 warnings=0' not in log:
+            raise RuntimeError('A struct Field did not keep one row per member across its first two Reads')
+        if 'Dynamic QML Field read from its definition rows=8 warnings=0' not in log:
+            raise RuntimeError('A struct Field read from its definition showed a member twice')
         report.update(checks=int(count[1]), warnings=int(count[2]), executable_sha256=digest(executable))
         report['actual_example_input'] = dict(independent_opt_in=True, writes=1, readbacks=1,
                                             controls_within_panels_and_window=True,

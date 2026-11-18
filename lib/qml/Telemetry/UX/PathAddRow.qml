@@ -50,6 +50,14 @@ FocusScope {
     property bool highlightBest: false
     // The highlight was moved by the keys: Enter takes it over the line.
     property bool pickedByKeys: false
+    // Where the "+" stands and how wide its column is, and where the words
+    // and the field start: by default the "+" in one indent step, the words
+    // after it. A list with columns (the Batch's) puts the "+" in its
+    // number column and the words under its first text column.
+    property real plusX: Type.padding
+    property real plusWidth: Type.indent
+    property int plusAlignment: Text.AlignHCenter
+    property real textX: plusX + plusWidth + Type.tight
     // Says what an addition did, on the panel's notice line, and the step it
     // recorded (UR-1), 0 when none.
     signal added(string notice, bool undoable, int serial)
@@ -278,11 +286,12 @@ FocusScope {
             TapHandler { enabled: !addRow.editing; onTapped: addRow.begin() }
             Text {
                 id: plus
-                x: Type.padding
-                width: Type.indent
+                objectName: addRow.namePrefix + "Plus"
+                x: addRow.plusX
+                width: addRow.plusWidth
                 height: parent.height
                 verticalAlignment: Text.AlignVCenter
-                horizontalAlignment: Text.AlignHCenter
+                horizontalAlignment: addRow.plusAlignment
                 text: "+"
                 color: Theme.textSecondary
                 font.pointSize: Type.body
@@ -291,8 +300,7 @@ FocusScope {
             Text {
                 objectName: addRow.namePrefix + "Rest"
                 visible: !addRow.editing
-                anchors.left: plus.right
-                anchors.leftMargin: Type.tight
+                x: addRow.textX
                 anchors.verticalCenter: parent.verticalCenter
                 text: addRow.restText
                 color: Theme.textMuted
@@ -302,9 +310,8 @@ FocusScope {
                 id: field
                 objectName: addRow.namePrefix + "Field"
                 visible: addRow.editing
-                anchors.left: plus.right
-                anchors.leftMargin: Type.tight
-                anchors.right: parent.right
+                x: addRow.textX
+                width: Math.max(0, parent.width - x)
                 anchors.verticalCenter: parent.verticalCenter
                 height: Type.rowHeight
                 topPadding: 0
@@ -568,7 +575,7 @@ FocusScope {
             onVisibleChanged: if (popup.visible) popup.place()
             onHeightChanged: if (popup.visible) popup.place()
             Layout.fillWidth: true
-            Layout.leftMargin: Type.padding + Type.indent + Type.tight
+            Layout.leftMargin: addRow.textX
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             text: addRow.check.message || ""
