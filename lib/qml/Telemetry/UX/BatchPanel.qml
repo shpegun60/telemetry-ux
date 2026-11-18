@@ -20,8 +20,19 @@ Pane {
     // stands on L and R (Type.padding), the header's as Details'.
     padding: 0
     implicitHeight: batchLayout.implicitHeight + 2 * Type.groupSpacing
-    // The family's surface: no card, no radius (BA-4c).
+    // The family's surface: no card, no radius (BA-4c); the family's colours
+    // for its own controls, as Details sets them (Clear reads as a control).
     background: Rectangle { color: Theme.surfaceWindow }
+    palette.window: Theme.surfaceWindow
+    palette.windowText: Theme.textPrimary
+    palette.base: Theme.surface
+    palette.alternateBase: Theme.surfaceAlternate
+    palette.text: Theme.textPrimary
+    palette.button: Theme.buttonFill
+    palette.buttonText: Theme.textPrimary
+    palette.highlight: Theme.stateSelected
+    palette.highlightedText: Theme.selectedForeground
+    palette.placeholderText: Theme.textMuted
     // The panel's one primary action, as Details' (BA-4c).
     component AccentButton: Button {
         font.weight: Type.headingWeight
@@ -66,6 +77,9 @@ Pane {
     // The widths of the list's fixed columns: the item number, the kind
     // (the widest kind word or its label) and the outcome (the widest shown,
     // growing only, from its label's width, at most 35 % of the list).
+    // The labels' own font (the panel's family), at the caption size. The
+    // widths read the font, so they follow a zoom (a method call alone would
+    // not make them).
     FontMetrics {
         id: captionFixed
         font.family: Type.fixedFamily
@@ -73,18 +87,28 @@ Pane {
     }
     FontMetrics {
         id: captionFont
+        font.family: panel.font.family
         font.pointSize: Type.caption
     }
-    readonly property real numberWidth: Math.ceil(captionFixed.advanceWidth("32"))
-    readonly property real kindWidth: Math.ceil(Math.max(captionFont.advanceWidth(kindWord("read")),
-                                                         captionFont.advanceWidth(kindWord("write")),
-                                                         captionFont.advanceWidth(kindWord("command")),
-                                                         captionFont.advanceWidth(kindWord("service")),
-                                                         captionFont.advanceWidth(qsTr("Operation"))))
+    readonly property real numberWidth: {
+        void captionFixed.font
+        return Math.ceil(captionFixed.advanceWidth("32"))
+    }
+    readonly property real kindWidth: {
+        void captionFont.font
+        return Math.ceil(Math.max(captionFont.advanceWidth(kindWord("read")), captionFont.advanceWidth(kindWord("write")),
+                                  captionFont.advanceWidth(kindWord("command")), captionFont.advanceWidth(kindWord("service")),
+                                  captionFont.advanceWidth(qsTr("Operation"))))
+    }
     property real outcomeSeen: 0
     function noteOutcome(width) { if (width > outcomeSeen) outcomeSeen = width }
-    readonly property real outcomeWidth: Math.ceil(Math.min(Math.max(captionFont.advanceWidth(qsTr("Outcome")), outcomeSeen),
-                                                            Math.max(Type.bodyPixels * 4, items.width * 0.35)))
+    // A zoom measures the outcomes again.
+    Connections { target: Type; function onCaptionChanged() { panel.outcomeSeen = 0 } }
+    readonly property real outcomeWidth: {
+        void captionFont.font
+        return Math.ceil(Math.min(Math.max(captionFont.advanceWidth(qsTr("Outcome")), outcomeSeen),
+                                  Math.max(Type.bodyPixels * 4, items.width * 0.35)))
+    }
     // The x of each column in the list: | 6 | # | 12 | Operation | 12 | Item | 12 | Outcome | … × | 6 |.
     readonly property real kindX: Type.padding + numberWidth + Type.columnGap
     readonly property real itemX: kindX + kindWidth + Type.columnGap

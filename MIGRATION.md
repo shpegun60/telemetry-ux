@@ -1608,3 +1608,98 @@ Per editor:
   as they were, and a step sideways still pans.
 - Known, left to the gesture redesign: at All (or a span longer than what is kept) the
   right-edge clamp in `TraceView::hold` leaves a sideways drag nowhere to go.
+
+## Details and the Batch: one layout from the top (November 2026)
+
+The Details layout spec: one stack from the top at natural height in one
+scroll, every table's whole structure with "–" for values not read or called
+yet, the state said once on the status line, and the action's result seen.
+
+QML, `EndpointPanel`:
+- The pane has no padding; blocks stand on L and R (`Type.padding`), fills
+  span the pane. Title row, line 2, status line, refusal strip, then each
+  section: its heading row (the section's name in the Name column's place, or
+  "Name" for a Field), its table, its footnote. `Type.sectionSpacing`
+  (`groupSpacing * 2`) between sections. The Request is always above the
+  Response; the side-by-side arrangement and `minimumTableWidth` are gone.
+- One scroll (`endpointBodyScroll`). Each table sits in a slot as tall as all
+  its rows (`valueTableSlot`, `responseTableSlot`, `metadataTableSlot`); the
+  TreeView is a window over its slot, as tall as the part in view, moved and
+  scrolled with the pane, so only the rows in view have delegates (the spec's
+  fallback: at full height "*" on 2,000 rows took 4.7 s; as a window, under
+  100 ms). Keys and an opening editor bring their row into view.
+- Removed: `emptyValueLabel`, `emptyResponseLabel`, the "Waiting…" labels,
+  `valueSectionHeading` and `responseSectionHeading` (the heading rows are
+  `valueTableHeader` and `responseTableHeader`, each with `tableHeadingName`,
+  `tableHeadingValue`, `tableHeadingType`, `tableHeadingRule`). A section with
+  no values shows its heading alone and one quiet line: `noArgumentsLabel`
+  ("No arguments." / "No request values.") and `noResponseLabel` ("No
+  response values."). `valueSectionCaption` and `responseStaleNote` are
+  footnotes under their tables. `emptyEndpointLabel` is a line where the
+  title would be.
+- New properties: `progressShown` (default true; the Batch's pane sets false),
+  `reducedMotion`, `statusFlashes` and `statusFlashing` (read-only, for checks).
+  Kept for hosts, now without effect: `framed`, `scrolls`, `emptyResponseText`.
+- No row is current until the user makes one; the fold memory restores only a
+  row the user made current (`FoldMemory.hasCurrent`). Tab into a table makes
+  its first row current. `restoreFolds` no longer makes a Field's root current.
+- Busy words on the pressed action ("Reading…", "Applying…", "Executing…",
+  "Calling…"), each button as wide as its longer word. When an action ends
+  the status line's time flashes once (`endpointStatusTime`, 600 ms) and the
+  values that changed flash once in their cells (`ValueCell.flash()`,
+  `updated`, `flashes`); not with `reducedMotion`. "–" reads muted.
+- Line 2 no longer says "no arguments": "Command · ()", "Service · () -> ()".
+
+QML, `BatchPanel`: header and an always-shown status line (the error glyph on
+failure, never the warning colour; the time flashes when a run ends); list and
+pane side by side from 720 px, the list `clamp(width / 2, 320, 520)` wide and
+a 1 px handle; the list's header row "#, Operation, Item, Outcome"
+(`batchListHeader`); the item's path in the application font, its group
+muted; the Outcome column from the new `outcome` role; the "+" row directly
+under the last item; no ListView highlight (the row draws its fill); Execute
+Batch says "Sending…" while a run is in flight; `reducedMotion`.
+`PathAddRow` gains `plusX`, `plusWidth`, `plusAlignment` and `textX`.
+
+C++:
+- `ValueModel::resetShape(schema, type, Section, shown)`: a structure-only
+  state - rows from a type alone, "–" (or the given texts) in every value,
+  nothing editable, nothing borrowed. `shape` (property), `shownTexts()`,
+  `noteUpdate()` / `dropUpdate()` and `UpdatedRole` ("updated": the value
+  differs from the one shown before the action that just ended),
+  `setSection(std::optional<Section>)`.
+- `EndpointModel::setSchemaSource(...)`: a Field's members for its definition
+  where no previews give the schema.
+- `DynamicConfiguratorBinding::setSchemaSource(...)` / `schema()`: a host
+  without previews or a Batch source gives its admitted schema, before its
+  providers are made (the dynamic example now does).
+- `DynamicConfiguratorProvider`: a Service's response shows its structure
+  before a call; a Field not read keeps no rows and Details shows its
+  definition, members included. The tables stay as they were while an action
+  runs (a read no longer clears the values; Apply, Execute and Call keep a
+  structure-only copy). A failed read or call keeps the values from before,
+  stale, with "From the read at …" / "From the call at …". New status words:
+  "Read 22:35:47 · took 9 ms", "Executed … · took 4 ms", "Executed … ·
+  accepted · took 4 ms", "Read failed … · <why>", "Write failed …",
+  "Execute failed …", "Call failed …". `serviceResponseEndpoint` is unchanged.
+- `BatchItemDetails`: `definitions`, `definitionRootIndex` and `valueNote`;
+  the item pane's words ("Not read yet · Execute Batch reads it", "Read
+  14:02:11 · in the Batch", "Changed since the run 14:02:11", "Refused
+  14:02:11 · arguments refused").
+- `DynamicBatch::status()` is never empty ("Add Fields, Commands and Services;
+  Execute Batch sends them in one request, in order.", "Not executed yet"),
+  and says a run as "Executed 14:02:11 · 3 of 3 done", or "· item 3 refused
+  its arguments" (`DynamicBatch::why`, `itemFailed`). A single `add()` no
+  longer sets "Draft - Execute sends one ordered Batch". `BatchListModel`
+  gains `OutcomeRole`; `BatchRow` gains `startsFrom`. The selected item's
+  tables stay while the Batch runs, and a Service's response from a run whose
+  request changed since is stale ("From the run at 14:02:11; the values
+  changed since.").
+
+Checks: `tests/qml_layout/DetailsLayout.cpp` (the spec's 16 checks and the
+feedback's, at the default body and at 125 %, with the screenshots),
+`tests/dynamic_qml_configurator` (a struct Field's first and second Read
+through the real provider, from its definition with and without its members;
+a Service's response before a call, busy words, the flashes),
+`tests/dynamic_batch` (the status, outcomes, response structure and the
+tables kept while a run is in flight), `tests/endpoint_previews/ui.cpp` (a
+slow device's busy words over TCP, "took N ms" after).

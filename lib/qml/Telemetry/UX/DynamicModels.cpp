@@ -501,10 +501,21 @@ struct EndpointModel::Impl {
 	QHash<TypeId, TypeMetadata> types;
 	WatchLeaves leaves;
 	std::size_t previewNodes = 0;
+	// A host's schema where no previews give one (setSchemaSource).
+	std::function<telemetry::runtime::RuntimeSchema()> schemaSource;
 
 	bool current() const
 	{
 		return inspector.isCurrent() && inspector.snapshotInfo().admission == admission;
+	}
+
+	// The schema the rows under a Field are made from: the previews', else
+	// the host's.
+	telemetry::runtime::RuntimeSchema typeSchema() const
+	{
+		if (previews)
+			return previews->schema();
+		return schemaSource ? schemaSource() : telemetry::runtime::RuntimeSchema{};
 	}
 
 	bool matchesSchema(const telemetry::runtime::RuntimeSchema& schema) const
@@ -799,9 +810,17 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 	if (!alive)
 		return;
 	impl_->tree.changing = false;
-	// The registry can publish its source before the provider rebuilds rows.
-	if (impl_->previews)
-		setSchemaMetadata(impl_->previews->schema());
+	// The registry can publish its source before the provider rebuilds rows;
+	// a host's own schema stands in for it.
+	if (impl_->previews || impl_->schemaSource)
+		setSchemaMetadata(impl_->typeSchema());
+}
+
+void EndpointModel::setSchemaSource(std::function<telemetry::runtime::RuntimeSchema()> source)
+{
+	impl_->schemaSource = std::move(source);
+	if (!impl_->previews && impl_->schemaSource)
+		setSchemaMetadata(impl_->typeSchema());
 }
 
 QVariantMap EndpointModel::endpoint(const QModelIndex& index) const
@@ -1080,10 +1099,10 @@ QString EndpointModel::pathOf(const QModelIndex& index) const
 bool EndpointModel::canFetchMore(const QModelIndex& parent) const
 {
 	const auto* row = impl_->tree.at(this, parent);
-	return row && impl_->current() && impl_->previews && row->previewOwner &&
+	return row && impl_->current() && (impl_->previews || impl_->schemaSource) && row->previewOwner &&
 	       row->aggregate && row->children.size() < row->totalChildren &&
 	       impl_->previewNodes < previewNodeLimit &&
-	       impl_->matchesSchema(impl_->previews->schema());
+	       impl_->matchesSchema(impl_->typeSchema());
 }
 
 void EndpointModel::fetchMore(const QModelIndex& parent)
@@ -1091,7 +1110,7 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 	if (changing() || !canFetchMore(parent))
 		return;
 	auto* row = impl_->tree.at(this, parent);
-	const auto schema = impl_->previews->schema();
+	const auto schema = impl_->typeSchema();
 	const auto* type = schema.type(row->typeId);
 	if (!type)
 		return;
@@ -1719,8 +1738,14 @@ bool ValueModel::shape() const noexcept
 	return impl_->shape;
 }
 
-QHash<QString, QString> ValueModel::shownTexts() const
+QHash<QString, QString> ValueModel::shownTexts()
 {
+	// What a table shows at once: the root's own rows.
+	if (impl_->tree.roots.size() == 1 && !changing()) {
+		const auto top = createIndex(0, 0, impl_->tree.roots.front()->token);
+		if (canFetchMore(top))
+			fetchMore(top);
+	}
 	// The rows hold their texts: what showed stays readable after the
 	// snapshot under them was replaced.
 	QHash<QString, QString> out;

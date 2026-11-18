@@ -681,12 +681,10 @@ struct DynamicBatch::Impl : std::enable_shared_from_this<DynamicBatch::Impl> {
 		values.setSection(field ? ValueModel::Section::Value : ValueModel::Section::Request);
 		if (row.operation == client::Operation::FieldRead) {
 			// The value read is the item's values; it has no response. Before
-			// its run, the Field's structure with "–" in every value.
+			// its run the pane shows the Field's definition (the provider's).
 			if (row.hasValue && snapshot.isCurrent()) {
 				responses.clear();
 				values.resetSnapshot(snapshot);
-			} else if (schema.type(row.responseType)) {
-				values.resetShape(schema, row.responseType, ValueModel::Section::Value);
 			}
 			return;
 		}
@@ -943,7 +941,6 @@ bool DynamicBatch::add(BatchRow row)
 	auto p = d;
 	if (!canAdd(row))
 		return false;
-	const bool fieldDraft = row.operation == client::Operation::FieldWrite;
 	row.request = QByteArray(row.request.constData(), row.request.size());
 	if (row.line.isEmpty())
 		row.line = lineOf(schema(), row.requestType, row.request);
@@ -959,11 +956,9 @@ bool DynamicBatch::add(BatchRow row)
 	p->snapshot.invalidate();
 	p->model.replace(std::move(rows));
 	p->showItem();
-	p->status =
-	    fieldDraft
-	        ? QStringLiteral(
-	              "Field draft captured. Cancel closes the current editor; the Batch keeps its copy. Execute sends one ordered request.")
-	        : QStringLiteral("Draft - Execute sends one ordered Batch");
+	// The Batch as it is now has not run: the status line says so.
+	p->status.clear();
+	p->attention = false;
 	p->finishPublication();
 	p->recordAdded(first);
 	p->signal();

@@ -17,6 +17,7 @@
 #include <QtCore/QVariantMap>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -109,6 +110,11 @@ public:
 	// descriptor views are retained, and metadata publication never sends I/O.
 	void setSchemaMetadata(const telemetry::runtime::RuntimeSchema& schema);
 	void setPreviews(EndpointPreviews* previews);
+	// Where the types come from when no previews give them: a Field's rows
+	// under it (its members, as Details shows its definition) are made from
+	// this schema. Previews, when set, take precedence. Nothing is retained
+	// from it between calls.
+	void setSchemaSource(std::function<telemetry::runtime::RuntimeSchema()> source);
 	// Invalid QVariant means no demand; Field ID zero is a valid demand.
 	Q_INVOKABLE QVariant previewDemandField(const QModelIndex& index) const;
 	Q_INVOKABLE bool previewOnlyChange(const QList<int>& roles) const;
@@ -240,8 +246,9 @@ public:
 	// nullopt follows the source (a request editor's rows are a section's).
 	void setSection(std::optional<Section> section);
 	// The values as they show now, by path (PathRole): what resetShape()
-	// takes to keep a table as it was. Scalars only; "–" is left out.
-	[[nodiscard]] QHash<QString, QString> shownTexts() const;
+	// takes to keep a table as it was. Scalars only; "–" is left out. The
+	// first level under the root is loaded first: a table shows it at once.
+	[[nodiscard]] QHash<QString, QString> shownTexts();
 	// The next reset shows the same thing again, newer (a read, a call, a
 	// run that just finished): its rows say which values changed
 	// (UpdatedRole). Any other reset compares nothing.

@@ -543,10 +543,9 @@ struct DynamicConfiguratorProvider::Impl {
 		else
 			responses.clear();
 	}
-	// A Field not read yet: its structure, "–" in every value (or the values
-	// from before a read that failed). Without a schema the table stays empty
-	// and Details shows the Field's definition instead.
-	void shapeValues(const QHash<QString, QString>& shown = {})
+	// A Field whose read failed: the values from before it, from its type.
+	// A Field never read keeps no rows: Details shows its definition.
+	void shapeValues(const QHash<QString, QString>& shown)
 	{
 		if (category != 1 || values.rowCount() > 0)
 			return;
@@ -1367,7 +1366,6 @@ struct DynamicConfiguratorProvider::Impl {
 						if (known.type(valueType))
 							values.resetShape(known, valueType, ValueModel::Section::Request);
 					}
-					shapeValues();
 					shapeResponse();
 					invalid.clear();
 					status = watchWroteLast
@@ -1394,8 +1392,6 @@ struct DynamicConfiguratorProvider::Impl {
 						if (values.rowCount() > 0)
 							values.setStale(true, said("From the read at %1.").arg(valuesAt));
 					}
-					// Not read (or not since this selection): the structure.
-					shapeValues();
 					if (category == 3 && (responseId != state->endpointId || responses.rowCount() == 0))
 						shapeResponse(responseFailed && responseId == state->endpointId ? responseBefore
 						                                                                 : QHash<QString, QString>{});
@@ -1571,6 +1567,12 @@ DynamicConfiguratorProvider::DynamicConfiguratorProvider(DynamicConfiguratorBind
 	d->item = new BatchItemDetails(this);
 	d->definitions.setSourceModel(&d->endpoints);
 	d->itemDefinitions.setSourceModel(&d->endpoints);
+	// A Field's members for its definition where no previews are set: the
+	// host's schema, through the binding (setSchemaSource).
+	d->endpoints.setSchemaSource([weak = std::weak_ptr<Impl>(d)] {
+		const auto p = weak.lock();
+		return p && p->binding ? p->binding->schema() : runtime::RuntimeSchema{};
+	});
 	std::weak_ptr<Impl> weak = d;
 	d->watchTarget = std::make_unique<UndoFunctions>(
 	    [weak](const QString& kind, const QVariantMap& state, const QStringList& keys) {
@@ -1745,11 +1747,10 @@ void DynamicConfiguratorProvider::setBinding(DynamicConfiguratorBinding* binding
 			p->endpoints.rebuild(p->state->view);
 		// A host's own schema (setSchemaSource, given before its providers
 		// are made) where no previews give one: the endpoints' types and
-		// sizes, so line 2 and the tables know them.
+		// sizes (the rebuild took them), and the values' enum choices.
 		if (p->state && !p->previews) {
 			const auto given = target->schema();
 			if (given.valid()) {
-				p->endpoints.setSchemaMetadata(given);
 				p->values.setSchemaMetadata(given);
 				p->responses.setSchemaMetadata(given);
 			}
@@ -3696,7 +3697,7 @@ QVariantMap DynamicConfiguratorProvider::detailsStatus() const
 		return line(said("Not executed yet"));
 	if (p.category == 3)
 		return line(said("Not called yet"));
-	return line(p.values.rowCount() > 0 && !p.values.shape() ? said("Read") : said("Not read yet"));
+	return line(p.values.rowCount() > 0 ? said("Read") : said("Not read yet"));
 }
 
 bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
@@ -3747,9 +3748,8 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 	p->responseAt.clear();
 	p->valuesFailed = p->responseFailed = false;
 	p->values.resetSnapshot(p->state->view);
-	// A Field not read yet and a Service's response before any call show
-	// their structure, "–" in every value.
-	p->shapeValues();
+	// A Service's response shows its structure before any call, "–" in
+	// every value; a Field not read yet shows its definition.
 	p->responses.clear();
 	p->shapeResponse();
 	p->markSent();

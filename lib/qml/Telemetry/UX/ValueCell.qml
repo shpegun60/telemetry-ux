@@ -93,6 +93,8 @@ Item {
     property bool listOpensOnBegin: true
     // The value changed on the device since it was last shown: Theme.info.
     property bool changed: false
+    // No value yet - not read, not called - shows as "–", muted.
+    readonly property bool noValue: !isAggregate && value === "\u2013"
     // The value differs from the one shown before the action that just
     // ended (a read, a call, a run): the cell flashes once, a fading accent
     // fill of 600 ms, so the user sees what changed. updatedAt is when the
@@ -373,7 +375,7 @@ Item {
                 text: cell.editorKind === "enum" && cell.optionIndex >= 0 && !cell.isAggregate
                       ? cell.options[cell.optionIndex].label : cell.value
                 color: cell.highlighted ? Theme.selectedForeground
-                    : cell.stale ? Theme.textMuted : cell.changed ? Theme.info : Theme.textPrimary
+                    : cell.stale || cell.noValue ? Theme.textMuted : cell.changed ? Theme.info : Theme.textPrimary
                 font.family: Type.fixedFamily
                 font.italic: cell.stale
                 horizontalAlignment: cell.numeric ? Text.AlignRight : Text.AlignLeft
@@ -401,7 +403,8 @@ Item {
                 elide: Text.ElideRight
                 font.family: Type.fixedFamily
                 font.italic: cell.stale
-                color: cell.highlighted ? Theme.selectedForeground : cell.stale ? Theme.textMuted : Theme.textSecondary
+                color: cell.highlighted ? Theme.selectedForeground
+                    : cell.stale || text === "\u2013" ? Theme.textMuted : Theme.textSecondary
                 readonly property real advance: summaryMetrics.advanceWidth
                 text: cell.summaryKind.length === 0 ? (cell.value.length > 0 ? cell.value : "–")
                     : cell.summaryFor(advance > 0 ? Math.floor(width / advance) : 0)

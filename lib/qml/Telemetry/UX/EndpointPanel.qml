@@ -310,18 +310,18 @@ Pane {
     function ensureVisible(view, row) {
         if (!view || row < 0 || row >= view.rows)
             return
+        // A row outside the table's window has no delegate: its place is
+        // estimated from the rows' even height.
         const item = view.itemAtCell(Qt.point(0, row))
-        if (!item) {
-            Qt.callLater(function() { if (view && view.itemAtCell(Qt.point(0, row))) panel.ensureVisible(view, row) })
-            return
-        }
-        const top = item.mapToItem(bodyColumn, 0, 0).y
-        const bottom = top + item.height
+        const rowY = item ? item.y : row * (view.rows > 0 ? view.contentHeight / view.rows : Type.rowHeight)
+        const top = view.windowTop + rowY
+        const bottom = top + (item ? item.height : Type.rowHeight)
         if (top < bodyScroll.contentY)
             bodyScroll.contentY = Math.max(0, top)
         else if (bottom > bodyScroll.contentY + bodyScroll.height)
             bodyScroll.contentY = Math.min(Math.max(0, bodyScroll.contentHeight - bodyScroll.height),
                                            bottom - bodyScroll.height)
+        view.forceLayout()
     }
     // The cell after or before row that takes text, opened; false at the end.
     function openNext(view, row, forward) {
@@ -571,14 +571,24 @@ Pane {
         const base = view.depth(row)
         view.expand(row)
         view.forceLayout()
-        for (let r = row + 1; r < view.rows && view.depth(r) > base && view.rows < 2000; ++r) {
+        // The rows a branch opens are in the tree at once; the table counts
+        // them when it is laid out, which happens only when the walk reaches
+        // the end of the rows it knows - not once per branch.
+        for (let r = row + 1; view.rows < 2000; ++r) {
+            if (r >= view.rows) {
+                view.forceLayout()
+                if (r >= view.rows)
+                    break
+            }
+            if (view.depth(r) <= base)
+                break
             if (!panel.rowHasChildren(view, r) || view.isExpanded(r))
                 continue
             if (isRangePath(pathOfRow(view, r)) && model.rowCount(view.index(r, 0)) === 0)
                 continue
             view.expand(r)
-            view.forceLayout()
         }
+        view.forceLayout()
     }
     function collapseUnder(view, row) {
         if (row < 0 || row >= view.rows)
@@ -756,8 +766,21 @@ Pane {
         onVisibleChanged: if (visible) rootFetch.restart()
         readonly property int modelDeepest: model && typeof model.deepest === "number" ? model.deepest - (headed ? 1 : 0) : -1
         readonly property int deepest: Math.max(0, modelDeepest >= 0 ? modelDeepest : seenDeepest)
-        Layout.fillWidth: true
-        Layout.preferredHeight: visible ? contentHeight : 0
+        // A window over its rows (Details layout §2's fallback, chosen by
+        // check 15: a table of 2,000 rows at its whole height took seconds
+        // to draw): as tall as the part of its slot the pane shows, moved
+        // and scrolled with the pane, so only the rows in view have
+        // delegates. The slot (its parent) is as tall as all the rows; the
+        // pane's scroll is the only one. windowTop: the slot's top in the
+        // pane's content.
+        property real windowTop: 0
+        readonly property real windowStart: Math.max(0, Math.min(bodyScroll.contentY - windowTop, contentHeight - height))
+        width: parent ? parent.width : 0
+        y: windowStart
+        height: Math.max(0, Math.min(Math.max(contentHeight, Type.rowHeight), bodyScroll.height))
+        onWindowStartChanged: contentY = windowStart
+        onContentYChanged: if (Math.abs(contentY - windowStart) > 0.5) contentY = windowStart
+        animate: false
         interactive: false
         clip: false
         alternatingRows: false
@@ -1060,7 +1083,10 @@ Pane {
     Timer {
         id: barTimer
         interval: 0
-        onTriggered: panel.barRoom = bodyBar.visible ? bodyBar.width : 0
+        // A style may keep the bar visible and only fade it: what counts is
+        // whether the content is taller than the view.
+        onTriggered: panel.barRoom = bodyBar.visible && bodyBar.policy !== ScrollBar.AlwaysOff
+                                     && bodyBar.size < 1.0 ? bodyBar.width : 0
     }
     Flickable {
         id: bodyScroll
@@ -1076,6 +1102,7 @@ Pane {
             objectName: "endpointBodyScrollBar"
             policy: ScrollBar.AsNeeded
             onVisibleChanged: barTimer.restart()
+            onSizeChanged: barTimer.restart()
             onWidthChanged: barTimer.restart()
         }
         // The blocks from the top at their own heights, the top and bottom
@@ -1394,7 +1421,7 @@ Pane {
                         Layout.fillWidth: true
                         title: valueSection.sectionName
                         bare: panel.noArguments
-                        view: panel.showMetadata && metadataLoader.item ? metadataLoader.item : valueTree
+                        view: panel.showMetadata && metadataLoader.item ? metadataLoader.item.table : valueTree
                     }
                     QuietLine {
                         objectName: "noArgumentsLabel"
@@ -1403,13 +1430,17 @@ Pane {
                     }
                     Loader {
                         id: metadataLoader
+                        objectName: "metadataTableSlot"
                         active: panel.showMetadata && panel.metadataFresh; visible: active
                         Layout.fillWidth: true
-                        Layout.preferredHeight: item ? item.contentHeight : 0
+                        Layout.preferredHeight: item ? item.table.contentHeight : 0
                         sourceComponent: Component {
+                          Item {
+                            readonly property alias table: metadataTree
                             DetailTree {
                                 id: metadataTree
                                 objectName: "metadataTree"
+                                windowTop: blocks.y + valueSection.y + metadataLoader.y
                                 section: ""
                                 headed: true
                                 Keys.onPressed: function(event) { event.accepted = panel.treeKey(metadataTree, event) }
@@ -1473,14 +1504,21 @@ Pane {
                                     }
                                 }
                             }
+                          }
                         }
                     }
-                    DetailTree {
+                    Item {
+                      id: valueSlot
+                      objectName: "valueTableSlot"
+                      visible: !panel.showMetadata && !panel.noArguments
+                      Layout.fillWidth: true
+                      Layout.preferredHeight: valueTree.contentHeight
+                      DetailTree {
                         id: valueTree
                         objectName: "valueTree"
+                        windowTop: blocks.y + valueSection.y + valueSlot.y
                         section: panel.headed ? "request" : "value"
                         headed: panel.headed
-                        visible: !panel.showMetadata && !panel.noArguments
                         model: panel.provider.values
                         rootIndex: {
                             void panel.valueModelRevision
@@ -1588,6 +1626,7 @@ Pane {
                                 }
                             }
                         }
+                      }
                     }
                     // Under the table, never between heading and rows: where a
                     // request's values start, where a write's start, or which
@@ -1637,12 +1676,18 @@ Pane {
                         visible: panel.noResponseValues
                         text: qsTr("No response values.")
                     }
-                    DetailTree {
+                    Item {
+                      id: responseSlot
+                      objectName: "responseTableSlot"
+                      visible: responseSection.hasRows && !panel.noResponseValues
+                      Layout.fillWidth: true
+                      Layout.preferredHeight: responseTree.contentHeight
+                      DetailTree {
                         id: responseTree
                         objectName: "responseTree"
+                        windowTop: blocks.y + responseSection.y + responseSlot.y
                         section: "response"
                         headed: true
-                        visible: responseSection.hasRows && !panel.noResponseValues
                         model: panel.provider.responses
                         rootIndex: {
                             void panel.responseModelRevision
@@ -1701,6 +1746,7 @@ Pane {
                                 }
                             }
                         }
+                      }
                     }
                     Footnote {
                         objectName: "responseStaleNote"

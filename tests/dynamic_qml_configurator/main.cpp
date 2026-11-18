@@ -795,25 +795,24 @@ static void fieldReadJourney()
 		return out;
 	};
 	const auto status = [&] { return control(panel, "endpointStatusLine")->property("text").toString(); };
-	// Not read: the root open and every member under it from the type
-	// alone, "–" for each value (samples, an array, folds to "–"), in the
-	// same table a read fills; the status line says it once.
+	// Not read: the Field's definition - its root open and every member
+	// under it, "–" where each value will be - and the status line says it
+	// once. Its members come from the host's schema (no previews here).
 	const QStringList once = QStringList{QStringLiteral("Config")} + members;
-	CHECK(until([&] { return names(settled(QStringLiteral("valueRow"))) == once; }));
-	CHECK(settled(QStringLiteral("endpointRow")).isEmpty());
+	CHECK(until([&] { return names(settled(QStringLiteral("endpointRow"))) == once; }));
+	CHECK(settled(QStringLiteral("valueRow")).isEmpty());
 	CHECK(status() == QStringLiteral("Not read yet"));
-	CHECK(config.values()->property("shape").toBool());
+	CHECK(config.values()->rowCount() == 0);
 	{
-		const auto lines = settled(QStringLiteral("valueRow"));
-		CHECK(lines.first() == QStringLiteral("Config|struct (7)|"));
-		for (int at = 1; at < lines.size(); ++at)
-			CHECK(lines.at(at).endsWith(QStringLiteral("|\u2013")) || lines.at(at).startsWith(QStringLiteral("samples|")));
-		QList<QQuickItem*> texts;
-		collectRows(details, QStringLiteral("valueText"), texts);
-		int dashes = 0;
-		for (auto* label : texts)
+		QList<QQuickItem*> labels;
+		collectRows(details, QStringLiteral("metadataValueLabel"), labels);
+		int dashes = 0, blanks = 0;
+		for (auto* label : labels) {
 			dashes += label->property("text").toString() == QStringLiteral("\u2013") ? 1 : 0;
-		CHECK(dashes == int(members.size()) - 1);
+			blanks += label->property("text").toString().isEmpty() ? 1 : 0;
+		}
+		// Every member "–"; the open root row nothing.
+		CHECK(dashes == int(members.size()) && blanks == 1);
 	}
 	auto* read = control(panel, "refreshButton");
 	CHECK(device.reads == 0);
@@ -822,8 +821,8 @@ static void fieldReadJourney()
 	CHECK(read->property("text").toString() == QStringLiteral("Reading\u2026") && !read->isEnabled());
 	CHECK(status() == QStringLiteral("Reading\u2026"));
 	h.pump();
-	// The first press: the root and its members, each once.
-	CHECK(until([&] { return !config.values()->property("shape").toBool(); }));
+	// The first press: the root and its members, each once, in the table
+	// of values that takes the definition's place.
 	CHECK(until([&] { return names(settled(QStringLiteral("valueRow"))) == once; }));
 	for (int round = 0; round < 6; ++round)
 		CHECK(names(settled(QStringLiteral("valueRow"))) == once);
@@ -853,10 +852,10 @@ static void fieldReadJourney()
 	select(config, "Serial");
 	events();
 	select(config, "Config");
-	CHECK(until([&] { return names(settled(QStringLiteral("valueRow"))) == once; }));
+	CHECK(until([&] { return names(settled(QStringLiteral("endpointRow"))) == once; }));
 	{
 		QList<QQuickItem*> rows;
-		collectRows(details, QStringLiteral("valueRow"), rows);
+		collectRows(details, QStringLiteral("endpointRow"), rows);
 		for (auto* row : rows)
 			CHECK(!row->property("current").toBool());
 	}

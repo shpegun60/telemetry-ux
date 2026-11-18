@@ -75,3 +75,12 @@ set_target_properties(telemetry_qml_metadata_tree PROPERTIES AUTOMOC ON)
 qt_add_resources(telemetry_qml_metadata_tree "metadata-tree-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES MetadataTree.qml)
 target_compile_features(telemetry_qml_metadata_tree PRIVATE cxx_std_20)
 target_link_libraries(telemetry_qml_metadata_tree PRIVATE TelemetryUX::qt_connection Qt6::Test)
+# The Details layout spec's checks (one stack from the top, every structure
+# shown, the Batch's split and list, the action's result seen) over real
+# ValueModels made from a real descriptor.
+qt_add_executable(telemetry_qml_details_layout DetailsLayout.cpp)
+set_target_properties(telemetry_qml_details_layout PROPERTIES AUTOMOC ON)
+qt_add_resources(telemetry_qml_details_layout "details-layout-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DetailsLayout.qml)
+target_compile_features(telemetry_qml_details_layout PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_qml_details_layout PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(telemetry_qml_details_layout PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench Qt6::Test)
