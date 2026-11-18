@@ -4,15 +4,19 @@
 // stay in memory either way - the last ten minutes of every watched value.
 // Follow keeps the newest readings at the right edge; unticked, the picture
 // holds still while reading goes on. 10 s, 1 min, 10 min or All choose the
-// span and follow again; a drag, the wheel, the arrows, + and - move it and
-// stop following, and the chip in the corner says how far behind it is and
-// follows again (End). The cursor follows the pointer, snapped to a reading;
+// span and follow again; a drag moves the picture in time and values (its
+// direction picks which), the wheel zooms the time, the arrows, + and - move
+// it, and moving the time stops following; the chip in the corner says how
+// far behind it is and follows again (End). A double-click or F fits all; a
+// right drag zooms to a box and a right click opens the graph's menu. The
+// cursor follows the pointer, snapped to a reading;
 // its time shows under the axis and each chip shows its value there. A click
 // or Enter pins a reference: the cursor then says the time since it, each
 // chip its value's difference; Esc takes it away. The values fit what is in
-// view, or the curve whose name was clicked; Ctrl and the wheel, the wheel
-// over the value labels, a drag there or Up and Down move them by hand, and
-// Auto (A) fits them again. A chip's colour mark opens its settings - its
+// view, or the curve whose name was clicked; an up-or-down drag, Ctrl and the
+// wheel, the wheel over the value labels, a drag there or Up and Down move
+// them by hand, and Auto (A) - stacked, a lane's own Auto - fits them again.
+// A chip's colour mark opens its settings - its
 // colour, and the multiplier and offset it is drawn with (Trend's words) - and
 // its menu (right-click) focuses it, shows its points or removes it; the
 // graph's menu shows every curve's points. In a narrow dock the header gives
@@ -517,9 +521,9 @@ FocusScope {
                 onToggled: view.following = checked
                 ToolTip.visible: hovered
                 ToolTip.delay: 700
-                ToolTip.text: qsTr("Keep the newest readings in view; unticked, the picture holds still")
+                ToolTip.text: qsTr("Keep the newest readings in view. Moving or zooming the time stops it; End brings it back.")
                 Accessible.name: qsTr("Follow the newest readings")
-                Accessible.description: qsTr("Keep the newest readings in view. Unticked, the picture holds still; reading goes on.")
+                Accessible.description: qsTr("Keep the newest readings in view (End). Moving or zooming the time stops following; reading goes on.")
             }
             // Narrow: Follow as its icon, filled while following.
             IconToolButton {
@@ -534,7 +538,7 @@ FocusScope {
                 switchedOn: checked
                 toggles: true
                 onToggled: view.following = checked
-                Accessible.description: qsTr("Keep the newest readings in view. Off, the picture holds still; reading goes on.")
+                Accessible.description: qsTr("Keep the newest readings in view (End). Moving or zooming the time stops following; reading goes on.")
             }
             // 10 s | 1 min | 10 min | All, as the Watchlist's List | Tree:
             // the chosen one filled, Left and Right move between them.
@@ -1358,6 +1362,13 @@ FocusScope {
                     font.family: Type.fixedFamily
                     font.pointSize: Type.caption
                     visible: plot.plotted.length > 0 && !plot.waiting
+                    // Space and H hold or follow only where Follow is offered.
+                    followable: plot.followable
+                    // The graph's menu: a right click, at the pointer.
+                    onContextMenuRequested: (position) => {
+                        graphMenu.at = position.x
+                        graphMenu.popup(view, position.x, position.y)
+                    }
                     // The graph's menu from the keyboard.
                     Keys.onPressed: (event) => {
                         if (event.key === Qt.Key_M && event.modifiers === Qt.NoModifier) {
@@ -1397,7 +1408,7 @@ FocusScope {
                         return plot.plotted.length === 1 ? qsTr("Plot of 1 value, %1").arg(state)
                                                          : qsTr("Plot of %1 values, %2").arg(plot.plotted.length).arg(state)
                     }
-                    Accessible.description: qsTr("Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again; L stacks the numbers in lanes of their own.")
+                    Accessible.description: qsTr("Drag moves the picture; the wheel zooms the time, Control and the wheel the values; Shift and the wheel move the time; a right-drag or Control and a drag zoom to a box; a double-click or F fits everything. Arrows pan, plus and minus zoom, Shift+arrows step the cursor, Enter pins a reference, Home goes to the oldest reading, End follows, 1 to 4 choose the span; Up and Down move the values, Control with them zooms the values, A fits them again; L stacks the numbers in lanes of their own.")
                 }
                 // The keys are on the graph: the lists' focus frame round it.
                 Rectangle {
@@ -1421,21 +1432,32 @@ FocusScope {
                     y: view.plotArea.y + Type.chipHeight
                     text: view.hoverGap
                 }
-                // The graph's menu: right-click.
-                TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onTapped: (point) => {
-                        graphMenu.at = point.position.x
-                        graphMenu.popup()
-                    }
+                // What each axis' labels do, said on hover: the menu and the
+                // graph's description say it too.
+                PlainToolTip {
+                    objectName: "plotValuesTip"
+                    visible: view.visible && view.hoverRegion === "values"
+                    delay: 700
+                    x: view.plotArea.x + Type.tight
+                    y: view.valuesArea.y + (view.valuesArea.height - height) / 2
+                    text: qsTr("Drag to move the values, wheel to zoom them, double-click to fit them (A).")
                 }
-                // Values zoomed or panned by hand: a way back to fitting them.
+                PlainToolTip {
+                    objectName: "plotTimeTip"
+                    visible: view.visible && view.hoverRegion === "time"
+                    delay: 700
+                    x: view.plotArea.x + (view.plotArea.width - width) / 2
+                    y: view.plotArea.y + view.plotArea.height - height - Type.tight
+                    text: plot.recording ? qsTr("Drag to move the time, wheel to zoom it, double-click to show the whole run (4).")
+                                         : qsTr("Drag to move the time, wheel to zoom it, double-click to show everything kept (4).")
+                }
+                // Values zoomed or panned by hand on the shared axis: a way
+                // back to fitting them. Stacked, each lane has its own.
                 Basic.Button {
                     id: autoValues
                     objectName: "plotAuto"
-                    visible: view.visible && !view.valueAuto
-                    x: view.numberLanes.length > 0 ? view.numberLanes[0].nameRect.right + Type.padding
-                                                   : view.valuesArea.left + Type.padding
+                    visible: view.visible && !view.valueAuto && view.numberLanes.length === 0
+                    x: view.valuesArea.left + Type.padding
                     y: view.valuesArea.top + Type.padding
                     height: Type.chipHeight
                     padding: Type.tight
@@ -1458,6 +1480,46 @@ FocusScope {
                         color: autoValues.down ? Theme.statePressed : autoValues.hovered ? Theme.stateHover : Theme.surface
                         border.width: autoValues.visualFocus ? 2 : 1
                         border.color: autoValues.visualFocus ? Theme.focusRing : Theme.outline
+                    }
+                }
+                // Stacked: a lane whose values are by hand says so after its
+                // name, and fits them again on a click. A fits every lane.
+                Repeater {
+                    // By count, so the chips stay while the lanes redraw.
+                    model: view.visible ? view.numberLanes.length : 0
+                    delegate: Basic.Button {
+                        id: laneAuto
+                        required property int index
+                        readonly property var lane: view.numberLanes[index] || ({})
+                        readonly property string path: lane.path !== undefined ? lane.path : ""
+                        objectName: "plotLaneAuto_" + path
+                        visible: lane.manual === true
+                        x: lane.nameRect ? lane.nameRect.x + lane.nameRect.width + Type.tight : 0
+                        y: lane.nameRect ? lane.nameRect.y : 0
+                        height: Type.chipHeight
+                        padding: Type.tight
+                        leftPadding: Type.padding
+                        rightPadding: Type.padding
+                        focusPolicy: Qt.TabFocus
+                        font.pointSize: Type.caption
+                        text: qsTr("Auto")
+                        onClicked: view.autoLane(path)
+                        Accessible.name: qsTr("Fit the values of %1 again").arg(path)
+                        ToolTip.visible: hovered || visualFocus
+                        ToolTip.delay: 700
+                        ToolTip.text: qsTr("Fit this lane's values again. A fits every lane.")
+                        contentItem: Text {
+                            text: laneAuto.text
+                            font: laneAuto.font
+                            color: Theme.textPrimary
+                            Accessible.ignored: true
+                        }
+                        background: Rectangle {
+                            radius: Type.radius
+                            color: laneAuto.down ? Theme.statePressed : laneAuto.hovered ? Theme.stateHover : Theme.surface
+                            border.width: laneAuto.visualFocus ? 2 : 1
+                            border.color: laneAuto.visualFocus ? Theme.focusRing : Theme.outline
+                        }
                     }
                 }
                 // Fitted to one curve: says which, on a chip so it reads over
@@ -1757,6 +1819,17 @@ FocusScope {
                         font.pointSize: Type.caption
                         text: plot.emptyHint
                     }
+                    // How the graph moves, said once before there is one.
+                    Label {
+                        objectName: "plotGestureHint"
+                        Layout.fillWidth: true
+                        visible: plot.traces !== null
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        color: Theme.textMuted
+                        font.pointSize: Type.caption
+                        text: qsTr("On the graph: drag to move, wheel to zoom, double-click to fit all.")
+                    }
                 }
             }
         }
@@ -1778,6 +1851,18 @@ FocusScope {
                 view.following = !view.following
                 checked = Qt.binding(() => view.following)
             }
+        }
+        // The double-click's and F's work, findable here.
+        MenuItem {
+            objectName: "plotMenuFitAll"
+            text: qsTr("Fit all") + "\t" + qsTr("F")
+            onTriggered: view.fitAll()
+        }
+        MenuItem {
+            objectName: "plotMenuFitValues"
+            text: qsTr("Fit values") + "\t" + qsTr("A")
+            enabled: !view.valueAuto
+            onTriggered: view.autoValues()
         }
         MenuItem {
             objectName: "plotMenuBack"

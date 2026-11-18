@@ -434,17 +434,25 @@ int main(int argc, char** argv)
 		traces.append(frame(ux::WatchTraces::nowNs(), {{3, 1, bits(S::S16, 2, 5)}}));
 		settle(150);
 		CHECK(view->property("rightUtcMs").toDouble() == heldRight && view->property("behindSeconds").toDouble() > 0);
-		// A pan never leaves empty time at the left: back a long way, the
-		// left edge stops at the oldest reading kept.
+		// A pan may run into time with no readings, but one reading always
+		// stays in view: back a long way, the right edge stops at the oldest
+		// reading kept; Home puts that reading at the left edge.
 		click(window, shown(content, "plotPreset_60"));
 		settle(150);
 		for (int i = 0; i < 200; ++i)
 			QMetaObject::invokeMethod(view, "pan", Q_ARG(qreal, -0.5));
 		settle(150);
-		const double oldestRight = view->property("rightUtcMs").toDouble();
+		const auto oldestUtc = [&] {
+			qint64 oldest = 0;
+			for (const auto& path : traces.plotted())
+				if (const auto* kept = traces.readings(path); kept && !kept->empty())
+					oldest = oldest ? std::min(oldest, kept->front().ns) : kept->front().ns;
+			return double(traces.anchor().utcMs) + double(oldest - traces.anchor().monotonicNs) / 1e6;
+		};
+		CHECK(std::abs(view->property("rightUtcMs").toDouble() - oldestUtc()) < 2);
 		QMetaObject::invokeMethod(view, "toOldest");
 		settle(150);
-		CHECK(std::abs(view->property("rightUtcMs").toDouble() - oldestRight) < 2);
+		CHECK(std::abs(view->property("rightUtcMs").toDouble() - (oldestUtc() + 60'000)) < 2);
 		// The keys' focus frame is round the graph.
 		view->forceActiveFocus(Qt::TabFocusReason);
 		settle();
@@ -1247,9 +1255,13 @@ int main(int argc, char** argv)
 			// The first lane still fits its own readings, now in the boxed time.
 			CHECK(!view->property("valueAuto").toBool() && secondSpan < secondBeforeBox * 0.6 && secondSpan > secondBeforeBox * 0.4 &&
 			      fitted(0));
-			// Auto (A) stands after the first lane's name, not over it.
-			auto* autoButton = shown(content, "plotAuto");
-			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(0).value(QStringLiteral("nameRect")).toRectF().right());
+			// Stacked, the lane boxed says it is by hand on its own Auto chip,
+			// after its name, not over it; the shared "Auto (A)" is not shown.
+			const auto secondAuto = QStringLiteral("plotLaneAuto_") + lane(1).value(QStringLiteral("path")).toString();
+			auto* autoButton = shown(content, qPrintable(secondAuto));
+			CHECK(autoButton && autoButton->mapToItem(view, QPointF(0, 0)).x() >= lane(1).value(QStringLiteral("nameRect")).toRectF().right() &&
+			      !named(content, "plotAuto") && lane(1).value(QStringLiteral("manual")).toBool() &&
+			      !lane(0).value(QStringLiteral("manual")).toBool());
 			view->forceActiveFocus(Qt::TabFocusReason);
 			QTest::keyClick(window, Qt::Key_Backspace);
 			settle(250);
