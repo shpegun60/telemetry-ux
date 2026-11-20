@@ -51,6 +51,14 @@ PAIRS = [
     ('focusRing', ['surfaceWindow', 'surface', 'surfaceBar', 'surfaceTitleBar', 'stateHover', 'stateSelected'], GRAPHIC,
      'focus frames'),
     ('accent', ['surfaceWindow', 'surfaceBar'], GRAPHIC, 'the primary button against its surroundings'),
+    # The Watchlist of WL-9 (check 16): a held text and its reason, and the
+    # change mark's value, keep their colours on a focused selection; quiet
+    # words on a stripe and a quiet selection; a doubtful write's glyph.
+    ('error', ['stateSelected'], TEXT, 'a held refused text and its reason on a focused selection'),
+    ('info', ['stateSelected'], TEXT, 'a changed value and its mark on a focused selection'),
+    ('textSecondary', ['surfaceAlternate', 'stateSelectedInactive'], TEXT,
+     'a code, a note and rw on a stripe or a quiet selection'),
+    ('warning', ['stateSelected'], GRAPHIC, 'the read-back warning glyph on a focused selection'),
 ]
 
 

@@ -97,7 +97,29 @@ public:
 		ShownTextRole,
 		// The row's own format, "original", "dec" or "hex"; "" when it
 		// follows the Watchlist's.
-		FormatRole
+		FormatRole,
+		// A bool's or an enum's word and its code in the row's format
+		// ("Idle", "2" or "0x02", WL-9 B2); a number's word and code are "".
+		ValueWordRole,
+		ValueCodeRole,
+		// A text kept in the row (WL-9 C4): one the device refused, or one
+		// that is no value left by Tab or a click; its reason in words
+		// ("Refused: the device does not take this value"); and its kind,
+		// "refused" or "invalid". "" for a row holding none.
+		HeldTextRole,
+		HeldReasonRole,
+		HeldKindRole,
+		// The row's last write (WL-9 C5): "pending" while it runs, then
+		// "confirmed", "differs" (read back otherwise) or "unconfirmed" (not
+		// read back, or the reply lost); "" for none. writtenText is what was
+		// written, in the row's format; writtenAt when (ms since the epoch).
+		WriteStateRole,
+		WrittenTextRole,
+		WrittenAtRole,
+		// When the row's bits last changed between two readings, in ms since
+		// the epoch (WL-9 E5); 0 when they have not. Never for the first
+		// reading after forgetChanges() or for the change a write caused.
+		ChangedAtRole
 	};
 	Q_ENUM(Role)
 	static constexpr int maxRows = watchlistRowLimit;
@@ -145,6 +167,29 @@ public:
 	[[nodiscard]] std::optional<WatchNumberFormat> rowFormat(int row) const;
 	// The type of the row's last reading; invalid before its first.
 	[[nodiscard]] WatchValueType valueType(int row) const;
+	// The row's last reading as it is shown, in its format: "Idle (2)".
+	[[nodiscard]] QString shownText(int row) const;
+	// What a typed text writes, in the row's format: "2" for "2.0" in an f32
+	// row, "Idle (0x02)" for "2" in an enum row shown in hex; text itself when
+	// it is no value of the row's type.
+	[[nodiscard]] QString shownFor(int row, const QString& text) const;
+	// A text kept in its row (WL-9 C4): the device refused it ("refused"), or
+	// it is no value ("invalid"). It outlives the row's delegates, a fold, a
+	// view or format switch and a reconnect to the same device (device: the
+	// binding's fingerprint). A new one replaces it.
+	bool setHeld(int row, const QString& text, const QString& reason, const QString& kind,
+	             const QString& device = {});
+	bool dropHeld(int row);
+	// Drops what is held on a device other than device (a new descriptor).
+	void dropHeldExcept(const QString& device);
+	[[nodiscard]] QString heldText(int row) const;
+	// The row's write (WL-9 C5): "pending" with the text written, then its
+	// outcome; "" clears it. A pending write's change is the user's, never
+	// marked as the device's.
+	bool setWriteState(int row, const QString& state, const QString& written = {});
+	// The next reading of every row is compared with none (a Start): it marks
+	// no change.
+	void forgetChanges();
 	// Rows for paths a device does not have, or not yet (WL-4c). A row whose
 	// key is watch_key::unresolved keeps its path and its last value; it is
 	// never read, written or recorded.
@@ -202,7 +247,15 @@ private:
 		WatchSample sample;
 		bool writable = false;
 		WatchValueBits value{};
+		// WL-9: a held text, the row's write and its change mark.
+		QString heldText, heldReason, heldKind, heldDevice;
+		QString writeState, writtenText;
+		qint64 writtenAt = 0, changedAt = 0;
+		bool compared = false;  // a reading before the next to compare it with
+		bool ownChange = false; // the next change is the user's write
 	};
+	// The row's value in its format, word and code apart.
+	watch_format::Parts partsOf(const Row& row) const;
 	Row makeRow(const WatchEntry& entry);
 	bool insertable(const QVector<WatchEntry>& entries) const;
 

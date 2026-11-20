@@ -12,7 +12,9 @@
 #include <QtCore/QStringList>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cstdint>
+#include <limits>
 
 namespace telemetry::ux::watch_format {
 namespace {
@@ -76,15 +78,37 @@ std::optional<Bounds> boundsOf(const WatchValueType& type, ScalarCode code)
 	return out;
 }
 
-// "“65536” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to
-// 0xFFFF)." - in the row's form: a row shown in hex says the hex range first.
+// "u16 takes 0 to 65535 (0x0000 to 0xFFFF)." - in the row's form: a row shown
+// in hex says the hex range first. The typed text is not said again: it is in
+// the editor, or held in the cell (WL-9 C3). A float has no range to give.
 // Whole sentences, so a translation can order them as it needs.
 QString outOfRangeText(const QString& typed, const WatchValueType& type, ScalarCode code, WatchNumberFormat form)
 {
 	const auto bounds = boundsOf(type, code);
 	if (!bounds)
 		return tr("“%1” is out of range for %2.").arg(typed, typeName(type));
-	return tr("“%1” is out of range for %2. Enter a number from %3.").arg(typed, typeName(type), range(type, form));
+	return tr("%1 takes %2.").arg(typeName(type), range(type, form));
+}
+
+// A float in the shortest decimal that reads back to the same bits; NaN,
+// -0 and the infinities as the editor writes them.
+template<class T, class B>
+QString shortest(B bits)
+{
+	constexpr int fraction = sizeof(T) == 4 ? 23 : 52;
+	constexpr B exponent = sizeof(T) == 4 ? B{0xff} : B{0x7ff};
+	const auto magnitude = bits & ((std::numeric_limits<B>::max)() >> 1);
+	const bool negative = (bits >> (sizeof(T) * 8 - 1)) != 0;
+	if (magnitude == 0)
+		return negative ? QStringLiteral("-0") : QStringLiteral("0");
+	if ((magnitude >> fraction) == exponent) {
+		if ((magnitude & ((B{1} << fraction) - 1)) != 0)
+			return QStringLiteral("NaN");
+		return negative ? QStringLiteral("-inf") : QStringLiteral("inf");
+	}
+	std::array<char, 64> buffer{};
+	const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<T>(bits));
+	return result.ec == std::errc{} ? QString::fromLatin1(buffer.data(), result.ptr - buffer.data()) : QString{};
 }
 
 bool asciiDigits(QStringView text)
@@ -120,7 +144,7 @@ QString name(WatchNumberFormat format)
 	return QStringLiteral("original");
 }
 
-QString text(const WatchValueBits& value, WatchNumberFormat format, const QHash<quint64, QString>* names)
+Parts parts(const WatchValueBits& value, WatchNumberFormat format, const QHash<quint64, QString>* names)
 {
 	if (!value.type.valid() || value.size != value.type.width)
 		return {};
@@ -130,28 +154,36 @@ QString text(const WatchValueBits& value, WatchNumberFormat format, const QHash<
 	std::uint64_t bits = 0;
 	for (unsigned i = 0; i < value.size; ++i)
 		bits |= std::uint64_t(std::to_integer<unsigned char>(value.bytes[i])) << (8 * i);
-	switch (format) {
-		case WatchNumberFormat::Hex:
-			return QStringLiteral("0x") +
-			       QString::number(bits, 16).toUpper().rightJustified(2 * value.type.width, QLatin1Char('0'));
-		case WatchNumberFormat::Dec:
-			if (*code == ScalarCode::Bool)
-				return bits == 1 ? QStringLiteral("1") : bits == 0 ? QStringLiteral("0") : QString{};
-			return detail::scalarEditorBits(bits, *code);
-		case WatchNumberFormat::Original:
-			if (value.type.enumeration) {
-				// Without the type's names, nothing here to say: the row's own text.
-				if (!names)
-					return {};
-				const auto digits = detail::scalarEditorBits(bits, *code);
-				const auto found = names ? names->constFind(bits) : QHash<quint64, QString>::const_iterator{};
-				if (names && found != names->cend())
-					return found.value();
-				return digits.isEmpty() ? QString{} : tr("Unknown (%1)").arg(digits);
-			}
-			return detail::scalarEditorBits(bits, *code);
+	const bool hex = format == WatchNumberFormat::Hex;
+	// A bool's byte: false for 0, true for any other, the byte itself its code.
+	if (*code == ScalarCode::Bool)
+		return {bits == 0 ? QStringLiteral("false") : QStringLiteral("true"),
+		        hex ? hexAt(bits, value.type.width) : QString::number(bits)};
+	if (value.type.enumeration) {
+		// Without the type's names there is no word: Original has nothing to
+		// add to the row's own text, Dec and Hex the code alone.
+		const auto digits = hex ? hexAt(bits, value.type.width) : detail::scalarEditorBits(bits, *code);
+		if (!names)
+			return format == WatchNumberFormat::Original ? Parts{} : Parts{{}, digits};
+		const auto found = names->constFind(bits);
+		return {found != names->cend() ? found.value() : tr("Unknown"), digits};
 	}
-	return {};
+	if (hex)
+		return {{}, hexAt(bits, value.type.width)};
+	if (format == WatchNumberFormat::Original && *code == ScalarCode::F32)
+		return {{}, shortest<float, std::uint32_t>(static_cast<std::uint32_t>(bits))};
+	if (format == WatchNumberFormat::Original && *code == ScalarCode::F64)
+		return {{}, shortest<double, std::uint64_t>(bits)};
+	// Every digit a float's bits hold (max_digits10), integers as they are.
+	return {{}, detail::scalarEditorBits(bits, *code)};
+}
+
+QString text(const WatchValueBits& value, WatchNumberFormat format, const QHash<quint64, QString>* names)
+{
+	const auto shown = parts(value, format, names);
+	if (shown.word.isEmpty())
+		return shown.code;
+	return shown.code.isEmpty() ? shown.word : shown.word + QStringLiteral(" (") + shown.code + QLatin1Char(')');
 }
 
 bool isHex(QStringView text)

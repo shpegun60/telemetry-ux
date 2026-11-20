@@ -7,7 +7,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Shapes
 import QtQml.Models
 
 Pane {
@@ -237,30 +236,6 @@ Pane {
         required property Button button
         font: button.font
     }
-    // A failure's 12 px glyph: a ring with "!". Pure QML, so a host needs none
-    // of the module's C++ types for it.
-    component ErrorGlyph: Shape {
-        id: glyph
-        readonly property real s: width / 12
-        implicitWidth: Math.round(Type.bodyPixels * 0.9)
-        implicitHeight: implicitWidth
-        preferredRendererType: Shape.CurveRenderer
-        Accessible.ignored: true
-        ShapePath {
-            strokeColor: Theme.error
-            strokeWidth: Math.max(1, glyph.s * 1.2)
-            fillColor: "transparent"
-            capStyle: ShapePath.RoundCap
-            startX: glyph.s * 6
-            startY: glyph.s * 0.9
-            PathArc { x: glyph.s * 6; y: glyph.s * 11.1; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
-            PathArc { x: glyph.s * 6; y: glyph.s * 0.9; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
-            PathMove { x: glyph.s * 6; y: glyph.s * 3.4 }
-            PathLine { x: glyph.s * 6; y: glyph.s * 6.9 }
-            PathMove { x: glyph.s * 6; y: glyph.s * 8.9 }
-            PathLine { x: glyph.s * 6; y: glyph.s * 9.0 }
-        }
-    }
     // A footnote under its table: one caption line at the rows' names,
     // elided, the whole of it in the tooltip.
     component Footnote: Label {
@@ -483,7 +458,8 @@ Pane {
         Accessible.name: title.length > 0 ? title : qsTr("Name, Value, Type")
         Label {
             objectName: "tableHeadingName"
-            x: heading.title.length > 0 ? Type.padding : Type.padding + Type.indent
+            // A Field's "Name" over its root row's name, past the glyph's slot.
+            x: heading.title.length > 0 ? Type.padding : Type.padding + Type.indent + Type.iconSize + Type.spacing
             width: Math.max(0, (heading.bare ? heading.width - Type.padding : panel.nameEnd(heading.tableWidth)) - x)
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
@@ -715,6 +691,11 @@ Pane {
             expandUnder(view, row)
             return true
         }
+        // "-" closes everything under the row, as in the Device tree.
+        if (event.key === Qt.Key_Minus || event.text === "-") {
+            collapseUnder(view, row)
+            return true
+        }
         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && plain && branch) {
             view.toggleExpanded(row)
             return true
@@ -744,7 +725,7 @@ Pane {
         }
         MenuItem {
             objectName: "treeMenuCollapseUnder"
-            text: qsTr("Collapse all under")
+            text: qsTr("Collapse all under\t-")
             onTriggered: panel.collapseUnder(rowMenu.view, rowMenu.row)
         }
         MenuItem {
@@ -798,7 +779,9 @@ Pane {
         property int activeFrom: 0
         property int activeTo: -1
         function updateStep() {
+            // The deepest name's room less its glyph's slot (the kinds design, F).
             const room = panel.nameEnd(width) - (Type.padding + Type.indent) - 6 * Type.bodyPixels
+                       - Type.iconSize - Type.spacing
             step = deepest === 0 ? Type.indent
                 : Math.max(Math.floor(Type.indent / 2), Math.min(Type.indent, Math.floor(room / deepest)))
         }
@@ -932,12 +915,18 @@ Pane {
         readonly property var valueItem: valueCell.item
         readonly property var tree: treeView
         readonly property real step: treeView && typeof treeView.step === "number" ? treeView.step : Type.indent
-        // Where the name starts, and where the chevron goes: past the hard
-        // cap a name keeps 4 characters.
+        // Where the kind's glyph and the name start, and where the chevron
+        // goes: past the hard cap a name keeps its floor (Type.nameFloor, its
+        // first characters), the glyph's slot before it (the kinds design, F).
+        readonly property real glyphSlot: Type.iconSize + Type.spacing
         readonly property real nameIndent: Math.min(depth * step + Type.indent,
-            Math.max(Type.indent, panel.nameEnd(width) - Type.bodyPixels * 4 - Type.padding))
+            Math.max(Type.indent, panel.nameEnd(width) - Type.nameFloor - glyphSlot - Type.padding))
         readonly property real chevronX: Type.padding + nameIndent - Type.indent
-        readonly property real nameX: Type.padding + nameIndent
+        readonly property real glyphX: Type.padding + nameIndent
+        readonly property real nameX: glyphX + glyphSlot
+        // What the row is, for its glyph: the model's kind, else from what it
+        // holds (a model without the role).
+        property string kind: ""
         // The name's text end, and the room a folded summary or an editor may take left of the value.
         readonly property real nameTextEnd: nameX + Math.min(nameLabel.implicitWidth, Math.max(0, panel.nameEnd(width) - nameX))
         readonly property real valueRoom: Math.max(0, panel.valueX(width) - Type.tight
@@ -1046,6 +1035,15 @@ Pane {
             }
         }
         contentItem: Item {
+            // What the row is, in its own slot after the chevron's (the kinds
+            // design, F): {} a struct, [] an array, a ring a value.
+            KindIcon {
+                x: cellRow.glyphX
+                y: (Type.rowHeight - height) / 2
+                kind: cellRow.kind
+                color: cellRow.highlighted && cellRow.treeView && cellRow.treeView.activeFocus
+                       ? Theme.selectedForeground : Theme.textSecondary
+            }
             Label {
                 id: nameLabel
                 objectName: "detailCellName"
@@ -1493,6 +1491,8 @@ Pane {
                                     cellName: name; cellType: typeText; cellValue: qsTr("Not read")
                                     cellHint: detail + "\n" + panel.contextHelp
                                     container: depth === 0
+                                    kind: typeof model.kind === "string" && model.kind.length > 0 ? model.kind
+                                        : /\]$/.test(typeText) ? "array" : /^struct/.test(typeText) ? "struct" : "value"
                                     // Not read: "–" where each value will be, at its
                                     // alignment; an open branch shows nothing there.
                                     valueComponent: Label {
@@ -1566,6 +1566,11 @@ Pane {
                             readonly property string staleNote: typeof model.staleNote === "string" ? model.staleNote : ""
                             readonly property bool updated: model.updated === true
                             readonly property bool rootRow: isAggregate && !panel.headed && depth === 0
+                            // "Not applied · device holds 3" under a value kept
+                            // after a refused Apply (WL-9 C4).
+                            readonly property string note: typeof model.note === "string" ? model.note : ""
+                            kind: typeof model.kind === "string" && model.kind.length > 0 ? model.kind
+                                : !isAggregate ? "value" : summaryKind === "struct" ? "struct" : "array"
                             cellName: rootRow ? panel.lastSegment(panel.provider.selection, name) : name
                             cellType: typeText; cellHint: detail; cellValue: value
                             cellPath: rowPath
@@ -1607,6 +1612,7 @@ Pane {
                                 takes: valueDelegate.takes
                                 stale: valueDelegate.stale
                                 staleNote: valueDelegate.staleNote
+                                standingNote: valueDelegate.note
                                 highlighted: valueDelegate.highlighted
                                 updated: valueDelegate.updated
                                 updatedAt: panel.valuesResetAt
@@ -1723,6 +1729,8 @@ Pane {
                             cellPath: typeof model.path === "string" ? model.path : ""
                             pathPrefix: panel.provider.selection + qsTr(" response: ")
                             container: false
+                            kind: typeof model.kind === "string" && model.kind.length > 0 ? model.kind
+                                : !isAggregate ? "value" : summaryKind === "struct" ? "struct" : "array"
                             TableView.onReused: if (valueItem && typeof valueItem.maybeFlash === "function") valueItem.maybeFlash()
                             valueComponent: ValueCell {
                                 objectName: "responseCell"

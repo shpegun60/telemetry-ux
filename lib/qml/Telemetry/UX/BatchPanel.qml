@@ -5,7 +5,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Shapes
 
 Pane {
     id: panel
@@ -41,29 +40,6 @@ Pane {
         palette.brightText: Theme.accentForeground
         palette.disabled.button: Theme.surfaceDisabled
         palette.disabled.buttonText: Theme.textDisabled
-    }
-    // A failure's 12 px glyph: a ring with "!", as Details draws it.
-    component ErrorGlyph: Shape {
-        id: glyph
-        readonly property real s: width / 12
-        implicitWidth: Math.round(Type.bodyPixels * 0.9)
-        implicitHeight: implicitWidth
-        preferredRendererType: Shape.CurveRenderer
-        Accessible.ignored: true
-        ShapePath {
-            strokeColor: Theme.error
-            strokeWidth: Math.max(1, glyph.s * 1.2)
-            fillColor: "transparent"
-            capStyle: ShapePath.RoundCap
-            startX: glyph.s * 6
-            startY: glyph.s * 0.9
-            PathArc { x: glyph.s * 6; y: glyph.s * 11.1; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
-            PathArc { x: glyph.s * 6; y: glyph.s * 0.9; radiusX: glyph.s * 5.1; radiusY: glyph.s * 5.1 }
-            PathMove { x: glyph.s * 6; y: glyph.s * 3.4 }
-            PathLine { x: glyph.s * 6; y: glyph.s * 6.9 }
-            PathMove { x: glyph.s * 6; y: glyph.s * 8.9 }
-            PathLine { x: glyph.s * 6; y: glyph.s * 9.0 }
-        }
     }
     // The list's column labels: caption, Regular, textSecondary.
     component ColumnLabel: Label {

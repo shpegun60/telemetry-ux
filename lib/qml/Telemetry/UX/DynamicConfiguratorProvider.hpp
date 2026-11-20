@@ -154,8 +154,12 @@ class DynamicConfiguratorProvider final : public QObject {
 	Q_PROPERTY(QString watchWriteOutcome READ watchWriteOutcome NOTIFY stateChanged)
 	// What the outcome is (WL-5): "writing", "confirmed" (read back as
 	// written), "differs" (the device reads back another value),
-	// "unconfirmed" (written, not read back), "refused", or "" before any.
+	// "unconfirmed" (written, not read back, or its reply lost), "refused",
+	// or "" before any.
 	Q_PROPERTY(QString watchWriteKind READ watchWriteKind NOTIFY stateChanged)
+	// When the outcome came, in ms since the epoch (WL-9 C5); 0 while a
+	// write runs and before any. The panel flashes the time once per outcome.
+	Q_PROPERTY(double watchWriteAt READ watchWriteAt NOTIFY stateChanged)
 	Q_PROPERTY(
 	    bool watchIndividual READ watchIndividual WRITE setWatchIndividual NOTIFY stateChanged)
 	Q_PROPERTY(
@@ -392,10 +396,17 @@ public:
 	// Details selection. Refused without permission, for a Field that is not
 	// writable, or while another row write is in flight.
 	Q_INVOKABLE bool writeWatch(int row, const QString& text);
+	// A text that is no value, left in its row by Tab or a click away (WL-9
+	// C4), held there with its reason until a write of the row succeeds, Esc
+	// on the row (dropWatchHeld), the row goes or another device attaches. A
+	// refused write is held by the provider itself.
+	Q_INVOKABLE bool holdWatchText(int row, const QString& text, const QString& reason);
+	Q_INVOKABLE bool dropWatchHeld(int row);
 	bool canWriteWatch() const;
 	bool watchWriting() const;
 	QString watchWriteOutcome() const;
 	QString watchWriteKind() const;
+	double watchWriteAt() const;
 	QString selection() const;
 	QModelIndex selectedEndpointIndex() const;
 	QString serviceResponseEndpoint() const;

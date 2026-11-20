@@ -1,12 +1,16 @@
 // Details' value tree (the house tree, indent guides, folded summaries, keys,
 // fold memory, edit marks) in a real QQuickWindow over a fake provider whose
 // models are QStandardItemModels with the roles of the real ValueModel. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QtCore/QDir>
+#include <QtCore/QRegularExpression>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQml/QQmlProperty>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
@@ -34,7 +38,7 @@ public:
 	enum Role {
 		Name = Qt::UserRole + 1, Detail, Value, Type, Aggregate, ChildCount, Loaded, Editable, EditorText, Takes,
 		Kind, Choices, Path, Parts, SummaryKind, ItemCount, Unsent, UnsentCount, Stale, StaleNote, Baseline,
-		SummaryText
+		SummaryText, Note
 	};
 	explicit TreeModel(int deepestLevel, QObject* parent = nullptr) : QStandardItemModel(parent), deepest_(deepestLevel)
 	{
@@ -44,7 +48,42 @@ public:
 		                  {Kind, "editorKind"}, {Choices, "editorChoices"}, {Path, "path"},
 		                  {Parts, "summaryParts"}, {SummaryKind, "summaryKind"}, {ItemCount, "itemCount"},
 		                  {Unsent, "unsent"}, {UnsentCount, "unsentCount"}, {Stale, "stale"},
-		                  {StaleNote, "staleNote"}});
+		                  {StaleNote, "staleNote"}, {Note, "note"}});
+	}
+	// WL-9 C4: the device refused the draft's Apply; it was read once and
+	// holds what was read before. Every edited value keeps its text and says
+	// so under it; no cell is blamed.
+	Q_INVOKABLE void refuse()
+	{
+		std::function<void(QStandardItem*)> walk = [&](QStandardItem* item) {
+			for (int row = 0; row < item->rowCount(); ++row)
+				walk(item->child(row));
+			if (!item->data(Aggregate).toBool() && item->data(Unsent).toBool())
+				item->setData(QStringLiteral("Not applied · device holds %1").arg(item->data(Baseline).toString()), Note);
+		};
+		for (int row = 0; row < rowCount(); ++row)
+			walk(item(row));
+	}
+	// Cancel: the values read back, no draft and no line under any cell.
+	Q_INVOKABLE void cancelDraft()
+	{
+		std::function<void(QStandardItem*)> walk = [&](QStandardItem* item) {
+			for (int row = 0; row < item->rowCount(); ++row)
+				walk(item->child(row));
+			if (item->data(Aggregate).toBool()) {
+				refresh(item);
+				return;
+			}
+			const auto read = item->data(Baseline).toString();
+			item->setData(read, Value);
+			item->setData(read, EditorText);
+			item->setData(read, SummaryText);
+			item->setData(false, Unsent);
+			item->setData(0, UnsentCount);
+			item->setData(QString{}, Note);
+		};
+		for (int row = 0; row < rowCount(); ++row)
+			walk(item(row));
 	}
 	int deepest() const { return deepest_; }
 
@@ -149,11 +188,18 @@ public:
 		if (kind == QLatin1String("bool")) {
 			if (text != QLatin1String("true") && text != QLatin1String("false"))
 				return false;
+		} else if (item->data(Type).toString() == QLatin1String("u8")) {
+			// A byte takes 0 to 255, whole.
+			const int byte = text.toInt(&number);
+			if (!number || byte < 0 || byte > 255)
+				return false;
 		} else {
 			text.toDouble(&number);
 			if (!number)
 				return false;
 		}
+		// An edit clears its cell's "Not applied" line (WL-9 C4).
+		item->setData(QString{}, Note);
 		item->setData(text, Value);
 		item->setData(text, EditorText);
 		item->setData(text, SummaryText);
@@ -242,6 +288,8 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	// Details shows each row's kind with KindIcon (a ToolIcon).
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;
@@ -303,6 +351,13 @@ int main(int argc, char** argv)
 		wide.leaf(wideRoot, "Pi", "f32", "3.1415927410125732", "Pi");
 		wide.leaf(wideRoot, "Gain", "f32", "1.5", "Gain");
 		wide.settle(wideRoot);
+		// Two bytes, for the commit rules on values with a range (WL-9 H 19).
+		TreeModel byte(1);
+		auto* bytes = byte.branch(nullptr, "Bytes", "struct (2)", "struct", 2, "");
+		byte.leaf(bytes, "Threshold", "u8", "100", "Threshold")->setData(QStringLiteral("u8 takes 0 to 255."), TreeModel::Takes);
+		byte.leaf(bytes, "Level", "u8", "7", "Level")->setData(QStringLiteral("u8 takes 0 to 255."), TreeModel::Takes);
+		byte.settle(bytes);
+		engine.rootContext()->setContextProperty(QStringLiteral("byteModel"), &byte);
 		QStandardItemModel empty;
 		engine.rootContext()->setContextProperty(QStringLiteral("wideModel"), &wide);
 		engine.rootContext()->setContextProperty(QStringLiteral("fieldModel"), &field);
@@ -320,6 +375,135 @@ int main(int argc, char** argv)
 		Q_UNUSED(body)
 
 #include "DetailsTreeChecks.inc"
+
+		// ---- WL-9 (20 November 2026): a refused Apply keeps its draft (H 18),
+		// Enter on text that is no value is refused with no trap (H 19); the
+		// kinds design in Details: each row's glyph (J 10), "-" and its menu.
+		{
+			const auto item = [&](int r) { return rig.call("rowItem", r).value<QQuickItem*>(); };
+			const auto cell = [&](int r) { return rig.call("cellAt", r).value<QObject*>(); };
+			const auto theme = [&](const char* name) { return QColor(rig.call("color", QString::fromLatin1(name)).toString()); };
+			const auto color = [](QObject* object, const char* property) {
+				return QQmlProperty::read(object, QString::fromLatin1(property)).value<QColor>();
+			};
+			const auto type = [&](const char* typed) {
+				for (const char* p = typed; *p; ++p)
+					QTest::keyClick(window, *p);
+				settle();
+			};
+			const auto press = [&](QQuickItem* target) {
+				CHECK(target && target->isVisible() && target->isEnabled());
+				QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+				                  target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint());
+				settle();
+			};
+			auto* fake = rig.call("provider").value<QObject*>();
+			CHECK(fake);
+			rig.resizeTo(560);
+			rig.call("use", QStringLiteral("field"));
+			rig.call("expandAllAsTheClientDoes");
+			fake->setProperty("draftOpens", true);
+			// J 10: Config a struct, Gain a value, both Regular.
+			const int gainRow = rig.rowOf("Gain"), periodRow = rig.rowOf("SamplePeriodMs"), enabledRow = rig.rowOf("Enabled");
+			CHECK(named(item(0), "kindIcon") && named(item(0), "kindIcon")->property("name").toString() == "struct");
+			CHECK(named(item(gainRow), "kindIcon")->property("name").toString() == "value");
+			CHECK(named(item(rig.rowOf("Taps")), "kindIcon")->property("name").toString() == "array");
+			CHECK(rig.row(0).value("weight").toInt() == QFont::Normal && rig.row(gainRow).value("weight").toInt() == QFont::Normal);
+			// The glyph's slot before the name: one depth, one x.
+			CHECK(named(item(gainRow), "kindIcon")->x() < named(item(gainRow), "detailCellName")->x());
+
+			// H 18: edit two values, Apply; the device refuses it.
+			rig.call("editorOpen", gainRow);
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			type("345");
+			rig.key(Qt::Key_Return);
+			rig.call("editorOpen", periodRow);
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			type("50");
+			rig.key(Qt::Key_Return);
+			CHECK(fake->property("editing").toBool());
+			const int reads = fake->property("reads").toInt();
+			press(named(window->contentItem(), "applyButton"));
+			CHECK(rig.call("statusGlyph").toBool());
+			CHECK(QRegularExpression(QStringLiteral("^Apply refused \\d\\d:\\d\\d:\\d\\d · the device does not take these values$"))
+			          .match(rig.call("statusText").toString()).hasMatch());
+			const struct { int row; const char* typed; const char* held; } edited[] = {{gainRow, "345", "1.5"}, {periodRow, "50", "100"}};
+			for (const auto& one : edited) {
+				auto* row = item(one.row);
+				auto* text = named(row, "valueText");
+				CHECK(text->property("text").toString() == QLatin1String(one.typed));
+				CHECK(!text->property("font").value<QFont>().strikeOut());
+				CHECK(color(text, "color") == theme(row->property("highlighted").toBool() ? "selectedForeground" : "textPrimary"));
+				CHECK(rig.row(one.row).value("unsentMark").toBool());
+				auto* caption = named(row, "valueCaption");
+				CHECK(caption && caption->isVisible() &&
+				      caption->property("text").toString() == QStringLiteral("Not applied · device holds %1").arg(QLatin1String(one.held)));
+				CHECK(color(caption, "color") != theme("error"));
+			}
+			CHECK(rig.row(enabledRow).value("valueText").toString() == QStringLiteral("true"));
+			CHECK(fake->property("reads").toInt() == reads + 1);
+			auto* apply = named(window->contentItem(), "applyButton");
+			CHECK(apply->isVisible() && apply->isEnabled());
+			rig.shot(out, QStringLiteral("details-refused-560.png"));
+			rig.call("setBody", 12.5);
+			rig.shot(out, QStringLiteral("details-refused-560-125.png"));
+			CHECK(named(item(gainRow), "valueCaption")->isVisible());
+			rig.call("setBody", 10);
+			// Cancel: the values read, no line under any cell.
+			press(named(window->contentItem(), "cancelEditButton"));
+			CHECK(rig.row(gainRow).value("valueText").toString() == QStringLiteral("1.5"));
+			CHECK(!named(item(gainRow), "valueCaption")->isVisible() && !named(item(periodRow), "valueCaption")->isVisible());
+
+			// H 19: "300" in a u8 cell. Enter and Ctrl+Enter keep the editor
+			// open, its border in the error colour, nothing kept, Apply not run,
+			// each refusal said once; Esc leaves; Tab leaves to the next cell.
+			rig.call("use", QStringLiteral("byte"));
+			rig.call("expandAllAsTheClientDoes");
+			const int threshold = rig.rowOf("Threshold"), level = rig.rowOf("Level");
+			fake->setProperty("editing", true);
+			const int applies = fake->property("applies").toInt();
+			rig.call("editorOpen", threshold);
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			type("300");
+			auto* byteCell = cell(threshold);
+			const int said = byteCell->property("announced").toInt();
+			rig.key(Qt::Key_Return);
+			CHECK(byteCell->property("open").toBool() && byteCell->property("announced").toInt() == said + 1);
+			CHECK(color(named(item(threshold), "scalarEditorBorder"), "border.color") == theme("error"));
+			rig.key(Qt::Key_Return, Qt::ControlModifier);
+			CHECK(byteCell->property("open").toBool() && byteCell->property("announced").toInt() == said + 2);
+			CHECK(fake->property("applies").toInt() == applies);
+			CHECK(rig.row(threshold).value("valueText").toString().isEmpty());  // the editor shows, not the value
+			rig.key(Qt::Key_Escape);
+			CHECK(!byteCell->property("open").toBool() && rig.row(threshold).value("valueText").toString() == QStringLiteral("100"));
+			CHECK(!window->activeFocusItem() || window->activeFocusItem()->objectName() != QLatin1String("scalarEditor"));
+			rig.call("editorOpen", threshold);
+			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+			type("300");
+			rig.key(Qt::Key_Tab);
+			// The last value that was one: typing is live in Details, so "30"
+			// (typed on the way to "300") is the draft's.
+			CHECK(!byteCell->property("open").toBool() && rig.row(threshold).value("valueText").toString() == QStringLiteral("30"));
+			CHECK(named(item(threshold), "valueCaption")->property("text").toString() ==
+			      QStringLiteral("Not changed: “300” · u8 takes 0 to 255."));
+			CHECK(cell(level)->property("open").toBool());
+			CHECK(window->activeFocusItem() && item(level)->isAncestorOf(window->activeFocusItem()));
+			rig.key(Qt::Key_Escape);
+			fake->setProperty("editing", false);
+			fake->setProperty("draftOpens", false);
+
+			// "-" closes everything under the row; its menu item says so.
+			rig.call("use", QStringLiteral("field"));
+			rig.call("expandAllAsTheClientDoes");
+			CHECK(rig.call("rowCount").toInt() > 1);
+			rig.select(0);
+			rig.key(Qt::Key_Minus);
+			CHECK(rig.call("rowCount").toInt() == 1);
+			rig.call("openRowMenu", 0);
+			auto* collapse = window->findChild<QObject*>(QStringLiteral("treeMenuCollapseUnder"));
+			CHECK(collapse && collapse->property("text").toString() == QStringLiteral("Collapse all under\t-"));
+			rig.key(Qt::Key_Escape);
+		}
 
 		std::printf("Details tree checks=%d warnings=%d\n", checks, warnings);
 		return warnings == 0 ? 0 : 1;

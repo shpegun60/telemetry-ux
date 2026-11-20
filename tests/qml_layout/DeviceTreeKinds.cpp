@@ -556,6 +556,25 @@ int main(int argc, char** argv)
 		CHECK(t.part(voltage, "endpointRowAccess")->property("text").toString() == QStringLiteral("r-"));
 		CHECK(t.part(setEnabled, "endpointRowAccess")->property("text").toString().isEmpty() ||
 		      t.part(setEnabled, "endpointRowAccess")->property("text").toString() == QStringLiteral("Execute"));
+		// WL-9 check 20 (at the 420 px of the design's mock): every member of
+		// Config shows "rw" at Config's rw x, in the Field's own colour
+		// (textSecondary), never a dimmer one.
+		const auto enabledMember = t.at(QStringLiteral("Fields/device/Config/Enabled"));
+		{
+			auto* configAccess = t.part(config, "endpointRowAccess");
+			CHECK(configAccess && configAccess->isVisible());
+			for (const auto& index : {gain, enabledMember, period}) {
+				auto* access = t.part(index, "endpointRowAccess");
+				CHECK(access && access->isVisible() && access->property("text").toString() == QStringLiteral("rw"));
+				CHECK(near(sceneX(access), sceneX(configAccess)));
+				QQuickItem* letter = nullptr;
+				for (auto* row : access->childItems())
+					for (auto* child : row->childItems())
+						if (!letter && child->property("text").toString() == QStringLiteral("r"))
+							letter = child;
+				CHECK(letter && color(letter) == token("textSecondary"));
+			}
+		}
 
 		// 5. 420 px: rw shown; every count ends where the rw marks end.
 		auto* accessTitle = named(t.panel, QStringLiteral("endpointColumnHeader_3"));
@@ -644,6 +663,9 @@ int main(int argc, char** argv)
 		t.width(280);
 		CHECK(!named(t.panel, QStringLiteral("endpointColumnHeader_3")));
 		CHECK(t.panel->property("accessColumn").toDouble() == 0);
+		// WL-9 check 20: rw gives way on every row, a Field's and its members'.
+		for (const auto& index : {config, gain, enabledMember, period, voltage})
+			CHECK(!t.part(index, "endpointRowAccess"));
 		for (const auto& index : {config, samples, mode}) {
 			auto* rowType = t.part(index, "endpointRowType");
 			CHECK(rowType && !rowType->property("truncated").toBool());

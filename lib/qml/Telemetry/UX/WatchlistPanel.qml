@@ -1,9 +1,13 @@
 // The Watchlist: the watched values and their latest readings. One toolbar
-// row - Read once, Start, the interval, List | Tree and a ⋯ menu - the status
-// under it, then the column titles and the rows: one per value with its whole
-// path, or a tree grouped by path, as Live Expressions shows them. The toolbar
-// and the titles stay where they are; only the rows scroll. As the panel
-// narrows, "Every" goes, then Read once and List | Tree move into ⋯.
+// row - Read once, Start, the interval and its pace, List | Tree, the number
+// format and a ⋯ menu - then one line for what was done last, the column
+// titles and the rows: one per value with its whole path, or a tree grouped by
+// path with each kind's glyph and indent guides, as Live Expressions shows
+// them. The toolbar and the titles stay where they are; only the rows scroll.
+// As the panel narrows, the pace leaves the bar first, then "Every", then Read
+// once and List | Tree move into ⋯ (WL-9, the designer's of 20 November 2026).
+// A value is written in its row; a text the device refuses, or that is no
+// value, stays held in it, struck, with what the device holds under it.
 // Presentation only: the caller owns the provider and all I/O. MIT.
 import QtQuick
 import QtQuick.Controls
@@ -14,6 +18,146 @@ import QtQuick.Templates as T
 Pane {
     id: panel
     required property var provider
+    // No flashes and no moving progress line: the words still change.
+    property bool reducedMotion: false
+    // A column's title, at its column's x.
+    component ColumnTitle: Label {
+        anchors.verticalCenter: parent.verticalCenter
+        color: Theme.textSecondary
+        font.pointSize: Type.caption
+        elide: Text.ElideRight
+        Accessible.role: Accessible.ColumnHeader
+    }
+    // A failure's or a doubt's glyph beside its words: 12 px at 100 %.
+    readonly property int markSize: Math.round(Type.bodyPixels * 0.9)
+
+    // ---- WL-9: the last action, held texts, writes, the change mark ----
+    // Which of the two kinds of last action shows: a row's write ("write")
+    // or what the panel did ("notice"); the newer event wins (D1).
+    property string lastEvent: ""
+    readonly property string writeLineText: writeRefusalText.length > 0 ? writeRefusalText
+        : typeof provider.watchWriteOutcome === "string" ? provider.watchWriteOutcome : ""
+    // A new write event: one started, one's outcome, or a refusal to write.
+    readonly property string writeEventKey: [typeof provider.watchWriteKind === "string" ? provider.watchWriteKind : "",
+                                             typeof provider.watchWriteAt === "number" ? provider.watchWriteAt : 0,
+                                             writeRefusalText].join("|")
+    onWriteEventKeyChanged: {
+        if (writeLineText.length === 0)
+            return
+        lastEvent = "write"
+        const kind = typeof provider.watchWriteKind === "string" ? provider.watchWriteKind : ""
+        if (kind === "confirmed")
+            flashWriteTime()
+        else if (kind === "refused" && writeRefusalText.length === 0)
+            announceRefusal()
+    }
+    Component.onCompleted: if (writeLineText.length > 0) lastEvent = "write"
+    // A confirmed write's time flashes once, as Details' (C5).
+    property int writeTimeFlashes: 0
+    function flashWriteTime() {
+        if (reducedMotion)
+            return
+        ++writeTimeFlashes
+        writeTimeFlash.restart()
+    }
+    // The row last written from here, for what a screen reader hears when
+    // the device refuses it.
+    property var lastWrite: null
+    function writeRow(item, text) {
+        // Another write still runs (an editor Tab opened): the text is held,
+        // nothing lost, and the line says why.
+        if (provider.canWriteWatch !== true) {
+            sayNotWritable(item)
+            holdRowText(item, text, writeRefusalText.length > 0 ? qsTr("Not written: %1").arg(writeRefusalText)
+                                                                 : qsTr("Not written"))
+            writeRefusalLeft = true
+            return
+        }
+        lastWrite = { name: item.name, text: text, row: item.index }
+        // A text kept by the panel itself goes with a new write of its row.
+        if (localHeld[item.name] !== undefined) {
+            const next = Object.assign({}, localHeld)
+            delete next[item.name]
+            localHeld = next
+        }
+        panel.provider.writeWatch(item.sourceRow, text)
+    }
+    function announceRefusal() {
+        if (!lastWrite)
+            return
+        const item = watchList.itemAtIndex(lastWrite.row)
+        const holds = item && item.name === lastWrite.name && item.ok && item.shownText.length > 0 ? item.shownText : ""
+        panel.Accessible.announce(holds.length > 0
+            ? qsTr("Write refused: %1 = %2. The device holds %3.").arg(lastWrite.name).arg(lastWrite.text).arg(holds)
+            : qsTr("Write refused: %1 = %2.").arg(lastWrite.name).arg(lastWrite.text))
+    }
+    // Texts held by the panel for a provider that holds none, by path.
+    property var localHeld: ({})
+    function holdRowText(item, text, reason) {
+        if (typeof provider.holdWatchText === "function" && provider.holdWatchText(item.sourceRow, text, reason))
+            return
+        const next = Object.assign({}, localHeld)
+        next[item.name] = { text: text, reason: reason }
+        localHeld = next
+    }
+    // Lets go of what a row holds - a text, or a doubtful write's mark (Esc
+    // on the row, its menu); true when there was one.
+    function dropRowHeld(item) {
+        if (!item)
+            return false
+        let dropped = false
+        if (localHeld[item.name] !== undefined) {
+            const next = Object.assign({}, localHeld)
+            delete next[item.name]
+            localHeld = next
+            dropped = true
+        }
+        if ((item.isHeld || item.differs) && typeof provider.dropWatchHeld === "function")
+            dropped = provider.dropWatchHeld(item.sourceRow) || dropped
+        return dropped
+    }
+    // The change mark's clock (E5): one 250 ms timer, running only while a
+    // row is marked; rows compare their changedAt with now.
+    property double markClock: 0
+    property double markUntil: 0
+    // A row whose reading changed starts the clock; the row itself reads the
+    // time, so nothing it depends on changes while it is worked out.
+    function noteChange(at) {
+        markUntil = Math.max(markUntil, at + 1000)
+        if (Date.now() < markUntil && !markTicker.running)
+            markTicker.start()
+    }
+    Timer {
+        id: markTicker
+        objectName: "watchMarkTimer"
+        interval: 250
+        repeat: true
+        onTriggered: {
+            panel.markClock = Date.now()
+            if (panel.markClock >= panel.markUntil + 250)
+                stop()
+        }
+    }
+    // The tree's current branch, for its brighter guide (the kinds design, E).
+    property int guideLevel: -1
+    property int guideFrom: 0
+    property int guideTo: -1
+    function updateGuides() {
+        const span = treeView && watchList.currentIndex >= 0 && typeof rows.branchSpan === "function"
+            ? rows.branchSpan(watchList.currentIndex) : null
+        guideLevel = span ? span.level : -1
+        guideFrom = span ? span.from : 0
+        guideTo = span ? span.to : -1
+    }
+    Timer { id: guideTimer; interval: 0; onTriggered: panel.updateGuides() }
+    Connections {
+        target: panel.rows
+        ignoreUnknownSignals: true
+        function onCountChanged() { guideTimer.restart() }
+        function onRowsMoved() { guideTimer.restart() }
+        function onModelReset() { guideTimer.restart() }
+        function onTreeChanged() { guideTimer.restart() }
+    }
     // The provider's history (UR-1): where its changes go as steps. Ctrl+Z
     // is the window's UndoRouter's; the notice under the toolbar offers the
     // Undo of what the panel just did, and says what an undo of a Watchlist
@@ -58,8 +202,10 @@ Pane {
             watchList.positionViewAtIndex(i, ListView.Contain)
             watchList.forceLayout()
             const item = watchList.itemAtIndex(i)
-            if (item && item.isValue && item.writable) {
-                item.startEdit()
+            // Tab goes on to the next editable value even while the write it
+            // made still runs; that value's own commit waits its turn (C2).
+            if (item && item.isValue && item.editableRow) {
+                item.startEdit(true)
                 return true
             }
         }
@@ -260,10 +406,12 @@ Pane {
     // own. The view's only; a write takes any form whatever is shown.
     readonly property bool formatAvailable: typeof provider.watchFormat === "string"
     readonly property string format: formatAvailable ? provider.watchFormat : "original"
+    // Each form changes something (WL-9 B1); the same words are the
+    // segments' accessible descriptions, so the difference is not hover-only.
     readonly property var formats: [
-        { name: "original", text: qsTr("Original"), tip: qsTr("Original: as the type means it (1.5, High, true)") },
-        { name: "dec", text: qsTr("Dec"), tip: qsTr("Dec: integers and codes in decimal (2, 1)") },
-        { name: "hex", text: qsTr("Hex"), tip: qsTr("Hex: the value's bits, floats included (0x3FC00000)") }
+        { name: "original", text: qsTr("Original"), tip: qsTr("Original: as the type means it (0.1, Idle (2), false (0))") },
+        { name: "dec", text: qsTr("Dec"), tip: qsTr("Dec: every digit a float holds (0.1 shows as 0.100000001); integers and codes as Original") },
+        { name: "hex", text: qsTr("Hex"), tip: qsTr("Hex: the bits (0x3DCCCCCD, Idle (0x02))") }
     ]
     function formatWord(name) {
         const found = formats.find(item => item.name === name)
@@ -434,6 +582,8 @@ Pane {
     readonly property int revision: typeof provider.watchRevision === "number" ? provider.watchRevision : -1
     function say(text, serial) {
         notice.say(text, serial)
+        if (text.length > 0)
+            lastEvent = "notice"
         // The notice is what is said, not the selection it left.
         selectionAnnounce.stop()
         announcedCount = selectedCount
@@ -606,34 +756,56 @@ Pane {
     readonly property real ownMarkWidth: ownMarkShown ? ownFormats.implicitWidth + 2 * barGap : 0
     readonly property real formatButtonWidth: formatAvailable ? formatButton.implicitWidth + 2 * barGap + ownMarkWidth : 0
     readonly property real formatSegmentsWidth: formatAvailable ? formatSegments.implicitWidth + 2 * barGap + ownMarkWidth : 0
+    // The bar's room: from L to R (WL-9 E1).
+    readonly property real barRoom: Math.max(0, availableWidth - Type.padding - scrollReserve)
     readonly property bool viewInBar: treeAvailable
-                                      && availableWidth >= barBase + formatButtonWidth + viewSegments.implicitWidth + barGap
+                                      && barRoom >= barBase + formatButtonWidth + viewSegments.implicitWidth + barGap
     readonly property real barCore: barBase + (viewInBar ? viewSegments.implicitWidth + barGap : 0) + formatButtonWidth
     readonly property bool readOnceInBar: (viewInBar || !treeAvailable)
-                                          && availableWidth >= barCore + readOnce.barWidth + barGap
+                                          && barRoom >= barCore + readOnce.barWidth + barGap
     readonly property bool formatInBar: formatAvailable && readOnceInBar
-        && availableWidth >= barCore - formatButtonWidth + formatSegmentsWidth + readOnce.barWidth + barGap
-    readonly property bool everyShown: readOnceInBar && (formatInBar || !formatAvailable)
-        && availableWidth >= barCore - formatButtonWidth + formatSegmentsWidth + readOnce.barWidth
-                             + every.implicitWidth + 2 * barGap
-    // The row family's columns (family A1-A3): Name fills; Value, Type and
-    // Status are as wide as the widest text they have shown, growing only
-    // until the list is cleared or the zoom changes, so a reading never makes
-    // them jump; rw is two letters. As the room for names shrinks, rw hides
-    // below 140 px, Type narrows to 40 px below 120 and hides below 96, then
-    // Status becomes a glyph whose word is in its tooltip. Name, Value and ×
-    // never hide, and a row is one line except while it is edited.
-    readonly property real columnGap: Math.round(Type.bodyPixels * 0.9)
+        && barRoom >= barCore - formatButtonWidth + formatSegmentsWidth + readOnce.barWidth + barGap
+    // Every control of the bar at its widest, "Every" included.
+    readonly property real barFull: barCore - (formatAvailable ? formatButtonWidth - formatSegmentsWidth : 0)
+                                    + readOnce.barWidth + every.implicitWidth + 2 * barGap
+    readonly property bool everyShown: readOnceInBar && (formatInBar || !formatAvailable) && barRoom >= barFull
+    // The pace beside the interval it qualifies (WL-9 D1), while the bar
+    // holds it whole beside every other control; it is the first to leave.
+    readonly property bool statusLineShown: (statusShown || readManyAdvice || paceText.length > 0) && statusText.length > 0
+    readonly property bool statusWarns: readManyAdvice || (paceBehind && paceText.length > 0 && statusText === paceText)
+    TextMetrics { id: paceMetrics; font.family: panel.font.family; font.pointSize: Type.caption; text: panel.statusText }
+    readonly property bool paceInBar: everyShown && statusLineShown && paceText.length > 0 && statusText === paceText
+        && barRoom >= barFull + Type.groupSpacing + Math.ceil(paceMetrics.advanceWidth)
+                      + (statusWarns ? markSize + Type.spacing : 0)
+    // The row family's columns (WL-9 A1-A2): Name, Value, Type, rw, Status
+    // and ×, one columnGap apart. Value, Type and Status are as wide as the
+    // widest text they have shown, growing only until the list is cleared or
+    // the zoom changes, so a reading never makes them jump; rw is two
+    // letters. Every column stands at one x on every row (valueX, typeX,
+    // accessX, statusX, removeX). The Name column fills up to its cap: the
+    // widest name's end plus a gap, or 24 body heights, so in a wide dock the
+    // values stay beside their names and the spare room lies after ×. As the
+    // room for names shrinks (on the deepest row shown): rw hides first, then
+    // Status becomes a glyph whose word is in its tooltip, then names elide
+    // down to their floor, then a row's type gives way at its right. Value
+    // never narrows below its widest number, Type never hides, nothing
+    // scrolls sideways.
+    readonly property real columnGap: Type.columnGap
     readonly property real removeColumnWidth: Type.rowHeight
+    // R: the rows' right line, clear of the scroll bar.
     readonly property real listWidth: Math.max(0, watchList.width - scrollReserve)
     property real valueSeen: 0
     property real typeSeen: 0
     property real statusSeen: 0
     property bool accessSeen: false
+    property real nameSeen: 0
+    property int deepestSeen: 0
     property real valuePending: 0
     property real typePending: 0
     property real statusPending: 0
     property bool accessPending: false
+    property real namePending: 0
+    property int deepestPending: 0
     function noteNumber(width) {
         if (width > numberSeen)
             numberSeen = width
@@ -647,14 +819,25 @@ Pane {
             applyMeasured.restart()
         }
     }
+    // A name's right end from the row's left (indent, chevron and glyph
+    // included), and its row's depth: the cap and the give-way follow them.
+    function noteName(end, depth) {
+        if (end > namePending || depth > deepestPending) {
+            namePending = Math.max(namePending, end)
+            deepestPending = Math.max(deepestPending, depth)
+            applyMeasured.restart()
+        }
+    }
     // Forgets the widths (a cleared list, a new zoom) and asks every row to
     // measure itself again: a type's text never changes, so its row would
     // not report it a second time by itself.
     property int measureEpoch: 0
     function forgetMeasured() {
-        valuePending = typePending = statusPending = 0
+        valuePending = typePending = statusPending = namePending = 0
+        deepestPending = 0
         accessPending = false
-        valueSeen = typeSeen = statusSeen = numberSeen = 0
+        valueSeen = typeSeen = statusSeen = numberSeen = nameSeen = 0
+        deepestSeen = 0
         accessSeen = false
         ++measureEpoch
     }
@@ -667,9 +850,12 @@ Pane {
             panel.typeSeen = Math.max(panel.typeSeen, panel.typePending)
             panel.statusSeen = Math.max(panel.statusSeen, panel.statusPending)
             panel.accessSeen = panel.accessSeen || panel.accessPending
+            panel.nameSeen = Math.max(panel.nameSeen, panel.namePending)
+            panel.deepestSeen = Math.max(panel.deepestSeen, panel.deepestPending)
         }
     }
     onCountChanged: if (count === 0) forgetMeasured()
+    onTreeViewChanged: forgetMeasured()
     Connections {
         target: Type
         function onBodyPixelsChanged() { panel.forgetMeasured() }
@@ -684,24 +870,45 @@ Pane {
         : Math.max(Math.round(Type.bodyPixels * 4.2),
                    Math.min(Math.ceil(numberSeen) + pencilRoom, listWidth * 0.55),
                    Math.min(Math.ceil(valueSeen) + pencilRoom, Type.bodyPixels * 16.5, listWidth * 0.4))
-    readonly property real typeFull: typeSeen > 0 ? Math.max(Type.bodyPixels * 3, Math.min(Math.ceil(typeSeen), Type.bodyPixels * 9.6)) : 0
+    // Type never hides (WL-9 A2): as wide as the widest type, 3 to 9.6 body
+    // heights; a row whose name would drop below its floor takes its room
+    // from its own type, which elides at its right, the whole in its tooltip.
+    readonly property real typeColumn: typeSeen > 0 ? Math.max(Type.bodyPixels * 3, Math.min(Math.ceil(typeSeen), Type.bodyPixels * 9.6)) : 0
+    readonly property real typeLeast: Math.round(Type.bodyPixels * 1.5)
     readonly property real accessFull: accessSeen ? Math.round(Type.bodyPixels * 1.05) : 0
     TextMetrics { id: statusTitleMetrics; font.family: panel.font.family; font.pointSize: Type.caption; text: qsTr("Status") }
     readonly property real statusFull: statusSeen > 0 ? Math.ceil(Math.max(statusSeen, statusTitleMetrics.advanceWidth)) : 0
     readonly property real glyphWidth: Math.round(Type.bodyPixels * 1.05)
-    function nameRoom(type, access, status) {
-        return listWidth - Type.padding - valueColumn - removeColumnWidth - 2 * columnGap
-            - (treeView ? 3 * Type.indent : 0)
-            - (type > 0 ? type + columnGap : 0) - (access > 0 ? access + columnGap : 0)
-            - (status > 0 ? status + columnGap : 0)
+    // Where a row's name starts: in the tree after its chevron and its kind
+    // glyph (42 + 16 × depth at 100 %), in the list on L.
+    function nameXAt(depth) {
+        return treeView ? Type.padding + (depth + 1) * Type.indent + Type.iconSize + Type.spacing : Type.padding
     }
-    readonly property real accessColumn: accessFull > 0 && nameRoom(typeFull, accessFull, statusFull) >= Type.bodyPixels * 10.5
+    // Where Value starts when the Name column fills: everything after it is
+    // as wide as it is, × ending on R.
+    function fillValueX(access, status) {
+        return listWidth - removeColumnWidth - columnGap
+            - (status > 0 ? status + columnGap : 0) - (access > 0 ? access + columnGap : 0)
+            - (typeColumn > 0 ? typeColumn + columnGap : 0) - valueColumn
+    }
+    // The room for names on the deepest row shown, with these columns.
+    function deepestRoom(access, status) {
+        return fillValueX(access, status) - columnGap - nameXAt(treeView ? deepestSeen : 0)
+    }
+    readonly property real accessColumn: accessFull > 0 && deepestRoom(accessFull, statusFull) >= Type.bodyPixels * 7.2
                                          ? accessFull : 0
-    readonly property real typeColumn: typeFull <= 0 ? 0
-        : nameRoom(typeFull, 0, statusFull) >= Type.bodyPixels * 9 ? typeFull
-        : nameRoom(Type.bodyPixels * 3, 0, statusFull) >= Type.bodyPixels * 7.2 ? Type.bodyPixels * 3 : 0
-    readonly property bool statusGlyph: statusFull > 0 && nameRoom(typeColumn, accessColumn, statusFull) < Type.bodyPixels * 7.2
+    readonly property bool statusGlyph: statusFull > 0 && deepestRoom(accessColumn, statusFull) < Type.bodyPixels * 7.2
     readonly property real statusColumn: statusFull <= 0 ? 0 : statusGlyph ? glyphWidth : statusFull
+    // The Name column's cap: never below the widest name, so it never elides one.
+    readonly property real nameCap: Math.max(nameSeen + columnGap, Type.bodyPixels * 24)
+    readonly property real valueX: Math.max(nameXAt(0), Math.min(fillValueX(accessColumn, statusColumn), nameCap + columnGap))
+    readonly property real typeX: valueX + valueColumn + columnGap
+    readonly property real accessX: typeX + (typeColumn > 0 ? typeColumn + columnGap : 0)
+    readonly property real statusX: accessX + (accessColumn > 0 ? accessColumn + columnGap : 0)
+    // × follows the last shown column; the spare room of a wide dock lies after it.
+    readonly property real removeX: statusX + (statusColumn > 0 ? statusColumn + columnGap : 0)
+    // The column group's right edge: the last shown column's (Status, rw, Type, else Value).
+    readonly property real groupRight: removeX - columnGap
     // Rows end left of the overlay scrollbar, so × never sits under it.
     readonly property real scrollReserve: Math.max(watchScrollBar.implicitWidth, Type.spacing) + Type.tight
 
@@ -733,7 +940,13 @@ Pane {
         return qsTr("%1 ms").arg(ms)
     }
 
-    padding: Type.padding
+    // No horizontal padding (WL-9 E1): row fills, stripes and the header rule
+    // span the pane; text stands on one left line L (Type.padding) and the
+    // toolbar ends on R (the scroll bar's edge).
+    topPadding: Type.padding
+    bottomPadding: Type.padding
+    leftPadding: 0
+    rightPadding: 0
     implicitWidth: Type.bodyPixels * 30
     background: Rectangle {
         color: panel.framed ? Theme.surface : Theme.surfaceWindow
@@ -748,6 +961,8 @@ Pane {
             id: bar
             objectName: "watchToolbar"
             Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: panel.scrollReserve
             Layout.minimumHeight: Type.controlHeight
             spacing: panel.barGap
             // The title, which folds the list. One state, two ways in: a host
@@ -891,6 +1106,41 @@ Pane {
                         focus = false
                         interval.resync()
                     }
+                }
+            }
+            // The pace in the bar, a group's gap after the interval it
+            // qualifies (WL-9 D1); behind, the warning glyph before it. The
+            // same words, tooltip and announcements as under the bar.
+            ToolIcon {
+                objectName: "watchBarStatusGlyph"
+                visible: panel.paceInBar && panel.statusWarns
+                Layout.leftMargin: Type.groupSpacing - panel.barGap
+                Layout.preferredWidth: panel.markSize
+                Layout.preferredHeight: panel.markSize
+                Layout.alignment: Qt.AlignVCenter
+                name: "warning"
+                color: Theme.warning
+                Accessible.ignored: true
+            }
+            Label {
+                id: barStatus
+                // The name of whichever of the two places shows the status.
+                objectName: panel.paceInBar ? "watchStatusLabel" : "watchBarStatusLabel"
+                visible: panel.paceInBar
+                Layout.leftMargin: panel.statusWarns ? 0 : Type.groupSpacing - panel.barGap
+                Layout.alignment: Qt.AlignVCenter
+                textFormat: Text.PlainText
+                text: panel.statusText
+                color: Theme.textSecondary
+                font.pointSize: Type.caption
+                readonly property string tip: panel.paceText.length > 0 ? panel.paceTip : ""
+                Accessible.description: tip
+                HoverHandler { id: barStatusHover }
+                PlainToolTip {
+                    objectName: panel.paceInBar ? "watchPaceTip" : "watchBarPaceTip"
+                    visible: barStatusHover.hovered && barStatus.tip.length > 0
+                    delay: 700
+                    text: barStatus.tip
                 }
             }
             Item {
@@ -1309,59 +1559,145 @@ Pane {
             }
         }
 
-        // The status under the toolbar, wrapped: a failure's advice is read
-        // whole, however long, and the toolbar does not move as it changes.
-        Label {
-            objectName: "watchStatusLabel"
-            visible: (panel.statusShown || panel.readManyAdvice || panel.paceText.length > 0) && text.length > 0
+        // The status under the toolbar, wrapped: the pace when the bar cannot
+        // hold it whole beside every other control (WL-9 D1), a wait, a
+        // failure's advice read whole however long; the toolbar does not move
+        // as it changes. Behind its interval, the warning glyph precedes it.
+        RowLayout {
+            id: statusRow
+            objectName: "watchStatusRow"
+            visible: panel.statusLineShown && !panel.paceInBar
             Layout.fillWidth: true
-            // The height its text takes, wrapped: the layout missed this
-            // label's implicit height growing (a bigger font, a glyph from a
-            // fallback font) and cut the last line.
-            Layout.preferredHeight: Math.ceil(contentHeight)
-            textFormat: Text.PlainText
-            text: panel.statusText
-            color: panel.readManyAdvice ? Theme.warning : Theme.textSecondary
-            font.pointSize: Type.caption
-            wrapMode: Text.Wrap
-            readonly property string tip: panel.paceText.length > 0 ? panel.paceTip : ""
-            Accessible.description: tip
-            HoverHandler { id: statusHover }
-            PlainToolTip {
-                objectName: "watchPaceTip"
-                visible: statusHover.hovered && parent.tip.length > 0
-                delay: 700
-                text: parent.tip
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: panel.scrollReserve
+            spacing: Type.spacing
+            ToolIcon {
+                objectName: "watchStatusGlyph"
+                visible: panel.statusWarns
+                Layout.alignment: Qt.AlignTop
+                Layout.topMargin: Math.max(0, (statusLineMetrics.height - height) / 2)
+                Layout.preferredWidth: panel.markSize
+                Layout.preferredHeight: panel.markSize
+                name: "warning"
+                color: Theme.warning
+                Accessible.ignored: true
+            }
+            Label {
+                id: statusLine
+                objectName: panel.paceInBar ? "watchLineStatusLabel" : "watchStatusLabel"
+                Layout.fillWidth: true
+                // The height its text takes, wrapped: the layout missed this
+                // label's implicit height growing (a bigger font, a glyph from a
+                // fallback font) and cut the last line.
+                Layout.preferredHeight: Math.ceil(contentHeight)
+                textFormat: Text.PlainText
+                text: panel.statusText
+                color: panel.readManyAdvice ? Theme.warning : Theme.textSecondary
+                font.pointSize: Type.caption
+                wrapMode: Text.Wrap
+                readonly property string tip: panel.paceText.length > 0 ? panel.paceTip : ""
+                Accessible.description: tip
+                FontMetrics { id: statusLineMetrics; font: statusLine.font }
+                HoverHandler { id: statusHover }
+                PlainToolTip {
+                    objectName: panel.paceInBar ? "watchLinePaceTip" : "watchPaceTip"
+                    visible: statusHover.hovered && statusLine.tip.length > 0
+                    delay: 700
+                    text: statusLine.tip
+                }
             }
         }
-        // The outcome of the last write from a row, in words; or why the row
-        // asked to write can't be.
-        // A write the device confirmed reads quietly; one it reads back
-        // otherwise, or that could not be read back or was refused, stands
-        // out (WL-5).
+        // What was done last, in one line (WL-9 D1): a row's write ("Wrote
+        // 22:31:05 · device.Config.Gain = 2 · read back 2"), why a row can't be
+        // written, or what the panel did ("Removed 3 values of device.Config ·
+        // Undo"). The newer event wins. A failure has the error glyph, a doubt
+        // the warning glyph, its words in the primary colour; a confirmed
+        // write's time flashes once. What a newer event pushes out, the row
+        // still shows.
         RowLayout {
-            visible: panel.open && writeOutcome.text.length > 0
+            id: writeLine
+            objectName: "watchWriteLine"
+            visible: panel.open && panel.lastEvent === "write" && writeOutcome.text.length > 0
             Layout.fillWidth: true
-            spacing: Type.tight
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: panel.scrollReserve
+            spacing: Type.spacing
+            ErrorGlyph {
+                objectName: "watchWriteGlyph"
+                visible: writeOutcome.kind === "refused"
+                Layout.alignment: Qt.AlignTop
+                Layout.topMargin: Math.max(0, (writeOutcome.lineHeightPixels - height) / 2)
+            }
+            ToolIcon {
+                objectName: "watchWriteWarning"
+                visible: writeOutcome.kind === "differs" || writeOutcome.kind === "unconfirmed"
+                Layout.alignment: Qt.AlignTop
+                Layout.topMargin: Math.max(0, (writeOutcome.lineHeightPixels - height) / 2)
+                Layout.preferredWidth: panel.markSize
+                Layout.preferredHeight: panel.markSize
+                name: "warning"
+                color: Theme.warning
+                Accessible.ignored: true
+            }
             Label {
                 id: writeOutcome
                 objectName: "watchWriteOutcome"
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.ceil(contentHeight)
+                // Its two lines at most from its implicit height: a height set
+                // from the text it shows would cut it to the first line.
+                Layout.minimumWidth: 0
+                readonly property real lineHeightPixels: writeMetrics.height
                 textFormat: Text.PlainText
-                text: panel.writeRefusalText.length > 0 ? panel.writeRefusalText
-                    : panel.provider.watchWriteOutcome === undefined ? "" : panel.provider.watchWriteOutcome
+                text: panel.writeLineText
                 readonly property string kind: panel.writeRefusalText.length > 0 ? "refused"
                     : typeof panel.provider.watchWriteKind === "string" ? panel.provider.watchWriteKind : ""
-                color: kind === "differs" || kind === "unconfirmed" || kind === "refused" ? Theme.textPrimary
-                                                                                           : Theme.textSecondary
+                readonly property bool failed: kind === "refused" || kind === "differs" || kind === "unconfirmed"
+                color: failed ? Theme.textPrimary : Theme.textSecondary
                 font.pointSize: Type.caption
                 wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                Accessible.name: text
+                FontMetrics { id: writeMetrics; font: writeOutcome.font }
+                HoverHandler { id: writeHover }
+                PlainToolTip { visible: writeHover.hovered && writeOutcome.truncated; text: writeOutcome.text; delay: 700 }
+                // The time, flashed once in the accent when a write is read back
+                // as written: the same glyphs over the line's own, fading out.
+                Label {
+                    id: writeTime
+                    objectName: "watchWriteTime"
+                    readonly property var found: /\b\d{1,2}:\d{2}:\d{2}\b/.exec(writeOutcome.text)
+                    text: found ? found[0] : ""
+                    x: found ? Math.round(writePrefix.advanceWidth) : 0
+                    y: 0
+                    height: writeOutcome.lineHeightPixels
+                    textFormat: Text.PlainText
+                    font: writeOutcome.font
+                    color: Theme.accent
+                    opacity: 0
+                    visible: text.length > 0 && writePrefix.advanceWidth < writeOutcome.width
+                    Accessible.ignored: true
+                    TextMetrics {
+                        id: writePrefix
+                        font: writeOutcome.font
+                        text: writeTime.found ? writeOutcome.text.substring(0, writeTime.found.index) : ""
+                    }
+                }
+                OpacityAnimator {
+                    id: writeTimeFlash
+                    target: writeTime
+                    from: 1
+                    to: 0
+                    duration: 600
+                    easing.type: Easing.InQuad
+                }
             }
             LinkButton {
                 objectName: "watchAllowChanges"
                 visible: panel.writeRefusalText.length > 0 && panel.writeRefusalChanges &&
                          panel.provider.allowMutations === false
+                Layout.alignment: Qt.AlignTop
+                font.pointSize: Type.caption
                 text: qsTr("Allow changes")
                 onClicked: {
                     panel.provider.allowMutations = true
@@ -1375,40 +1711,47 @@ Pane {
         // What the last removal, copy or format did, as the Device tree says
         // it: "Removed 3 values of device.Config · Undo", Undo while that step
         // is the one Undo would take; "Copied device.Config.Gain". It speaks
-        // for the Watchlist's steps undone or redone anywhere.
+        // for the Watchlist's steps undone or redone anywhere. The same line
+        // as a write's outcome: whichever came last shows.
         UndoNotice {
             id: notice
             objectName: "watchNotice"
             Layout.fillWidth: true
+            Layout.leftMargin: Type.padding
+            Layout.rightMargin: panel.scrollReserve
             active: panel.open
+            visible: active && text.length > 0 && panel.lastEvent !== "write"
             history: panel.history
             kinds: ["watch.rows", "watch.format"]
             revision: panel.revision
+            onMessageChanged: if (message.length > 0) panel.lastEvent = "notice"
         }
-        // Column titles over the one-line rows; they stay while the rows scroll.
-        RowLayout {
+        // Column titles over the rows, each at its column's x on every row;
+        // "Name" over the depth-0 names. They stay while the rows scroll, a
+        // group's gap below the lines above them (WL-9 E2).
+        Item {
+            id: columnTitles
             objectName: "watchColumns"
             visible: panel.open && panel.count > 0
             Layout.fillWidth: true
-            Layout.rightMargin: panel.scrollReserve
-            Layout.topMargin: Type.tight
-            // The row family's gap: "230" and "OK" read as two things.
-            spacing: panel.columnGap
+            Layout.topMargin: Type.groupSpacing - Type.tight
+            Layout.preferredHeight: nameHeader.implicitHeight
             // The list by name, A-Z, and back to the order added (WL-2c); the
             // tree keeps the device's order, so its header only names.
             Label {
                 id: nameHeader
                 objectName: "watchColumnName"
                 readonly property bool sortable: panel.sortable && !panel.treeView
-                text: sortable && panel.sorted ? qsTr("Name") + " \u25B4" : qsTr("Name")
+                text: sortable && panel.sorted ? qsTr("Name") + " ▴" : qsTr("Name")
                 color: nameHeaderHover.hovered && sortable ? Theme.textPrimary : Theme.textSecondary
                 font.pointSize: Type.caption
-                // A target as tall as a row; the text stays where it was.
+                // A target as tall as a row; the text stays on the names' x.
                 leftPadding: Type.tight
+                rightPadding: Type.tight
                 topPadding: Type.tight
                 bottomPadding: Type.tight
-                Layout.leftMargin: Type.padding - Type.tight
-                Layout.fillWidth: true
+                x: panel.nameXAt(0) - leftPadding
+                width: Math.min(implicitWidth, Math.max(0, panel.valueX - panel.columnGap - x))
                 elide: Text.ElideRight
                 background: Rectangle {
                     radius: Type.radius
@@ -1432,22 +1775,45 @@ Pane {
                 Accessible.description: sortable ? (panel.sorted ? qsTr("Press for the order added") : qsTr("Press to sort by name, A to Z")) : ""
                 Accessible.onPressAction: if (sortable) panel.setSorted(!panel.sorted)
             }
-            Label { objectName: "watchColumnValue"; text: qsTr("Value"); color: Theme.textSecondary; font.pointSize: Type.caption; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: panel.valueColumn; elide: Text.ElideRight
-                    Accessible.role: Accessible.ColumnHeader }
-            Label { objectName: "watchColumnType"; visible: panel.typeColumn > 0; text: qsTr("Type"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.typeColumn; elide: Text.ElideRight
-                    Accessible.role: Accessible.ColumnHeader }
-            Label { objectName: "watchColumnAccess"; visible: panel.accessColumn > 0; text: qsTr("rw"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.accessColumn
-                    Accessible.role: Accessible.ColumnHeader; Accessible.name: qsTr("Access")
-                    ToolTip.visible: accessTitleHover.hovered; ToolTip.delay: 700; ToolTip.text: qsTr("Access: r can be read, w can be written")
-                    HoverHandler { id: accessTitleHover } }
-            Label { objectName: "watchColumnStatus"; visible: panel.statusColumn > 0; text: panel.statusGlyph ? "" : qsTr("Status"); color: Theme.textSecondary; font.pointSize: Type.caption; Layout.preferredWidth: panel.statusColumn }
-            Item { Layout.preferredWidth: panel.removeColumnWidth }
+            ColumnTitle {
+                objectName: "watchColumnValue"
+                x: panel.valueX
+                width: panel.valueColumn
+                text: qsTr("Value")
+                horizontalAlignment: Text.AlignRight
+            }
+            ColumnTitle {
+                objectName: "watchColumnType"
+                visible: panel.typeColumn > 0
+                x: panel.typeX
+                width: panel.typeColumn
+                text: qsTr("Type")
+            }
+            ColumnTitle {
+                objectName: "watchColumnAccess"
+                visible: panel.accessColumn > 0
+                x: panel.accessX
+                width: panel.accessColumn
+                text: qsTr("rw")
+                Accessible.name: qsTr("Access")
+                ToolTip.visible: accessTitleHover.hovered
+                ToolTip.delay: 700
+                ToolTip.text: qsTr("Access: r can be read, w can be written")
+                HoverHandler { id: accessTitleHover }
+            }
+            ColumnTitle {
+                objectName: "watchColumnStatus"
+                visible: panel.statusColumn > 0
+                x: panel.statusX
+                width: panel.statusColumn
+                text: panel.statusGlyph ? "" : qsTr("Status")
+            }
         }
+        // The rule under the titles spans the pane, as the row fills do.
         Rectangle {
             objectName: "watchColumnsRule"
             visible: panel.open && panel.count > 0
             Layout.fillWidth: true
-            Layout.rightMargin: panel.scrollReserve
             Layout.preferredHeight: 1
             color: Theme.outlineVariant
         }
@@ -1460,6 +1826,7 @@ Pane {
             id: watchList
             Accessible.role: panel.treeView ? Accessible.Tree : Accessible.List
             onCurrentIndexChanged: {
+                guideTimer.restart()
                 if (panel.writeRefusalLeft)
                     return
                 panel.writeRefusalText = ""
@@ -1584,6 +1951,12 @@ Pane {
                 }
                 if (currentIndex < 0)
                     return
+                // Esc steps out: after the selection, a held text or a
+                // doubtful write's mark on the current row goes (WL-9 C2).
+                if (event.key === Qt.Key_Escape && event.modifiers === Qt.NoModifier) {
+                    event.accepted = panel.dropRowHeld(currentItem)
+                    return
+                }
                 if (event.key === Qt.Key_C && event.modifiers === Qt.ControlModifier) {
                     event.accepted = panel.copyRows(currentIndex, "lines")
                     return
@@ -1649,8 +2022,9 @@ Pane {
                 required property string name
                 required property string status
                 required property string text
-                // Optional roles (writable, sampleValue, sampleExact) are read
-                // through the model object, so other providers need not have them.
+                // Optional roles (writable, sampleValue, sampleExact, the WL-9
+                // ones) are read through the model object, so other providers
+                // need not have them.
                 required property var model
                 width: watchList.width
                 // Dragged by the mouse past the threshold: its values' paths go
@@ -1673,10 +2047,15 @@ Pane {
                     enabled: !watchRow.editing
                 }
                 // A writable Field is changed in its own row, as in Live
-                // Expressions: double-click the value (or the pencil, or F2),
-                // Enter writes, Esc or clicking elsewhere cancels.
+                // Expressions: double-click the value (or F2), Enter writes,
+                // Esc cancels; Tab or a click away writes, or holds text that
+                // is no value.
                 readonly property bool writable: model.writable === true &&
                                                  panel.provider.canWriteWatch === true
+                // The value takes text at all: its editor stays made while a
+                // write runs, so the typed value, a held text and a confirmed
+                // read-back's flash show in it.
+                readonly property bool editableRow: model.writable === true
                 // What the row is: a value, or in the tree a node above values
                 // (a group, a struct, an array, an element of one).
                 readonly property string node: typeof model.node === "string" ? model.node : "value"
@@ -1687,7 +2066,7 @@ Pane {
                 readonly property bool expanded: model.expanded === true
                 readonly property int leaves: typeof model.leaves === "number" ? model.leaves : 1
                 // Inside a Field in the tree: one read, one outcome, shown on
-                // the Field; its members leave Status and rw blank.
+                // the Field; its members leave Status blank and show its rw.
                 readonly property bool nested: model.nested === true
                 readonly property int sourceRow: typeof model.sourceRow === "number" ? model.sourceRow : index
                 // The cell is open: the same ValueCell as Details'.
@@ -1720,12 +2099,16 @@ Pane {
                     : ""
                 readonly property string editorKind: typeof model.editorKind === "string" ? model.editorKind : "text"
                 readonly property bool choicesTruncated: model.editorChoicesTruncated === true
-                function startEdit() {
-                    if (!writable && isValue) {
+                // fromTab: the editor before it moved on here (C2), which
+                // opens it even while that editor's write still runs.
+                function startEdit(fromTab) {
+                    const may = fromTab === true ? editableRow && panel.provider.allowMutations !== false
+                                                   && panel.provider.connected === true : writable
+                    if (!may && isValue) {
                         panel.sayNotWritable(watchRow)
                         return
                     }
-                    if (!writable || editing || !cellLoader.item)
+                    if (!may || editing || !cellLoader.item)
                         return
                     watchList.currentIndex = index
                     if (panel.selectable)
@@ -1746,8 +2129,6 @@ Pane {
                 readonly property bool quiet: status === "" || status === "Pending" || status === "Not read" || status === "NotRead"
                 readonly property bool waiting: isValue && quiet
                 readonly property bool stale: status === "Stale"
-                // Numbers, hex and bools line up on the right; enum names and a
-                // folded node's summary on the left.
                 // The form the row shows: its own, else the Watchlist's. A
                 // node's own is the one its values share, "mixed" when not.
                 readonly property string ownFormat: typeof model.format === "string" && model.format !== "mixed"
@@ -1755,33 +2136,111 @@ Pane {
                 readonly property string formatName: ownFormat.length > 0 ? ownFormat : panel.format
                 readonly property string shownText: typeof model.shownText === "string" && model.shownText.length > 0
                                                     ? model.shownText : text
-                readonly property bool leftValue: !isValue || (editorKind === "enum" && formatName === "original")
+                // A bool's or an enum's word and its code (WL-9 B2): two tones,
+                // the code never cut.
+                readonly property string valueWord: typeof model.valueWord === "string" ? model.valueWord : ""
+                readonly property string valueCode: typeof model.valueCode === "string" ? model.valueCode : ""
+                readonly property bool twoTone: isValue && valueWord.length > 0 && !missing
+                // Numbers, bools and enums stand on the column's right edge in
+                // every form; text stays on the left.
+                readonly property bool leftValue: !isValue || (!twoTone
+                    && !/^(?:[usi](?:8|16|32|64)|f(?:32|64)|bool|enum.*)$/.test(typeText)
+                    && !/^[-+]?(?:\d|\.\d|0[xX]|NaN|inf)/.test(shownText))
                 // A word only for a problem or a stale value; waiting is "–" alone,
                 // its word in the value's tooltip and the row's description.
                 // A value inside a Field shares its Field's word, but one its
                 // device lacks says so itself.
                 readonly property string statusText: ok || quiet || (nested && !missing) || isGroup ? "" : panel.statusWord(status)
                 readonly property string waitingText: waiting ? panel.statusWord(status === "" ? "Not read" : status) : ""
-                readonly property string accessText: !nested && typeof model.access === "string" ? model.access : ""
+                // rw on every row of a Field, its members and elements included,
+                // in the Field's own colour (WL-9 A1). Groups have none.
+                readonly property string accessText: !isGroup && typeof model.access === "string" ? model.access : ""
+                readonly property string accessWords: accessText === "rw" ? qsTr("read and write")
+                                                    : accessText === "r-" ? qsTr("read only") : ""
                 readonly property string typeText: typeof model.typeText === "string" ? model.typeText : ""
+                // A text held in the row (WL-9 C4): the provider's, or the
+                // panel's own for a provider that keeps none.
+                readonly property var localHeld: panel.localHeld[watchRow.name] !== undefined ? panel.localHeld[watchRow.name] : null
+                readonly property string heldText: typeof model.heldText === "string" && model.heldText.length > 0 ? model.heldText
+                                                 : localHeld ? localHeld.text : ""
+                readonly property string heldReason: typeof model.heldReason === "string" && model.heldReason.length > 0 ? model.heldReason
+                                                   : localHeld ? localHeld.reason : ""
+                readonly property string heldKind: typeof model.heldKind === "string" && model.heldKind.length > 0 ? model.heldKind
+                                                 : localHeld ? "invalid" : ""
+                // The row's write (WL-9 C5): under way, read back otherwise,
+                // not read back.
+                readonly property string writeState: typeof model.writeState === "string" ? model.writeState : ""
+                readonly property string writtenText: typeof model.writtenText === "string" ? model.writtenText : ""
+                readonly property bool pendingWrite: isValue && writeState === "pending"
+                readonly property bool differs: isValue && writeState === "differs"
+                readonly property bool unconfirmed: isValue && writeState === "unconfirmed" && writtenText.length > 0
+                readonly property bool isHeld: isValue && heldText.length > 0 && !pendingWrite
+                // What the device holds, after the held text's reason: the row's
+                // reading in its format; while the one read runs, that; with no
+                // reading, nothing.
+                readonly property string holdsTail: !isHeld ? ""
+                    : panel.provider.watchActive !== true && panel.provider.watchPending === true ? qsTr("reading the device…")
+                    : ok && shownText.length > 0 ? qsTr("device holds %1").arg(shownText) : ""
+                readonly property string heldLine: holdsTail.length === 0 ? heldReason
+                    : qsTr("%1 · %2").arg(heldReason.replace(/\.$/, "")).arg(holdsTail)
+                // A read back as written flashes the cell once: the user's.
+                onWriteStateChanged: if (writeState === "confirmed" && cellLoader.item) cellLoader.item.flash()
+                // The change mark (WL-9 E5): a value whose reading changed, 1 s;
+                // a folded node or group for the values under it. Not on the
+                // row edited, a held row, a stale one, or an open group.
+                readonly property double changedAt: typeof model.changedAt === "number" ? model.changedAt : 0
+                readonly property var changedBelow: model.changedBelow !== undefined && model.changedBelow !== null ? model.changedBelow : []
+                onChangedAtChanged: if (changedAt > 0) panel.noteChange(changedAt)
+                onChangedBelowChanged: {
+                    let last = 0
+                    for (let i = 0; i < changedBelow.length; ++i)
+                        last = Math.max(last, changedBelow[i])
+                    if (last > 0)
+                        panel.noteChange(last)
+                }
+                readonly property int changingBelow: {
+                    void panel.markClock
+                    const now = Date.now()
+                    let n = 0
+                    for (let i = 0; i < changedBelow.length; ++i)
+                        if (now - changedBelow[i] < 1000)
+                            ++n
+                    return n
+                }
+                // The cell's editor is open: told by the cell, so the mark
+                // never makes the cell while it is worked out.
+                property bool cellOpen: false
+                readonly property bool changeMarked: {
+                    void panel.markClock
+                    if (cellOpen || isHeld || stale)
+                        return false
+                    if (isValue)
+                        return changedAt > 0 && Date.now() - changedAt < 1000
+                    return !expanded && changingBelow > 0
+                }
                 // Reports this row's widths again when the panel forgot them.
                 readonly property int measureEpoch: panel.measureEpoch
                 // After the change has settled (a new zoom's fonts); the timer
                 // is the row's own, so a row destroyed meanwhile is not called.
                 onMeasureEpochChanged: reportAgain.restart()
                 Timer { id: reportAgain; interval: 0; onTriggered: watchRow.report() }
-                // Numbers never elide; text and summaries do, within the cap.
+                // Numbers never elide; text, words and summaries do, within the cap.
                 function reportValue() {
                     // A node's summary uses the name's room, never the column's.
                     if (!watchRow.isValue)
                         return
-                    if (watchRow.leftValue)
-                        panel.noteMeasured(valueText.implicitWidth - valueText.leftPadding, 0, 0, false)
+                    const width = Math.ceil(valueMetrics.advanceWidth)
+                    if (watchRow.leftValue || watchRow.twoTone)
+                        panel.noteMeasured(width, 0, 0, false)
                     else
-                        panel.noteNumber(valueText.implicitWidth - valueText.leftPadding)
+                        panel.noteNumber(width)
+                }
+                function reportName() {
+                    panel.noteName(nameCell.nameLeft + nameCell.naturalWidth, watchRow.depth)
                 }
                 function report() {
                     watchRow.reportValue()
+                    watchRow.reportName()
                     panel.noteMeasured(0,
                                        typeMetrics.text.length > 0 ? typeMetrics.advanceWidth + Type.tight : 0,
                                        statusMetrics.text.length > 0 ? statusMetrics.advanceWidth + Type.tight : 0,
@@ -1810,9 +2269,22 @@ Pane {
                 readonly property color muted: marked && !active ? Theme.textSecondary : Theme.textMuted
                 readonly property bool removeShown: !editing && (rowHover.hovered || current)
                 readonly property color foreground: active ? Theme.selectedForeground : Theme.textPrimary
+                // The value's colour: the change mark's info, a reading's
+                // primary, else muted; the selection's foreground on a focused one.
+                readonly property color valueInk: active ? Theme.selectedForeground
+                                                : changeMarked ? Theme.info : ok ? Theme.textPrimary : muted
                 // One line, plus the cell's caption while it has something to say.
                 readonly property real valueHeight: cellLoader.visible && cellLoader.item
                     ? Math.max(Type.rowHeight, cellLoader.item.implicitHeight) : Type.rowHeight
+                // Where this row's columns stand: the panel's, but a name that
+                // would drop below its floor takes room from its own type, which
+                // gives way at its right (WL-9 A2 step 4).
+                readonly property real nameNeed: Math.min(nameCell.naturalWidth, Type.nameFloor)
+                readonly property real deficit: isGroup || panel.typeColumn <= 0 ? 0
+                    : Math.max(0, Math.min(nameNeed - (panel.valueX - panel.columnGap - nameCell.nameLeft),
+                                           panel.typeColumn - panel.typeLeast))
+                readonly property real valueLeft: panel.valueX + deficit
+                readonly property real typeLeft: panel.typeX + deficit
                 // What a keyboard or screen reader user hears: the hidden
                 // columns too, and the status the glyph only marks (spec F).
                 Accessible.role: panel.treeView ? Accessible.TreeItem : Accessible.ListItem
@@ -1830,35 +2302,68 @@ Pane {
                                   watchRow.isGroup ? qsTr("group, %L1 watched").arg(watchRow.leaves)
                                   : watchRow.isValue ? ""
                                   : watchRow.node === "array" ? qsTr("array, %L1 watched").arg(watchRow.leaves)
-                                  : watchRow.node === "element" ? qsTr("struct, %L1 watched").arg(watchRow.leaves)
                                   : qsTr("struct, %L1 watched").arg(watchRow.leaves),
                                   watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.isValue ? "–" : "",
                                   watchRow.typeText,
-                                  watchRow.accessText === "rw" ? qsTr("read and write")
-                                  : watchRow.accessText === "r-" ? qsTr("read only") : ""]
+                                  watchRow.accessWords]
                     .filter(part => part.length > 0).join(", ")
-                Accessible.description: [watchRow.statusText.length > 0 ? watchRow.statusText : watchRow.waitingText,
+                Accessible.description: [watchRow.isHeld ? (watchRow.heldKind === "refused"
+                                             ? qsTr("refused value %1, %2").arg(watchRow.heldText).arg(watchRow.heldLine.replace(/^Refused: /, "").split(" \u00B7 ").join(", "))
+                                             : qsTr("value not written %1, %2").arg(watchRow.heldText).arg(watchRow.heldLine.replace(/^Not written: /, "").split(" \u00B7 ").join(", ")))
+                                         : "",
+                                         watchRow.differs ? qsTr("you wrote %1; the device reads back %2").arg(watchRow.writtenText).arg(watchRow.shownText) : "",
+                                         watchRow.changeMarked ? qsTr("changed") : "",
+                                         watchRow.statusText.length > 0 ? watchRow.statusText : watchRow.waitingText,
                                          watchRow.statusDetail,
                                          watchRow.isValue && watchRow.ownFormat.length > 0
                                              ? qsTr("shown in %1").arg(panel.formatWord(watchRow.ownFormat)) : ""]
                     .filter(part => part.length > 0).join(", ")
                 height: valueHeight
+                // The row's fill spans the pane (WL-9 E1): stripes, hover and
+                // the selection bleed to both edges; a row with line 2 is one
+                // stripe over both lines.
                 Rectangle {
+                    objectName: "watchRowFill"
                     anchors.fill: parent
-                    anchors.rightMargin: panel.scrollReserve
                     color: watchRow.active ? Theme.stateSelected
                          : watchRow.marked ? Theme.stateSelectedInactive
                          : rowHover.hovered ? Theme.stateHover
                          : watchRow.index % 2 ? Theme.surfaceAlternate : "transparent"
                 }
+                // Indent guides (the kinds design, E): one 1 px line under each
+                // ancestor's chevron, through line 2 too; the current branch's
+                // brighter.
+                Repeater {
+                    model: panel.treeView ? watchRow.depth : 0
+                    Rectangle {
+                        required property int index
+                        objectName: "indentGuide"
+                        x: Math.round(Type.padding + index * Type.indent + Type.indent / 2)
+                        width: 1
+                        height: watchRow.height
+                        readonly property bool active: index === panel.guideLevel
+                            && watchRow.index >= panel.guideFrom && watchRow.index <= panel.guideTo
+                        color: active ? Theme.outline : Theme.outlineVariant
+                        Accessible.ignored: true
+                    }
+                }
+                // The change mark's line at the row's left edge, its full height.
+                Rectangle {
+                    objectName: "watchChangeMark"
+                    visible: watchRow.changeMarked
+                    x: 0
+                    width: 2
+                    height: watchRow.height
+                    color: Theme.info
+                    Accessible.ignored: true
+                }
                 // The keyboard's row while the list has the keys: a frame inside
-                // the row, the list clipping anything outside it.
+                // the row round both lines, the list clipping anything outside it.
                 Rectangle {
                     objectName: "watchRowFocusFrame"
                     visible: watchRow.current && !watchRow.editing
                     anchors.fill: parent
                     anchors.margins: 1
-                    anchors.rightMargin: panel.scrollReserve + 1
                     radius: Type.radius
                     color: "transparent"
                     border.width: 2
@@ -1899,15 +2404,27 @@ Pane {
                     }
                 }
                 // A folded node's values in brief, in the name's spare room up
-                // to the numbers' edge, so no column moves when a row folds.
+                // to the numbers' edge, so no column moves when a row folds; a
+                // value held under it puts the error glyph before it.
+                ErrorGlyph {
+                    id: summaryGlyph
+                    objectName: "watchRowSummaryGlyph"
+                    readonly property string held: typeof watchRow.model.heldBelow === "string" ? watchRow.model.heldBelow : ""
+                    visible: summaryText.visible && held.length > 0
+                    x: summaryText.x + summaryText.width - summaryText.contentWidth - Type.spacing - width
+                    y: (Type.rowHeight - height) / 2
+                    HoverHandler { id: summaryGlyphHover }
+                    PlainToolTip { visible: summaryGlyphHover.hovered; text: summaryGlyph.held; delay: 700 }
+                }
                 Text {
                     id: summaryText
                     objectName: "watchRowSummary"
                     visible: !watchRow.isValue && !watchRow.isGroup && watchRow.text.length > 0 && width > 0
-                    readonly property real start: rowLayout.x + nameCell.x + leafText.x + leafText.width + panel.columnGap
+                    readonly property real start: nameCell.x + leafText.x + leafText.width + panel.columnGap
+                                                  + (summaryGlyph.held.length > 0 ? summaryGlyph.width + Type.spacing : 0)
                     x: start
                     y: 0
-                    width: Math.max(0, rowLayout.x + valueText.x + valueText.width - start)
+                    width: Math.max(0, watchRow.valueLeft + panel.valueColumn - start)
                     height: Type.rowHeight
                     verticalAlignment: Text.AlignVCenter
                     horizontalAlignment: Text.AlignRight
@@ -1920,7 +2437,11 @@ Pane {
                          : watchRow.ok ? Theme.textPrimary : watchRow.muted
                     elide: Text.ElideRight
                     HoverHandler { id: summaryHover }
-                    PlainToolTip { visible: summaryHover.hovered && summaryText.truncated; text: watchRow.text; delay: 700 }
+                    PlainToolTip {
+                        visible: summaryHover.hovered && (summaryText.truncated || summaryGlyph.held.length > 0)
+                        text: summaryGlyph.held.length > 0 ? watchRow.text + "\n" + summaryGlyph.held : watchRow.text
+                        delay: 700
+                    }
                 }
                 // The tree's chevron, an indent wide at the row's depth; the
                 // indent is kept on values, so names of one depth share an x.
@@ -1946,358 +2467,455 @@ Pane {
                         }
                     }
                 }
-                // One grid for both shapes: a table row is name, value, status,
-                // ×; two lines put × after the name and the status after the
-                // value. Every line is a row high and nothing wraps.
-                GridLayout {
-                    id: rowLayout
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: panel.scrollReserve
-                    anchors.top: parent.top
-                    columns: 6
-                    rowSpacing: 0
-                    columnSpacing: panel.columnGap
-                    // The path: its prefix muted, its last segment whole while
-                    // it fits, the prefix eliding in its middle (dev…Config.Gain).
-                    Item {
-                        id: nameCell
-                        objectName: "watchRowName"
-                        Layout.row: 0
-                        Layout.column: 0
-                        Layout.leftMargin: Type.padding + (panel.treeView ? (watchRow.depth + 1) * Type.indent : 0)
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 1
-                        Layout.preferredHeight: Type.rowHeight
-                        readonly property int leafStart: typeof watchRow.model.leafStart === "number"
-                                                         ? Math.max(0, Math.min(watchRow.name.length, watchRow.model.leafStart)) : 0
-                        Text {
-                            id: prefixText
-                            objectName: "watchRowPrefix"
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Math.max(0, Math.min(implicitWidth, parent.width - leafText.implicitWidth))
-                            visible: text.length > 0 && width > 0
-                            textFormat: Text.PlainText
-                            text: panel.treeView ? "" : watchRow.name.substring(0, nameCell.leafStart)
-                            font: panel.font
-                            color: watchRow.active ? Theme.selectedForeground : watchRow.muted
-                            elide: Text.ElideMiddle
-                        }
-                        Text {
-                            id: leafText
-                            objectName: "watchRowLeaf"
-                            anchors.left: prefixText.visible ? prefixText.right : parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Math.min(implicitWidth, parent.width - (prefixText.visible ? prefixText.width : 0))
-                            textFormat: Text.PlainText
-                            text: watchRow.name.substring(nameCell.leafStart)
-                            font.family: panel.font.family
-                            font.pointSize: panel.font.pointSize
-                            font.weight: watchRow.isGroup ? Type.headingWeight : Font.Normal
-                            color: watchRow.foreground
-                            elide: Text.ElideRight
-                        }
-                        // Edited while polling (WL-5): the live reading beside the
-                        // name, "Now 1.48"; a failing read says its status.
-                        Text {
-                            id: nowText
-                            objectName: "watchRowNow"
-                            anchors.left: leafText.right
-                            anchors.leftMargin: Type.padding
-                            anchors.verticalCenter: parent.verticalCenter
-                            // Only the room the editor leaves; none, and its words go
-                            // into the editor's description.
-                            readonly property real room: cellLoader.item
-                                ? cellLoader.x + cellLoader.width - cellLoader.item.editorWidth - nameCell.x - leafText.x - leafText.width - 2 * Type.padding
-                                : 0
-                            width: Math.max(0, Math.min(parent.width - leafText.x - leafText.width - Type.padding, room))
-                            visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > Type.bodyPixels * 3
-                            textFormat: Text.PlainText
-                            text: watchRow.ok ? qsTr("Now %1").arg(watchRow.shownText) : watchRow.status
-                            font.family: Type.fixedFamily
-                            font.pointSize: Type.caption
-                            color: watchRow.ok ? (watchRow.active ? Theme.selectedForeground : watchRow.muted) : Theme.warning
-                            elide: Text.ElideRight
-                            Accessible.name: text
-                        }
-                        HoverHandler { id: nameHover }
-                        PlainToolTip {
-                            objectName: "watchRowNameTip"
-                            visible: nameHover.hovered && (!watchRow.isValue || prefixText.truncated || leafText.truncated)
-                            text: watchRow.isValue ? watchRow.name
-                                : [watchRow.name, watchRow.typeText,
-                                   watchRow.leaves === 1 ? qsTr("1 value watched") : qsTr("%Ln values watched", "", watchRow.leaves)]
-                                  .filter(part => part.length > 0).join(" \u00B7 ")
-                            delay: 700
-                        }
+                // What the row is, in its own slot after the chevron's (the
+                // kinds design): folder, {}, [] or a ring. The list has none:
+                // every row there is a value.
+                KindIcon {
+                    visible: panel.treeView
+                    x: Type.padding + (watchRow.depth + 1) * Type.indent
+                    y: (Type.rowHeight - height) / 2
+                    kind: watchRow.node
+                    color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
+                }
+                // The path: its prefix muted, its last segment whole while it
+                // fits, the prefix eliding in its middle (dev…Config.Gain); in
+                // the tree the last segment, eliding in its middle.
+                Item {
+                    id: nameCell
+                    objectName: "watchRowName"
+                    readonly property real nameLeft: panel.nameXAt(watchRow.depth)
+                    readonly property real naturalWidth: Math.ceil((panel.treeView ? 0 : prefixMetrics.advanceWidth) + leafMetrics.advanceWidth)
+                    x: nameLeft
+                    y: 0
+                    width: Math.max(1, (watchRow.isGroup ? groupCount.x - panel.columnGap : watchRow.valueLeft - panel.columnGap) - nameLeft)
+                    height: Type.rowHeight
+                    readonly property int leafStart: typeof watchRow.model.leafStart === "number"
+                                                     ? Math.max(0, Math.min(watchRow.name.length, watchRow.model.leafStart)) : 0
+                    onNaturalWidthChanged: watchRow.reportName()
+                    Component.onCompleted: watchRow.reportName()
+                    TextMetrics { id: prefixMetrics; font: panel.font; text: prefixText.text }
+                    TextMetrics {
+                        id: leafMetrics
+                        font.family: panel.font.family
+                        font.pointSize: panel.font.pointSize
+                        font.weight: leafText.font.weight
+                        text: leafText.text
                     }
-                    // A group shows how many values it holds, at the row's right.
-                    Label {
-                        objectName: "watchGroupCount"
-                        visible: watchRow.isGroup
-                        Layout.row: 0
-                        Layout.column: 1
-                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-                        Layout.preferredHeight: Type.rowHeight
-                        verticalAlignment: Text.AlignVCenter
+                    Text {
+                        id: prefixText
+                        objectName: "watchRowPrefix"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, Math.min(implicitWidth, parent.width - leafText.implicitWidth))
+                        visible: text.length > 0 && width > 0
                         textFormat: Text.PlainText
-                        text: qsTr("%L1 watched").arg(watchRow.leaves)
-                        font.pointSize: Type.caption
+                        text: panel.treeView ? "" : watchRow.name.substring(0, nameCell.leafStart)
+                        font: panel.font
                         color: watchRow.active ? Theme.selectedForeground : watchRow.muted
+                        elide: Text.ElideMiddle
+                    }
+                    Text {
+                        id: leafText
+                        objectName: "watchRowLeaf"
+                        anchors.left: prefixText.visible ? prefixText.right : parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, parent.width - (prefixText.visible ? prefixText.width : 0))
+                        textFormat: Text.PlainText
+                        text: watchRow.name.substring(nameCell.leafStart)
+                        font.family: panel.font.family
+                        font.pointSize: panel.font.pointSize
+                        // DemiBold only on groups (the kinds design).
+                        font.weight: watchRow.isGroup ? Type.headingWeight : Font.Normal
+                        color: watchRow.foreground
+                        elide: panel.treeView ? Text.ElideMiddle : Text.ElideRight
+                    }
+                    // Edited while polling (WL-5): the live reading beside the
+                    // name, "Now 1.48"; a failing read says its status.
+                    Text {
+                        id: nowText
+                        objectName: "watchRowNow"
+                        anchors.left: leafText.right
+                        anchors.leftMargin: Type.padding
+                        anchors.verticalCenter: parent.verticalCenter
+                        // Only the room the editor leaves; none, and its words go
+                        // into the editor's description.
+                        readonly property real room: cellLoader.item
+                            ? cellLoader.x + cellLoader.width - cellLoader.item.editorWidth - nameCell.x - leafText.x - leafText.width - 2 * Type.padding
+                            : 0
+                        width: Math.max(0, Math.min(parent.width - leafText.x - leafText.width - Type.padding, room))
+                        visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > Type.bodyPixels * 3
+                        textFormat: Text.PlainText
+                        text: watchRow.ok ? qsTr("Now %1").arg(watchRow.shownText) : watchRow.status
+                        font.family: Type.fixedFamily
+                        font.pointSize: Type.caption
+                        color: watchRow.ok ? (watchRow.active ? Theme.selectedForeground : watchRow.muted) : Theme.warning
+                        elide: Text.ElideRight
+                        Accessible.name: text
+                    }
+                    HoverHandler { id: nameHover }
+                    PlainToolTip {
+                        objectName: "watchRowNameTip"
+                        visible: nameHover.hovered && (!watchRow.isValue || prefixText.truncated || leafText.truncated)
+                        text: watchRow.isValue ? watchRow.name
+                            : [watchRow.name, watchRow.typeText,
+                               watchRow.leaves === 1 ? qsTr("1 value watched") : qsTr("%Ln values watched", "", watchRow.leaves)]
+                              .filter(part => part.length > 0).join(" · ")
+                        delay: 700
+                    }
+                }
+                // A group shows how many values it holds, right-aligned on the
+                // column group's right edge; folded and changing, how many move.
+                Text {
+                    id: groupCount
+                    objectName: "watchGroupCount"
+                    visible: watchRow.isGroup
+                    x: panel.groupRight - width
+                    y: 0
+                    height: Type.rowHeight
+                    width: implicitWidth
+                    verticalAlignment: Text.AlignVCenter
+                    textFormat: Text.StyledText
+                    readonly property string count: qsTr("%L1 watched").arg(watchRow.leaves)
+                    readonly property string moving: watchRow.changingBelow > 0 && !watchRow.expanded
+                                                     ? qsTr("%L1 changing").arg(watchRow.changingBelow) : ""
+                    // The tail in the info colour, on a focused selection the
+                    // selection's foreground.
+                    text: moving.length === 0 ? count
+                        : count + " · <font color=\"" + (watchRow.active ? Theme.selectedForeground : Theme.info) + "\">" + moving + "</font>"
+                    font.pointSize: Type.caption
+                    color: watchRow.active ? Theme.selectedForeground : watchRow.muted
+                    Accessible.name: moving.length === 0 ? count : count + ", " + moving
+                }
+                // The value: a number or a text as it shows in the row's form, or
+                // a bool's or an enum's word with its code (WL-9 B2); a write the
+                // device read back otherwise has the warning glyph at its left;
+                // one not read back shows what was typed, italic, until a reading.
+                Item {
+                    id: valueBox
+                    objectName: "watchValueBox"
+                    visible: watchRow.isValue && !watchRow.cellShown
+                    x: watchRow.valueLeft
+                    y: 0
+                    width: panel.valueColumn
+                    height: Type.rowHeight
+                    readonly property string plain: watchRow.missing ? "–"
+                        : watchRow.unconfirmed ? watchRow.writtenText
+                        : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
+                    TextMetrics {
+                        id: valueMetrics
+                        font.family: Type.fixedFamily
+                        font.pointSize: panel.font.pointSize
+                        text: watchRow.shownText
+                        onAdvanceWidthChanged: watchRow.reportValue()
+                        Component.onCompleted: watchRow.reportValue()
                     }
                     Label {
                         id: valueText
                         objectName: "watchValueText"
-                        visible: !watchRow.cellShown && !watchRow.isGroup
-                        Layout.row: 0
-                        Layout.column: 1
-                        Layout.preferredWidth: panel.valueColumn
-                        Layout.minimumWidth: 1
-                        Layout.preferredHeight: Type.rowHeight
+                        visible: !watchRow.twoTone || watchRow.unconfirmed
+                        anchors.fill: parent
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         // Not read yet: a dash at the value's alignment, no word.
-                        text: !watchRow.isValue ? "" : watchRow.missing ? "–"
-                            : watchRow.shownText.length > 0 ? watchRow.shownText : watchRow.waiting ? "–" : ""
+                        text: valueBox.plain
                         font.family: Type.fixedFamily
-                        font.italic: (watchRow.stale || watchRow.problem) && watchRow.text.length > 0
-                        color: watchRow.active ? Theme.selectedForeground
-                             : watchRow.ok ? Theme.textPrimary : watchRow.muted
+                        font.italic: watchRow.unconfirmed || ((watchRow.stale || watchRow.problem) && watchRow.text.length > 0)
+                        color: watchRow.unconfirmed && !watchRow.active ? Theme.textSecondary : watchRow.valueInk
                         horizontalAlignment: watchRow.leftValue ? Text.AlignLeft : Text.AlignRight
                         leftPadding: watchRow.leftValue ? panel.pencilRoom : 0
                         elide: Text.ElideRight
-                        onImplicitWidthChanged: watchRow.reportValue()
-                        Component.onCompleted: watchRow.reportValue()
-                        ToolTip.visible: valueHover.hovered && (truncated || watchRow.waitingText.length > 0
-                                                                || watchRow.ownFormat.length > 0)
-                        ToolTip.text: watchRow.waitingText.length > 0 ? watchRow.waitingText
-                                    : watchRow.ownFormat.length === 0 ? watchRow.shownText
-                                    : watchRow.ownFormat === panel.format
-                                      ? qsTr("%1 · shown in %2").arg(watchRow.shownText).arg(panel.formatWord(watchRow.ownFormat))
-                                    : qsTr("%1 · shown in %2 (the Watchlist shows %3)").arg(watchRow.shownText)
-                                          .arg(panel.formatWord(watchRow.ownFormat)).arg(panel.formatWord(panel.format))
-                        HoverHandler { id: valueHover }
-                        TapHandler {
-                            id: valueTap
-                            enabled: watchRow.writable || watchRow.writeRefusal.length > 0
-                            onDoubleTapped: if (valueTap.point.modifiers === Qt.NoModifier) watchRow.startEdit()
-                        }
                     }
-                    // The editor is Details' own cell, in the Value column: it
-                    // looks and sizes the same, grows leftwards only as far as its
-                    // text needs, and keeps the row one line plus its caption.
-                    Loader {
-                        id: cellLoader
-                        objectName: "watchValueCellLoader"
-                        active: watchRow.isValue && watchRow.writable
-                        visible: item ? (item.open || item.refusal.length > 0) : false
-                        Layout.row: 0
-                        Layout.column: 1
-                        Layout.preferredWidth: panel.valueColumn
-                        Layout.minimumWidth: 1
-                        Layout.preferredHeight: Type.rowHeight
-                        Layout.alignment: Qt.AlignTop
-                        sourceComponent: ValueCell {
-                            objectName: "valueCell"
-                            name: watchRow.name
-                            value: watchRow.shownText.length > 0 ? watchRow.shownText : "–"
-                            typeText: watchRow.typeText
-                            editable: watchRow.writable
-                            editorText: typeof watchRow.model.editorText === "string" ? watchRow.model.editorText
-                                : watchRow.model.sampleExact === true
-                                    ? (watchRow.model.sampleValue === 0 && 1 / watchRow.model.sampleValue < 0 ? "-0" : String(watchRow.model.sampleValue))
-                                    : watchRow.text
-                            editorKind: watchRow.editorKind
-                            editorChoices: watchRow.model.editorChoices !== undefined ? watchRow.model.editorChoices : []
-                            choicesTruncated: watchRow.choicesTruncated
-                            hexCodes: watchRow.formatName === "hex"
-                            highlighted: watchRow.active
-                            openOnClick: false
-                            listOpensOnBegin: false
-                            editorRoom: Math.max(0, cellLoader.x - nameCell.x - nameCell.Layout.leftMargin
-                                                    - Math.min(leafText.implicitWidth, Type.bodyPixels * 3) - Type.tight)
-                            captionRoom: Math.max(0, cellLoader.x - nameCell.x - nameCell.Layout.leftMargin)
-                            captionRightRoom: Math.max(0, rowLayout.width - cellLoader.x - cellLoader.width - panel.removeColumnWidth)
-                            note: watchRow.scopeNote
-                            noteDetail: watchRow.scopeDetail
-                            extraDescription: [watchRow.editing && !nowText.visible && nowText.text.length > 0 ? nowText.text : "",
-                                               qsTr("Enter writes; Escape cancels.")].filter(part => part.length > 0).join(" ")
-                            // Typing only checks; Enter, Tab, a click away or a choice writes.
-                            checkText: function(text) {
-                                const result = typeof panel.provider.watchEditPreview === "function"
-                                    ? panel.provider.watchEditPreview(watchRow.sourceRow, text) : null
-                                const error = result && result.error ? result.error : ""
-                                return { ok: error.length === 0 && text.length > 0,
-                                         error: error.length === 0 && text.length === 0 ? qsTr("Enter a value.") : error,
-                                         preview: !error && result && result.preview ? result.preview : "" }
-                            }
-                            commitText: function(text) { panel.provider.writeWatch(watchRow.sourceRow, text) }
-                            onTabbed: function(forward) { panel.openNextWritable(watchRow.index, forward) }
-                            onFinished: function(byKey) { if (byKey) watchList.forceActiveFocus() }
-                        }
-                    }
-                    Label {
-                        objectName: "watchRowType"
-                        visible: !watchRow.isGroup && panel.typeColumn > 0
-                        Layout.row: 0
-                        Layout.column: 2
-                        Layout.preferredWidth: panel.typeColumn
-                        Layout.preferredHeight: Type.rowHeight
-                        verticalAlignment: Text.AlignVCenter
-                        textFormat: Text.PlainText
-                        text: watchRow.typeText
-                        font.family: Type.fixedFamily
-                        font.pointSize: Type.caption
-                        color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
-                        elide: Text.ElideRight
-                        HoverHandler { id: typeHover }
-                        PlainToolTip { visible: typeHover.hovered && parent.truncated; text: watchRow.typeText; delay: 700 }
-                    }
-                    // rw: each letter, a missing right as "-" in the placeholder colour.
                     Row {
-                        objectName: "watchRowAccess"
-                        visible: !watchRow.isGroup && panel.accessColumn > 0
-                        Layout.row: 0
-                        Layout.column: 3
-                        Layout.preferredWidth: panel.accessColumn
-                        Layout.preferredHeight: Type.rowHeight
-                        Repeater {
-                            model: watchRow.accessText.split("")
-                            Text {
-                                required property string modelData
-                                height: Type.rowHeight
-                                verticalAlignment: Text.AlignVCenter
-                                text: modelData
-                                font.family: Type.fixedFamily
-                                font.pointSize: Type.caption
-                                color: watchRow.active ? Theme.selectedForeground
-                                     : modelData === "-" && !watchRow.marked ? Theme.textDisabled : Theme.textSecondary
-                            }
-                        }
-                        HoverHandler { id: accessHover }
-                        PlainToolTip {
-                            visible: accessHover.hovered && watchRow.accessText.length > 0
-                            text: watchRow.accessText === "rw" ? qsTr("read and write") : qsTr("read only")
-                            delay: 700
-                        }
-                    }
-                    // A reading's word only when it is not a fresh value: a
-                    // problem in warning, waiting in muted; the provider's
-                    // own words in the tooltip.
-                    Label {
-                        objectName: "watchRowStatus"
-                        visible: !watchRow.isGroup && panel.statusColumn > 0 && !panel.statusGlyph
-                        Layout.row: 0
-                        Layout.column: 4
-                        Layout.minimumWidth: 1
-                        Layout.preferredWidth: panel.statusColumn
-                        Layout.preferredHeight: Type.rowHeight
-                        verticalAlignment: Text.AlignVCenter
-                        textFormat: Text.PlainText
-                        text: watchRow.statusText
-                        color: watchRow.active ? Theme.selectedForeground
-                             : watchRow.problem ? Theme.warning
-                             : watchRow.missing ? Theme.textSecondary : watchRow.muted
-                        font.pointSize: Type.caption
-                        elide: Text.ElideRight
-                        HoverHandler { id: statusRowHover }
-                        PlainToolTip {
-                            visible: statusRowHover.hovered && parent.text.length > 0
-                                     && (parent.truncated || parent.text !== watchRow.status || watchRow.statusDetail.length > 0)
-                            text: watchRow.statusDetail.length > 0 ? watchRow.statusDetail : watchRow.status
-                            delay: 700
-                        }
-                    }
-                    // Too little room: the word becomes a mark, the word in its tooltip.
-                    Item {
-                        objectName: "watchRowStatusGlyph"
-                        visible: !watchRow.isGroup && panel.statusGlyph
-                        Layout.row: 0
-                        Layout.column: 4
-                        Layout.preferredWidth: panel.statusColumn
-                        Layout.preferredHeight: Type.rowHeight
+                        id: twoToneRow
+                        objectName: "watchValueTwoTone"
+                        visible: watchRow.twoTone && !watchRow.unconfirmed
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
                         Text {
-                            anchors.centerIn: parent
-                            visible: watchRow.statusText.length > 0
-                            text: watchRow.problem ? "!" : "·"
-                            font.bold: true
+                            id: wordText
+                            objectName: "watchValueWord"
+                            width: Math.max(0, Math.min(implicitWidth, valueBox.width - codeText.implicitWidth))
+                            textFormat: Text.PlainText
+                            text: watchRow.valueWord
+                            elide: Text.ElideRight
+                            font.family: Type.fixedFamily
+                            font.italic: watchRow.stale || watchRow.problem
+                            color: watchRow.valueInk
+                        }
+                        Text {
+                            id: codeText
+                            objectName: "watchValueCode"
+                            visible: watchRow.valueCode.length > 0
+                            textFormat: Text.PlainText
+                            text: " (" + watchRow.valueCode + ")"
+                            font.family: Type.fixedFamily
+                            font.italic: watchRow.stale || watchRow.problem
                             color: watchRow.active ? Theme.selectedForeground
-                                 : watchRow.problem ? Theme.warning : Theme.textSecondary
-                        }
-                        HoverHandler { id: glyphHover }
-                        PlainToolTip {
-                            visible: glyphHover.hovered && watchRow.statusText.length > 0
-                            text: watchRow.statusDetail.length > 0 ? watchRow.statusText + "\n" + watchRow.statusDetail
-                                                                   : watchRow.statusText
-                            delay: 700
+                                 : watchRow.changeMarked ? Theme.info : Theme.textSecondary
                         }
                     }
-                    // Measure the type and the word for their columns, shown or
-                    // not: a hidden Text does not lay itself out, so a column
-                    // measured from its own label would never appear.
-                    TextMetrics {
-                        id: typeMetrics
-                        font.family: Type.fixedFamily
-                        font.pointSize: Type.caption
-                        text: watchRow.typeText
-                        onAdvanceWidthChanged: panel.noteMeasured(0, text.length > 0 ? advanceWidth + Type.tight : 0, 0,
-                                                                  watchRow.accessText.length > 0)
-                        Component.onCompleted: panel.noteMeasured(0, text.length > 0 ? advanceWidth + Type.tight : 0, 0,
-                                                                  watchRow.accessText.length > 0)
+                    ToolIcon {
+                        id: readBackGlyph
+                        objectName: "watchReadBackGlyph"
+                        visible: watchRow.differs
+                        width: panel.markSize
+                        height: panel.markSize
+                        readonly property real textStart: valueBox.width - (watchRow.twoTone ? twoToneRow.width : Math.min(valueText.contentWidth, valueBox.width))
+                        x: textStart - Type.spacing - width
+                        y: (Type.rowHeight - height) / 2
+                        name: "warning"
+                        color: Theme.warning
+                        Accessible.ignored: true
                     }
-                    TextMetrics {
-                        id: statusMetrics
-                        font.family: panel.font.family
-                        font.pointSize: Type.caption
-                        text: watchRow.statusText
-                        onAdvanceWidthChanged: panel.noteMeasured(0, 0, text.length > 0 ? advanceWidth + Type.tight : 0, false)
+                    HoverHandler { id: valueHover }
+                    PlainToolTip {
+                        visible: valueHover.hovered && text.length > 0
+                        delay: 700
+                        text: watchRow.differs ? qsTr("You wrote %1; the device reads back %2.").arg(watchRow.writtenText).arg(watchRow.shownText)
+                            : watchRow.unconfirmed ? qsTr("You wrote %1; it was not read back.").arg(watchRow.writtenText)
+                            : watchRow.waitingText.length > 0 ? watchRow.waitingText
+                            : (valueText.visible && valueText.truncated) || (twoToneRow.visible && wordText.truncated)
+                              ? (watchRow.ownFormat.length === 0 ? watchRow.shownText
+                                 : qsTr("%1 · shown in %2").arg(watchRow.shownText).arg(panel.formatWord(watchRow.ownFormat)))
+                            : watchRow.ownFormat.length === 0 ? ""
+                            : watchRow.ownFormat === panel.format
+                              ? qsTr("%1 · shown in %2").arg(watchRow.shownText).arg(panel.formatWord(watchRow.ownFormat))
+                            : qsTr("%1 · shown in %2 (the Watchlist shows %3)").arg(watchRow.shownText)
+                                  .arg(panel.formatWord(watchRow.ownFormat)).arg(panel.formatWord(panel.format))
                     }
-                    // × shows on the row under the pointer and on the current
-                    // row; the keyboard removes with Delete.
-                    Item {
-                        Layout.row: 0
-                        Layout.column: 5
-                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-                        Layout.preferredWidth: panel.removeColumnWidth
-                        Layout.preferredHeight: Type.rowHeight
-                        Basic.ToolButton {
-                            id: remove
-                            objectName: "removeWatchButton"
+                    TapHandler {
+                        id: valueTap
+                        enabled: watchRow.writable || watchRow.writeRefusal.length > 0
+                        onDoubleTapped: if (valueTap.point.modifiers === Qt.NoModifier) watchRow.startEdit()
+                    }
+                }
+                // The editor is Details' own cell, in the Value column: it looks
+                // and sizes the same, grows leftwards only as far as its text
+                // needs, and keeps the row one line plus its line 2. It also
+                // shows a held text, a write under way and a confirmed read-back's
+                // flash.
+                Loader {
+                    id: cellLoader
+                    objectName: "watchValueCellLoader"
+                    active: watchRow.isValue && (watchRow.editableRow || watchRow.isHeld)
+                    visible: item ? (item.open || item.refusal.length > 0 || watchRow.isHeld || watchRow.pendingWrite
+                                     || item.flashing) : false
+                    x: watchRow.valueLeft
+                    y: 0
+                    width: panel.valueColumn
+                    sourceComponent: ValueCell {
+                        objectName: "valueCell"
+                        name: watchRow.name
+                        value: watchRow.shownText.length > 0 ? watchRow.shownText : "–"
+                        valueWord: watchRow.twoTone ? watchRow.valueWord : ""
+                        valueCode: watchRow.twoTone ? watchRow.valueCode : ""
+                        typeText: watchRow.typeText
+                        editable: watchRow.editableRow
+                        editorText: typeof watchRow.model.editorText === "string" ? watchRow.model.editorText
+                            : watchRow.model.sampleExact === true
+                                ? (watchRow.model.sampleValue === 0 && 1 / watchRow.model.sampleValue < 0 ? "-0" : String(watchRow.model.sampleValue))
+                                : watchRow.text
+                        editorKind: watchRow.editorKind
+                        editorChoices: watchRow.model.editorChoices !== undefined ? watchRow.model.editorChoices : []
+                        choicesTruncated: watchRow.choicesTruncated
+                        hexCodes: watchRow.formatName === "hex"
+                        highlighted: watchRow.active
+                        changed: watchRow.changeMarked
+                        heldText: watchRow.isHeld ? watchRow.heldText : ""
+                        heldReason: watchRow.isHeld ? watchRow.heldLine : ""
+                        pendingText: watchRow.pendingWrite ? watchRow.writtenText : ""
+                        reducedMotion: panel.reducedMotion
+                        openOnClick: false
+                        listOpensOnBegin: false
+                        editorRoom: Math.max(0, watchRow.valueLeft - nameCell.nameLeft
+                                                - Math.min(leafText.implicitWidth, Type.bodyPixels * 3) - Type.tight)
+                        captionRoom: Math.max(0, watchRow.valueLeft - nameCell.nameLeft)
+                        captionRightRoom: Math.max(0, panel.groupRight - watchRow.valueLeft - panel.valueColumn)
+                        note: watchRow.scopeNote
+                        noteDetail: watchRow.scopeDetail
+                        extraDescription: [watchRow.editing && !nowText.visible && nowText.text.length > 0 ? nowText.text : "",
+                                           qsTr("Enter writes; Escape cancels.")].filter(part => part.length > 0).join(" ")
+                        // Typing only checks; Enter, Tab, a click away or a choice writes.
+                        checkText: function(text) {
+                            const result = typeof panel.provider.watchEditPreview === "function"
+                                ? panel.provider.watchEditPreview(watchRow.sourceRow, text) : null
+                            const error = result && result.error ? result.error : ""
+                            return { ok: error.length === 0 && text.length > 0,
+                                     error: error.length === 0 && text.length === 0 ? qsTr("Enter a value.") : error,
+                                     preview: !error && result && result.preview ? result.preview : "" }
+                        }
+                        commitText: function(text) { panel.writeRow(watchRow, text) }
+                        onTextHeld: function(text, reason) { panel.holdRowText(watchRow, text, reason) }
+                        onOpenChanged: watchRow.cellOpen = open
+                        onTabbed: function(forward) { panel.openNextWritable(watchRow.index, forward) }
+                        onFinished: function(byKey) { if (byKey) watchList.forceActiveFocus() }
+                    }
+                }
+                Label {
+                    id: typeLabel
+                    objectName: "watchRowType"
+                    visible: !watchRow.isGroup && panel.typeColumn > 0
+                    x: watchRow.typeLeft
+                    y: 0
+                    width: panel.typeColumn - watchRow.deficit
+                    height: Type.rowHeight
+                    verticalAlignment: Text.AlignVCenter
+                    textFormat: Text.PlainText
+                    text: watchRow.typeText
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
+                    elide: Text.ElideRight
+                    HoverHandler { id: typeHover }
+                    PlainToolTip { visible: typeHover.hovered && typeLabel.truncated; text: watchRow.typeText; delay: 700 }
+                }
+                // rw: each letter, a missing right as "-" in the placeholder colour.
+                Row {
+                    objectName: "watchRowAccess"
+                    visible: !watchRow.isGroup && panel.accessColumn > 0 && watchRow.accessText.length > 0
+                    x: panel.accessX
+                    y: 0
+                    width: panel.accessColumn
+                    height: Type.rowHeight
+                    readonly property string text: watchRow.accessText
+                    Repeater {
+                        model: watchRow.accessText.split("")
+                        Text {
+                            required property string modelData
+                            height: Type.rowHeight
+                            verticalAlignment: Text.AlignVCenter
+                            text: modelData
+                            font.family: Type.fixedFamily
+                            font.pointSize: Type.caption
+                            color: watchRow.active ? Theme.selectedForeground
+                                 : modelData === "-" && !watchRow.marked ? Theme.textDisabled : Theme.textSecondary
+                        }
+                    }
+                    HoverHandler { id: accessHover }
+                    PlainToolTip {
+                        visible: accessHover.hovered && watchRow.accessText.length > 0
+                        // A member is written with its whole Field.
+                        text: watchRow.nested && watchRow.writeScope && watchRow.accessText === "rw"
+                              ? qsTr("%1 · written with all of %2").arg(watchRow.accessWords).arg(watchRow.tail(watchRow.writeScope.field))
+                              : watchRow.accessWords
+                        delay: 700
+                    }
+                }
+                // A reading's word only when it is not a fresh value: a
+                // problem in warning, waiting in muted; the provider's
+                // own words in the tooltip.
+                Label {
+                    id: statusLabel
+                    objectName: "watchRowStatus"
+                    visible: !watchRow.isGroup && panel.statusColumn > 0 && !panel.statusGlyph
+                    x: panel.statusX
+                    y: 0
+                    width: panel.statusColumn
+                    height: Type.rowHeight
+                    verticalAlignment: Text.AlignVCenter
+                    textFormat: Text.PlainText
+                    text: watchRow.statusText
+                    color: watchRow.active ? Theme.selectedForeground
+                         : watchRow.problem ? Theme.warning
+                         : watchRow.missing ? Theme.textSecondary : watchRow.muted
+                    font.pointSize: Type.caption
+                    elide: Text.ElideRight
+                    HoverHandler { id: statusRowHover }
+                    PlainToolTip {
+                        visible: statusRowHover.hovered && statusLabel.text.length > 0
+                                 && (statusLabel.truncated || statusLabel.text !== watchRow.status || watchRow.statusDetail.length > 0)
+                        text: watchRow.statusDetail.length > 0 ? watchRow.statusDetail : watchRow.status
+                        delay: 700
+                    }
+                }
+                // Too little room: the word becomes a mark, the word in its tooltip.
+                Item {
+                    objectName: "watchRowStatusGlyph"
+                    visible: !watchRow.isGroup && panel.statusGlyph
+                    x: panel.statusX
+                    y: 0
+                    width: panel.statusColumn
+                    height: Type.rowHeight
+                    Text {
+                        anchors.centerIn: parent
+                        visible: watchRow.statusText.length > 0
+                        text: watchRow.problem ? "!" : "·"
+                        font.bold: true
+                        color: watchRow.active ? Theme.selectedForeground
+                             : watchRow.problem ? Theme.warning : Theme.textSecondary
+                    }
+                    HoverHandler { id: glyphHover }
+                    PlainToolTip {
+                        visible: glyphHover.hovered && watchRow.statusText.length > 0
+                        text: watchRow.statusDetail.length > 0 ? watchRow.statusText + "\n" + watchRow.statusDetail
+                                                               : watchRow.statusText
+                        delay: 700
+                    }
+                }
+                // Measure the type and the word for their columns, shown or
+                // not: a hidden Text does not lay itself out, so a column
+                // measured from its own label would never appear.
+                TextMetrics {
+                    id: typeMetrics
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    text: watchRow.typeText
+                    onAdvanceWidthChanged: panel.noteMeasured(0, text.length > 0 ? advanceWidth + Type.tight : 0, 0,
+                                                              watchRow.accessText.length > 0)
+                    Component.onCompleted: panel.noteMeasured(0, text.length > 0 ? advanceWidth + Type.tight : 0, 0,
+                                                              watchRow.accessText.length > 0)
+                }
+                TextMetrics {
+                    id: statusMetrics
+                    font.family: panel.font.family
+                    font.pointSize: Type.caption
+                    text: watchRow.statusText
+                    onAdvanceWidthChanged: panel.noteMeasured(0, 0, text.length > 0 ? advanceWidth + Type.tight : 0, false)
+                }
+                // × shows on the row under the pointer and on the current
+                // row, one gap after the last column; the keyboard removes with
+                // Delete.
+                Item {
+                    x: panel.removeX
+                    y: 0
+                    width: panel.removeColumnWidth
+                    height: Type.rowHeight
+                    Basic.ToolButton {
+                        id: remove
+                        objectName: "removeWatchButton"
+                        anchors.fill: parent
+                        visible: watchRow.removeShown
+                        focusPolicy: Qt.NoFocus
+                        padding: 0
+                        text: "×"
+                        enabled: !panel.changeLocked
+                        font.pointSize: Type.body
+                        contentItem: Text {
+                            text: remove.text
+                            font: remove.font
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            color: !remove.enabled ? Theme.textDisabled
+                                 : remove.hovered ? Theme.textPrimary : Theme.textSecondary
+                        }
+                        background: Rectangle {
+                            // Inside the current row's focus frame.
                             anchors.fill: parent
-                            visible: watchRow.removeShown
-                            focusPolicy: Qt.NoFocus
-                            padding: 0
-                            text: "×"
-                            enabled: !panel.changeLocked
-                            font.pointSize: Type.body
-                            contentItem: Text {
-                                text: remove.text
-                                font: remove.font
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                color: !remove.enabled ? Theme.textDisabled
-                                     : remove.hovered ? Theme.textPrimary : Theme.textSecondary
-                            }
-                            background: Rectangle {
-                                // Inside the current row's focus frame.
-                                anchors.fill: parent
-                                anchors.margins: 3
-                                radius: Type.radius
-                                color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
-                            }
-                            onClicked: panel.removeAt(watchRow.index, true)
-                            readonly property string what: watchRow.isValue ? qsTr("Remove %1").arg(watchRow.name)
-                                : watchRow.leaves === 1 ? qsTr("Remove the 1 value of %1").arg(watchRow.name)
-                                : qsTr("Remove the %Ln values of %1", "", watchRow.leaves).arg(watchRow.name)
-                            Accessible.name: what
-                            ToolTip.visible: hovered
-                            ToolTip.delay: 700
-                            // Delete does the same only where this row is all that is selected.
-                            readonly property string tip: watchRow.ListView.isCurrentItem && !panel.onSelection(watchRow.index)
-                                                          ? qsTr("%1 (Delete)").arg(what) : what
-                            ToolTip.text: tip
+                            anchors.margins: 3
+                            radius: Type.radius
+                            color: remove.down ? Theme.statePressed : remove.hovered ? Theme.stateHover : "transparent"
                         }
+                        onClicked: panel.removeAt(watchRow.index, true)
+                        readonly property string what: watchRow.isValue ? qsTr("Remove %1").arg(watchRow.name)
+                            : watchRow.leaves === 1 ? qsTr("Remove the 1 value of %1").arg(watchRow.name)
+                            : qsTr("Remove the %Ln values of %1", "", watchRow.leaves).arg(watchRow.name)
+                        Accessible.name: what
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 700
+                        // Delete does the same only where this row is all that is selected.
+                        readonly property string tip: watchRow.ListView.isCurrentItem && !panel.onSelection(watchRow.index)
+                                                      ? qsTr("%1 (Delete)").arg(what) : what
+                        ToolTip.text: tip
                     }
                 }
             }
@@ -2489,6 +3107,18 @@ Pane {
                   + "\t" + qsTr("Delete")
             enabled: !panel.changeLocked
             onTriggered: panel.removeAt(panel.menuRow)
+        }
+        // A held text goes, the row showing what the device holds (WL-9 C4).
+        MenuItem {
+            objectName: "watchRowDropHeld"
+            readonly property bool shown: rowMenu.many === 0 && rowMenu.item !== null && rowMenu.item.isHeld === true
+            visible: shown
+            height: shown ? implicitHeight : 0
+            enabled: shown
+            text: (rowMenu.item && rowMenu.item.heldKind === "refused" ? qsTr("Drop the refused value")
+                                                                         : qsTr("Drop the text not written"))
+                  + "\t" + qsTr("Esc")
+            onTriggered: panel.dropRowHeld(rowMenu.item)
         }
     }
     // Values dropped from the Device tree join the Watchlist (LP-1g3). Over

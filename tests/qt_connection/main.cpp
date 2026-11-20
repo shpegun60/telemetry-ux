@@ -8,6 +8,7 @@
 #include <integration/qt/ConnectionSession.hpp>
 #include "TcpDemoServer.hpp"
 #include "../helpers/UndoKinds.hpp"
+#include <QtCore/QRegularExpression>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QTimer>
@@ -1214,14 +1215,18 @@ void memberRowWrite()
 	CHECK(provider->writeWatch(0, QStringLiteral("2.0")));
 	CHECK(await([&] { return finished.count() == 1; }));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Gain = 2 · read back 2.") &&
-	      provider->watchWriteKind() == QStringLiteral("confirmed"));
+	// "Wrote 22:31:05 · device.Config.Gain = 2 · read back 2" (WL-9 C5): the
+	// time, then the values in the row's form.
+	CHECK(QRegularExpression(QStringLiteral("^Wrote \\d\\d:\\d\\d:\\d\\d · device\\.Config\\.Gain = 2 · read back 2$"))
+	          .match(provider->watchWriteOutcome()).hasMatch() &&
+	      provider->watchWriteKind() == QStringLiteral("confirmed") && provider->watchWriteAt() > 0);
 	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));
 	CHECK(text(1) == "18446744073709551615" && text(2) == "3");
 	// The element of a nested array, the same way.
 	CHECK(provider->writeWatch(2, QStringLiteral("-7")));
 	CHECK(await([&] { return finished.count() == 2; }));
-	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Config.Matrix[1][0] = -7 · read back -7."));
+	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Wrote ")) &&
+	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device.Config.Matrix[1][0] = -7 · read back -7")));
 	CHECK(await([&] { return !provider->watchActive() && text(2) == "-7"; }));
 	CHECK(text(0) == "2" && text(1) == "18446744073709551615");
 	// An invalid text is refused locally and nothing is written.
@@ -1608,6 +1613,53 @@ void deviceActionsNotUndone()
 	connection.disconnect();
 }
 
+// Details' Apply the device refuses (WL-9 C4): the draft stays a live draft,
+// the Field is read once, each edited value says "Not applied · device holds
+// …" and no cell is blamed; the status line says the refusal once; Apply stays
+// on; Cancel shows the values read and no note.
+void detailsRefusedApply()
+{
+	inspector_qml::TcpDemoServer peer;
+	peer.setWritableDemo(true);
+	CHECK(peer.listen());
+	host::ConnectionSession connection;
+	ux::QtConnectionBinding presentation{&connection};
+	presentation.setMutationsAllowed(true);
+	auto* provider = presentation.createProvider();
+	connect(connection, peer);
+	provider->setAllowMutations(true);
+	const auto setpoint = endpoint(provider->endpoints(), QStringLiteral("Setpoint"));
+	CHECK(setpoint.isValid() && provider->selectEndpoint(setpoint));
+	QSignalSpy read(provider, &ux::DynamicConfiguratorProvider::readFinished);
+	QSignalSpy applied(provider, &ux::DynamicConfiguratorProvider::applyFinished);
+	CHECK(provider->refresh());
+	CHECK(await([&] { return read.count() == 1; }));
+	auto* values = provider->values();
+	const auto value = [&](int role) { return values->data(values->index(0, 0), role).toString(); };
+	const auto held = value(ux::ValueModel::ValueRole);
+	CHECK(!held.isEmpty() && held != QStringLiteral("–"));
+	CHECK(provider->setScalarText(values->index(0, 0), QStringLiteral("200000")));
+	CHECK(provider->editing() && provider->canApply());
+	CHECK(provider->apply());
+	CHECK(await([&] { return applied.count() == 1; }));
+	CHECK(!applied.last().at(0).toBool());
+	// The one read after it, then the draft back over what it read.
+	CHECK(await([&] { return read.count() == 2 && !provider->busy(); }));
+	CHECK(read.count() == 2 && provider->editing() && provider->canApply());
+	const auto status = provider->detailsStatus();
+	CHECK(status.value(QStringLiteral("failed")).toBool() &&
+	      status.value(QStringLiteral("text")).toString().startsWith(QStringLiteral("Apply refused ")));
+	CHECK(value(ux::ValueModel::EditorTextRole) == QStringLiteral("200000") &&
+	      values->data(values->index(0, 0), ux::ValueModel::UnsentRole).toBool());
+	CHECK(value(ux::ValueModel::NoteRole) == QStringLiteral("Not applied · device holds %1").arg(held));
+	// An edit clears its note; Cancel puts back the values read, no note.
+	CHECK(provider->setScalarText(values->index(0, 0), QStringLiteral("150000")));
+	CHECK(value(ux::ValueModel::NoteRole).isEmpty());
+	provider->cancelEdit();
+	CHECK(!provider->editing() && value(ux::ValueModel::ValueRole) == held && value(ux::ValueModel::NoteRole).isEmpty());
+	connection.disconnect();
+}
+
 void watchRowWrite()
 {
 	inspector_qml::TcpDemoServer peer;
@@ -1649,7 +1701,8 @@ void watchRowWrite()
 		return finished.count() == 1;
 	}));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	CHECK(provider->watchWriteOutcome() == QStringLiteral("Wrote device.Setpoint = 1234 · read back 1234."));
+	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Wrote ")) &&
+	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device.Setpoint = 1234 · read back 1234")));
 	CHECK(await([&] {
 		return text(0) == QStringLiteral("1234");
 	}));
@@ -1665,13 +1718,27 @@ void watchRowWrite()
 	}));
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == writes);
 	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("not written: “twelve” is not a number for ")));
-	// The device refuses a value above its limit; the row keeps the old one.
+	// The device refuses a value above its limit; the row keeps the old one
+	// and holds the refused text, read once to say what the device holds
+	// (WL-9 C4).
 	CHECK(provider->writeWatch(0, QStringLiteral("200000")));
 	CHECK(await([&] {
 		return finished.count() == 3;
 	}));
 	CHECK(!finished.last().at(0).toBool());
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("not written")));
+	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Write refused ")) &&
+	      provider->watchWriteOutcome().contains(QStringLiteral(" · device.Setpoint = 200000 · ")) &&
+	      provider->watchWriteKind() == QStringLiteral("refused"));
+	{
+		auto* watched = provider->watchlist();
+		CHECK(watched->data(watched->index(0, 0), ux::WatchlistModel::HeldTextRole).toString() == QStringLiteral("200000") &&
+		      watched->data(watched->index(0, 0), ux::WatchlistModel::HeldKindRole).toString() == QStringLiteral("refused"));
+		CHECK(await([&] { return !provider->watchActive(); }));
+		CHECK(provider->watchWriteOutcome().endsWith(QStringLiteral(" · it holds 1234")));
+		// Esc on the row lets go of it.
+		CHECK(provider->dropWatchHeld(0) &&
+		      watched->data(watched->index(0, 0), ux::WatchlistModel::HeldTextRole).toString().isEmpty());
+	}
 	// While polling: the write goes through and polling goes on.
 	provider->setWatchIntervalMs(20);
 	provider->startWatch();
@@ -1738,14 +1805,15 @@ void watchRowWriteUnknown()
 	connection.disconnect();
 	CHECK(await([&] { return finished.count() == 1 && !provider->watchWriting(); }));
 	CHECK(!finished.last().at(0).toBool());
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")));
+	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Write not confirmed ")) &&
+	      provider->watchWriteOutcome().contains(QStringLiteral("the reply was lost; it may have been written")));
 	CHECK(!provider->watchWriteOutcome().contains(QStringLiteral("not written")) &&
 	      provider->watchWriteKind() == QStringLiteral("unconfirmed"));
 	CHECK(!provider->watchWriting() && connection.recoveryRequired());
 	const auto writes = peer.nativeWrites();
 	connect(connection, peer);
 	CHECK(!connection.recoveryRequired() && peer.nativeWrites() == writes && finished.count() == 1);
-	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("OutcomeUnknown")) &&
+	CHECK(provider->watchWriteOutcome().contains(QStringLiteral("the reply was lost")) &&
 	      provider->watchWriteOutcome().contains(QStringLiteral("previous session")));
 	connection.disconnect();
 }
@@ -2798,6 +2866,7 @@ int main(int argc, char** argv)
 	requestSelectionKeepsWatchlist();
 	siblingWriteKeepsPolling();
 	watchRowWrite();
+	detailsRefusedApply();
 	deviceActionsNotUndone();
 	watchRowWriteUnknown();
 	watchRowSignedZero();

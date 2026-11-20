@@ -1864,3 +1864,139 @@ a real `EndpointModel` of the demo device, screenshots
 kind role), `main.cpp`, `SearchProviders.cpp` and `Bulk.cpp` (the find in
 place), `DetailsTreeChecks.inc` (the root row Regular), `tests/theme_contrast`
 (info on the row fills, textSecondary on a quiet selection).
+
+## The Watchlist: values that say what they are, writes that say what happened (WL-9, November 2026)
+
+The Watchlist design of 20 November 2026 (with the owner's decisions and the
+designer's review of that day), and the Device tree design's leftovers for the
+Watchlist and Details trees.
+
+QML, `WatchlistPanel`:
+- A host calls `telemetry::ux::registerQmlTypes()` before loading the panel:
+  its tree shows each row's kind with `KindIcon` and its lines use `ToolIcon`.
+  A provider with an `EndpointModel` (the Dynamic provider) registers them.
+- Rows: the pane has no horizontal padding; fills, stripes and the header
+  rule span it; text stands on one left line (`Type.padding`), the toolbar
+  ends on R (the scroll bar's edge). Every column stands at one x on every
+  row: `valueX`, `typeX`, `accessX`, `statusX`, `removeX`, `groupRight` (the
+  column group's right edge) and `nameXAt(depth)`. The Name column stops at
+  `nameCap` = max(widest name + `columnGap`, 24 body heights), so in a wide dock
+  the values stay beside their names, × follows the last column and the spare
+  room lies after it. Give-way on the deepest row shown: rw, then Status to its
+  glyph, then names to `Type.nameFloor`, then a row's type at its right. Type
+  never hides (the 40 px and hidden steps are gone). Removed: `typeFull`,
+  `nameRoom()`; new: `nameSeen`, `deepestSeen`, `noteName()`, `fillValueX()`,
+  `typeLeast`.
+- The tree: a kind glyph (`kindIcon`) after the chevron, the name at
+  `42 + 16 × depth`; DemiBold only on groups; indent guides (`indentGuide`,
+  the current branch's in `outline`, `guideLevel`/`guideFrom`/`guideTo`); a
+  group's count right-aligned on the column group's edge, "· N changing" when
+  folded. rw on every row of a Field, its members and elements included, in
+  the Field's colour (`watchRowAccess` has a `text`); its tooltip says "written
+  with all of Config".
+- Values: a bool or an enum as its word and its code in two tones
+  (`watchValueWord`, `watchValueCode`), right-aligned on the column's edge in
+  every format; the word elides, the code never. Text values stay left.
+- Line 2 (`ValueCell`'s caption) is whole: the row is 22 + 3 + its laid-out
+  lines + 4 px, it wraps up to three lines from the name's x and never reaches
+  the focus frame.
+- Commit rules: Enter (and Ctrl+Enter) on text that is no value keeps the
+  editor open, border and line 2 in `error`, announced; Esc, Tab, Shift+Tab
+  and a click always leave. Leaving with such text holds it in the row. Tab
+  opens the next editable value even while the first write runs; a commit
+  while a write runs is held with why.
+- A held text: struck in `error` with the `ErrorGlyph`, its reason and what
+  the device holds under it; F2 opens it selected; Esc on the row
+  (`dropRowHeld`) or the row menu's `watchRowDropHeld` lets go. A folded node
+  puts the glyph before its summary. A provider without `holdWatchText` keeps
+  it in the panel (`localHeld`, by path).
+- A write: the typed value quiet while it runs (`valuePending`, a
+  `ProgressLine` after 400 ms), one flash on a confirmed read-back, the
+  warning glyph (`watchReadBackGlyph`) when read back otherwise, the typed
+  value in italics when not read back.
+- One last-action line: `watchWriteOutcome` (in `watchWriteLine`, with
+  `watchWriteGlyph` or `watchWriteWarning`, the time flashed once:
+  `writeTimeFlashes`) and `watchNotice` share a place; the newer event shows
+  (`lastEvent`). The pace sits in the toolbar after the interval while it fits
+  whole (`paceInBar`); the warning glyph precedes it when behind.
+  `watchStatusLabel` names whichever of the two places shows it.
+- The change mark (`watchChangeMark`): a value whose reading changed is `info`
+  with a 2 px line at the row's left for a second; never on the edited row, a
+  held one, a stale one, an open group or the user's own write.
+- `reducedMotion`: no flashes, a still progress line.
+- `writeRow(item, text)`, `holdRowText(item, text, reason)`,
+  `dropRowHeld(item)`, `noteChange(at)`, `markClock`, `markSize`.
+- Format tips: Original "as the type means it (0.1, Idle (2), false (0))", Dec
+  "every digit a float holds (0.1 shows as 0.100000001); integers and codes as
+  Original", Hex "the bits (0x3DCCCCCD, Idle (0x02))".
+
+QML, `ValueCell`:
+- `valueWord`, `valueCode`; `heldText`, `heldReason`, `holdText(text,
+  reason)` and the signal `textHeld(text, reason)` (draft mode); `pendingText`,
+  `pending`; `standingNote` (a line under the closed cell); `announced`,
+  `lastAnnounced`; `whyInvalid()`, `check(text)`, `releaseFocus()`.
+  `keep(byKey, leaving)` returns whether it closed: without `leaving`, text
+  that is no value is refused.
+- Details: leaving with text that is no value says "Not changed: “300” · u8
+  takes 0 to 255." (the typed text echoed). The editor's border is `error`
+  while its text is no value (`scalarEditorBorder`). A closed cell's Escape is
+  no longer taken.
+- `codeLabel` turns a negative code into its bits at the type's width in hex
+  ("Off (0xFF)", was "-0x01").
+
+QML, `EndpointPanel` (Details) and the Batch's item pane:
+- A host calls `registerQmlTypes()` (each row's kind glyph is a `KindIcon`).
+- Each row has a kind glyph (`kindIcon`) after its chevron; the name starts
+  after it (`glyphX`, `nameX`); the header's "Name" stands over the root
+  row's name; the step's room and the hard cap leave room for the glyph; a
+  name keeps `Type.nameFloor`. The delegates take `kind` (the model's `kind`
+  role, or worked out from what the row holds).
+- `-` collapses everything under the row; the menu reads "Collapse all
+  under\t-".
+- A value's `note` role shows under its closed cell (`standingNote`).
+- New shared `ErrorGlyph.qml`; the inline copies in `EndpointPanel` and
+  `BatchPanel` are gone (both still have `endpointStatusGlyph` etc. by name).
+
+C++:
+- `watch_format`: `Parts parts(value, format, names)` ({word, code}); `text()`
+  gives "Idle (2)", "false (0)", "true (2)" for a bool byte of 2, "Unknown
+  (7)", in Hex "Idle (0x02)", "Off (0xFF)"; Original floats in their shortest
+  exact text (0.1), Dec with every digit (0.100000001, 17 for f64). A number
+  out of range reads "u32 takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF)."
+  (was "“…” is out of range for u32. Enter a number from …").
+- `value_words::takes` reads "u8 takes 0 to 255." for integers, no digit
+  grouping (was "Enter a number from 0 to 255.").
+- `WatchlistModel`: roles `valueWord`, `valueCode`, `heldText`, `heldReason`,
+  `heldKind`, `writeState`, `writtenText`, `writtenAt`, `changedAt`;
+  `shownText(row)`, `shownFor(row, text)`, `setHeld()`, `dropHeld()`,
+  `dropHeldExcept(device)`, `heldText()`, `setWriteState()`,
+  `forgetChanges()`. A float's `editorText` is its shortest exact text.
+- `WatchRows`: forwards those roles; `access` on every node of a Field;
+  `heldBelow` and `changedBelow` on folded nodes; `branchSpan(row)`; the folded
+  summary uses `valueWord` (words without codes).
+- `DynamicWatchlist::readQuietly()`: every row read once, not counted in the
+  pace, the status left as it is; Start forgets the readings to compare with.
+- `DynamicConfiguratorProvider`: `watchWriteAt`, `holdWatchText(row, text,
+  reason)`, `dropWatchHeld(row)`. The write words: "Writing … = …", "Wrote
+  22:31:05 · device.Config.Gain = 2 · read back 2", "… · the device reads back
+  10", "… · not read back: …", "Write not confirmed … · the reply was lost; it
+  may have been written · it holds 2", "Write refused … · the device does not
+  take this value · it holds 3", "Not written · … is larger than one write …".
+  A refused write is held in its row; after any write attempt a stopped
+  Watchlist reads the list once quietly (`readQuietly()`, was a Read once with
+  its pace and status): a write leaves every value stale, so one Field alone
+  would leave the other rows stale. Details: an Apply the
+  device refuses keeps its draft, reads the Field once, notes each edited value
+  "Not applied · device holds 3" and says "Apply refused 22:29:21 · the device
+  does not take these values"; Apply stays on, an edit clears its note, Cancel
+  drops it all.
+- `ValueModel`: `KindRole` (`kind`), `NoteRole` (`note`), `unsentTexts()`,
+  `setNotes()`, `clearNote()`, `hasNotes()`.
+
+Checks: `tests/qml_layout/WatchLook.cpp` (new: the design's checks 1-15, 19
+and 21 at 100 % and 125 %, `watch-wl9-*.png`), `DetailsTree.cpp` (18, 19, the
+kinds design's 10, "-"), `DeviceTreeKinds.cpp` (20), `TypedWatch.cpp`,
+`WatchTree.cpp` (the kinds design's 10), `ValueCell.cpp`,
+`DetailsTreeChecks.inc`, `tests/theme_contrast` (16),
+`tests/dynamic_watchlist` (the forms and words), `tests/qt_connection` (the
+write words, a held refusal, Details' refused Apply on the demo device).

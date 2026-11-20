@@ -12,7 +12,7 @@ qt_add_qml_module(telemetry_ux_configurator STATIC NO_PLUGIN NO_CACHEGEN
               HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
               ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
               JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml FoldMemory.qml
-              UndoNotice.qml UndoButtons.qml KindIcon.qml
+              UndoNotice.qml UndoButtons.qml KindIcon.qml ErrorGlyph.qml
               OUTPUT_TARGETS _telemetry_ux_qml_objects)
 add_library(TelemetryUX::configurator ALIAS telemetry_ux_configurator)
 set_target_properties(telemetry_ux_configurator PROPERTIES EXPORT_NAME configurator)
@@ -57,7 +57,7 @@ install(FILES Configurator.qml FieldEditor.qml CommandPanel.qml ServicePanel.qml
     HexPane.qml InspectorTable.qml DeviceFileMenu.qml DeviceTransfersPanel.qml RowCheckBox.qml Chevron.qml TreeChevron.qml FoldTitle.qml DeviceFileProperties.qml DescriptorView.qml DescriptorRow.qml
     ValuesView.qml ValuesRow.qml FindBar.qml TextPane.qml TablePane.qml CapabilityView.qml
     JsonView.qml UnsavedChangesDialog.qml IconToolButton.qml FileEditTools.qml ValueCell.qml FoldMemory.qml
-    UndoNotice.qml UndoButtons.qml KindIcon.qml
+    UndoNotice.qml UndoButtons.qml KindIcon.qml ErrorGlyph.qml
     "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
     "${CMAKE_CURRENT_BINARY_DIR}/telemetry_ux_configurator.qmltypes"
     DESTINATION "${TELEMETRY_UX_QML_INSTALL_DIR}/Telemetry/UX")

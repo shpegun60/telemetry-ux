@@ -78,6 +78,17 @@ public:
 		MemberRole,
 		ShownTextRole,  // the value in its row's format
 		FormatRole,     // the row's own format, "" when it follows the Watchlist's
+		// WL-9: a bool's or enum's word and code; a held text, its reason and
+		// kind; the row's write and when; when its value last changed.
+		ValueWordRole,
+		ValueCodeRole,
+		HeldTextRole,
+		HeldReasonRole,
+		HeldKindRole,
+		WriteStateRole,
+		WrittenTextRole,
+		WrittenAtRole,
+		ChangedAtRole,
 		// This model's own.
 		SourceRowRole,  // the source row, -1 for a node above values
 		DepthRole,      // 0 in the list; the tree's depth
@@ -87,8 +98,13 @@ public:
 		LeavesRole,     // the values at and under the row
 		NestedRole,     // in the tree, a row inside a Field (its member or element)
 		SelectedRole,   // the row is in the selection
-		ParentLabelRole // in the tree, what a nested row belongs to: "Config",
-		                // "Phase[2]" (an element by its array), "" elsewhere
+		ParentLabelRole, // in the tree, what a nested row belongs to: "Config",
+		                 // "Phase[2]" (an element by its array), "" elsewhere
+		// On a folded node (WL-9 C4, E5): the held texts under it in words
+		// ("Gain: the device refused 345"), and when each value under it last
+		// changed (its changedAt, the ones not 0).
+		HeldBelowRole,
+		ChangedBelowRole
 	};
 	Q_ENUM(Role)
 
@@ -111,6 +127,10 @@ public:
 	Q_INVOKABLE void collapseAll();
 	// The row of the node above row, or -1 at the top.
 	Q_INVOKABLE int parentRow(int row) const;
+	// The current branch of the tree for its indent guide (the kinds design,
+	// E): row itself when it is an open branch, else its parent; {level: its
+	// depth, from: the first row under it, to: the last}. level -1: none.
+	Q_INVOKABLE QVariantMap branchSpan(int row) const;
 	// The row showing source row sourceRow, opening the nodes above it; -1
 	// when the source has no such row.
 	Q_INVOKABLE int reveal(int sourceRow);
@@ -233,6 +253,8 @@ private:
 	QVariant sourceData(int sourceRow, Role role) const;
 	QVariant nodeData(const Node& node, Role role) const;
 	QString summary(const Node& node) const;
+	QString heldBelow(const Node& node) const;
+	QVariantList changedBelow(const Node& node) const;
 	int firstLeaf(const Node& node) const;
 	void unfoldAbove(const QString& path);
 	void setCount(int before);
@@ -261,7 +283,7 @@ private:
 	int pathTypesRole_ = -1;
 	// The last roles a reading came with, translated: a poll repeats them.
 	QList<int> lastSource_, lastOwn_;
-	bool lastTexts_ = false, lastOutcome_ = false, lastFormat_ = false;
+	bool lastTexts_ = false, lastOutcome_ = false, lastFormat_ = false, lastMarks_ = false;
 	bool refreshing_ = false, again_ = false;
 	int held_ = 0;                          // beginChanges without their end
 	bool heldRows_ = false, heldData_ = false, heldFolds_ = false;  // what came while held

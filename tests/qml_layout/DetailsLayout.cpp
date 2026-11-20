@@ -5,6 +5,7 @@
 // response, a request editor's draft for a Command's arguments and a
 // Service's request - and a Field's definition as Details' provider gives
 // it. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/DynamicModels.hpp>
 #include <integration/inspector/SnapshotStore.hpp>
 #include <integration/workbench/RequestEditor.hpp>
@@ -523,6 +524,8 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	// Details shows each row's kind with KindIcon (a ToolIcon).
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;
