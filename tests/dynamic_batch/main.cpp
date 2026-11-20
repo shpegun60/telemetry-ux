@@ -403,8 +403,8 @@ void requestArguments()
 	namespace ra = ux::request_arguments;
 	f::Backing backing;
 	const auto& schema = backing.schema;
-	const auto* config = schema.findField("device/Config");
-	const auto* inspect = schema.findService("device/Inspect");
+	const auto* config = schema.findField("device.Config");
+	const auto* inspect = schema.findService("device.Inspect");
 	CHECK(config && inspect);
 	// The inputs, in order, with their types and choices.
 	const auto inputs = ra::arguments(schema, config->typeId);
@@ -416,7 +416,7 @@ void requestArguments()
 	CHECK(ra::signatureText(schema, config->typeId) == "(serial: u64, offset: i64, gain: f32, precise: f64, …)");
 	CHECK(ra::valueType(schema, inputs[5].type).enumeration && !ra::valueType(schema, inputs[6].type).valid());
 	// A request that takes no input has no arguments.
-	const auto* ping = schema.findService("device/Ping");
+	const auto* ping = schema.findService("device.Ping");
 	CHECK(ping && ra::signatureText(schema, ping->typeId) == "()");
 }
 
@@ -429,7 +429,7 @@ void requestArguments()
 // A Service item of device.Inspect, its request at its initial values.
 ux::BatchRow serviceRow(Peer& peer)
 {
-	const auto* inspect = peer.storage->schema.findService("device/Inspect");
+	const auto* inspect = peer.storage->schema.findService("device.Inspect");
 	CHECK(inspect);
 	const auto bound = peer.storage->owner.bindService(inspect->id);
 	CHECK(bound);

@@ -147,9 +147,11 @@ void metadataAndLocalChildren() {
 	const auto command = endpoint(model, 2, 0);
 	const auto service = endpoint(model, 3, 0);
 	CHECK(config.isValid() && command.isValid() && service.isValid());
-	CHECK(model.isGroup(model.index(0, 0)) && model.isGroup(model.parent(config)));
-	CHECK(model.isGroup(model.index(1, 0)) && model.isGroup(model.parent(command)));
-	CHECK(model.isGroup(model.index(2, 0)) && model.isGroup(model.parent(service)));
+	// One tree of groups: every top row is a group, and each endpoint's parent.
+	for (int row = 0; row < model.rowCount(); ++row)
+		CHECK(model.isGroup(model.index(row, 0)));
+	CHECK(model.isGroup(model.parent(config)) && model.isGroup(model.parent(command)) &&
+	      model.isGroup(model.parent(service)) && !model.parent(model.parent(config)).isValid());
 	CHECK(!model.isGroup({}) && !model.isGroup(config) && !model.isGroup(command) && !model.isGroup(service));
 	ux::EndpointModel foreign;
 	foreign.rebuild(storage->owner);

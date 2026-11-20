@@ -249,6 +249,11 @@ private:
 	// browser's compact folders do (the review's 14.3); split again when a
 	// second child comes.
 	static void joinChains(Shape& shape);
+	// A fold an older project saved in the dotted form ("device.Config")
+	// rewritten to its node's path in the "/" form once the node is there;
+	// true when one was.
+	bool migrateFolds(const Shape& shape);
+	bool foldsMigrated_ = false;
 	void walk(const Shape& shape, int node, QVector<int>& rows) const;
 	// Brings the shown rows to the source's present shape, row by row. A
 	// change asked for while it is under way is made right after it.

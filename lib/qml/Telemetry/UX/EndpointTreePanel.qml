@@ -1107,10 +1107,14 @@ Pane {
             openInitialGroups()
         }
         const selected = panel.selectedEndpointIndex
-        if (selected && selected.valid)
+        if (selected && selected.valid && !selectionStale)
             reveal(selected, !memory || memory.current.length === 0)
         snapshotFolds()
     }
+    // A provider's selection made before the model was reset: an index into
+    // rows that are gone, never mapped (a plain index of a deleted row reads
+    // freed memory). It is fresh again when the provider selects anew.
+    property bool selectionStale: false
 
     // The current branch's guide (design E): the current row if it is an open
     // branch, else its parent; the rows below it at that level.
@@ -1204,13 +1208,16 @@ Pane {
     onSearchSourceChanged: { clearPreviews(); clearWatchMarks(); afterResetTimer.restart() }
     // A selection made elsewhere (the Watchlist, the Batch, a host's search)
     // is brought into view, and the keyboard's row follows it.
-    onSelectedEndpointIndexChanged: revealSelection.restart()
+    onSelectedEndpointIndexChanged: {
+        selectionStale = false
+        revealSelection.restart()
+    }
     Timer {
         id: revealSelection
         interval: 0
         onTriggered: {
             const index = panel.selectedEndpointIndex
-            if (index && index.valid)
+            if (index && index.valid && !panel.selectionStale)
                 panel.reveal(index, true)
         }
     }
@@ -1861,7 +1868,13 @@ Pane {
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
-        function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); afterResetTimer.stop() }
+        function onModelAboutToBeReset() {
+            panel.clearPreviews()
+            panel.clearWatchMarks()
+            afterResetTimer.stop()
+            revealSelection.stop()
+            panel.selectionStale = true
+        }
         function onModelReset() {
             panel.forgetMeasured()
             panel.findStep = -1

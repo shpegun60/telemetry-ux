@@ -367,6 +367,17 @@ protected:
 			if (p == index) return true;
 		for (QModelIndex p = index.parent(); p.isValid(); p = p.parent())
 			if (p == selected) return true;
+		// Every group stays (one tree of groups: a group is a top row, with
+		// no category above it), so the table's root - the selected Field's
+		// group - never goes from under the table when the selection moves to
+		// another group; a group under that root would be a row of the
+		// table, so not those.
+		if (index.data(EndpointModel::KindRole).toString() == QLatin1String("group")) {
+			const auto root = selected.parent();
+			for (QModelIndex p = index.parent(); p.isValid(); p = p.parent())
+				if (p == root) return false;
+			return true;
+		}
 		return false;
 	}
 };

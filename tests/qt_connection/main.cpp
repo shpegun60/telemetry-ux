@@ -622,7 +622,7 @@ void groupWatchBoxes()
 	const auto ticked = history.undoSerial();
 	const auto all = names();
 	provider->removeWatch(0);
-	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove scaling.")));
+	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove scaling/")));
 	CHECK(history.undo() && history.undoSerial() == ticked && names() == all);
 	// Another provider's index is refused; nothing was sent to the device.
 	CHECK(provider->setWatchMany(watched(endpoint(other->endpoints(), QStringLiteral("Value_0"))), true)
@@ -1217,7 +1217,7 @@ void memberRowWrite()
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
 	// "Wrote 22:31:05 · device/Config.Gain = 2 · read back 2" (WL-9 C5): the
 	// time, then the values in the row's form.
-	CHECK(QRegularExpression(QStringLiteral("^Wrote \\d\\d:\\d\\d:\\d\\d · device\\.Config\\.Gain = 2 · read back 2$"))
+	CHECK(QRegularExpression(QStringLiteral("^Wrote \\d\\d:\\d\\d:\\d\\d · device/Config\\.Gain = 2 · read back 2$"))
 	          .match(provider->watchWriteOutcome()).hasMatch() &&
 	      provider->watchWriteKind() == QStringLiteral("confirmed") && provider->watchWriteAt() > 0);
 	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));

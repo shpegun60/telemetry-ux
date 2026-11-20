@@ -1399,6 +1399,17 @@ void run(const QString& output, double points, int& screens)
 		CHECK(rowOf(v.list, QStringLiteral("plant/area/drive/line/converter/inverter/metrology/harmonics/phaseA/band_from_2000_Hz_to_4000_Hz_above_the_carrier"))
 		          ->property("isGroup").toBool());
 		shot(v, output, QStringLiteral("watch-tree-chains-560%1.png").arg(suffix));
+		// A fold an older project saved in the dotted form names its node in
+		// the "/" form once the node is there; the node is folded.
+		{
+			const QString spectrum = QStringLiteral("metrology/harmonics/phaseA/Spectrum");
+			look.rows.setFolded({QStringLiteral("metrology.harmonics.phaseA.Spectrum")});
+			settle(80);
+			CHECK(look.rows.folded() == QStringList{spectrum});
+			CHECK(!rowOf(v.list, spectrum)->property("expanded").toBool());
+			look.rows.setFolded({});
+			settle(80);
+		}
 		// A second child splits the chain where it branches.
 		look.addRow(QStringLiteral("metrology/levels/L1"), 64, typeOf(WatchScalar::F32, 4), floatBits(1), QStringLiteral("f32"));
 		settle(120);

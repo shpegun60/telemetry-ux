@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchRows.hpp"
+#include "PathGrammar.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
@@ -787,11 +788,40 @@ void WatchRows::walk(const Shape& shape, int node, QVector<int>& rows) const
 	}
 }
 
+bool WatchRows::migrateFolds(const Shape& shape)
+{
+	if (folded_.isEmpty())
+		return false;
+	// A node's path as a project saved it before the one grammar: no "/",
+	// the names joined by ".", unescaped ("device/Config" -> "device.Config").
+	QHash<QString, QString> older;
+	for (qsizetype i = 1; i < shape.nodes.size(); ++i) {
+		const auto& path = shape.nodes.at(i).path;
+		if (path_grammar::slashed(path))
+			older.insert(path_grammar::unescaped(QString(path).replace(QLatin1Char('/'), QLatin1Char('.'))), path);
+	}
+	bool changed = false;
+	for (const auto& saved : QStringList(folded_.cbegin(), folded_.cend())) {
+		const auto now = path_grammar::slashed(saved) ? QString{} : older.value(saved);
+		if (now.isEmpty())
+			continue;
+		folded_.remove(saved);
+		folded_.insert(now);
+		changed = true;
+	}
+	return changed;
+}
+
 void WatchRows::reset()
 {
 	const int before = count();
 	beginResetModel();
 	shape_ = build();
+	// A dotted fold of an older project names its node in the "/" form now.
+	if (tree_ && migrateFolds(shape_)) {
+		shape_ = build();
+		foldsMigrated_ = true;
+	}
 	identities_.clear();
 	identities_.reserve(shape_.rows.size());
 	for (const int node : std::as_const(shape_.rows))
@@ -803,6 +833,8 @@ void WatchRows::reset()
 		rowOfNode_[shape_.rows.at(row)] = static_cast<int>(row);
 	setCount(before);
 	pruneSelection();
+	if (std::exchange(foldsMigrated_, false))
+		Q_EMIT foldedChanged();
 }
 
 void WatchRows::refresh()
@@ -814,11 +846,19 @@ void WatchRows::refresh()
 	refreshing_ = true;
 	do {
 		again_ = false;
-		apply(build());
+		auto shape = build();
+		// A dotted fold of an older project names its node in the "/" form now.
+		if (tree_ && migrateFolds(shape)) {
+			shape = build();
+			foldsMigrated_ = true;
+		}
+		apply(std::move(shape));
 	} while (again_);
 	refreshing_ = false;
 	if (std::exchange(selectionMoved_, false))
 		Q_EMIT selectionChanged();
+	if (std::exchange(foldsMigrated_, false))
+		Q_EMIT foldedChanged();
 }
 
 namespace {

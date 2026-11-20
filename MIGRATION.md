@@ -2123,7 +2123,17 @@ the provider's `revealGroup(path)` where it has one.
 
 `DynamicConfiguratorProvider`: `revealGroup(path)` and the signal
 `revealGroupRequested(path)`; `watchRefusal` gives none for a group with no
-Fields (it has no box, as a Command has none).
+Fields (it has no box, as a Command has none). The definitions model behind
+Details' metadata tree keeps every group row outside the selection's parent,
+so the tree's root stays alive when the categories it once kept are gone.
+
+`EndpointTreePanel`: a selection whose index dies in a model reset is no
+longer revealed after the reset (`selectionStale`); revealing it scrolled to
+a row of the cleared model.
+
+`WatchRows`: folds saved under the dotted names (`a.b.Spectrum`) are read
+once against the rows' new paths and kept under the "/" names, and
+`foldedChanged` carries them back to the saver.
 
 Checks: `tests/qml_layout/DeviceTreeGroups.cpp` (new: the path grammar, groups
 inside groups over a model shaped as a group tree, counts with their groups,
