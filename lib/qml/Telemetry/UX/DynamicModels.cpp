@@ -12,9 +12,11 @@
 #include "ScalarEditorMetadata.hpp"
 #include "ValueWords.hpp"
 #include "WatchLeaves.hpp"
+#include "PathGrammar.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
+#include <QtCore/QLocale>
 #include <QtCore/QPointer>
 #include <QtCore/QString>
 
@@ -116,8 +118,9 @@ struct Row {
 	std::uint32_t rangeFirst = 0, rangeCount = 0;
 	// The row's values as leaf ordinals of its Field: [leafFirst, leafFirst + leafCount).
 	std::uint32_t leafFirst = 0, leafCount = 0;
-	// A category's or group's endpoints.
-	std::uint32_t count = 0;
+	// A group's endpoints, everything under it, and of each family, and its
+	// groups under it.
+	std::uint32_t count = 0, fields = 0, commands = 0, services = 0, groups = 0;
 	int category = 0;
 	bool readable = false, writable = false, endpoint = false, aggregate = false;
 	bool previewOwner = false, previewReadable = false, previewChild = false, previewRange = false;
@@ -129,6 +132,8 @@ struct Row {
 	QString label;
 	// The Device tree's kind of row (KindRole) and an enum's names (TypeNamesRole).
 	QString kind, typeNames;
+	// A named type ("adc::Config"); empty until a descriptor names its types.
+	QString typeName;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
@@ -201,6 +206,29 @@ QString endpointDetail(const Row& row)
 		}
 	}
 	return parts.join(QStringLiteral(" \u00b7 "));
+}
+
+// A group's count in words, Fields first because the box acts on them, the
+// families it has none of left out: "7 Fields · 1 Command"; with groups
+// under it, "in 4 groups" after them (the designer's review, 14.1).
+QString countWords(const Row& row, bool withGroups)
+{
+	const auto words = [](std::uint32_t count, const char* one, const char* many) {
+		return count == 1 ? QCoreApplication::translate("EndpointModel", one)
+		                  : QCoreApplication::translate("EndpointModel", many).arg(QLocale().toString(count));
+	};
+	QStringList parts;
+	if (row.fields > 0)
+		parts << words(row.fields, "1 Field", "%1 Fields");
+	if (row.commands > 0)
+		parts << words(row.commands, "1 Command", "%1 Commands");
+	if (row.services > 0)
+		parts << words(row.services, "1 Service", "%1 Services");
+	auto text = parts.join(QStringLiteral(" · "));
+	if (withGroups && row.groups > 0)
+		text = QCoreApplication::translate("EndpointModel", "%1 in %2").arg(text,
+		           words(row.groups, "1 group", "%1 groups"));
+	return text;
 }
 
 // A QModelIndex stores only an integer token. Clear never reuses a token, so an
@@ -455,6 +483,36 @@ struct Reader {
 	}
 };
 
+// A flat (v3.0) descriptor's catalogs as one tree of groups (14.1): the
+// same-named catalogs of the three families one group, the groups in the
+// order the families first name them (the Fields', then the Commands', then
+// the Services'). Part B: a descriptor with group records gives them here.
+GroupOutline outlineOf(const Reader& source)
+{
+	GroupOutline outline;
+	QHash<QString, std::size_t> byName;
+	constexpr std::array<Category, 3> families{Category::Field, Category::Command, Category::Service};
+	for (std::size_t family = 0; family < families.size(); ++family) {
+		const auto count = source.endpoints(families[family]).size();
+		for (const auto& catalog : source.catalogs(families[family])) {
+			const auto name = text(catalog.name);
+			auto found = byName.constFind(name);
+			if (found == byName.cend()) {
+				found = byName.insert(name, outline.groups.size());
+				outline.groups.push_back({name, -1, {}});
+			}
+			auto& group = outline.groups[found.value()];
+			for (std::uint32_t i = 0; i < catalog.endpointCount; ++i) {
+				const auto at = std::uint64_t{catalog.firstEndpoint} + i;
+				if (at >= count)
+					break;
+				group.endpoints[family].push_back(static_cast<std::size_t>(at));
+			}
+		}
+	}
+	return outline;
+}
+
 std::unique_ptr<Row> valueRow(const Reader& inspector, const ins::NodeHandle& handle)
 {
 	const auto info = inspector.info(handle);
@@ -515,6 +573,8 @@ struct EndpointModel::Impl {
 	WatchLeaves leaves;
 	std::size_t previewNodes = 0;
 	QString widestFieldType;
+	// The descriptor's endpoints of each family, and its deepest group.
+	int fieldTotal = 0, commandTotal = 0, serviceTotal = 0, deepestGroup = -1;
 	// A host's schema where no previews give one (setSchemaSource).
 	std::function<telemetry::runtime::RuntimeSchema()> schemaSource;
 
@@ -593,16 +653,71 @@ void EndpointModel::clear()
 	impl_->leaves.clear();
 	impl_->previewNodes = 0;
 	impl_->inspector = {};
+	const bool totals = impl_->fieldTotal || impl_->commandTotal || impl_->serviceTotal || impl_->deepestGroup >= 0;
+	impl_->fieldTotal = impl_->commandTotal = impl_->serviceTotal = 0;
+	impl_->deepestGroup = -1;
 	endResetModel();
 	if (!alive)
 		return;
 	impl_->tree.changing = false;
+	if (totals)
+		Q_EMIT totalsChanged();
+	if (!alive)
+		return;
 	setWidestFieldType({});
 }
 
 QString EndpointModel::widestFieldType() const
 {
 	return impl_->widestFieldType;
+}
+
+int EndpointModel::fieldTotal() const noexcept
+{
+	return impl_->fieldTotal;
+}
+
+int EndpointModel::commandTotal() const noexcept
+{
+	return impl_->commandTotal;
+}
+
+int EndpointModel::serviceTotal() const noexcept
+{
+	return impl_->serviceTotal;
+}
+
+int EndpointModel::deepestGroup() const noexcept
+{
+	return impl_->deepestGroup;
+}
+
+void EndpointModel::setTotals(int fields, int commands, int services, int deepest)
+{
+	impl_->fieldTotal = fields;
+	impl_->commandTotal = commands;
+	impl_->serviceTotal = services;
+	impl_->deepestGroup = deepest;
+}
+
+QSet<QString> EndpointModel::groupNames() const
+{
+	QSet<QString> names;
+	if (!impl_->current() || impl_->tree.changing)
+		return names;
+	std::vector<const Row*> stack;
+	for (const auto& root : impl_->tree.roots)
+		stack.push_back(root.get());
+	while (!stack.empty()) {
+		const auto* row = stack.back();
+		stack.pop_back();
+		if (row->kind != QLatin1String("group"))
+			continue;
+		names.insert(path_grammar::unescaped(row->path));
+		for (const auto& child : row->children)
+			stack.push_back(child.get());
+	}
+	return names;
 }
 
 void EndpointModel::setWidestFieldType(const QString& type)
@@ -784,81 +899,118 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 	impl_->previewNodes = 0;
 	impl_->inspector = {inspector, workbench, false, false, view};
 	impl_->admission = impl_->inspector.snapshotInfo().admission;
+	impl_->fieldTotal = impl_->commandTotal = impl_->serviceTotal = 0;
+	impl_->deepestGroup = -1;
 	if (impl_->current()) {
-		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
-			auto categoryRow = std::make_unique<Row>();
-			categoryRow->category = static_cast<int>(category);
-			categoryRow->kind = QStringLiteral("category");
-			categoryRow->name = category == Category::Field     ? QStringLiteral("Fields")
-			                    : category == Category::Command ? QStringLiteral("Commands")
-			                                                    : QStringLiteral("Services");
-			auto* parent = impl_->tree.append(std::move(categoryRow));
-			if (!parent)
+		constexpr std::array<Category, 3> families{Category::Field, Category::Command, Category::Service};
+		const std::array<decltype(impl_->inspector.endpoints(Category::Field)), 3> endpoints{
+		    impl_->inspector.endpoints(Category::Field), impl_->inspector.endpoints(Category::Command),
+		    impl_->inspector.endpoints(Category::Service)};
+		impl_->fieldTotal = static_cast<int>(endpoints[0].size());
+		impl_->commandTotal = static_cast<int>(endpoints[1].size());
+		impl_->serviceTotal = static_cast<int>(endpoints[2].size());
+		const auto outline = outlineOf(impl_->inspector);
+		// An endpoint's row under its group: its family's kind, its path in
+		// the one grammar (group/endpoint).
+		const auto endpointRow = [&](Row* group, std::size_t family, std::size_t at) {
+			const auto category = families[family];
+			const auto& endpoint = endpoints[family][at];
+			auto row = std::make_unique<Row>();
+			row->category = static_cast<int>(category);
+			row->endpoint = true;
+			// A Field's kind follows its type once the schema gives it.
+			row->kind = category == Category::Command   ? QStringLiteral("command")
+			            : category == Category::Service ? QStringLiteral("service")
+			                                            : QStringLiteral("value");
+			row->endpointId = endpoint.id;
+			row->typeId = endpoint.typeId;
+			row->responseTypeId = endpoint.responseTypeId;
+			row->name = text(endpoint.name);
+			row->path = path_grammar::endpoint(group->path, row->name);
+			row->readable =
+			    category == Category::Field &&
+			    (endpoint.capabilities & static_cast<std::uint8_t>(telemetry::descriptor::Capability::Readable)) != 0;
+			row->writable =
+			    category == Category::Field &&
+			    (endpoint.capabilities & static_cast<std::uint8_t>(telemetry::descriptor::Capability::Writable)) != 0;
+			row->accessText = category == Category::Command   ? QStringLiteral("Execute")
+			                  : category == Category::Service ? QStringLiteral("Call")
+			                  : row->readable && row->writable ? QStringLiteral("Read / Write")
+			                  : row->readable                  ? QStringLiteral("Read-only")
+			                  : row->writable                  ? QStringLiteral("Write-only")
+			                                                   : QStringLiteral("Unavailable");
+			row->detail = endpointDetail(*row);
+			return impl_->tree.append(std::move(row), group) != nullptr;
+		};
+		// Pre-order: a group, its subgroups (each with all of its own), then
+		// its Fields, Commands and Services in declaration order.
+		std::vector<Row*> made(outline.groups.size(), nullptr);
+		std::vector<int> depth(outline.groups.size(), 0);
+		std::vector<std::vector<std::size_t>> children(outline.groups.size());
+		std::vector<std::size_t> tops;
+		for (std::size_t g = 0; g < outline.groups.size(); ++g) {
+			const auto parent = outline.groups[g].parent;
+			if (parent >= 0 && static_cast<std::size_t>(parent) < g)
+				children[static_cast<std::size_t>(parent)].push_back(g);
+			else
+				tops.push_back(g);
+		}
+		const std::function<bool(std::size_t, Row*, int)> place = [&](std::size_t g, Row* parent, int level) {
+			const auto& spec = outline.groups[g];
+			auto groupRow = std::make_unique<Row>();
+			groupRow->kind = QStringLiteral("group");
+			groupRow->name = spec.name;
+			groupRow->path = parent ? parent->path + QLatin1Char('/') + path_grammar::escaped(spec.name)
+			                        : path_grammar::escaped(spec.name);
+			auto* group = impl_->tree.append(std::move(groupRow), parent);
+			if (!group)
+				return false;
+			made[g] = group;
+			depth[g] = level;
+			impl_->deepestGroup = std::max(impl_->deepestGroup, level);
+			for (const auto child : children[g])
+				if (!place(child, group, level + 1))
+					return false;
+			for (std::size_t family = 0; family < families.size(); ++family)
+				for (const auto at : spec.endpoints[family])
+					if (at < endpoints[family].size() && !endpointRow(group, family, at))
+						return false;
+			return true;
+		};
+		for (const auto g : tops)
+			if (!place(g, nullptr, 0))
 				break;
-			const auto endpoints = impl_->inspector.endpoints(category);
-			parent->count = static_cast<std::uint32_t>(endpoints.size());
-			for (const auto& catalog : impl_->inspector.catalogs(category)) {
-				auto catalogRow = std::make_unique<Row>();
-				catalogRow->category = static_cast<int>(category);
-				catalogRow->kind = QStringLiteral("group");
-				catalogRow->name = text(catalog.name);
-				catalogRow->count = catalog.endpointCount;
-				const bool one = catalog.endpointCount == 1;
-				const auto words = category == Category::Field
-				    ? (one ? QCoreApplication::translate("EndpointModel", "1 Field")
-				           : QCoreApplication::translate("EndpointModel", "%1 Fields"))
-				    : category == Category::Command
-				    ? (one ? QCoreApplication::translate("EndpointModel", "1 Command")
-				           : QCoreApplication::translate("EndpointModel", "%1 Commands"))
-				    : (one ? QCoreApplication::translate("EndpointModel", "1 Service")
-				           : QCoreApplication::translate("EndpointModel", "%1 Services"));
-				catalogRow->detail = one ? words : words.arg(integerText(catalog.endpointCount));
-				auto* group = impl_->tree.append(std::move(catalogRow), parent);
-				if (!group)
-					break;
-				for (std::uint32_t i = 0; i < catalog.endpointCount; ++i) {
-					const auto at = std::uint64_t{catalog.firstEndpoint} + i;
-					if (at >= endpoints.size())
-						break;
-					const auto& endpoint = endpoints[static_cast<std::size_t>(at)];
-					auto row = std::make_unique<Row>();
-					row->category = static_cast<int>(category);
-					row->endpoint = true;
-					// A Field's kind follows its type once the schema gives it.
-					row->kind = category == Category::Command   ? QStringLiteral("command")
-					            : category == Category::Service ? QStringLiteral("service")
-					                                            : QStringLiteral("value");
-					row->endpointId = endpoint.id;
-					row->typeId = endpoint.typeId;
-					row->responseTypeId = endpoint.responseTypeId;
-					row->name = text(endpoint.name);
-					row->path = group->name + QLatin1Char('.') + row->name;
-					row->readable =
-					    category == Category::Field &&
-					    (endpoint.capabilities &
-					     static_cast<std::uint8_t>(telemetry::descriptor::Capability::Readable)) !=
-					        0;
-					row->writable =
-					    category == Category::Field &&
-					    (endpoint.capabilities &
-					     static_cast<std::uint8_t>(telemetry::descriptor::Capability::Writable)) !=
-					        0;
-					row->accessText = category == Category::Command ? QStringLiteral("Execute")
-					                  : category == Category::Service ? QStringLiteral("Call")
-					                  : row->readable && row->writable ? QStringLiteral("Read / Write")
-					                  : row->readable ? QStringLiteral("Read-only")
-					                  : row->writable ? QStringLiteral("Write-only")
-					                                  : QStringLiteral("Unavailable");
-					row->detail = endpointDetail(*row);
-					impl_->tree.append(std::move(row), group);
+		// Everything under a group counted, deepest first: one pass back over
+		// the pre-order list (15.2).
+		for (auto g = outline.groups.size(); g-- > 0;) {
+			auto* group = made[g];
+			if (!group)
+				continue;
+			for (const auto& child : group->children) {
+				if (child->kind == QLatin1String("group")) {
+					group->fields += child->fields;
+					group->commands += child->commands;
+					group->services += child->services;
+					group->groups += child->groups + 1;
+				} else if (child->category == static_cast<int>(Category::Field)) {
+					++group->fields;
+				} else if (child->category == static_cast<int>(Category::Command)) {
+					++group->commands;
+				} else if (child->category == static_cast<int>(Category::Service)) {
+					++group->services;
 				}
 			}
+			group->count = group->fields + group->commands + group->services;
+			group->detail = countWords(*group, true);
 		}
 	}
 	endResetModel();
 	if (!alive)
 		return;
 	impl_->tree.changing = false;
+	Q_EMIT totalsChanged();
+	if (!alive)
+		return;
 	setWidestFieldType({});
 	if (!alive)
 		return;
@@ -1119,6 +1271,16 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			return row->kind;
 		case TypeNamesRole:
 			return row->typeNames;
+		case FieldCountRole:
+			return row->fields;
+		case CommandCountRole:
+			return row->commands;
+		case ServiceCountRole:
+			return row->services;
+		case GroupCountRole:
+			return row->groups;
+		case TypeNameRole:
+			return row->typeName;
 		case PreviewReasonRole:
 			return impl_->expansionLimited(*row)
 			           ? tr("Tree preview expansion is limited to 4096 rows. Open Details to inspect this value.")
@@ -1145,7 +1307,9 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {CountRole, "count"},           {PathRole, "path"},
 	        {WatchLeafFirstRole, "watchLeafFirst"}, {WatchLeafCountRole, "watchLeafCount"},
 	        {WatchLeafKindRole, "watchLeafKind"}, {KindRole, "kind"},
-	        {TypeNamesRole, "typeNames"}};
+	        {TypeNamesRole, "typeNames"},   {FieldCountRole, "fieldCount"},
+	        {CommandCountRole, "commandCount"}, {ServiceCountRole, "serviceCount"},
+	        {GroupCountRole, "groupCount"}, {TypeNameRole, "typeName"}};
 }
 
 QString EndpointModel::pathOf(const QModelIndex& index) const
@@ -1157,8 +1321,21 @@ QModelIndex EndpointModel::indexOfPath(const QString& path)
 {
 	if (path.isEmpty() || changing() || !impl_->current())
 		return {};
+	// The names, split at every "/" a backslash does not escape.
+	QStringList names;
+	QString pending;
+	for (qsizetype i = 0; i < path.size(); ++i) {
+		if (path.at(i) == QLatin1Char('\\') && i + 1 < path.size()) {
+			pending.append(path.at(++i));
+		} else if (path.at(i) == QLatin1Char('/')) {
+			names.append(std::exchange(pending, {}));
+		} else {
+			pending.append(path.at(i));
+		}
+	}
+	names.append(pending);
 	QModelIndex at;
-	for (const auto& name : path.split(QLatin1Char('/'))) {
+	for (const auto& name : std::as_const(names)) {
 		QModelIndex next;
 		for (int row = 0;; ++row) {
 			// A Field's values come in batches: fetch while the name is not among them.
@@ -1180,6 +1357,16 @@ QModelIndex EndpointModel::indexOfPath(const QString& path)
 		at = next;
 	}
 	return at;
+}
+
+QModelIndex EndpointModel::indexOfGroupPath(const QString& path) const
+{
+	if (path.isEmpty() || changing() || !impl_->current())
+		return {};
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row && row->kind == QLatin1String("group") && row->path == path)
+			return createIndex(row->row, 0, row->token);
+	return {};
 }
 
 bool EndpointModel::canFetchMore(const QModelIndex& parent) const

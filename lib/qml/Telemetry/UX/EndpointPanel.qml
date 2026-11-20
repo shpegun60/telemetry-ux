@@ -48,6 +48,14 @@ Pane {
     // The header's title: the path. A host that shows something else (the
     // Batch's pane) names it otherwise.
     property string title: provider.selection
+    // A breadcrumb's group was chosen: the Device tree shows it. A provider
+    // that can ask its trees (revealGroup) is asked; a host may also listen.
+    signal groupRevealRequested(string path)
+    function revealGroup(path) {
+        groupRevealRequested(path)
+        if (provider && typeof provider.revealGroup === "function")
+            provider.revealGroup(path)
+    }
     // Words before line 2, as the Batch's pane says "Item 3 · ".
     property string infoPrefix: ""
     // Replaces the header's own actions (Read, Cancel, Apply, Execute, Call).
@@ -508,10 +516,17 @@ Pane {
     // Bumped when the columns are measured again (zoom, another selection).
     property int columnEpoch: 0
 
-    // The tail of a path "device.Config" -> "Config".
+    // The tail of a path, after its last "/" or "." a backslash does not
+    // escape: "device/Config" -> "Config" (an older "device.Config" too),
+    // "power\.meter/Voltage" -> "Voltage"; a name's own escapes dropped.
     function lastSegment(path, fallback) {
-        const cut = path.lastIndexOf(".")
-        const tail = cut >= 0 ? path.substring(cut + 1) : path
+        let cut = -1
+        for (let i = 0; i < path.length; ++i) {
+            if (path[i] === "\\") { ++i; continue }
+            if (path[i] === "/" || path[i] === ".")
+                cut = i
+        }
+        const tail = (cut >= 0 ? path.substring(cut + 1) : path).replace(/\\(.)/g, "$1")
         return tail.length > 0 ? tail : fallback
     }
     function setCurrentRow(view, row) {
@@ -1167,18 +1182,22 @@ Pane {
                         readonly property bool wraps: width - actionsWidth - Type.groupSpacing < Type.bodyPixels * 6
                         columns: wraps ? 1 : 2
                         columnSpacing: Type.groupSpacing; rowSpacing: Type.tight
-                        Label {
+                        // The title is a breadcrumb (the review's 14.3): the
+                        // path label with its leaf DemiBold; each group before
+                        // it a link that shows the group in the Device tree.
+                        // One Tab stop: Left and Right move between the
+                        // groups, Enter shows one.
+                        PathLabel {
                             id: titleLabel
                             objectName: "endpointSelectionTitle"
-                            textFormat: Text.PlainText; text: panel.title
-                            font.weight: Type.headingWeight; color: Theme.textPrimary
+                            path: panel.title
+                            font: panel.font
+                            leafWeight: Type.headingWeight
+                            interactive: true
                             Layout.fillWidth: true; Layout.minimumWidth: 0
                             Layout.preferredHeight: Type.controlHeight
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideMiddle
                             Accessible.role: Accessible.Heading
-                            HoverHandler { id: titleHover }
-                            PlainToolTip { delay: 700; visible: titleHover.hovered && titleLabel.truncated; text: panel.title }
+                            onSegmentActivated: function(groupPath) { panel.revealGroup(groupPath) }
                         }
                         Loader {
                             id: hostActions

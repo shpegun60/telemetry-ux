@@ -14,12 +14,15 @@
 #include <integration/workbench/WorkbenchModel.hpp>
 
 #include <QtCore/QAbstractItemModel>
+#include <QtCore/QSet>
 #include <QtCore/QVariantMap>
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace telemetry::ux {
 
@@ -51,6 +54,25 @@ using Workbench = telemetry::integration::workbench::WorkbenchModel<8, workbench
 using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, workbenchPayloadBytes,
                                                                        workbenchSnapshotBytes, 1536>;
 
+// The Device tree's groups, one tree for all three families (the designer's
+// review of 20 November 2026, 14.1): in pre-order, each naming its parent's
+// place in the list (-1 at the top), with the endpoints it holds of each
+// family in declaration order. A flat (v3.0) descriptor gives one level, its
+// same-named catalogs of different families one group (outlineOf in
+// DynamicModels.cpp); a group tree (v3.1, part B) gives its group records as
+// they are. The tree shows a group's subgroups first, then its Fields,
+// Commands and Services.
+struct GroupOutline {
+	struct Group {
+		QString name;
+		int parent = -1;
+		// Indexes into the descriptor's endpoints of each family:
+		// [0] Fields, [1] Commands, [2] Services.
+		std::array<std::vector<std::size_t>, 3> endpoints;
+	};
+	std::vector<Group> groups;
+};
+
 // All calls run on the Inspector owner thread. The Inspector object must outlive
 // these models. Materialized labels and values are Qt-owned copies; the controller
 // clears/resetSnapshot() before changing the displayed admission or snapshot.
@@ -60,6 +82,15 @@ class EndpointModel final : public QAbstractItemModel {
 	// the Device tree's Type column is as wide as it, once per descriptor, so
 	// opening a branch never moves the column. Empty until the types are known.
 	Q_PROPERTY(QString widestFieldType READ widestFieldType NOTIFY widestFieldTypeChanged)
+	// The device's Fields, Commands and Services (the descriptor's counts):
+	// what the kinds filter's menu says beside each kind.
+	Q_PROPERTY(int fieldTotal READ fieldTotal NOTIFY totalsChanged)
+	Q_PROPERTY(int commandTotal READ commandTotal NOTIFY totalsChanged)
+	Q_PROPERTY(int serviceTotal READ serviceTotal NOTIFY totalsChanged)
+	// How deep the deepest group lies, the top level 0; -1 without groups.
+	// The tree's indent step is chosen for a name at this depth plus 2 (a
+	// Field and one member level), once per descriptor.
+	Q_PROPERTY(int deepestGroup READ deepestGroup NOTIFY totalsChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -84,11 +115,12 @@ public:
 		PreviewStateRole,
 		PreviewAgeMsRole,
 		PreviewReasonRole,
-		// A category's or group's number of endpoints; 0 on other rows.
+		// A group's endpoints, everything under it; 0 on other rows.
 		CountRole,
-		// A Field's or a value's path: "device.Config.Gain", "data.Samples[3]";
-		// a range row's names its range, "data.Samples[0 … 255]"; a group's
-		// or category's name.
+		// A Field's or a value's path in the one grammar (PathGrammar.hpp):
+		// "device/Config.Gain", "data/Samples[3]"; a range row's names its
+		// range, "data/Samples[0 … 255]"; a group's its groups' path,
+		// "metrology/harmonics".
 		PathRole,
 		// The row's values as Watchlist leaf ordinals of its Field:
 		// [first, first + count). A scalar Field is 0, 1; groups are 0, 0.
@@ -98,13 +130,22 @@ public:
 		// struct of scalars), "elements" (an array of scalars) or "values"
 		// (anything deeper); empty on other rows.
 		WatchLeafKindRole,
-		// What the row is, for its glyph: "category", "group", "struct",
-		// "array", "value" (a scalar or an enum), "command" or "service"; a
-		// value inside a Field by its own type, a range of an array "array".
+		// What the row is, for its glyph: "group", "struct", "array", "value"
+		// (a scalar or an enum), "command" or "service"; a value inside a
+		// Field by its own type, a range of an array "array".
 		KindRole,
 		// An enum's names for the row's tooltip, "Off, Low, High"; empty on
 		// any other row.
-		TypeNamesRole
+		TypeNamesRole,
+		// A group's Fields, Commands, Services and groups, everything under
+		// it counted (the group's words: "7 Fields · 1 Command"); 0 on other rows.
+		FieldCountRole,
+		CommandCountRole,
+		ServiceCountRole,
+		GroupCountRole,
+		// The row's named type, "adc::Config", what find matches as a type;
+		// empty while the descriptor names no types (v3.0, part B's seam).
+		TypeNameRole
 	};
 	Q_ENUM(Role)
 
@@ -134,13 +175,21 @@ public:
 	// What PathRole holds; empty for an invalid or stale index.
 	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
 	// The row at a path of names (NameRole) from the root, joined by "/":
-	// "Fields/device/Config", "Commands/control"; the values of a Field are
-	// fetched on the way. Invalid when no such row. Unlike PathRole the path
-	// names the category, so a group of Commands and one of Services with
-	// the same name are told apart: what the Device tree keeps of its open
-	// branches across a reconnect.
+	// "device/Config", "device/Config/Gain"; the values of a Field are
+	// fetched on the way. Invalid when no such row. What the Device tree
+	// keeps of its open branches across a reconnect.
 	Q_INVOKABLE QModelIndex indexOfPath(const QString& path);
+	// The group row at a group's path in the one grammar ("metrology/harmonics",
+	// "power\.meter"), or invalid: what a breadcrumb's segment reveals.
+	Q_INVOKABLE QModelIndex indexOfGroupPath(const QString& path) const;
 	[[nodiscard]] QString widestFieldType() const;
+	[[nodiscard]] int fieldTotal() const noexcept;
+	[[nodiscard]] int commandTotal() const noexcept;
+	[[nodiscard]] int serviceTotal() const noexcept;
+	[[nodiscard]] int deepestGroup() const noexcept;
+	// The device's group names as a flat descriptor names them: what a
+	// dotted key of an older project is read against (PathGrammar.hpp).
+	[[nodiscard]] QSet<QString> groupNames() const;
 	// Resolve the current model index without retaining one across a reset.
 	bool matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const;
 	// Whether the current device's Field with this id accepts writes.
@@ -164,11 +213,13 @@ public:
 
 Q_SIGNALS:
 	void widestFieldTypeChanged();
+	void totalsChanged();
 
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 	void setWidestFieldType(const QString& type);
+	void setTotals(int fields, int commands, int services, int deepest);
 	void rebuildSource(const Inspector* inspector, const Workbench* workbench,
 	                   const WorkbenchView* view = nullptr);
 	void previewSourceChanged();

@@ -94,3 +94,25 @@ glyphs and guides, and the change mark (`watch-wl9-*.png`). `DetailsTree.cpp`
 adds Details' refused Apply (H 18, `details-refused-560.png`), Enter refused in
 a u8 cell (H 19), each row's kind glyph (the kinds design's J 10) and "-";
 `DeviceTreeKinds.cpp` rw on Config's members (H 20).
+
+The designer's review of 20 November 2026 (section 14, part A) is held by
+four programs. `DeviceTreeGroups.cpp` checks the path grammar's helpers
+(`group/…/endpoint.member[i]`, escapes, older dotted keys read against the
+groups) and drives the Device tree over a model shaped as a group tree will be
+- groups inside groups, `typeName` on some Fields: the opening rule (seven
+top-level groups or fewer open one level, eight open nothing), subgroups first,
+counts in words that give way from the right with "in N groups" in the
+tooltip and the accessible name, one indent step for the whole tree (16 px at
+420, 8 at 280, the guides straight), `*` and "Collapse all", the context line
+(`power/metrology/harmonics` over the tree, a click on a segment, a
+provider's request), find by path segments (`harm/H3`) and by named type with
+the run underlined in the Type cell, the kinds filter, Copy path, and the path
+label alone (the drop order, the leaf's elision, the keys of a breadcrumb)
+(`device-tree-groups-*.png`). `DeviceTreeKinds.cpp` holds the one tree on the
+demo device: no family rows, the Commands' and Services' `control` one folder
+in declaration order, the funnel with the device's totals and "Commands only ·
+3 matches", the context line (`device-tree-context-*.png`,
+`device-tree-kinds-funnel-*.png`). `WatchLook.cpp` (22) holds the Watchlist's
+path label, the Name cap's ceiling of 40 body heights and the tree's joined
+chains (`watch-list-long-path-*.png`, `watch-tree-chains-560.png`), and
+`DetailsLayout.cpp` Details' breadcrumb (`details-breadcrumb-*.png`).

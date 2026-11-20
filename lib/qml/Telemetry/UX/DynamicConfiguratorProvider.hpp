@@ -442,10 +442,15 @@ public:
 	Q_INVOKABLE bool executeCommand();
 	Q_INVOKABLE bool callService();
 	Q_INVOKABLE bool setScalarText(const QModelIndex& index, const QString& text);
+	// Asks every Device tree on this provider to show a group and make it
+	// its current row (Details' breadcrumb): its path in the one grammar,
+	// "metrology/harmonics". No I/O.
+	Q_INVOKABLE void revealGroup(const QString& path);
 
 Q_SIGNALS:
 	void stateChanged();
 	void historyChanged();
+	void revealGroupRequested(const QString& path);
 	// Direct owner-thread publication of one accepted terminal Watch request.
 	// Owns exact bytes; Current describes source validity, not atomic UI commit.
 	void watchCompleted(const telemetry::ux::WatchFrame& frame);

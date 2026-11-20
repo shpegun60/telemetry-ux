@@ -231,6 +231,9 @@ public:
 	Q_INVOKABLE bool setScalarText(const QModelIndex&, const QString&) { return true; }
 	Q_INVOKABLE bool setOperation(const QString&) { return true; }
 	Q_INVOKABLE void closeValue() {}
+	// The groups a breadcrumb asked the Device tree to show.
+	QStringList revealed;
+	Q_INVOKABLE void revealGroup(const QString& path) { revealed << path; }
 	void changed() { Q_EMIT stateChanged(); }
 Q_SIGNALS:
 	void stateChanged();
@@ -359,7 +362,7 @@ struct Fixtures {
 	void field(Provider& p, bool read, const QString& status = {})
 	{
 		reset(p);
-		p.selection = QStringLiteral("device.Config");
+		p.selection = QStringLiteral("device/Config");
 		p.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Field · struct (3) · 9 bytes · read and write")},
 		                   {QStringLiteral("typeText"), QStringLiteral("struct (3)")}, {QStringLiteral("wireBytes"), 9},
 		                   {QStringLiteral("readable"), true}, {QStringLiteral("writable"), true}};
@@ -378,7 +381,7 @@ struct Fixtures {
 	void table(Provider& p)
 	{
 		reset(p);
-		p.selection = QStringLiteral("device.Table");
+		p.selection = QStringLiteral("device/Table");
 		p.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Field · Config[500] · 4,500 bytes · read only")},
 		                   {QStringLiteral("typeText"), QStringLiteral("struct (3)[500]")}, {QStringLiteral("wireBytes"), 4500},
 		                   {QStringLiteral("readable"), true}, {QStringLiteral("writable"), false}};
@@ -392,7 +395,7 @@ struct Fixtures {
 	void commandNone(Provider& p)
 	{
 		reset(p);
-		p.selection = QStringLiteral("control.Reset");
+		p.selection = QStringLiteral("control/Reset");
 		p.commandSelected = true;
 		p.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Command · ()")}, {QStringLiteral("typeText"), QStringLiteral("()")},
 		                   {QStringLiteral("wireBytes"), 0}};
@@ -403,7 +406,7 @@ struct Fixtures {
 	void commandArguments(Provider& p)
 	{
 		reset(p);
-		p.selection = QStringLiteral("control.SetEnabled");
+		p.selection = QStringLiteral("control/SetEnabled");
 		p.commandSelected = true;
 		p.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Command · (bool) · 1-byte argument")},
 		                   {QStringLiteral("typeText"), QStringLiteral("(bool)")}, {QStringLiteral("wireBytes"), 1}};
@@ -415,7 +418,7 @@ struct Fixtures {
 	void service(Provider& p, const QString& state)
 	{
 		reset(p);
-		p.selection = QStringLiteral("control.Scale");
+		p.selection = QStringLiteral("control/Scale");
 		p.serviceSelected = true;
 		p.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Service · (f32, f32) -> (f32) · 8-byte request")},
 		                   {QStringLiteral("typeText"), QStringLiteral("(f32, f32) -> (f32)")}, {QStringLiteral("wireBytes"), 8},
@@ -882,7 +885,7 @@ int main(int argc, char** argv)
 			// Another Field and back: none current.
 			fixtures.commandNone(details);
 			settle();
-			details.selection = QStringLiteral("device.Other");
+			details.selection = QStringLiteral("device/Other");
 			details.changed();
 			settle(2);
 			fixtures.field(details, true);
@@ -1011,7 +1014,7 @@ int main(int argc, char** argv)
 			itemProvider.switchable = false;
 			if (row == 2) {
 				fixtures.reset(itemProvider);
-				itemProvider.selection = QStringLiteral("device.Config");
+				itemProvider.selection = QStringLiteral("device/Config");
 				itemProvider.operation = QStringLiteral("read");
 				itemProvider.switchable = true;
 				itemProvider.selectionInfo = {{QStringLiteral("detail"), QStringLiteral("Field · struct (3) · 9 bytes · read and write")},
@@ -1036,9 +1039,9 @@ int main(int argc, char** argv)
 			itemProvider.changed();
 		};
 		batch.onSelect = showItem;
-		batch.add(QStringLiteral("control.Scale"), QStringLiteral("service"), QStringLiteral("value=0 factor=0"), QStringLiteral("–"));
-		batch.add(QStringLiteral("control.Reset"), QStringLiteral("command"), QString{}, QStringLiteral("–"));
-		batch.add(QStringLiteral("device.Config"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
+		batch.add(QStringLiteral("control/Scale"), QStringLiteral("service"), QStringLiteral("value=0 factor=0"), QStringLiteral("–"));
+		batch.add(QStringLiteral("control/Reset"), QStringLiteral("command"), QString{}, QStringLiteral("–"));
+		batch.add(QStringLiteral("device/Config"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
 		batch.status = QStringLiteral("Not executed yet");
 		batch.changed();
 		window->setProperty("mode", QStringLiteral("batch"));
@@ -1231,6 +1234,71 @@ int main(int argc, char** argv)
 			QCoreApplication::removeTranslator(&longer);
 			engine.retranslate();
 			settle();
+		}
+
+		// The title is a breadcrumb (the designer's review of 20 November
+		// 2026, 14.3): the one path label with its leaf DemiBold, prefix and
+		// separators muted; each group before the leaf a link that shows the
+		// group in the Device tree; one Tab stop, Left and Right between the
+		// groups, Enter shows one; whole segments drop when narrow.
+		{
+			window->setProperty("mode", QStringLiteral("details"));
+			window->setWidth(420);
+			window->setHeight(520);
+			showKind(kinds[0]);
+			const auto path = QStringLiteral("power/metrology/harmonics/phaseA/Spectrum");
+			details.selection = path;
+			details.changed();
+			settle();
+			auto* title = need(panel, "endpointSelectionTitle");
+			CHECK(title->property("path").toString() == path && title->property("interactive").toBool());
+			auto* leaf = need(title, "pathLabelLeaf");
+			CHECK(leaf->property("text").toString() == QStringLiteral("Spectrum"));
+			CHECK(leaf->property("font").value<QFont>().weight() == type->property("headingWeight").toInt());
+			CHECK(color(leaf) == token("textPrimary"));
+			const auto links = all(title, QStringLiteral("pathLabelLink"));
+			CHECK(links.size() == 4);
+			QStringList words;
+			for (auto* link : links) {
+				words << link->property("text").toString();
+				CHECK(color(link) == token("textMuted"));
+			}
+			CHECK(words == (QStringList{QStringLiteral("power"), QStringLiteral("/metrology"), QStringLiteral("/harmonics"),
+			                            QStringLiteral("/phaseA")}));
+			CHECK(title->property("spokenName").toString() == QStringLiteral("Spectrum, in power, metrology, harmonics, phaseA"));
+			CHECK(!title->property("elided").toBool());
+			shot(window, output, QStringLiteral("details-breadcrumb-420"));
+			// The keyboard: one stop, the arrows between the groups, Enter shows one.
+			title->forceActiveFocus(Qt::TabFocusReason);
+			settle();
+			CHECK(title->hasActiveFocus() && title->property("currentLink").toInt() == 3);
+			QTest::keyClick(window, Qt::Key_Left);
+			settle();
+			CHECK(title->property("currentLink").toInt() == 2);
+			QTest::keyClick(window, Qt::Key_Return);
+			settle();
+			CHECK(details.revealed.size() == 1 && details.revealed.last() == QStringLiteral("power/metrology/harmonics"));
+			// A click on a link shows that group.
+			auto* metrology = links.at(1);
+			QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+			                  metrology->mapToScene(QPointF(metrology->width() - 4, metrology->height() / 2)).toPoint());
+			settle();
+			CHECK(details.revealed.size() == 2 && details.revealed.last() == QStringLiteral("power/metrology"));
+			// Narrow: whole segments drop under one "…", the leaf stays whole.
+			window->setWidth(280);
+			settle();
+			title = need(panel, "endpointSelectionTitle");
+			CHECK(title->property("elided").toBool());
+			CHECK(need(title, "pathLabelLeaf")->property("text").toString() == QStringLiteral("Spectrum"));
+			CHECK(!need(title, "pathLabelLeaf")->property("truncated").toBool());
+			bool cut = false;
+			for (auto* part : all(title, QStringLiteral("pathLabelPart")))
+				cut = cut || part->property("text").toString().endsWith(QStringLiteral("…"));
+			CHECK(cut);
+			CHECK(title->property("usedWidth").toReal() <= title->width() + 0.75);
+			shot(window, output, QStringLiteral("details-breadcrumb-280"));
+			window->setWidth(560);
+			showKind(kinds[0]);
 		}
 
 		// At 125 %: the same rules, and the screenshots.

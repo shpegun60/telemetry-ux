@@ -1,10 +1,15 @@
 // Reusable presentation: the caller owns the provider and all I/O. MIT.
 //
-// The Device tree (the designer's, 18 November 2026): every row says what it
-// is by a glyph and a weight, every Field its type in one column that never
-// hides, every group its count in words; indent guides, the current branch's
-// brighter. Find filters the tree in place and steps through the matches;
-// the keys fold and step as in Details; what is open survives a reconnect.
+// The Device tree (the designer's, 18 November 2026, and the review of 20
+// November): one tree of groups, a group's subgroups first, then its
+// Fields, Commands and Services, with no level for the families - a kinds
+// filter (the funnel) narrows the tree to them instead. Every row says what
+// it is by a glyph and a weight, every Field its type in one column that
+// never hides, every group its count in words; one indent step for the
+// whole tree, indent guides, the current branch's brighter; a context line
+// over the tree names the group the rows in view belong to. Find filters the
+// tree in place by name, path or type and steps through the matches; the
+// keys fold and step as in Details; what is open survives a reconnect.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -170,18 +175,25 @@ Pane {
     readonly property real typeFull: Math.max(Math.round(Type.bodyPixels * 2),
         Math.min(widestFieldType.length > 0 ? Math.ceil(widestMetrics.advanceWidth) : typeSeen, Math.round(Type.bodyPixels * 9.6)))
     readonly property real accessFull: Math.ceil(accessMetrics.advanceWidth)
-    // Where a second-level row's name starts from a dock's edge: the panel's
-    // padding, two indents, the chevron, the box's slot, the glyph and its
-    // gap (96 px).
-    readonly property real nameStart: Type.padding + Type.indent * 3 + Type.rowHeight + Type.iconSize + Type.spacing
-    // What a second-level row has from its name to its right edge, which is
-    // the scroll bar's (the panel's padding is the margin on either side).
-    readonly property real rowRoom: endpointTree.width - scrollInset - (nameStart - Type.padding)
+    // A row's name x in the tree at a depth and a step: the indents, the
+    // chevron, the box's slot, the glyph and its gap (90 px at depth 2, 16 px).
+    function nameXAt(depth, step) {
+        return depth * step + Type.indent + Type.rowHeight + Type.iconSize + Type.spacing
+    }
+    // What a row has from its name to its right edge, the scroll bar's (the
+    // panel's padding is the margin on either side), at the full step.
+    function roomAt(depth) {
+        return endpointTree.width - scrollInset - nameXAt(depth, Type.indent)
+    }
+    // The give-way (the designer's review, 14.1): 1 rw and 3 the type
+    // scopes are measured on a depth-3 row, 2 Value on a depth-2 row as
+    // the kinds design had it, 4 the indent step at the descriptor's depth.
+    readonly property real rowRoom: roomAt(2)
     readonly property real valueWanted: valueColumnShown
         ? Math.max(Math.round(Type.bodyPixels * 4.2), Math.min(valueSeen, Math.round(Type.bodyPixels * 16.5), endpointTree.width * 0.4))
         : 0
-    // 1. rw gives way first: shown while the name keeps 7.2 body heights with it.
-    readonly property real accessColumn: rowRoom - (accessFull + columnGap) - (typeFull + columnGap)
+    // 1. rw gives way first: shown while a depth-3 name keeps 7.2 body heights with it.
+    readonly property real accessColumn: roomAt(3) - (accessFull + columnGap) - (typeFull + columnGap)
         - (valueWanted > 0 ? valueWanted + columnGap : 0) >= Type.bodyPixels * 7.2 ? accessFull : 0
     readonly property real accessPart: accessColumn > 0 ? accessColumn + columnGap : 0
     // 2. Value narrows to its least before a name drops below its floor.
@@ -197,13 +209,62 @@ Pane {
     readonly property real accessLeft: endpointTree.width - scrollInset - accessColumn
     readonly property real typeLeft: accessLeft - (accessColumn > 0 ? columnGap : 0) - typeColumn
     readonly property real valueLeft: typeLeft - (typeColumn > 0 ? columnGap : 0) - valueColumn
-    // A category's or a group's endpoints in words: "72 Fields", "2 Commands",
-    // "1 Service" (the owner, 18 November 2026).
-    function countText(count, category) {
-        if (!(count > 0)) return ""
-        if (category === 2) return count === 1 ? qsTr("1 Command") : qsTr("%L1 Commands").arg(count)
-        if (category === 3) return count === 1 ? qsTr("1 Service") : qsTr("%L1 Services").arg(count)
-        return fieldsText(count)
+    // 4. One indent step for the whole tree (Details' rule): 16 px while a
+    // name at the descriptor's depth D keeps 6 body heights (80 px), then
+    // evenly less, never under 8 px (VS Code's). D is the deepest group plus
+    // 2, a Field and one member level. It follows the descriptor and the
+    // width, never what is open, so opening never moves a row sideways.
+    readonly property int deepestGroup: searchSource && typeof searchSource.deepestGroup === "number"
+                                        ? searchSource.deepestGroup : walkedDeepest
+    // A model without deepestGroup: its deepest row that is not an endpoint,
+    // found once per reset.
+    property int walkedDeepest: 0
+    readonly property int indentDepth: Math.max(1, deepestGroup + 2)
+    readonly property real indentStep: {
+        const nameEnd = (valueColumn > 0 ? valueLeft : typeLeft) - columnGap
+        const room = nameEnd - nameXAt(0, 0) - Math.round(Type.bodyPixels * 6)
+        return Math.max(Math.floor(Type.indent / 2), Math.min(Type.indent, Math.floor(room / indentDepth)))
+    }
+    function walkDeepest() {
+        const source = searchSource
+        if (!source || typeof source.deepestGroup === "number") return
+        let deepest = 0
+        let budget = groupWalkLimit
+        const walk = function(parent, depth) {
+            for (let row = 0; row < source.rowCount(parent) && budget > 0; ++row, --budget) {
+                const child = source.index(row, 0, parent)
+                if (source.rowCount(child) > 0 && !treeFilter.value(child, "isEndpoint") && !treeFilter.value(child, "previewChild")) {
+                    deepest = Math.max(deepest, depth)
+                    if (depth < searchDepthLimit) walk(child, depth + 1)
+                }
+            }
+        }
+        walk(source.index(-1, -1), 0)
+        walkedDeepest = deepest
+    }
+    // A group's count in words, Fields first, as parts that give way from
+    // the right ("7 Fields", "1 Command"); a model without the families'
+    // counts gives its endpoints' count, by its category.
+    function countParts(model) {
+        if (typeof model.fieldCount === "number") {
+            const parts = []
+            if (model.fieldCount > 0) parts.push(fieldsText(model.fieldCount))
+            if (model.commandCount > 0) parts.push(model.commandCount === 1 ? qsTr("1 Command") : qsTr("%L1 Commands").arg(model.commandCount))
+            if (model.serviceCount > 0) parts.push(model.serviceCount === 1 ? qsTr("1 Service") : qsTr("%L1 Services").arg(model.serviceCount))
+            return parts
+        }
+        const count = typeof model.count === "number" ? model.count : 0
+        if (!(count > 0)) return []
+        if (model.category === 2) return [count === 1 ? qsTr("1 Command") : qsTr("%L1 Commands").arg(count)]
+        if (model.category === 3) return [count === 1 ? qsTr("1 Service") : qsTr("%L1 Services").arg(count)]
+        return [fieldsText(count)]
+    }
+    // The whole count, with the groups under it: "7 Fields · 1 Command in 4 groups".
+    function countFull(model) {
+        const words = countParts(model).join(" · ")
+        const groups = typeof model.groupCount === "number" ? model.groupCount : 0
+        if (words.length === 0 || groups <= 0) return words
+        return qsTr("%1 in %2").arg(words).arg(groups === 1 ? qsTr("1 group") : qsTr("%L1 groups").arg(groups))
     }
     // Why a Field, a member or a group of them has its box off: the
     // provider's words where it says, none from older providers.
@@ -562,20 +623,24 @@ Pane {
         const item = index.row >= 0 && index.row < nameModel.count ? nameModel.items.get(index.row) : null
         return !!item && !!item.model && item.model.isEndpoint !== true && item.model.previewChild !== true
     }
+    // The most top-level groups a new descriptor opens with (Miller): with
+    // more, every branch stays folded for the user to choose.
+    readonly property int openLimit: 7
     function openInitialGroups() {
         if (!openOnLoad)
             return
         // A connected model can reset after this panel was created empty.
         // Materialize its new root rows before inspecting the flattened view.
         endpointTree.forceLayout()
-        if (endpointTree.rows === 0)
+        const tops = endpointTree.rows
+        if (tops === 0 || tops > openLimit)
             return
-        const first = sourceOf(endpointTree.index(0, 0))
-        if (!isGroup(first))
-            return
-        // Exactly the category and catalog levels. Field value children start
-        // below them and remain collapsed; do not walk a changing flat row list.
-        endpointTree.expandRecursively(0, 2)
+        // One level: each top-level group opens, nothing below it. From the
+        // last, so the rows above keep their numbers.
+        for (let row = tops - 1; row >= 0; --row)
+            if (isGroup(sourceOf(endpointTree.index(row, 0))) && !endpointTree.isExpanded(row))
+                endpointTree.expand(row)
+        endpointTree.forceLayout()
     }
     // Opens the actions of one row next to the item it was opened from.
     function openEndpointMenu(index, isEndpoint, anchor, x, y) {
@@ -615,8 +680,7 @@ Pane {
         const child = Boolean(treeFilter.value(index, "previewChild"))
         const category = Number(treeFilter.value(index, "category"))
         const type = String(treeFilter.value(index, "typeText") || "")
-        return endpointTree.depth(row) === 0 && !endpoint ? "category"
-            : !endpoint && !child ? "group"
+        return !endpoint && !child ? "group"
             : category === 2 ? "command" : category === 3 ? "service"
             : type.endsWith("]") ? "array" : type.startsWith("struct") ? "struct" : "value"
     }
@@ -656,10 +720,10 @@ Pane {
         endpointTree.positionViewAtRow(row, TableView.Contain)
         return true
     }
-    // Opens every container under a row (*): a category its groups, a group
-    // its subgroups; a struct or an array Field all its values, within the
-    // model's bound of 4,096 rows. A struct or array under a group stays
-    // folded, so * on Fields never buries the tree in its elements.
+    // Opens every container under a row (*): a group and every group under
+    // it, its Fields folded; a struct or an array Field all its values,
+    // within the model's bound of 4,096 rows. A struct or array under a group
+    // stays folded, so * on a group never buries the tree in its elements.
     function expandUnder(row) {
         if (row < 0 || row >= endpointTree.rows)
             return
@@ -691,7 +755,7 @@ Pane {
         if (row >= 0 && row < endpointTree.rows)
             endpointTree.collapseRecursively(row)
     }
-    // Back to the three categories.
+    // Every branch folded: the top-level groups alone.
     function collapseAll() {
         endpointTree.collapseRecursively()
     }
@@ -766,8 +830,8 @@ Pane {
             collapseUnder(row)
             return true
         }
-        // Enter on a group or a category folds it; on a Field, a Command or a
-        // Service it opens Details.
+        // Enter on a group folds it; on a Field, a Command or a Service it
+        // opens Details.
         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && plain) {
             const kind = kindAt(row)
             if ((kind === "category" || kind === "group") && branch)
@@ -796,40 +860,79 @@ Pane {
         return false
     }
 
-    // Find (design G1): the tree filtered in place - the matches and their
-    // parents, the parents open, the matches folded - and Enter stepping
-    // through them. Groups, Fields, Commands and Services are found by name
-    // or path; the values inside a Field are not.
-    // What the tree is filtered by: the field's text, "/" read as ".".
+    // Find (design G1, the review's 14.1): the tree filtered in place - the
+    // matches and their parents, the parents open, the matches folded - and
+    // Enter stepping through them. Groups, Fields, Commands and Services are
+    // found by name, by path ("/" and "." one separator, the segments in
+    // order with gaps: "harm/H3") or by a named type; the values inside a
+    // Field are not. The kinds filter narrows it in place, with or without text.
+    // What the tree is filtered by: the field's text.
     property string findText: ""
-    readonly property bool finding: findText.length > 0
+    // The kinds shown (TreeFilter's bits: Fields 1, Commands 2, Services 4);
+    // 0 shows every kind.
+    property int kindsShown: 0
+    readonly property bool kindsOn: kindsShown !== 0 && kindsShown !== 7
+    readonly property bool finding: findText.length > 0 || kindsOn
     readonly property int findCount: treeFilter.count
     // The match made current last by Enter or F3, from 0; -1 before any.
     property int findStep: -1
-    readonly property string findStatus: !finding ? ""
-        : findCount === 0 ? qsTr("Nothing matches “%1”.").arg(searchInput.text.trim())
+    // "Commands only", "Fields and Services only": what the funnel shows.
+    readonly property string kindsWords: {
+        const names = []
+        if (kindsShown & 1) names.push(qsTr("Fields"))
+        if (kindsShown & 2) names.push(qsTr("Commands"))
+        if (kindsShown & 4) names.push(qsTr("Services"))
+        return !kindsOn ? "" : names.length === 1 ? qsTr("%1 only").arg(names[0])
+                                               : qsTr("%1 and %2 only").arg(names[0]).arg(names[1])
+    }
+    readonly property string matchWords: findCount === 0 && findText.length > 0 ? qsTr("Nothing matches “%1”.").arg(searchInput.text.trim())
+        : findCount === 0 ? qsTr("No matches")
         : findStep >= 0 && findStep < findCount ? qsTr("%L1 of %L2 matches").arg(findStep + 1).arg(findCount)
         : findCount === 1 ? qsTr("1 match") : qsTr("%L1 matches").arg(findCount)
+    readonly property string findStatus: !finding ? ""
+        : kindsOn ? qsTr("%1 · %2").arg(kindsWords).arg(matchWords) : matchWords
     onFindCountChanged: if (findStep >= findCount) findStep = -1
-    function applyFind() {
-        findTimer.stop()
-        const needle = searchInput.text.trim().replace(/\s*\/\s*/g, ".")
-        if (needle === findText)
-            return
-        const was = finding
-        if (needle.length > 0 && !was)
+    // A kind on or off; all three on is the tree unfiltered.
+    function toggleKind(bit) {
+        const next = (kindsOn ? kindsShown : 0) ^ bit
+        kindsShown = next === 7 ? 0 : next
+    }
+    onKindsShownChanged: {
+        const was = treeFilter.active
+        if (!was && kindsOn)
             snapshotFolds()
-        // The row the keyboard is on, kept through the end of a find.
-        const kept = was && needle.length === 0 ? treeFilter.namePath(endpointTree.selectionModel.currentIndex) : ""
+        const kept = was && !kindsOn && findText.length === 0
+                     ? treeFilter.namePath(endpointTree.selectionModel.currentIndex) : ""
         findStep = -1
-        findText = needle
-        treeFilter.setText(needle)
-        if (needle.length > 0) {
+        treeFilter.kinds = kindsShown
+        if (treeFilter.active) {
             showFound()
             return
         }
-        // Cleared: what was open before the find, then the path to the
-        // current row, which stays current and in view.
+        endFiltering(kept)
+    }
+    function applyFind() {
+        findTimer.stop()
+        const needle = searchInput.text.trim()
+        if (needle === findText)
+            return
+        const was = treeFilter.active
+        if (needle.length > 0 && !was)
+            snapshotFolds()
+        // The row the keyboard is on, kept through the end of a find.
+        const kept = was && needle.length === 0 && !kindsOn ? treeFilter.namePath(endpointTree.selectionModel.currentIndex) : ""
+        findStep = -1
+        findText = needle
+        treeFilter.setText(needle)
+        if (treeFilter.active) {
+            showFound()
+            return
+        }
+        endFiltering(kept)
+    }
+    // The tree unfiltered again: what was open before the find, then the
+    // path to the row the keyboard was on (kept), which stays current and in view.
+    function endFiltering(kept) {
         const memory = foldMemory[descriptorKey]
         restoreFolds(memory ? memory.open : [], true)
         // A descriptor that came during the find opens as a new one does.
@@ -865,7 +968,7 @@ Pane {
     // The next (1) or the previous (-1) match becomes current and selected,
     // in view, wrapping; Details shows it. False with nothing to step to.
     function stepFind(delta) {
-        if (findTimer.running || searchInput.text.trim().replace(/\s*\/\s*/g, ".") !== findText)
+        if (findTimer.running || searchInput.text.trim() !== findText)
             applyFind()
         if (!finding)
             return false
@@ -890,9 +993,9 @@ Pane {
 
     // What is open survives a reconnect (design G): the open branches of
     // each descriptor seen in this session, by the names from the root
-    // ("Fields/device/Config"), and the keyboard's row. A descriptor is told
-    // by its categories' and groups' names. A descriptor never seen opens as
-    // openOnLoad says; one seen before opens as it was left. A find's own
+    // ("device/Config"), and the keyboard's row. A descriptor is told by its
+    // top-level groups' names and their rows'. A descriptor never seen opens
+    // as openOnLoad says; one seen before opens as it was left. A find's own
     // opening is never kept.
     property var foldMemory: ({})
     property string descriptorKey: ""
@@ -987,6 +1090,7 @@ Pane {
     // After the model is made anew (a connect, a reconnect) or at the start.
     function afterReset() {
         endpointTree.forceLayout()
+        walkDeepest()
         descriptorKey = identityOf()
         if (descriptorKey.length === 0)
             return
@@ -1003,10 +1107,14 @@ Pane {
             openInitialGroups()
         }
         const selected = panel.selectedEndpointIndex
-        if (selected && selected.valid)
+        if (selected && selected.valid && !selectionStale)
             reveal(selected, !memory || memory.current.length === 0)
         snapshotFolds()
     }
+    // A provider's selection made before the model was reset: an index into
+    // rows that are gone, never mapped (a plain index of a deleted row reads
+    // freed memory). It is fresh again when the provider selects anew.
+    property bool selectionStale: false
 
     // The current branch's guide (design E): the current row if it is an open
     // branch, else its parent; the rows below it at that level.
@@ -1037,17 +1145,79 @@ Pane {
         guideLevel = last > branch ? level : -1
     }
 
+    // The context line (the review's 14.1, the kinds design's sticky
+    // headers): the path of the group the top row in view belongs to, laid
+    // over the tree under its header once the tree is scrolled - the group's
+    // own row is then at or above the line, which stands for it. It never
+    // covers the current row. A click on a segment makes that group current;
+    // Left reaches it from the keyboard.
+    property string contextPath: ""
+    function groupPathAt(row) {
+        const index = endpointTree.index(row, 0)
+        const path = treeFilter.value(index, "path")
+        return typeof path === "string" && path.length > 0 ? path
+            : treeFilter.namePath(index).split("/").map(function(name) { return name.replace(/([\/.\[\]\\])/g, "\\$1") }).join("/")
+    }
+    function updateContext() {
+        const rh = Type.rowHeight
+        const rows = endpointTree.rows
+        const y = endpointTree.contentY
+        if (rows === 0 || y <= 0.5) {
+            contextPath = ""
+            return
+        }
+        // The first row below the line, and the group it belongs to.
+        const top = Math.min(rows - 1, Math.floor((y + rh) / rh))
+        let group = -1
+        for (let r = parentRowOf(top); r >= 0; r = parentRowOf(r))
+            if (kindAt(r) === "group") {
+                group = r
+                break
+            }
+        const index = endpointTree.selectionModel.currentIndex
+        const current = index.valid ? endpointTree.rowAtIndex(index) : -1
+        const coversCurrent = current >= 0 && current * rh < y + rh && (current + 1) * rh > y
+        contextPath = group >= 0 && !coversCurrent ? groupPathAt(group) : ""
+    }
+    // Makes a group current and shows it: a context line's or a breadcrumb's
+    // segment, by the group's path in the one grammar.
+    function revealGroupPath(path) {
+        const source = treeFilter.sourceModel
+        if (!source || path.length === 0)
+            return false
+        let index = typeof source.indexOfGroupPath === "function" ? source.indexOfGroupPath(path) : null
+        if (!index || !index.valid)
+            index = treeFilter.sourceAt(path.replace(/\\(.)/g, "$1"))
+        return index && index.valid ? reveal(index, true) : false
+    }
+    Timer { id: contextTimer; interval: 0; onTriggered: panel.updateContext() }
+    // The device's totals of each kind for the funnel's menu; -1 unknown.
+    function kindTotal(bit) {
+        const source = searchSource
+        const value = !source ? undefined : bit === 1 ? source.fieldTotal : bit === 2 ? source.commandTotal : source.serviceTotal
+        return typeof value === "number" ? value : -1
+    }
+    // A provider may ask every tree to show a group (Details' breadcrumb).
+    Connections {
+        target: panel.provider
+        ignoreUnknownSignals: true
+        function onRevealGroupRequested(path) { panel.revealGroupPath(path) }
+    }
+
     onProviderChanged: { clearPreviews(); clearWatchMarks() }
     onSearchSourceChanged: { clearPreviews(); clearWatchMarks(); afterResetTimer.restart() }
     // A selection made elsewhere (the Watchlist, the Batch, a host's search)
     // is brought into view, and the keyboard's row follows it.
-    onSelectedEndpointIndexChanged: revealSelection.restart()
+    onSelectedEndpointIndexChanged: {
+        selectionStale = false
+        revealSelection.restart()
+    }
     Timer {
         id: revealSelection
         interval: 0
         onTriggered: {
             const index = panel.selectedEndpointIndex
-            if (index && index.valid)
+            if (index && index.valid && !panel.selectionStale)
                 panel.reveal(index, true)
         }
     }
@@ -1219,13 +1389,13 @@ Pane {
         // Nothing to find before the tree has rows: the empty text says why.
         RowLayout {
             Layout.fillWidth: true
-            visible: endpointTree.rows > 0 || searchInput.text.length > 0
+            visible: endpointTree.rows > 0 || searchInput.text.length > 0 || panel.kindsOn
             spacing: Type.spacing
             TextField {
                 id: searchInput
                 objectName: "endpointSearch"
                 Layout.fillWidth: true
-                placeholderText: qsTr("Find by name or path (Ctrl+F)")
+                placeholderText: qsTr("Find by name, path or type (Ctrl+F)")
                 maximumLength: 256
                 // Room for the clear button inside the field.
                 rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
@@ -1279,6 +1449,37 @@ Pane {
                     text: "✕"
                     onClicked: { searchInput.clear(); panel.applyFind(); searchInput.forceActiveFocus() }
                     Accessible.name: qsTr("Clear the search")
+                }
+            }
+            // The kinds filter (the review's 14.1): one Tab stop after the
+            // find field. Its menu holds the device's totals the category
+            // rows used to show; a kind chosen narrows the tree in place, as
+            // find does, and with it.
+            IconToolButton {
+                id: kindsButton
+                objectName: "endpointKindsFilter"
+                iconName: "filter"
+                switchedOn: panel.kindsOn
+                text: panel.kindsOn ? qsTr("Kinds shown: %1").arg(panel.kindsWords) : qsTr("Show only some kinds")
+                onClicked: kindsMenu.open()
+                Accessible.role: Accessible.ButtonMenu
+                Menu {
+                    id: kindsMenu
+                    objectName: "endpointKindsMenu"
+                    y: kindsButton.height
+                    KindsMenuItem { objectName: "endpointKindsFields"; word: qsTr("Fields"); total: panel.kindTotal(1)
+                                    checked: panel.kindsOn && (panel.kindsShown & 1) !== 0; onTriggered: panel.toggleKind(1) }
+                    KindsMenuItem { objectName: "endpointKindsCommands"; word: qsTr("Commands"); total: panel.kindTotal(2)
+                                    checked: panel.kindsOn && (panel.kindsShown & 2) !== 0; onTriggered: panel.toggleKind(2) }
+                    KindsMenuItem { objectName: "endpointKindsServices"; word: qsTr("Services"); total: panel.kindTotal(4)
+                                    checked: panel.kindsOn && (panel.kindsShown & 4) !== 0; onTriggered: panel.toggleKind(4) }
+                    MenuSeparator {}
+                    MenuItem {
+                        objectName: "endpointKindsAll"
+                        text: qsTr("Show all")
+                        enabled: panel.kindsOn
+                        onTriggered: panel.kindsShown = 0
+                    }
                 }
             }
             // Values: off | Every 1 s | Every 2 s | Every 5 s | Read now (PV-2).
@@ -1346,7 +1547,8 @@ Pane {
                 visible: panel.finding && panel.findCount === 0
                 text: qsTr("Clear the search")
                 font.pointSize: Type.caption
-                onClicked: { searchInput.clear(); panel.applyFind(); searchInput.forceActiveFocus() }
+                // The way back is the whole tree: the text and the kinds.
+                onClicked: { searchInput.clear(); panel.kindsShown = 0; panel.applyFind(); searchInput.forceActiveFocus() }
             }
         }
         Item {
@@ -1422,21 +1624,24 @@ Pane {
             model: treeFilter
             onTopRowChanged: panel.suspendPreviews()
             onBottomRowChanged: panel.suspendPreviews()
+            onContentYChanged: contextTimer.restart()
             onExpanded: {
                 panel.suspendPreviews()
                 guideTimer.restart()
+                contextTimer.restart()
                 if (!panel.foldBusy && !panel.finding)
                     snapshotTimer.restart()
             }
             onCollapsed: function(row, recursively) {
                 panel.suspendPreviews()
                 guideTimer.restart()
+                contextTimer.restart()
                 if (recursively)
                     panel.forgetUnder(row)
                 if (!panel.foldBusy && !panel.finding)
                     snapshotTimer.restart()
             }
-            onRowsChanged: guideTimer.restart()
+            onRowsChanged: { guideTimer.restart(); contextTimer.restart() }
             // Current keyboard row is a navigation cursor, not operation
             // selection. Only an explicit click/Enter asks the provider.
             activeFocusOnTab: true
@@ -1445,6 +1650,7 @@ Pane {
                 target: endpointTree.selectionModel
                 function onCurrentChanged() {
                     guideTimer.restart()
+                    contextTimer.restart()
                     panel.noteCurrent()
                 }
             }
@@ -1488,16 +1694,19 @@ Pane {
                 rightClearance: panel.scrollInset
                 kind: typeof model.kind === "string" ? model.kind : ""
                 category: typeof model.category === "number" ? model.category : 0
-                countText: typeof model.count === "number" ? panel.countText(model.count, model.category) : ""
+                countParts: !isEndpoint && !previewChild ? panel.countParts(model) : []
+                countFull: !isEndpoint && !previewChild ? panel.countFull(model) : ""
+                indentStep: panel.indentStep
                 pathText: typeof model.path === "string" && model.path.length > 0 ? model.path
-                        : treeFilter.namePath(sourceIndex, ".")
+                        : treeFilter.namePath(sourceIndex, "/")
                 typeNames: typeof model.typeNames === "string" ? model.typeNames : ""
-                matchText: panel.findText
-                matched: {
+                matchRun: {
                     void name
                     void depth
                     void endpointTree.rows
-                    return panel.finding && treeFilter.matches(endpointTree.index(row, 0))
+                    void panel.findText
+                    void panel.kindsShown
+                    return panel.finding ? treeFilter.run(endpointTree.index(row, 0)) : ({})
                 }
                 guideLevel: panel.guideLevel
                 guideFrom: panel.guideFrom
@@ -1570,6 +1779,54 @@ Pane {
                 color: Theme.textMuted
                 text: panel.emptyText
             }
+            // The context line, laid over the top row under the header: the
+            // folder, then the group's path, each segment a link; a 1 px rule
+            // under it. Opaque, so the row under it does not show through.
+            Rectangle {
+                id: contextLine
+                objectName: "endpointTreeContext"
+                parent: endpointTree
+                z: 2
+                visible: panel.contextPath.length > 0
+                width: endpointTree.width - panel.scrollInset
+                height: Type.rowHeight
+                color: panel.palette.base
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("In %1").arg(contextLabel.spokenName)
+                // A click on the line never reaches the row under it.
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.AllButtons
+                    Accessible.ignored: true
+                }
+                KindIcon {
+                    x: panel.nameXAt(0, 0) - Type.iconSize - Type.spacing
+                    anchors.verticalCenter: parent.verticalCenter
+                    kind: "group"
+                }
+                PathLabel {
+                    id: contextLabel
+                    objectName: "endpointTreeContextPath"
+                    x: panel.nameXAt(0, 0)
+                    width: Math.max(0, parent.width - x - Type.padding)
+                    anchors.verticalCenter: parent.verticalCenter
+                    path: panel.contextPath
+                    interactive: true
+                    tabStop: false
+                    leafLink: true
+                    font: panel.font
+                    leafWeight: Type.headingWeight
+                    onSegmentActivated: function(groupPath) { panel.revealGroupPath(groupPath) }
+                }
+                Rectangle {
+                    objectName: "endpointTreeContextRule"
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: 1
+                    color: Theme.outlineVariant
+                    Accessible.ignored: true
+                }
+            }
             Component.onCompleted: afterResetTimer.restart()
         }
         // What the last watch action did, on one line kept at the bottom: always
@@ -1611,7 +1868,13 @@ Pane {
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
-        function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); afterResetTimer.stop() }
+        function onModelAboutToBeReset() {
+            panel.clearPreviews()
+            panel.clearWatchMarks()
+            afterResetTimer.stop()
+            revealSelection.stop()
+            panel.selectionStale = true
+        }
         function onModelReset() {
             panel.forgetMeasured()
             panel.findStep = -1

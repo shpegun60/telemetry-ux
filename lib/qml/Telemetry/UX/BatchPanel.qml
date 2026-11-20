@@ -120,16 +120,6 @@ Pane {
             }
         }
     }
-    // An item's path in the list: its group muted, its name bright.
-    function escaped(text) {
-        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    }
-    function pathMarkup(path, muted) {
-        const cut = path.lastIndexOf(".")
-        if (cut < 0)
-            return escaped(path)
-        return "<font color=\"" + muted + "\">" + escaped(path.substring(0, cut + 1)) + "</font>" + escaped(path.substring(cut + 1))
-    }
     ColumnLayout {
         id: batchLayout
         anchors.fill: parent
@@ -536,29 +526,32 @@ Pane {
                                     color: item.current ? Theme.selectedForeground : Theme.textSecondary
                                     Layout.preferredWidth: panel.kindWidth
                                 }
-                                // The path in the application font, its group muted
-                                // and its name bright; then its values, fixed and
-                                // quieter. The values elide first (at most half
-                                // the cell), the path in the middle only after.
+                                // The path in the one path label (the review's
+                                // 14.3): its groups muted and its leaf bright,
+                                // whole segments dropping under "…"; then its
+                                // values, fixed and quieter. The values elide
+                                // first (at most half the cell), the path after.
                                 Item {
                                     id: lineBox
                                     objectName: "batchRowName"
                                     readonly property string text: item.name + (item.values.length > 0 ? " " + item.values : "")
-                                    readonly property bool truncated: pathLabel.truncated || valuesLabel.truncated
+                                    readonly property bool truncated: pathLabel.elided || valuesLabel.truncated
                                     readonly property real valuesRoom: valuesLabel.text.length === 0 ? 0
                                         : Math.min(valuesLabel.implicitWidth, lineBox.width / 2)
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     clip: true
-                                    Label {
+                                    PathLabel {
                                         id: pathLabel
                                         objectName: "batchRowPath"
                                         anchors.verticalCenter: parent.verticalCenter
-                                        textFormat: item.current || item.historical ? Text.PlainText : Text.StyledText
-                                        text: item.current || item.historical ? item.name : panel.pathMarkup(item.name, Theme.textMuted)
-                                        color: item.current ? Theme.selectedForeground
-                                             : item.historical ? Theme.textMuted : Theme.textPrimary
-                                        elide: Text.ElideMiddle
+                                        height: parent.height
+                                        path: item.name
+                                        font: panel.font
+                                        prefixColor: item.current ? Theme.selectedForeground : Theme.textMuted
+                                        leafColor: item.current ? Theme.selectedForeground
+                                                 : item.historical ? Theme.textMuted : Theme.textPrimary
+                                        toolTipEnabled: false
                                         width: Math.min(implicitWidth, Math.max(0, lineBox.width
                                             - (lineBox.valuesRoom > 0 ? lineBox.valuesRoom + Type.groupSpacing : 0)))
                                     }

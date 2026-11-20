@@ -374,15 +374,16 @@ int main(int argc, char** argv) {
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QString())));
         QTest::qWait(250);
         settle();
-        // A model without a kind role: its rows are worked out - a root that
-        // is not an endpoint a category, a branch a group, an endpoint a value.
+        // A model without a kind role: its rows are worked out - a row that
+        // is not an endpoint a group, at the top too (one tree of groups, the
+        // designer's review of 20 November 2026), an endpoint a value.
         const auto glyph = [&](const QString& name) {
             auto* row = rowNamed(window->contentItem(), name);
             auto* icon = row ? named(row, "kindIcon") : nullptr;
             return icon ? icon->property("name").toString() : QString();
         };
         CHECK(glyph(QStringLiteral("measure")) == QStringLiteral("group"));
-        CHECK(rowNamed(window->contentItem(), QStringLiteral("measure"))->property("shownKind").toString() == QStringLiteral("category"));
+        CHECK(rowNamed(window->contentItem(), QStringLiteral("measure"))->property("shownKind").toString() == QStringLiteral("group"));
         CHECK(rowNamed(window->contentItem(), QStringLiteral("config"))->property("shownKind").toString() == QStringLiteral("group"));
         CHECK(glyph(QStringLiteral("Voltage")) == QStringLiteral("value"));
         // A structural change closes an open menu and drops its index: no

@@ -1201,8 +1201,8 @@ static void plotUndoKinds()
 	CHECK(traces && traces->history() == nullptr);
 	provider.setHistory(&history);
 	CHECK(traces->history() == &history);
-	const QString gain = QStringLiteral("device.Config.gain"), serial = QStringLiteral("device.Serial"),
-	              limit = QStringLiteral("device.Config.limit");
+	const QString gain = QStringLiteral("device/Config.gain"), serial = QStringLiteral("device/Serial"),
+	              limit = QStringLiteral("device/Config.limit");
 	const auto state = [traces] {
 		QVariantMap colours;
 		for (const auto& path : traces->plotted())
@@ -1216,7 +1216,7 @@ static void plotUndoKinds()
 			provider.setBinding(h.binding.get());
 		CHECK(traces->restore({{QStringLiteral("plotted"), QStringList{gain, serial}}}));
 		// Every curve's look plain, then gain's own.
-		for (const auto& path : {gain, serial, limit, QStringLiteral("device.Config.mode")}) {
+		for (const auto& path : {gain, serial, limit, QStringLiteral("device/Config.mode")}) {
 			CHECK(traces->setAppearance(path, QString{}, 1, 0));
 			traces->setPoints(path, 0);
 		}
@@ -1249,7 +1249,7 @@ static void plotUndoKinds()
 	add("plot.curves", "remove a curve", [&] { traces->unplot(gain); });
 	add("plot.curves", "remove all curves", [&] { traces->unplotMany(traces->plotted()); });
 	add("plot.curves", "plot several", [&] {
-		CHECK(traces->plotMany({limit, gain, QStringLiteral("device.Config.mode")}).value("added").toInt() == 2);
+		CHECK(traces->plotMany({limit, gain, QStringLiteral("device/Config.mode")}).value("added").toInt() == 2);
 	});
 	add("plot.look", "change a curve", [&] { CHECK(traces->setAppearance(serial, QStringLiteral("#aa0000"), 10, -1)); });
 	add("plot.look", "change a curve's points twice", [&] {
@@ -1264,13 +1264,13 @@ static void plotUndoKinds()
 
 	// The words, and a curve back in its place with its colour.
 	start();
-	CHECK(traces->plot(limit).isEmpty() && history.undoText() == QStringLiteral("Plot device.Config.limit"));
+	CHECK(traces->plot(limit).isEmpty() && history.undoText() == QStringLiteral("Plot device/Config.limit"));
 	const auto colour = traces->colorIndex(gain);
 	traces->unplot(gain);
-	CHECK(history.undoText() == QStringLiteral("Remove device.Config.gain from the Plot"));
+	CHECK(history.undoText() == QStringLiteral("Remove device/Config.gain from the Plot"));
 	// A curve never plotted takes the first free colour: the one gain left.
-	CHECK(traces->plot(QStringLiteral("device.Config.fresh")).isEmpty() &&
-	      traces->colorIndex(QStringLiteral("device.Config.fresh")) == colour);
+	CHECK(traces->plot(QStringLiteral("device/Config.fresh")).isEmpty() &&
+	      traces->colorIndex(QStringLiteral("device/Config.fresh")) == colour);
 	CHECK(history.undo() && history.undo() && traces->plotted() == QStringList({gain, serial, limit}) &&
 	      traces->colorIndex(gain) == colour);
 	traces->unplotMany(traces->plotted());
@@ -1278,12 +1278,12 @@ static void plotUndoKinds()
 	      traces->plotted() == QStringList({gain, serial, limit}));
 	now += 10000;
 	traces->setPoints(serial, 1);
-	CHECK(history.undoText() == QStringLiteral("Change the points of device.Serial"));
+	CHECK(history.undoText() == QStringLiteral("Change the points of device/Serial"));
 	now += 500;
 	traces->setPoints(serial, 0);
-	CHECK(history.undoText() != QStringLiteral("Change the points of device.Serial"));
+	CHECK(history.undoText() != QStringLiteral("Change the points of device/Serial"));
 	CHECK(traces->setAppearance(serial, QStringLiteral("#00aa00"), 1, 0) &&
-	      history.undoText() == QStringLiteral("Change the curve of device.Serial"));
+	      history.undoText() == QStringLiteral("Change the curve of device/Serial"));
 	traces->setShowPoints(true);
 	CHECK(history.undoText() == QStringLiteral("Show measurement points"));
 	traces->setShowPoints(false);
@@ -1308,7 +1308,7 @@ static void plotUndoKinds()
 		                 said = history.sentence(text, undone, note, outcome);
 	                 });
 	CHECK(history.undo() && history.count() == 0 &&
-	      said == QStringLiteral("Skipped: Plot device.Config.gain; device.Config.gain is no longer on the Plot."));
+	      said == QStringLiteral("Skipped: Plot device/Config.gain; device/Config.gain is no longer on the Plot."));
 	// Without a history its traces record nothing either.
 	provider.setHistory(nullptr);
 	CHECK(traces->history() == nullptr && traces->plot(limit).isEmpty() && history.count() == 0);
@@ -1430,7 +1430,7 @@ static void undoHistoryCore()
 	// An action on the device: words kept for whatever answers Ctrl+Z, no
 	// step, nothing cleared; the next step, or an acknowledgement, ends them.
 	const auto before = history.count();
-	history.noteIrreversible(QStringLiteral("The write to device.Gain is not undone; write 1.5 to go back."));
+	history.noteIrreversible(QStringLiteral("The write to device/Gain is not undone; write 1.5 to go back."));
 	CHECK(history.irreversibleNote().startsWith(QStringLiteral("The write")) && history.count() == before && history.canUndo());
 	history.acknowledgeIrreversible();
 	CHECK(history.irreversibleNote().isEmpty());
@@ -1438,7 +1438,7 @@ static void undoHistoryCore()
 	now += 5000;
 	CHECK(set(QStringLiteral("f"), 1) > 0 && history.irreversibleNote().isEmpty());
 	// A step taken ends it too: the user is past the action on the device.
-	history.noteIrreversible(QStringLiteral("The Command device.Reset was sent; Undo does not take it back."));
+	history.noteIrreversible(QStringLiteral("The Command device/Reset was sent; Undo does not take it back."));
 	CHECK(history.undo() && history.irreversibleNote().isEmpty() && history.redo());
 	// A notice that shows what an undo did says so from done(); the next
 	// undo or redo starts unnoticed.

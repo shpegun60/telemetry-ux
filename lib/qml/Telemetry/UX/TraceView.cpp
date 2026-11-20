@@ -1,5 +1,6 @@
 // The live Plot's drawing: plotted values over time of day (LP-1). MIT.
 #include "TraceView.hpp"
+#include "PathGrammar.hpp"
 #include "WatchTraces.hpp"
 #include <QtCore/QDateTime>
 #include <QtCore/QSaveFile>
@@ -23,6 +24,13 @@
 
 namespace telemetry::ux {
 namespace {
+// A lane's name: its path's last step after a "/" or a ".", an element with
+// its array's name ("Samples[3]").
+QString lastStep(const QString& path)
+{
+	return path.mid(std::max(path_grammar::lastSeparator(path, QLatin1Char('/')),
+	                         path_grammar::lastSeparator(path, QLatin1Char('.'))) + 1);
+}
 constexpr qint64 msNs = 1'000'000;
 constexpr qint64 dayMs = 86'400'000;
 // A pause in reading longer than this, and ten times the step before it,
@@ -2472,7 +2480,7 @@ void TraceView::paint(QPainter* painter)
 	}
 	painter->setClipRect(area);
 	for (auto& lane : numberLanes) {
-		const auto leaf = lane.path.section(QLatin1Char('.'), -1);
+		const auto leaf = lastStep(lane.path);
 		const qreal w = std::min(metrics.horizontalAdvance(leaf) + pad * 2, area.width() / 2);
 		lane.nameRect = QRectF(area.left() + 2, lane.rect.top() + 2, w, metrics.height());
 		QColor fill = chipColor_;
@@ -2492,7 +2500,7 @@ void TraceView::paint(QPainter* painter)
 		painter->setPen(separator);
 		painter->drawLine(QPointF(row.left(), std::round(row.top()) + 0.5), QPointF(row.right(), std::round(row.top()) + 0.5));
 		// Its leaf name in the value labels' column.
-		const auto leaf = path.section(QLatin1Char('.'), -1);
+		const auto leaf = lastStep(path);
 		laneLabels << leaf;
 		painter->save();
 		painter->setClipping(false);

@@ -455,10 +455,26 @@ QPainterPath oneWay()
 	path.lineTo(14.5, 16.5);
 	return path;
 }
+// The Device tree's kinds filter: a funnel, its stem a short spout, as file
+// browsers and IDEs draw a filter.
+QPainterPath funnel()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 5.5);
+	path.lineTo(19.5, 5.5);
+	path.lineTo(13.5, 12.5);
+	path.lineTo(13.5, 18);
+	path.lineTo(10.5, 19.5);
+	path.lineTo(10.5, 12.5);
+	path.closeSubpath();
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("zoomIn"))
 		return lens(true);
+	if (name == QLatin1String("filter"))
+		return funnel();
 	if (name == QLatin1String("follow"))
 		return toNewest();
 	if (name == QLatin1String("zoomOut"))

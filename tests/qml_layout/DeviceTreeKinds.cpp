@@ -10,7 +10,9 @@
 #include <telemetry/descriptor/Descriptor.hpp>
 #include <QtCore/QDir>
 #include <QtCore/QItemSelectionModel>
+#include <QtCore/QSet>
 #include <QtCore/QTimer>
+#include <QtGui/QClipboard>
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
@@ -427,18 +429,53 @@ int main(int argc, char** argv)
 		model.setSchemaSource([schema = backing->schema] { return schema; });
 		model.rebuild(backing->owner);
 		Provider provider(&model);
-		// The model's own answers first: the kinds, the widest type, the counts.
+		// The model's own answers first: one tree of groups (the designer's
+		// review of 20 November 2026, 14.1), the kinds, the widest type, the
+		// counts, the paths in the one grammar.
 		CHECK(model.widestFieldType() == QStringLiteral("struct (3)"));
-		CHECK(model.data(model.indexOfPath(QStringLiteral("Fields/device/Mode")), ux::EndpointModel::TypeTextRole).toString()
+		CHECK(model.data(model.indexOfPath(QStringLiteral("device/Mode")), ux::EndpointModel::TypeTextRole).toString()
 		      == QStringLiteral("enum (3)"));
-		CHECK(model.data(model.indexOfPath(QStringLiteral("Fields/device/Mode")), ux::EndpointModel::TypeNamesRole).toString()
+		CHECK(model.data(model.indexOfPath(QStringLiteral("device/Mode")), ux::EndpointModel::TypeNamesRole).toString()
 		      == QStringLiteral("Off, Low, High"));
-		CHECK(model.data(model.indexOfPath(QStringLiteral("Fields/device/Config/Gain")), ux::EndpointModel::KindRole).toString()
+		CHECK(model.data(model.indexOfPath(QStringLiteral("device/Config/Gain")), ux::EndpointModel::KindRole).toString()
 		      == QStringLiteral("value"));
 		// A value inside a Field reads and writes as the Field.
-		CHECK(model.data(model.indexOfPath(QStringLiteral("Fields/device/Config/Gain")), ux::EndpointModel::WritableRole).toBool());
-		CHECK(model.indexOfPath(QStringLiteral("Commands/control")) != model.indexOfPath(QStringLiteral("Services/control")));
-		CHECK(!model.indexOfPath(QStringLiteral("Fields/nothing")).isValid());
+		CHECK(model.data(model.indexOfPath(QStringLiteral("device/Config/Gain")), ux::EndpointModel::WritableRole).toBool());
+		CHECK(!model.indexOfPath(QStringLiteral("nothing")).isValid());
+		// No family level: the top rows are the groups, the Commands' and the
+		// Services' "control" one folder, its Commands before its Services,
+		// each in declaration order.
+		{
+			QStringList tops;
+			for (int row = 0; row < model.rowCount(); ++row)
+				tops << model.index(row, 0).data(ux::EndpointModel::NameRole).toString();
+			CHECK(tops == (QStringList{QStringLiteral("measure"), QStringLiteral("device"), QStringLiteral("signals"),
+			                           QStringLiteral("control")}));
+			const auto control = model.indexOfPath(QStringLiteral("control"));
+			QStringList order;
+			for (int row = 0; row < model.rowCount(control); ++row)
+				order << model.index(row, 0, control).data(ux::EndpointModel::NameRole).toString();
+			CHECK(order == (QStringList{QStringLiteral("SetEnabled"), QStringLiteral("Reset"), QStringLiteral("SetVoltage"),
+			                            QStringLiteral("Scale")}));
+			CHECK(control.data(ux::EndpointModel::KindRole).toString() == QStringLiteral("group"));
+			CHECK(control.data(ux::EndpointModel::FieldCountRole).toInt() == 0 &&
+			      control.data(ux::EndpointModel::CommandCountRole).toInt() == 3 &&
+			      control.data(ux::EndpointModel::ServiceCountRole).toInt() == 1 &&
+			      control.data(ux::EndpointModel::CountRole).toInt() == 4);
+			CHECK(control.data(ux::EndpointModel::DetailRole).toString() == QStringLiteral("3 Commands · 1 Service"));
+			CHECK(model.indexOfGroupPath(QStringLiteral("control")) == control);
+			CHECK(model.fieldTotal() == 72 && model.commandTotal() == 3 && model.serviceTotal() == 1);
+			CHECK(model.deepestGroup() == 0);
+			CHECK(model.groupNames() == (QSet<QString>{QStringLiteral("measure"), QStringLiteral("device"),
+			                                           QStringLiteral("signals"), QStringLiteral("control")}));
+			// The one grammar: group/endpoint, then .member and [i].
+			CHECK(model.pathOf(model.indexOfPath(QStringLiteral("device/Config"))) == QStringLiteral("device/Config"));
+			CHECK(model.pathOf(model.indexOfPath(QStringLiteral("device/Config/Gain"))) == QStringLiteral("device/Config.Gain"));
+			CHECK(model.pathOf(model.indexOfPath(QStringLiteral("measure/Samples/[3]"))) == QStringLiteral("measure/Samples[3]"));
+			CHECK(model.pathOf(control) == QStringLiteral("control"));
+			CHECK(model.fieldPath(model.indexOfPath(QStringLiteral("device/Mode")).data(ux::EndpointModel::EndpointIdRole).toUInt())
+			      == QStringLiteral("device/Mode"));
+		}
 
 		QQmlApplicationEngine engine;
 		engine.rootContext()->setContextProperty(QStringLiteral("kindsProvider"), &provider);
@@ -459,35 +496,37 @@ int main(int argc, char** argv)
 		const double iconSize = type("iconSize").toDouble();
 		const double nameFloor = type("nameFloor").toDouble();
 		const double gap = type("columnGap").toDouble();
+		const double indent = type("indent").toDouble();
 
-		const auto fields = t.at(QStringLiteral("Fields"));
-		const auto commands = t.at(QStringLiteral("Commands"));
-		const auto services = t.at(QStringLiteral("Services"));
-		const auto measure = t.at(QStringLiteral("Fields/measure"));
-		const auto voltage = t.at(QStringLiteral("Fields/measure/Voltage"));
-		const auto samples = t.at(QStringLiteral("Fields/measure/Samples"));
-		const auto deviceGroup = t.at(QStringLiteral("Fields/device"));
-		const auto config = t.at(QStringLiteral("Fields/device/Config"));
-		const auto mode = t.at(QStringLiteral("Fields/device/Mode"));
-		const auto signalGroup = t.at(QStringLiteral("Fields/signals"));
-		const auto commandGroup = t.at(QStringLiteral("Commands/control"));
-		const auto setEnabled = t.at(QStringLiteral("Commands/control/SetEnabled"));
-		const auto serviceGroup = t.at(QStringLiteral("Services/control"));
-		const auto scale = t.at(QStringLiteral("Services/control/Scale"));
-		// Everything the mocks show open: the groups, Config, the Commands and Services.
-		CHECK(t.expanded(fields) && t.expanded(measure) && t.expanded(deviceGroup));
+		const auto measure = t.at(QStringLiteral("measure"));
+		const auto voltage = t.at(QStringLiteral("measure/Voltage"));
+		const auto samples = t.at(QStringLiteral("measure/Samples"));
+		const auto deviceGroup = t.at(QStringLiteral("device"));
+		const auto config = t.at(QStringLiteral("device/Config"));
+		const auto mode = t.at(QStringLiteral("device/Mode"));
+		const auto signalGroup = t.at(QStringLiteral("signals"));
+		const auto control = t.at(QStringLiteral("control"));
+		const auto setEnabled = t.at(QStringLiteral("control/SetEnabled"));
+		const auto scale = t.at(QStringLiteral("control/Scale"));
+		// A new descriptor of 7 groups or fewer opens each one level (Miller).
+		CHECK(t.expanded(measure) && t.expanded(deviceGroup) && t.expanded(signalGroup) && t.expanded(control));
+		CHECK(!t.expanded(config) && !t.expanded(samples));
 		t.expand(config);
-		const auto gain = t.at(QStringLiteral("Fields/device/Config/Gain"));
-		const auto period = t.at(QStringLiteral("Fields/device/Config/SamplePeriodMs"));
-		for (const auto& index : {commands, commandGroup, services, serviceGroup})
-			t.expand(index);
+		const auto gain = t.at(QStringLiteral("device/Config/Gain"));
+		const auto period = t.at(QStringLiteral("device/Config/SamplePeriodMs"));
 		t.collapse(signalGroup);
+		// No family rows anywhere, and no category rule.
+		for (auto* row : rowsShown(t.view)) {
+			const auto name = row->property("name").toString();
+			CHECK(name != QStringLiteral("Fields") && name != QStringLiteral("Commands") && name != QStringLiteral("Services"));
+			CHECK(!named(row, QStringLiteral("categoryRule")));
+		}
 
 		// The 420 px mock: Config selected and current in the focused tree.
 		CHECK(provider.selectEndpoint(config));
 		t.makeCurrent(config);
 		t.view->forceActiveFocus();
-		t.reveal(fields);
+		t.reveal(measure);
 		t.shot(output, QStringLiteral("device-tree-kinds-420.png"));
 		// The keyboard elsewhere: every glyph at rest, the selection quiet.
 		named(t.panel, QStringLiteral("endpointSearch"))->forceActiveFocus();
@@ -495,22 +534,21 @@ int main(int argc, char** argv)
 
 		// 1. A glyph per kind, in the kind's own slot, quiet.
 		const QList<std::pair<QModelIndex, QString>> glyphs{
-		    {fields, QStringLiteral("group")},   {measure, QStringLiteral("group")},    {voltage, QStringLiteral("value")},
-		    {samples, QStringLiteral("array")},  {config, QStringLiteral("struct")},    {mode, QStringLiteral("value")},
-		    {gain, QStringLiteral("value")},     {commands, QStringLiteral("group")},   {setEnabled, QStringLiteral("command")},
-		    {services, QStringLiteral("group")}, {scale, QStringLiteral("service")}};
+		    {measure, QStringLiteral("group")},  {voltage, QStringLiteral("value")}, {samples, QStringLiteral("array")},
+		    {config, QStringLiteral("struct")},  {mode, QStringLiteral("value")},    {gain, QStringLiteral("value")},
+		    {control, QStringLiteral("group")},  {setEnabled, QStringLiteral("command")}, {scale, QStringLiteral("service")}};
 		for (const auto& [index, name] : glyphs) {
 			auto* glyph = t.part(index, "kindIcon");
 			CHECK(glyph && glyph->property("name").toString() == name);
 			CHECK(near(glyph->width(), iconSize) && near(glyph->height(), iconSize));
 			CHECK(color(glyph) == token("textSecondary"));
 		}
-		// Every glyph of one depth at one x, the Commands' and Services' too.
-		const double depthTwo = sceneX(t.part(voltage, "kindIcon"));
+		// Every glyph of one depth at one x, the Commands' and the Service's too.
+		const double depthOne = sceneX(t.part(voltage, "kindIcon"));
 		for (const auto& index : {config, mode, setEnabled, scale})
-			CHECK(near(sceneX(t.part(index, "kindIcon")), depthTwo));
-		CHECK(near(sceneX(t.part(measure, "kindIcon")), depthTwo - type("indent").toDouble()));
-		CHECK(near(sceneX(t.part(commandGroup, "kindIcon")), depthTwo - type("indent").toDouble()));
+			CHECK(near(sceneX(t.part(index, "kindIcon")), depthOne));
+		CHECK(near(sceneX(t.part(measure, "kindIcon")), depthOne - indent));
+		CHECK(near(sceneX(t.part(control, "kindIcon")), depthOne - indent));
 		// Selected in a focused tree: the selection's foreground.
 		CHECK(provider.selectEndpoint(config));
 		t.view->forceActiveFocus();
@@ -523,15 +561,16 @@ int main(int argc, char** argv)
 		CHECK(color(t.part(config, "kindIcon")) == token("textSecondary"));
 		CHECK(color(t.part(config, "endpointRowName")) == token("textPrimary"));
 
-		// 2. Weight says container: categories and groups DemiBold, the rest Regular.
+		// 2. Weight says container: groups DemiBold, the rest Regular.
 		const auto weight = [&](const QModelIndex& index) { return t.part(index, "endpointRowName")->property("font").value<QFont>().weight(); };
 		const int heading = type("headingWeight").toInt();
-		for (const auto& index : {fields, commands, services, measure, deviceGroup, commandGroup, serviceGroup})
+		for (const auto& index : {measure, deviceGroup, control})
 			CHECK(weight(index) == heading);
 		for (const auto& index : {config, samples, mode, gain, setEnabled, scale})
 			CHECK(weight(index) == QFont::Normal);
 
-		// 3. Types and counts never look alike.
+		// 3. Types and counts never look alike; a group counts in words,
+		// Fields first, the families it has none of left out.
 		auto* configType = t.part(config, "endpointRowType");
 		CHECK(configType->property("text").toString() == QStringLiteral("struct (3)"));
 		CHECK(configType->property("font").value<QFont>().family() == type("fixedFamily").toString());
@@ -541,10 +580,8 @@ int main(int argc, char** argv)
 		CHECK(measureCount->property("font").value<QFont>().family() != type("fixedFamily").toString());
 		CHECK(color(measureCount) == token("textMuted"));
 		CHECK(!t.part(measure, "endpointRowType"));
-		// Categories count in words too (the owner, 18 November 2026).
-		CHECK(t.part(fields, "endpointRowCount")->property("text").toString() == QStringLiteral("72 Fields"));
-		CHECK(t.part(commands, "endpointRowCount")->property("text").toString() == QStringLiteral("3 Commands"));
-		CHECK(t.part(serviceGroup, "endpointRowCount")->property("text").toString() == QStringLiteral("1 Service"));
+		CHECK(t.part(control, "endpointRowCount")->property("text").toString() == QStringLiteral("3 Commands · 1 Service"));
+		CHECK(t.part(deviceGroup, "endpointRowCount")->property("text").toString() == QStringLiteral("2 Fields"));
 		auto* typeTitle = named(t.panel, QStringLiteral("endpointColumnHeader_2"));
 		CHECK(typeTitle);
 		const auto fieldRows = {voltage, samples, config, mode, gain, period};
@@ -559,7 +596,7 @@ int main(int argc, char** argv)
 		// WL-9 check 20 (at the 420 px of the design's mock): every member of
 		// Config shows "rw" at Config's rw x, in the Field's own colour
 		// (textSecondary), never a dimmer one.
-		const auto enabledMember = t.at(QStringLiteral("Fields/device/Config/Enabled"));
+		const auto enabledMember = t.at(QStringLiteral("device/Config/Enabled"));
 		{
 			auto* configAccess = t.part(config, "endpointRowAccess");
 			CHECK(configAccess && configAccess->isVisible());
@@ -580,13 +617,13 @@ int main(int argc, char** argv)
 		auto* accessTitle = named(t.panel, QStringLiteral("endpointColumnHeader_3"));
 		CHECK(accessTitle && accessTitle->isVisible());
 		const double rwRight = sceneX(accessTitle) + accessTitle->width();
-		for (const auto& index : {fields, measure, deviceGroup, commands, commandGroup, services, serviceGroup}) {
+		for (const auto& index : {measure, deviceGroup, control}) {
 			auto* count = t.part(index, "endpointRowCount");
 			CHECK(count && near(sceneX(count) + count->width(), rwRight));
 		}
 		t.makeCurrent(config);
 		t.view->forceActiveFocus();
-		t.reveal(fields);
+		t.reveal(measure);
 
 		// 8. Indent guides: one per ancestor, under its chevron; Config's
 		// members alone carry the current branch's brighter one.
@@ -597,8 +634,8 @@ int main(int argc, char** argv)
 			collect(row, QStringLiteral("indentGuide"), found);
 			return found;
 		};
-		for (const auto& [index, depth] : QList<std::pair<QModelIndex, int>>{{fields, 0}, {measure, 1}, {voltage, 2}, {config, 2},
-		                                                                     {gain, 3}, {period, 3}, {services, 0}, {scale, 2}}) {
+		for (const auto& [index, depth] : QList<std::pair<QModelIndex, int>>{{measure, 0}, {voltage, 1}, {config, 1},
+		                                                                     {gain, 2}, {period, 2}, {control, 0}, {scale, 1}}) {
 			const auto found = guides(index);
 			CHECK(found.size() == depth);
 			for (int a = 0; a < found.size(); ++a)
@@ -606,23 +643,19 @@ int main(int argc, char** argv)
 		}
 		settle(100);
 		int bright = 0;
-		for (const auto& index : {fields, measure, voltage, samples, deviceGroup, config, gain,
-		                          t.at(QStringLiteral("Fields/device/Config/Enabled")), period, mode, commands, scale}) {
+		for (const auto& index : {measure, voltage, samples, deviceGroup, config, gain,
+		                          t.at(QStringLiteral("device/Config/Enabled")), period, mode, control, scale}) {
 			const auto found = guides(index);
 			for (int a = 0; a < found.size(); ++a) {
 				const bool outline = color(found[a]) == token("outline");
 				CHECK(outline || color(found[a]) == token("outlineVariant"));
 				if (outline) {
 					++bright;
-					CHECK(a == 2 && (index == gain || index == period || index.parent() == config));
+					CHECK(a == 1 && (index == gain || index == period || index.parent() == config));
 				}
 			}
 		}
 		CHECK(bright == 3);
-
-		// 9. A category after the first reads as a section: a rule on its top edge.
-		CHECK(t.part(commands, "categoryRule") && t.part(services, "categoryRule"));
-		CHECK(!t.part(fields, "categoryRule"));
 
 		// 10. The same glyph and weight here as in the other trees.
 		CHECK(t.part(config, "kindIcon")->property("name").toString() == QStringLiteral("struct"));
@@ -634,10 +667,12 @@ int main(int argc, char** argv)
 		CHECK(spoken(config).contains(QStringLiteral("Field")) && spoken(config).contains(QStringLiteral("struct with 3 members")) &&
 		      spoken(config).contains(QStringLiteral("read and write")));
 		CHECK(spoken(measure).contains(QStringLiteral("group")) && spoken(measure).contains(QStringLiteral("5 Fields")));
+		CHECK(spoken(control).contains(QStringLiteral("3 Commands · 1 Service")));
 		CHECK(spoken(gain).contains(QStringLiteral("member")) && spoken(gain).contains(QStringLiteral("read and write")));
 		CHECK(eval(t.part(config, "kindIcon"), QStringLiteral("Accessible.ignored")).toBool());
-		// The path first in the name's tooltip, then the words; an enum's names.
-		CHECK(t.item(config)->property("toolTipText").toString().startsWith(QStringLiteral("device.Config\nField · struct (3)")));
+		// The path first in the name's tooltip, in the one grammar, then the words; an enum's names.
+		CHECK(t.item(config)->property("toolTipText").toString().startsWith(QStringLiteral("device/Config\nField · struct (3)")));
+		CHECK(t.item(gain)->property("toolTipText").toString().startsWith(QStringLiteral("device/Config.Gain\n")));
 		CHECK(t.item(mode)->property("toolTipText").toString().contains(QStringLiteral("Off, Low, High")));
 
 		// 7. Previews on at 420: a type never runs into a value.
@@ -659,10 +694,20 @@ int main(int argc, char** argv)
 		t.panel->setProperty("previewValues", false);
 		settle(200);
 
+		// One indent step for the whole tree (14.1): 16 px while a name at the
+		// descriptor's depth (the deepest group + 2) keeps 80 px, then evenly
+		// less, never under 8; never changed by opening a branch.
+		const auto stepOf = [&] { return t.panel->property("indentStep").toDouble(); };
+		CHECK(t.panel->property("indentDepth").toInt() == 2);
+		CHECK(near(stepOf(), 16, 0.01));
+		for (auto* row : rowsShown(t.view))
+			CHECK(near(row->property("indentation").toDouble(), stepOf(), 0.01));
+
 		// 4. 280 px, previews off: rw has given way, every type is whole.
 		t.width(280);
 		CHECK(!named(t.panel, QStringLiteral("endpointColumnHeader_3")));
 		CHECK(t.panel->property("accessColumn").toDouble() == 0);
+		CHECK(near(stepOf(), 16, 0.01));
 		// WL-9 check 20: rw gives way on every row, a Field's and its members'.
 		for (const auto& index : {config, gain, enabledMember, period, voltage})
 			CHECK(!t.part(index, "endpointRowAccess"));
@@ -672,26 +717,48 @@ int main(int argc, char** argv)
 		}
 		// The design's "(f32, f32) -> f32" is whole here; the SDK answers a
 		// Service with a struct, so the real one reads "-> (f32)", two
-		// characters more. It takes all its row leaves after the whole name
-		// "Scale", runs over the blank rw cell, and is whole from 290 px.
+		// characters more. One level higher than under a category, it is
+		// whole beside the whole name "Scale": it starts left of the column
+		// no further than the name allows and runs over the blank rw cell.
 		auto* scaleType = t.part(scale, "endpointRowType");
 		CHECK(scaleType->property("text").toString() == QStringLiteral("(f32, f32) -> (f32)"));
+		CHECK(!scaleType->property("truncated").toBool());
 		auto* scaleName = t.part(scale, "endpointRowName");
 		CHECK(scaleName->width() >= scaleName->implicitWidth() - 1 && !scaleName->property("truncated").toBool());
-		CHECK(near(scaleType->x(), scaleName->x() + scaleName->implicitWidth() + gap, 1.0));
+		CHECK(scaleType->x() >= scaleName->x() + scaleName->implicitWidth() + gap - 1.0);
+		CHECK(sceneX(scaleType) <= sceneX(named(t.panel, QStringLiteral("endpointColumnHeader_2"))) + 1.0);
 		t.width(290);
 		CHECK(!t.part(scale, "endpointRowType")->property("truncated").toBool());
 		t.width(280);
+		// One level higher than under a category, "SamplePeriodMs" keeps its
+		// whole name at 280 px; its type stands at the column's x.
 		auto* periodName = t.part(period, "endpointRowName");
-		CHECK(periodName->property("truncated").toBool() && periodName->property("elide").toInt() == Qt::ElideMiddle);
+		CHECK(!periodName->property("truncated").toBool() || periodName->property("elide").toInt() == Qt::ElideMiddle);
 		CHECK(near(sceneX(t.part(period, "endpointRowType")), sceneX(named(t.panel, QStringLiteral("endpointColumnHeader_2")))));
 		t.makeCurrent(config);
-		t.reveal(fields);
+		t.reveal(measure);
 		t.shot(output, QStringLiteral("device-tree-kinds-280.png"));
 
-		// 6. The floor at 240 px: a type elides only once its name keeps its first characters.
+		// 6. The floor at 240 px: a type elides only once its name keeps its
+		// first characters; the step gives way before the names (8 px here),
+		// and a group's count drops whole parts from the right.
 		t.width(240);
+		CHECK(near(stepOf(), 8, 0.01));
+		periodName = t.part(period, "endpointRowName");
+		CHECK(periodName->property("truncated").toBool() && periodName->property("elide").toInt() == Qt::ElideMiddle);
+		for (auto* row : rowsShown(t.view))
+			CHECK(near(row->property("indentation").toDouble(), 8, 0.01));
+		{
+			auto* count = t.part(control, "endpointRowCount");
+			const auto words = count->property("text").toString();
+			CHECK(words == QStringLiteral("3 Commands · 1 Service") || words == QStringLiteral("3 Commands · …"));
+			CHECK(t.item(control)->property("countFull").toString() == QStringLiteral("3 Commands · 1 Service"));
+			CHECK(eval(count, QStringLiteral("Accessible.name")).toString() == QStringLiteral("3 Commands · 1 Service"));
+			auto* controlName = t.part(control, "endpointRowName");
+			CHECK(controlName->width() >= std::min(controlName->implicitWidth(), nameFloor) - 1);
+		}
 		t.expand(signalGroup);
+		CHECK(near(stepOf(), 8, 0.01));
 		const auto floorHolds = [&] {
 			for (auto* row : rowsShown(t.view)) {
 				auto* rowType = named(row, QStringLiteral("endpointRowType"));
@@ -701,7 +768,7 @@ int main(int argc, char** argv)
 					CHECK(rowName->width() >= std::min(rowName->implicitWidth(), nameFloor) - 1);
 			}
 		};
-		for (const auto& index : {fields, period, t.at(QStringLiteral("Fields/signals/Signal40")), scale}) {
+		for (const auto& index : {measure, period, t.at(QStringLiteral("signals/Signal40")), scale}) {
 			t.reveal(index);
 			floorHolds();
 		}
@@ -722,17 +789,15 @@ int main(int argc, char** argv)
 		CHECK(t.current() == measure && t.expanded(measure));
 		t.key(Qt::Key_Left);
 		CHECK(t.current() == measure && !t.expanded(measure));
-		CHECK(QMetaObject::invokeMethod(t.view, "collapseRecursively", Q_ARG(int, t.row(fields))));
+		// * on a group opens it and every group under it, its Fields folded.
+		CHECK(QMetaObject::invokeMethod(t.view, "collapseRecursively", Q_ARG(int, t.row(deviceGroup))));
 		settle();
-		t.makeCurrent(fields);
+		t.makeCurrent(deviceGroup);
 		t.view->forceActiveFocus();
 		t.key(Qt::Key_Asterisk, Qt::ShiftModifier);
-		CHECK(t.expanded(fields) && t.expanded(measure) && t.expanded(deviceGroup) && t.expanded(signalGroup));
-		CHECK(!t.expanded(config) && !t.expanded(samples));
+		CHECK(t.expanded(deviceGroup) && !t.expanded(config));
 		t.key(Qt::Key_Minus);
-		CHECK(!t.expanded(fields));
-		t.expand(fields);
-		CHECK(!t.expanded(measure) && !t.expanded(deviceGroup) && !t.expanded(signalGroup));
+		CHECK(!t.expanded(deviceGroup));
 		t.makeCurrent(measure);
 		t.view->forceActiveFocus();
 		t.key(Qt::Key_Return);
@@ -744,9 +809,8 @@ int main(int argc, char** argv)
 		const int rows = t.view->property("rows").toInt();
 		CHECK(t.row(t.current()) == rows - 1 && t.inView(t.current()));
 		t.key(Qt::Key_Home);
-		CHECK(t.row(t.current()) == 0 && t.current() == fields && t.inView(fields));
+		CHECK(t.row(t.current()) == 0 && t.current() == measure && t.inView(measure));
 		// Enter on a Field opens Details, as before.
-		t.makeCurrent(voltage.isValid() && t.row(voltage) >= 0 ? voltage : mode);
 		t.expand(measure);
 		t.makeCurrent(voltage);
 		t.view->forceActiveFocus();
@@ -759,22 +823,35 @@ int main(int argc, char** argv)
 		auto* expandAll = menu->findChild<QObject*>(QStringLiteral("treeMenuExpandAll"));
 		auto* collapseUnder = menu->findChild<QObject*>(QStringLiteral("treeMenuCollapseUnder"));
 		auto* collapseAll = menu->findChild<QObject*>(QStringLiteral("treeMenuCollapseAll"));
-		CHECK(expandAll && collapseUnder && collapseAll);
+		auto* copyPath = menu->findChild<QObject*>(QStringLiteral("endpointMenuCopyPath"));
+		CHECK(expandAll && collapseUnder && collapseAll && copyPath);
 		CHECK(expandAll->property("text").toString() == QStringLiteral("Expand all under\t*"));
 		CHECK(collapseUnder->property("text").toString() == QStringLiteral("Collapse all under\t-"));
 		CHECK(collapseAll->property("text").toString() == QStringLiteral("Collapse all"));
+		// "Copy path" pastes into device code: what it takes is the path in
+		// the one grammar (the clipboard itself is TreeActions' to check).
+		CHECK(copyPath->property("text").toString() == QStringLiteral("Copy path\tCtrl+C"));
 		QTest::keyClick(t.window, Qt::Key_Escape);
 		settle();
-		CHECK(!menu->property("visible").toBool());
-		// Collapse all: back to the three categories.
+		t.expand(deviceGroup);
+		t.expand(config);
+		const auto copied = [&](const QModelIndex& index) {
+			QVariant path;
+			CHECK(QMetaObject::invokeMethod(t.panel, "rowPath", Q_RETURN_ARG(QVariant, path), Q_ARG(QVariant, QVariant::fromValue(index))));
+			return path.toString();
+		};
+		CHECK(copied(voltage) == QStringLiteral("measure/Voltage"));
+		CHECK(copied(t.at(QStringLiteral("device/Config/Gain"))) == QStringLiteral("device/Config.Gain"));
+		CHECK(copied(control) == QStringLiteral("control"));
+		// Collapse all: every branch folded, the four groups alone.
+		t.makeCurrent(voltage);
 		t.view->forceActiveFocus();
 		t.key(Qt::Key_Menu);
 		CHECK(QMetaObject::invokeMethod(collapseAll, "triggered"));
 		settle();
-		CHECK(t.view->property("rows").toInt() == 3);
+		CHECK(t.view->property("rows").toInt() == 4);
 
 		// 12. Find filters in place and steps through the matches.
-		t.expand(fields);
 		t.expand(measure);
 		t.expand(deviceGroup);
 		t.makeCurrent(mode);
@@ -782,13 +859,14 @@ int main(int argc, char** argv)
 		auto* search = named(t.panel, QStringLiteral("endpointSearch"));
 		auto* status = named(t.panel, QStringLiteral("endpointSearchStatus"), false);
 		CHECK(search && status);
+		CHECK(search->property("placeholderText").toString() == QStringLiteral("Find by name, path or type (Ctrl+F)"));
 		search->forceActiveFocus();
 		CHECK(search->setProperty("text", QStringLiteral("volt")));
 		settle(250);
 		CHECK(status->isVisible() && status->property("text").toString() == QStringLiteral("4 matches"));
-		CHECK(t.expanded(fields) && t.expanded(measure) && t.expanded(signalGroup) && t.expanded(commands) && t.expanded(commandGroup));
-		CHECK(t.row(deviceGroup) < 0 && t.row(services) < 0);
-		CHECK(t.view->property("rows").toInt() == 9);
+		CHECK(t.expanded(measure) && t.expanded(signalGroup) && t.expanded(control));
+		CHECK(t.row(deviceGroup) < 0 && t.row(scale) < 0);
+		CHECK(t.view->property("rows").toInt() == 7);
 		// The header stays.
 		CHECK(named(t.panel, QStringLiteral("endpointColumnHeaders")));
 		t.width(280);
@@ -801,7 +879,7 @@ int main(int argc, char** argv)
 		CHECK(voltageName->property("text").toString().contains(QStringLiteral("<u>")));
 		t.key(Qt::Key_Return);
 		CHECK(status->property("text").toString() == QStringLiteral("2 of 4 matches"));
-		const auto busVolts = t.at(QStringLiteral("Fields/signals/BusVolts"));
+		const auto busVolts = t.at(QStringLiteral("signals/BusVolts"));
 		CHECK(t.current() == busVolts && t.inView(busVolts));
 		t.shot(output, QStringLiteral("device-tree-kinds-filter.png"));
 		t.key(Qt::Key_Return, Qt::ShiftModifier);
@@ -810,7 +888,7 @@ int main(int argc, char** argv)
 		t.key(Qt::Key_Return);
 		t.key(Qt::Key_Return);
 		CHECK(status->property("text").toString() == QStringLiteral("4 of 4 matches"));
-		CHECK(t.current() == t.at(QStringLiteral("Commands/control/SetVoltage")));
+		CHECK(t.current() == t.at(QStringLiteral("control/SetVoltage")));
 		t.key(Qt::Key_Return);
 		CHECK(status->property("text").toString() == QStringLiteral("1 of 4 matches") && t.current() == voltage);
 		// F3 from the tree steps on; Down from the field enters the tree at the match.
@@ -839,7 +917,133 @@ int main(int argc, char** argv)
 		CHECK(QMetaObject::invokeMethod(clearLink, "clicked"));
 		settle(150);
 		CHECK(search->property("text").toString().isEmpty() && t.openKeys() == openBefore);
+		// Find by path: "/" and "." are one separator, the segments match in
+		// order with gaps, the last in the row's own name.
+		const auto findCount = [&](const QString& text) {
+			CHECK(search->setProperty("text", text));
+			settle(250);
+			return t.filter->property("count").toInt();
+		};
+		CHECK(findCount(QStringLiteral("dev/conf")) == 1 && t.row(config) >= 0 && t.row(mode) < 0);
+		CHECK(findCount(QStringLiteral("dev.conf")) == 1);
+		CHECK(findCount(QStringLiteral("sig/40")) == 1 && t.row(t.at(QStringLiteral("signals/Signal40"))) >= 0);
+		CHECK(findCount(QStringLiteral("conf/dev")) == 0);
+		CHECK(findCount(QStringLiteral("ctl/Reset")) == 0 && findCount(QStringLiteral("con/Reset")) == 1);
+		CHECK(search->setProperty("text", QString{}));
+		settle(250);
+		CHECK(t.openKeys() == openBefore);
+
+		// The kinds filter (14.1): the funnel one Tab stop after the find
+		// field; its menu holds the device's totals; a kind chosen narrows the
+		// tree in place, with the text or without.
+		auto* funnel = named(t.panel, QStringLiteral("endpointKindsFilter"));
+		auto* kindsMenu = t.panel->findChild<QObject*>(QStringLiteral("endpointKindsMenu"));
+		CHECK(funnel && kindsMenu && funnel->property("iconName").toString() == QStringLiteral("filter"));
+		CHECK(!funnel->property("switchedOn").toBool());
+		search->forceActiveFocus();
+		settle();
+		t.key(Qt::Key_Tab);
+		CHECK(funnel->hasActiveFocus());
+		auto* kindFields = kindsMenu->findChild<QObject*>(QStringLiteral("endpointKindsFields"));
+		auto* kindCommands = kindsMenu->findChild<QObject*>(QStringLiteral("endpointKindsCommands"));
+		auto* kindServices = kindsMenu->findChild<QObject*>(QStringLiteral("endpointKindsServices"));
+		auto* kindAll = kindsMenu->findChild<QObject*>(QStringLiteral("endpointKindsAll"));
+		CHECK(kindFields && kindCommands && kindServices && kindAll);
+		CHECK(kindFields->property("totalText").toString() == QStringLiteral("72") &&
+		      kindCommands->property("totalText").toString() == QStringLiteral("3") &&
+		      kindServices->property("totalText").toString() == QStringLiteral("1"));
+		CHECK(kindFields->property("text").toString() == QStringLiteral("Fields, 72"));
+		CHECK(kindFields->property("checkable").toBool() && !kindFields->property("checked").toBool());
+		t.key(Qt::Key_Space);
+		CHECK(kindsMenu->property("visible").toBool());
+		{
+			auto* total = qobject_cast<QQuickItem*>(kindFields)->findChild<QQuickItem*>(QStringLiteral("kindsMenuTotal"));
+			CHECK(total && color(total) == token("textMuted"));
+		}
+		CHECK(QMetaObject::invokeMethod(kindCommands, "triggered"));
+		QTest::keyClick(t.window, Qt::Key_Escape);
+		settle(250);
+		CHECK(funnel->property("switchedOn").toBool());
+		CHECK(status->isVisible() && status->property("text").toString() == QStringLiteral("Commands only · 3 matches"));
+		CHECK(t.view->property("rows").toInt() == 4 && t.expanded(control) && t.row(scale) < 0 && t.row(measure) < 0);
+		t.width(280);
+		t.shot(output, QStringLiteral("device-tree-kinds-funnel-280.png"));
 		t.width(420);
+		t.shot(output, QStringLiteral("device-tree-kinds-funnel-420.png"));
+		// With the text: both narrow.
+		CHECK(findCount(QStringLiteral("volt")) == 1);
+		CHECK(status->property("text").toString() == QStringLiteral("Commands only · 1 match"));
+		CHECK(search->setProperty("text", QString{}));
+		settle(250);
+		CHECK(status->property("text").toString() == QStringLiteral("Commands only · 3 matches"));
+		// Two kinds; all three is no filter.
+		CHECK(QMetaObject::invokeMethod(kindServices, "triggered"));
+		settle(250);
+		CHECK(status->property("text").toString() == QStringLiteral("Commands and Services only · 4 matches"));
+		CHECK(QMetaObject::invokeMethod(kindAll, "triggered"));
+		settle(250);
+		CHECK(!funnel->property("switchedOn").toBool() && !status->isVisible());
+		CHECK(t.openKeys() == openBefore);
+		t.width(420);
+
+		// The context line (14.1): over the tree under its header, the path
+		// of the group the top row in view belongs to while that group's row
+		// is out of view; never over the current row; a click on its segment
+		// makes the group current.
+		{
+			// A shorter window, so the tree can scroll a group out of view.
+			t.window->resize(t.window->width(), 420);
+			settle(120);
+			auto* context = named(t.panel, QStringLiteral("endpointTreeContext"), false);
+			CHECK(context && !context->isVisible());
+			t.expand(signalGroup);
+			const double rh = type("rowHeight").toDouble();
+			const auto signal10 = t.at(QStringLiteral("signals/Signal10"));
+			t.view->setProperty("contentY", t.row(signal10) * rh);
+			settle(120);
+			CHECK(context->isVisible());
+			CHECK(t.panel->property("contextPath").toString() == QStringLiteral("signals"));
+			CHECK(near(context->mapToItem(t.view, QPointF(0, 0)).y(), 0, 0.5) && near(context->height(), rh, 0.5));
+			auto* contextPath = named(context, QStringLiteral("endpointTreeContextPath"));
+			CHECK(contextPath && contextPath->property("path").toString() == QStringLiteral("signals"));
+			t.shot(output, QStringLiteral("device-tree-context-420.png"));
+			t.width(280);
+			t.view->setProperty("contentY", t.row(signal10) * rh);
+			settle(120);
+			CHECK(context->isVisible());
+			t.shot(output, QStringLiteral("device-tree-context-280.png"));
+			// The current row under the line: the line gives way.
+			t.makeCurrent(t.at(QStringLiteral("signals/Signal9")));
+			t.view->setProperty("contentY", t.row(t.at(QStringLiteral("signals/Signal9"))) * rh);
+			settle(120);
+			CHECK(!context->isVisible());
+			// A click on its segment makes the group current, in view. (The
+			// current row elsewhere first: the view animates to a current row.)
+			t.makeCurrent(t.at(QStringLiteral("measure/Voltage")));
+			settle(500);
+			t.view->setProperty("contentY", t.row(signal10) * rh);
+			settle(120);
+			CHECK(context->isVisible());
+			auto* leaf = named(contextPath, QStringLiteral("pathLabelLeaf"));
+			CHECK(leaf);
+			QTest::mouseClick(t.window, Qt::LeftButton, Qt::NoModifier,
+			                  leaf->mapToScene(QPointF(leaf->width() / 2, leaf->height() / 2)).toPoint());
+			settle(500);
+			CHECK(t.current() == signalGroup && t.inView(signalGroup) && !context->isVisible());
+			// Left reaches it from the keyboard too.
+			t.makeCurrent(t.at(QStringLiteral("signals/Signal15")));
+			settle(500);
+			t.view->setProperty("contentY", t.row(signal10) * rh);
+			settle(120);
+			CHECK(context->isVisible());
+			t.view->forceActiveFocus();
+			t.key(Qt::Key_Left);
+			settle(500);
+			CHECK(t.current() == signalGroup && t.inView(signalGroup));
+			t.collapse(signalGroup);
+			t.window->resize(420, 760);
+			settle(150);
+		}
 
 		// 13. What is open survives a reconnect, the selected Field in view;
 		// a selection made elsewhere opens its path and shows it.
@@ -848,17 +1052,17 @@ int main(int argc, char** argv)
 		CHECK(provider.selectEndpoint(mode));
 		settle(100);
 		const auto openKept = t.openKeys();
-		CHECK(openKept.contains(QStringLiteral("Fields/measure")) && openKept.contains(QStringLiteral("Fields/device/Config")));
+		CHECK(openKept.contains(QStringLiteral("measure")) && openKept.contains(QStringLiteral("device/Config")));
 		model.rebuild(backing->owner);
 		settle(250);
 		CHECK(t.openKeys() == openKept);
-		const auto modeAgain = t.at(QStringLiteral("Fields/device/Mode"));
+		const auto modeAgain = t.at(QStringLiteral("device/Mode"));
 		CHECK(provider.selected() == modeAgain);
 		CHECK(t.inView(modeAgain));
-		const auto signalsAgain = t.at(QStringLiteral("Fields/signals"));
+		const auto signalsAgain = t.at(QStringLiteral("signals"));
 		t.collapse(signalsAgain);
 		CHECK(!t.expanded(signalsAgain));
-		const auto signal40 = t.at(QStringLiteral("Fields/signals/Signal40"));
+		const auto signal40 = t.at(QStringLiteral("signals/Signal40"));
 		CHECK(provider.selectEndpoint(signal40));
 		settle(150);
 		CHECK(t.expanded(signalsAgain) && t.inView(signal40) && t.current() == signal40);

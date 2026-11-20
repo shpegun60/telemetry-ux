@@ -6,6 +6,7 @@
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "EndpointPaths.hpp"
+#include "PathGrammar.hpp"
 #include "ScalarEditor.hpp"
 #include "ScalarEditorMetadata.hpp"
 #include "WatchCoverage.hpp"
@@ -366,6 +367,17 @@ protected:
 			if (p == index) return true;
 		for (QModelIndex p = index.parent(); p.isValid(); p = p.parent())
 			if (p == selected) return true;
+		// Every group stays (one tree of groups: a group is a top row, with
+		// no category above it), so the table's root - the selected Field's
+		// group - never goes from under the table when the selection moves to
+		// another group; a group under that root would be a row of the
+		// table, so not those.
+		if (index.data(EndpointModel::KindRole).toString() == QLatin1String("group")) {
+			const auto root = selected.parent();
+			for (QModelIndex p = index.parent(); p.isValid(); p = p.parent())
+				if (p == root) return false;
+			return true;
+		}
 		return false;
 	}
 };
@@ -2339,9 +2351,14 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		                : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
 		if (input) {
 			const auto schema = p->batch.schema();
-			const auto utf8 = entry.path.toUtf8();
-			const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
-			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where)) {
+			// The schema names an endpoint by its catalog and its own name,
+			// not by the path the GUI writes.
+			const auto group = entry.group.toUtf8();
+			const auto name = entry.name.toUtf8();
+			const std::string_view inGroup{group.constData(), std::size_t(group.size())};
+			const std::string_view named{name.constData(), std::size_t(name.size())};
+			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(inGroup, named)
+			                                               : schema.findService(inGroup, named)) {
 				typeText = request_arguments::signatureText(schema, endpoint->typeId);
 				if (entry.category == 3 && endpoint->responseTypeId)
 					typeText += QStringLiteral(" -> ") + schema_text::typeText(schema, endpoint->responseTypeId);
@@ -2363,7 +2380,11 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 	};
 	// What the text names, kind by kind, best first: a path by its start, a
 	// name word by word. No group rows: a group's name lists its members.
-	const bool isPath = typed.contains(QLatin1Char('.')) || typed.contains(QLatin1Char('['));
+	// A dotted start of an older key reads as the path it begins.
+	const bool isPath = typed.contains(QLatin1Char('.')) || typed.contains(QLatin1Char('[')) ||
+	                    typed.contains(QLatin1Char('/'));
+	if (isPath)
+		typed = path_grammar::canonicalPrefix(typed, p->endpoints.groupNames());
 	const auto terms = typed.split(QLatin1Char(' '), Qt::SkipEmptyParts);
 	// Empty, eight of each kind to look through; typed, what fits a list.
 	const int limit = typed.isEmpty() ? 8 : 40;
@@ -2440,7 +2461,7 @@ QVector<BatchLine> planBatchLines(const QStringList& lines, const QVector<Endpoi
 			bool any = false;
 			for (const auto& entry : list)
 				if (entry.category == 1 && (entry.group.compare(group, Qt::CaseInsensitive) == 0 ||
-				                            entry.path.startsWith(group + QLatin1Char('.'), Qt::CaseInsensitive))) {
+				                            entry.path.startsWith(group + QLatin1Char('/'), Qt::CaseInsensitive))) {
 					any = true;
 					if (!seen.contains(entry.path)) {
 						seen.insert(entry.path);
@@ -3028,7 +3049,7 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 			}
 			auto named = entry;
 			if (named.name.isEmpty())
-				named.name = group + QLatin1Char('.') + name;
+				named.name = path_grammar::compose(group, name, {});
 			seen.insert(named.key);
 			entries.push_back(named);
 			continue;
@@ -3038,9 +3059,8 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 		// back the same way: a group and a name.
 		if (group.isEmpty() || name.isEmpty())
 			continue;
-		auto path = group + QLatin1Char('.') + name;
-		if (!member.isEmpty())
-			path += (member.startsWith(QLatin1Char('[')) ? QString{} : QStringLiteral(".")) + member;
+		const auto path = path_grammar::compose(group, name, member.isEmpty() || member.startsWith(QLatin1Char('['))
+		                                                     ? member : QLatin1Char('.') + member);
 		if (seenPaths.contains(path) || (!replace && p->watch.unboundRow(path) >= 0)) {
 			++duplicate;
 			continue;
@@ -3371,17 +3391,19 @@ QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) cons
 	    index.model() != &p->endpoints || !p->watch.canTellHoldable() || watchState(index) >= 0)
 		return {};
 	using Role = EndpointModel::Role;
-	if (index.data(Role::CategoryRole).toInt() != static_cast<int>(telemetry::descriptor::Category::Field))
+	// A group holds Fields, Commands and Services alike (one tree, 14.1): one
+	// with no Field has no box at all, as a Command has none.
+	const bool group = index.data(Role::KindRole).toString() == QLatin1String("group");
+	if (group ? index.data(Role::FieldCountRole).toUInt() == 0
+	          : index.data(Role::CategoryRole).toInt() != static_cast<int>(telemetry::descriptor::Category::Field))
 		return {};
 	// The Field a row belongs to, by its path: the row itself or the nearest
 	// endpoint above a member.
 	auto field = index;
 	while (field.isValid() && !field.data(Role::IsEndpointRole).toBool())
 		field = field.parent();
-	const auto path = [](const QModelIndex& at) {
-		const auto group = at.parent().data(Role::NameRole).toString();
-		const auto name = at.data(Role::NameRole).toString();
-		return group.isEmpty() ? name : group + QLatin1Char('.') + name;
+	const auto path = [&p](const QModelIndex& at) {
+		return p->endpoints.pathOf(at);
 	};
 	// A Field's reason; a value row inside it gives its Field's.
 	const auto reason = [&p, &path](const QModelIndex& at) -> QString {
@@ -3399,9 +3421,9 @@ QString DynamicConfiguratorProvider::watchRefusal(const QModelIndex& index) cons
 	};
 	if (index.data(Role::PreviewChildRole).toBool() || index.data(Role::IsEndpointRole).toBool())
 		return field.isValid() ? reason(field) : QString{};
-	// A group or the Fields themselves, with nothing the Watchlist can hold.
+	// A group of Fields the Watchlist can hold none of.
 	return p->endpoints.rowCount(index) > 0
-	    ? tr("Nothing in %1 can be watched.").arg(index.data(Role::NameRole).toString())
+	    ? tr("Nothing in %1 can be watched.").arg(p->endpoints.pathOf(index))
 	    : QString{};
 }
 
@@ -3755,6 +3777,12 @@ void DynamicConfiguratorProvider::stopWatch()
 QString DynamicConfiguratorProvider::selection() const
 {
 	return d->selection;
+}
+
+void DynamicConfiguratorProvider::revealGroup(const QString& path)
+{
+	if (!path.isEmpty())
+		Q_EMIT revealGroupRequested(path);
 }
 
 QModelIndex DynamicConfiguratorProvider::selectedEndpointIndex() const

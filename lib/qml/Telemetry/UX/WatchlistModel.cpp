@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchlistModel.hpp"
+#include "PathGrammar.hpp"
 #include "ScalarEditorMetadata.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
@@ -895,16 +896,10 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			                                                : QStringLiteral("values")}};
 		case WriteRefusalRole:
 			return row.refusal;
-		case LeafStartRole: {
-			// The last path step: an element "[3]" or a name after the last dot.
-			const auto& name = row.name;
-			if (name.endsWith(QLatin1Char(']'))) {
-				const auto open = name.lastIndexOf(QLatin1Char('['));
-				return open > 0 ? int(open) : 0;
-			}
-			const auto dot = name.lastIndexOf(QLatin1Char('.'));
-			return dot >= 0 ? int(dot + 1) : 0;
-		}
+		case LeafStartRole:
+			// The last path step: an element "[3]", or a name after the last
+			// "/" or "." (PathGrammar.hpp).
+			return int(path_grammar::leafStart(row.name));
 		case AccessRole:
 			if (watch_key::isUnresolved(row.key))
 				return QString{};

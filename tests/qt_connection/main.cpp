@@ -465,9 +465,9 @@ void nativeWatchFrames()
 	QString counterPath, modePath;
 	for (int row = 0; row < watched->rowCount(); ++row) {
 		const auto path = watched->index(row, 0).data(ux::WatchlistModel::NameRole).toString();
-		if (path.endsWith(QStringLiteral(".Counter")))
+		if (path.endsWith(QStringLiteral("/Counter")))
 			counterPath = path;
-		if (path.endsWith(QStringLiteral(".Mode")))
+		if (path.endsWith(QStringLiteral("/Mode")))
 			modePath = path;
 	}
 	CHECK(traces && !counterPath.isEmpty() && !modePath.isEmpty());
@@ -576,7 +576,7 @@ void groupWatchBoxes()
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1);
 	CHECK(provider->watchState(first) == Qt::Checked && provider->watchState(group) == Qt::PartiallyChecked);
 	CHECK(result.value("serial").toInt() == history.undoSerial() &&
-	      history.undoText() == QStringLiteral("Add scaling.Value_0 to the Watchlist"));
+	      history.undoText() == QStringLiteral("Add scaling/Value_0 to the Watchlist"));
 	// The group: every Field it holds, the one already watched unchanged.
 	QSignalSpy inserted(provider->watchlist(), &QAbstractItemModel::rowsInserted);
 	result = provider->setWatchMany(watched(group), true);
@@ -588,7 +588,7 @@ void groupWatchBoxes()
 	// Undo takes back what the group added, and only that; Redo does it again.
 	CHECK(history.undo());
 	CHECK(provider->watchCount() == 1 && provider->watchState(group) == Qt::PartiallyChecked &&
-	      history.undoText() == QStringLiteral("Add scaling.Value_0 to the Watchlist") && history.canRedo());
+	      history.undoText() == QStringLiteral("Add scaling/Value_0 to the Watchlist") && history.canRedo());
 	CHECK(history.redo() && provider->watchCount() == holdable && history.undo() && provider->watchCount() == 1);
 	// Unwatching the group, then Undo: the rows come back in their order.
 	CHECK(provider->setWatchMany(watched(third), true).value("changed").toInt() == 1);
@@ -622,7 +622,7 @@ void groupWatchBoxes()
 	const auto ticked = history.undoSerial();
 	const auto all = names();
 	provider->removeWatch(0);
-	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove scaling.")));
+	CHECK(history.undoSerial() != ticked && history.undoText().startsWith(QStringLiteral("Remove scaling/")));
 	CHECK(history.undo() && history.undoSerial() == ticked && names() == all);
 	// Another provider's index is refused; nothing was sent to the device.
 	CHECK(provider->setWatchMany(watched(endpoint(other->endpoints(), QStringLiteral("Value_0"))), true)
@@ -672,7 +672,7 @@ void memberWatchBoxes()
 	auto result = provider->setWatchMany(one(gain), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 1 && result.value("values").toBool());
 	CHECK(provider->watchState(gain) == Qt::Checked && provider->watchState(config) == Qt::PartiallyChecked &&
-	      history.undoText() == QStringLiteral("Add device.Config.Gain to the Watchlist"));
+	      history.undoText() == QStringLiteral("Add device/Config.Gain to the Watchlist"));
 	// Opening more of the struct changes no box and no step.
 	const auto matrix = child(config, QStringLiteral("Matrix"));
 	const auto second = child(matrix, QStringLiteral("[1]"));
@@ -688,8 +688,8 @@ void memberWatchBoxes()
 	// Rows are named by path and keep their member text; written from the row
 	// by writing Config, a writable struct within one write.
 	auto* list = provider->watchlist();
-	CHECK(list->rowCount() == 2 && list->index(0, 0).data(Qt::DisplayRole).toString() == "device.Config.Gain" &&
-	      list->index(1, 0).data(Qt::DisplayRole).toString() == "device.Config.Matrix[1][0]" &&
+	CHECK(list->rowCount() == 2 && list->index(0, 0).data(Qt::DisplayRole).toString() == "device/Config.Gain" &&
+	      list->index(1, 0).data(Qt::DisplayRole).toString() == "device/Config.Matrix[1][0]" &&
 	      list->index(1, 0).data(ux::WatchlistModel::MemberRole).toString() == "Matrix[1][0]" &&
 	      list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool());
 	// One read of Config answers both, as one frame.
@@ -711,11 +711,11 @@ void memberWatchBoxes()
 	result = provider->setWatchMany(one(config), true);
 	CHECK(result.value("changed").toInt() == 19 && result.value("unchanged").toInt() == 2 &&
 	      result.value("fields").toInt() == 21 && provider->watchState(config) == Qt::Checked);
-	CHECK(history.undoText() == QStringLiteral("Add 19 values of device.Config to the Watchlist"));
+	CHECK(history.undoText() == QStringLiteral("Add 19 values of device/Config to the Watchlist"));
 	result = provider->setWatchMany(one(config), false);
 	CHECK(result.value("changed").toInt() == 21 && provider->watchCount() == 0 &&
 	      provider->watchState(config) == Qt::Unchecked && provider->watchState(gain) == Qt::Unchecked);
-	CHECK(history.undoText() == QStringLiteral("Remove 21 values of device.Config from the Watchlist"));
+	CHECK(history.undoText() == QStringLiteral("Remove 21 values of device/Config from the Watchlist"));
 	CHECK(history.undo() && provider->watchCount() == 21 && provider->watchState(cell) == Qt::Checked);
 	connection.disconnect();
 	CHECK(provider->watchState(config) == -1 && provider->watchState(gain) == -1);
@@ -738,20 +738,20 @@ void memberWatchBoxes()
 	CHECK(result.value("status") == "capacity" && result.value("fields").toInt() == 16384 &&
 	      result.value("adding").toInt() == 16384 &&
 	      result.value("room").toInt() == ux::watchlistRowLimit && result.value("values").toBool() && dataProvider->watchCount() == 0);
-	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data.Empty has no values to watch.");
+	CHECK(dataProvider->watchState(empty) == -1 && dataProvider->watchRefusal(empty) == "data/Empty has no values to watch.");
 	// Typed, the same room is said before Enter, and a paste adds all or nothing.
-	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("status") == "error" &&
-	      dataProvider->checkWatchPath(QStringLiteral("data.Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(ux::watchlistRowLimit))));
-	CHECK(dataProvider->addWatchPaths({QStringLiteral("data.Samples")}).value("status") == "capacity" &&
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data/Samples")).value("status") == "error" &&
+	      dataProvider->checkWatchPath(QStringLiteral("data/Samples")).value("message").toString().contains(QStringLiteral("room for %1").arg(QLocale().toString(ux::watchlistRowLimit))));
+	CHECK(dataProvider->addWatchPaths({QStringLiteral("data/Samples")}).value("status") == "capacity" &&
 	      dataProvider->watchCount() == 0);
-	CHECK(dataProvider->checkWatchPath(QStringLiteral("data.Samples[300]")).value("message") == "Adds data.Samples[300]");
+	CHECK(dataProvider->checkWatchPath(QStringLiteral("data/Samples[300]")).value("message") == "Adds data/Samples[300]");
 	const auto range = child(samples, QStringLiteral("[256 … 511]"));
 	CHECK(range.isValid() && dataProvider->watchState(range) == Qt::Unchecked);
 	result = dataProvider->setWatchMany(one(range), true);
 	CHECK(result.value("status") == "ok" && result.value("changed").toInt() == 256);
 	CHECK(dataProvider->watchState(range) == Qt::Checked && dataProvider->watchState(samples) == Qt::PartiallyChecked);
 	auto* dataList = dataProvider->watchlist();
-	CHECK(dataList->index(3, 0).data(Qt::DisplayRole).toString() == "data.Samples[259]" &&
+	CHECK(dataList->index(3, 0).data(Qt::DisplayRole).toString() == "data/Samples[259]" &&
 	      dataList->index(3, 0).data(ux::WatchlistModel::MemberRole).toString() == "[259]");
 	dataConnection.disconnect();
 }
@@ -770,43 +770,43 @@ void watchPaths()
 	provider->setHistory(&history);
 	connect(connection, peer);
 	const auto check = [&](const char* text) { return provider->checkWatchPath(QString::fromUtf8(text)); };
-	auto said = check("device.Config.Gain");
-	CHECK(said.value("status") == "adds" && said.value("message") == "Adds device.Config.Gain" &&
+	auto said = check("device/Config.Gain");
+	CHECK(said.value("status") == "adds" && said.value("message") == "Adds device/Config.Gain" &&
 	      said.value("adds").toInt() == 1);
-	said = check("device.Config");
+	said = check("device/Config");
 	CHECK(said.value("status") == "adds" && said.value("adds").toInt() == 21);
-	CHECK(check("control.Execute").value("message") == "control.Execute is a Command. Only Fields can be watched.");
-	CHECK(check("control.Transform").value("message") == "control.Transform is a Service. Only Fields can be watched.");
-	CHECK(check("device.Nope").value("status") == "missing");
-	CHECK(check("device.Config.Gainn").value("status") == "error" &&
-	      check("device.Config.Gainn").value("message").toString().contains("Did you mean Gain?"));
+	CHECK(check("control/Execute").value("message") == "control/Execute is a Command. Only Fields can be watched.");
+	CHECK(check("control/Transform").value("message") == "control/Transform is a Service. Only Fields can be watched.");
+	CHECK(check("device/Nope").value("status") == "missing");
+	CHECK(check("device/Config.Gainn").value("status") == "error" &&
+	      check("device/Config.Gainn").value("message").toString().contains("Did you mean Gain?"));
 	CHECK(check("Gain").value("status") == "error" && check("  ").value("status") == "empty");
 	// Candidates come from the descriptor, in its order.
-	const auto candidates = provider->watchPathCandidates(QStringLiteral("device.Config."));
-	CHECK(!candidates.isEmpty() && candidates.first().toMap().value("path") == "device.Config.Gain");
+	const auto candidates = provider->watchPathCandidates(QStringLiteral("device/Config."));
+	CHECK(!candidates.isEmpty() && candidates.first().toMap().value("path") == "device/Config.Gain");
 	CHECK(provider->watchPathCandidates(QStringLiteral("gain")).size() >= 1);
 	// Pasted lines: a path, a copied "path = value", a struct for all its
 	// values, one not on this device, a Command; one change, Undo takes it back.
-	auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain = 1.5"), QStringLiteral("device.SignedZero32\t-0"),
-	                                      QStringLiteral("device.Nope"), QStringLiteral("control.Execute"),
-	                                      QStringLiteral(""), QStringLiteral("device.Config.Gain")});
+	auto added = provider->addWatchPaths({QStringLiteral("device/Config.Gain = 1.5"), QStringLiteral("device/SignedZero32\t-0"),
+	                                      QStringLiteral("device/Nope"), QStringLiteral("control/Execute"),
+	                                      QStringLiteral(""), QStringLiteral("device/Config.Gain")});
 	// The one not on this device is kept as a row that says so (WL-4c).
 	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 2 && provider->watchCount() == 3);
-	CHECK(added.value("missing").toList() == QVariantList({QStringLiteral("device.Nope")}));
+	CHECK(added.value("missing").toList() == QVariantList({QStringLiteral("device/Nope")}));
 	CHECK(added.value("refused").toList().size() == 1 && added.value("serial").toInt() == history.undoSerial() &&
 	      history.undoText() == QStringLiteral("Add 3 values to the Watchlist"));
-	said = check("device.Config.Gain");
+	said = check("device/Config.Gain");
 	CHECK(said.value("status") == "watched" && said.value("row").toInt() >= 0);
-	said = check("device.Nope");
+	said = check("device/Nope");
 	CHECK(said.value("status") == "watched" && said.value("row").toInt() == 2);
-	CHECK(provider->addWatchPaths({QStringLiteral("device.Nope")}).value("already").toInt() == 1 && provider->watchCount() == 3);
+	CHECK(provider->addWatchPaths({QStringLiteral("device/Nope")}).value("already").toInt() == 1 && provider->watchCount() == 3);
 	CHECK(history.undo() && provider->watchCount() == 0);
-	CHECK(provider->addWatchPaths({QStringLiteral("device.Config")}).value("added").toInt() == 21 &&
+	CHECK(provider->addWatchPaths({QStringLiteral("device/Config")}).value("added").toInt() == 21 &&
 	      provider->watchCount() == 21);
 	// While the Watchlist polls, a typed path goes in between two reads (fix 8).
 	provider->startWatch();
 	CHECK(await([&] { return provider->watchActive(); }));
-	CHECK(provider->addWatchPaths({QStringLiteral("device.SignedZero32")}).value("added").toInt() == 1 &&
+	CHECK(provider->addWatchPaths({QStringLiteral("device/SignedZero32")}).value("added").toInt() == 1 &&
 	      provider->watchCount() == 22);
 	provider->stopWatch();
 	CHECK(await([&] { return !provider->watchActive(); }));
@@ -869,11 +869,11 @@ void watchBindings()
 	// (WL-4c): an element past the end can't be watched, an absent Field is
 	// not on the device, and a struct kept whole becomes its other values.
 	const auto now = names();
-	CHECK(now.mid(0, 5) == before + QStringList({QStringLiteral("device.Config.Matrix[2][0]"), QStringLiteral("device.Absent")}));
+	CHECK(now.mid(0, 5) == before + QStringList({QStringLiteral("device/Config.Matrix[2][0]"), QStringLiteral("device/Absent")}));
 	CHECK(list->index(3, 0).data(ux::WatchlistModel::StatusRole) == "Unwatchable" &&
 	      !list->index(3, 0).data(ux::WatchlistModel::WriteRefusalRole).toString().isEmpty());
 	CHECK(list->index(4, 0).data(ux::WatchlistModel::StatusRole) == "Missing");
-	CHECK(now.size() > 6 && !now.contains(QStringLiteral("device.Config")) && now.count(QStringLiteral("device.Config.Gain")) == 1);
+	CHECK(now.size() > 6 && !now.contains(QStringLiteral("device/Config")) && now.count(QStringLiteral("device/Config.Gain")) == 1);
 	CHECK(provider->watchState(gain) == Qt::Checked);
 	// Added again, nothing more: values once, kept paths once.
 	const auto again = provider->addWatchBindings(entries);
@@ -901,27 +901,27 @@ void batchPaths()
 	const auto check = [provider](const char* text) { return provider->checkBatchPath(QString::fromUtf8(text)); };
 	// A name two endpoints share asks for a choice; a kind word makes it.
 	CHECK(check("Ping").value("status") == "choose" && check("ping").value("message").toString().contains("2 endpoints"));
-	const auto command = check("command control.Ping");
+	const auto command = check("command control/Ping");
 	CHECK(command.value("status") == "unsupported" && command.value("operation") == "command" &&
-	      command.value("path") == "control.Ping" && command.value("message") == "This device has no Batch.");
+	      command.value("path") == "control/Ping" && command.value("message") == "This device has no Batch.");
 	CHECK(check("service Ping").value("operation") == "service");
 	// A value inside a Field names the Field, read whole.
-	const auto member = check("device.Config.Gain");
-	CHECK(member.value("path") == "device.Config" && member.value("operation") == "read");
-	CHECK(check("Setpoint").value("path") == "device.Setpoint");
+	const auto member = check("device/Config.Gain");
+	CHECK(member.value("path") == "device/Config" && member.value("operation") == "read");
+	CHECK(check("Setpoint").value("path") == "device/Setpoint");
 	// One whose input has a struct or an array is added like any other, at
 	// its initial values to be set on the item (BA-4b) - had this device a Batch.
-	const auto input = check("control.Execute");
+	const auto input = check("control/Execute");
 	CHECK(input.value("status") == "unsupported" && input.value("operation") == "command" &&
-	      input.value("path") == "control.Execute");
+	      input.value("path") == "control/Execute");
 	// Input to one that takes none is refused in words; a Field's "= value" still is.
-	const auto none = check("command control.Ping now");
-	CHECK(none.value("status") == "error" && none.value("message") == "control.Ping takes no input; remove \"now\".");
+	const auto none = check("command control/Ping now");
+	CHECK(none.value("status") == "error" && none.value("message") == "control/Ping takes no input; remove \"now\".");
 	// A kind word in the plural chooses as the singular does.
 	CHECK(check("commands Ping").value("operation") == "command" && check("Services ping").value("operation") == "service");
 	CHECK(check("Nope").value("status") == "missing" && check("Nope").value("message") == "Nothing on this device is named Nope.");
-	CHECK(check("device.Nope").value("message") == "device.Nope is not on this device.");
-	CHECK(check("device.Setpoint = 3").value("status") == "error");
+	CHECK(check("device/Nope").value("message") == "device/Nope is not on this device.");
+	CHECK(check("device/Setpoint = 3").value("status") == "error");
 	// Suggestions under the headings Fields, Commands and Services, in that
 	// order, each with its count (BA-4b); no group rows: a group's name lists
 	// its members, word by word.
@@ -945,26 +945,26 @@ void batchPaths()
 	      groups.first().toMap().value("path") == "Fields" && groups.first().toMap().value("completion") == "field dev");
 	for (const auto& candidate : groups)
 		CHECK(!candidate.toMap().value("container").toBool() && candidate.toMap().value("kindCode") != "group");
-	CHECK(picks(groups).first().toMap().value("path").toString().startsWith("device."));
+	CHECK(picks(groups).first().toMap().value("path").toString().startsWith("device/"));
 	QStringList pings;
 	for (const auto& candidate : picks(provider->batchPathCandidates(QStringLiteral("Pi"))))
 		pings << candidate.toMap().value("completion").toString() + QLatin1Char('/') + candidate.toMap().value("section").toString();
-	CHECK(pings.contains("command control.Ping/Commands") && pings.contains("service control.Ping/Services"));
+	CHECK(pings.contains("command control/Ping/Commands") && pings.contains("service control/Ping/Services"));
 	const auto piHeadings = headings(provider->batchPathCandidates(QStringLiteral("Pi")));
 	CHECK(piHeadings.contains("Commands 1") && piHeadings.contains("Services 1") &&
 	      piHeadings.indexOf("Commands 1") < piHeadings.indexOf("Services 1"));
 	// A kind word lists that kind only.
 	CHECK(headings(provider->batchPathCandidates(QStringLiteral("commands Pi"))) == QStringList({"Commands 1"}));
 	CHECK(picks(provider->batchPathCandidates(QStringLiteral("command Pi"))).first().toMap().value("completion") ==
-	      "command control.Ping");
+	      "command control/Ping");
 	const auto words = picks(provider->batchPathCandidates(QStringLiteral("dev set")));
-	CHECK(words.size() == 1 && words.first().toMap().value("path") == "device.Setpoint" &&
+	CHECK(words.size() == 1 && words.first().toMap().value("path") == "device/Setpoint" &&
 	      !words.first().toMap().value("typeText").toString().isEmpty() &&
 	      !words.first().toMap().value("typeText").toString().contains("write-only"));
 	const auto under = provider->batchPathCandidates(QStringLiteral("control."));
 	CHECK(picks(under).size() == 8 && headings(under).size() == 2 && headings(under).first().startsWith("Commands"));
 	for (const auto& candidate : under)
-		if (candidate.toMap().value("path") == "control.Execute")
+		if (candidate.toMap().value("path") == "control/Execute")
 			CHECK(candidate.toMap().value("input").toBool() && candidate.toMap().value("section") == "Commands");
 	// Empty: up to eight of each kind, the heading saying how many there are.
 	const auto empty = provider->batchPathCandidates(QString{});
@@ -975,27 +975,27 @@ void batchPaths()
 			      candidate.toMap().value("shown").toInt() == std::min(8, candidate.toMap().value("count").toInt()));
 	// A half-typed name: Enter takes the first suggestion, said quietly.
 	const auto partial = check("Setp");
-	CHECK(partial.value("status") == "partial" && partial.value("message") == "Enter takes device.Setpoint.");
+	CHECK(partial.value("status") == "partial" && partial.value("message") == "Enter takes device/Setpoint.");
 	// A value inside the Field must be one.
-	CHECK(check("device.Config.Gian").value("status") == "error" &&
-	      check("device.Config.Gian").value("message").toString().contains("Did you mean Gain?"));
+	CHECK(check("device/Config.Gian").value("status") == "error" &&
+	      check("device/Config.Gian").value("message").toString().contains("Did you mean Gain?"));
 	// Every line or none, each refusal in words.
-	const auto added = provider->addBatchPaths({QStringLiteral("device.Setpoint"), QStringLiteral("Nope")});
+	const auto added = provider->addBatchPaths({QStringLiteral("device/Setpoint"), QStringLiteral("Nope")});
 	CHECK(added.value("status") == "refused" && added.value("added").toInt() == 0 &&
 	      added.value("refused").toList().size() == 2 && provider->batchCount() == 0);
 	CHECK(added.value("message") ==
-	      "Nothing added: line 1, device.Setpoint: This device has no Batch. (and one more line)");
-	CHECK(provider->addBatchPaths({QStringLiteral("device.Setpoint")}).value("message") == "This device has no Batch.");
+	      "Nothing added: line 1, device/Setpoint: This device has no Batch. (and one more line)");
+	CHECK(provider->addBatchPaths({QStringLiteral("device/Setpoint")}).value("message") == "This device has no Batch.");
 	// A Field is read whole: a struct, any of its members, or the struct with
 	// all of them is one item; a group is one per Field; a Command one.
 	const auto items = [provider](const QStringList& lines) { return provider->batchItemCount(lines); };
-	CHECK(items({QStringLiteral("device.Config")}) == 1);
-	CHECK(items({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Config.Matrix[1][0]")}) == 1);
-	CHECK(items({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Config"), QStringLiteral("device.Config.Matrix[1][0]")}) == 1);
+	CHECK(items({QStringLiteral("device/Config")}) == 1);
+	CHECK(items({QStringLiteral("device/Config.Gain"), QStringLiteral("device/Config.Matrix[1][0]")}) == 1);
+	CHECK(items({QStringLiteral("device/Config.Gain"), QStringLiteral("device/Config"), QStringLiteral("device/Config.Matrix[1][0]")}) == 1);
 	const auto groupItems = items({QStringLiteral("device")});
-	CHECK(groupItems > 2 && items({QStringLiteral("device"), QStringLiteral("device.Config.Gain")}) == groupItems);
-	CHECK(items({QStringLiteral("device.Setpoint"), QStringLiteral("device.Config.Gain")}) == 2);
-	CHECK(items({QStringLiteral("command control.Ping")}) == 1);
+	CHECK(groupItems > 2 && items({QStringLiteral("device"), QStringLiteral("device/Config.Gain")}) == groupItems);
+	CHECK(items({QStringLiteral("device/Setpoint"), QStringLiteral("device/Config.Gain")}) == 2);
+	CHECK(items({QStringLiteral("command control/Ping")}) == 1);
 	connection.disconnect();
 
 	// A Command that takes input, on the demo whose control.Calibrate takes
@@ -1008,10 +1008,10 @@ void batchPaths()
 	auto* calibrate = secondPresentation.createProvider();
 	connect(second, plain);
 	const auto line = [calibrate](const char* text) { return calibrate->checkBatchPath(QString::fromUtf8(text)); };
-	auto typed = line("control.Calibrate");
+	auto typed = line("control/Calibrate");
 	CHECK(typed.value("status") == "unsupported" && typed.value("operation") == "command" &&
-	      typed.value("path") == "control.Calibrate");
-	for (const auto* text : {"control.Calibrate reference=1.5", "Calibrate reference=0x3fc00000"}) {
+	      typed.value("path") == "control/Calibrate");
+	for (const auto* text : {"control/Calibrate reference=1.5", "Calibrate reference=0x3fc00000"}) {
 		typed = line(text);
 		CHECK(typed.value("status") == "error" && !typed.contains("arguments") &&
 		      typed.value("message") == QStringLiteral("Set values on the item, not here: remove \"%1\".")
@@ -1022,12 +1022,12 @@ void batchPaths()
 	const auto found = calibrate->batchPathCandidates(QStringLiteral("Calib"));
 	bool signature = false;
 	for (const auto& candidate : found)
-		signature = signature || (candidate.toMap().value("path") == "control.Calibrate" &&
+		signature = signature || (candidate.toMap().value("path") == "control/Calibrate" &&
 		                          candidate.toMap().value("typeText") == "(reference: f32)" &&
 		                          candidate.toMap().value("section") == "Commands" &&
 		                          !candidate.toMap().contains("follow") && !candidate.toMap().contains("continues"));
 	CHECK(signature);
-	for (const auto& candidate : calibrate->batchPathCandidates(QStringLiteral("control.Calibrate ")))
+	for (const auto& candidate : calibrate->batchPathCandidates(QStringLiteral("control/Calibrate ")))
 		CHECK(candidate.toMap().value("kindCode") != "argument");
 	second.disconnect();
 }
@@ -1046,8 +1046,8 @@ void watchKeptAcrossReconnect()
 	ux::UndoHistory history;
 	provider->setHistory(&history);
 	connect(connection, peer);
-	const auto added = provider->addWatchPaths({QStringLiteral("device.Config.Gain"), QStringLiteral("device.Nope"),
-	                                            QStringLiteral("device.Config.Counter")});
+	const auto added = provider->addWatchPaths({QStringLiteral("device/Config.Gain"), QStringLiteral("device/Nope"),
+	                                            QStringLiteral("device/Config.Counter")});
 	CHECK(added.value("added").toInt() == 2 && added.value("missing").toList().size() == 1 && provider->watchCount() == 3);
 	auto* list = provider->watchlist();
 	const auto role = [list](int row, int which) { return list->index(row, 0).data(which).toString(); };
@@ -1063,7 +1063,7 @@ void watchKeptAcrossReconnect()
 	// The device goes: the rows stay, with their last values, stale.
 	connection.disconnect();
 	CHECK(await([&] { return !bound(0) && !bound(2); }));
-	CHECK(provider->watchCount() == 3 && role(0, ux::WatchlistModel::NameRole) == "device.Config.Gain");
+	CHECK(provider->watchCount() == 3 && role(0, ux::WatchlistModel::NameRole) == "device/Config.Gain");
 	CHECK(role(0, ux::WatchlistModel::StatusRole) == "Stale" && role(0, ux::WatchlistModel::TextRole) == "1");
 	CHECK(role(2, ux::WatchlistModel::StatusRole) == "Stale" && role(2, ux::WatchlistModel::TextRole) == read);
 	CHECK(!list->index(0, 0).data(ux::WatchlistModel::WritableRole).toBool());
@@ -1081,8 +1081,8 @@ void watchKeptAcrossReconnect()
 	const auto restored = provider->restoreWatchBindings(QVariantList{saved[2], saved[1], saved[0]});
 	CHECK(restored.value("status") == "ok" && restored.value("added").toInt() == 2 &&
 	      restored.value("missing").toList() == QVariantList{1});
-	CHECK(role(0, ux::WatchlistModel::NameRole) == "device.Config.Counter" && role(1, ux::WatchlistModel::NameRole) == "device.Nope" &&
-	      role(2, ux::WatchlistModel::NameRole) == "device.Config.Gain" && history.count() == steps);
+	CHECK(role(0, ux::WatchlistModel::NameRole) == "device/Config.Counter" && role(1, ux::WatchlistModel::NameRole) == "device/Nope" &&
+	      role(2, ux::WatchlistModel::NameRole) == "device/Config.Gain" && history.count() == steps);
 	// A saved path the device has but that names nothing to watch says why.
 	const auto command = provider->restoreWatchBindings({QVariantMap{{"group", "control"}, {"name", "Execute"}}});
 	CHECK(command.value("status") == "ok" && provider->watchCount() == 1 && !provider->watchReadable());
@@ -1117,7 +1117,7 @@ void watchResumesOnSameDevice()
 	provider->setHistory(&history);
 	// Typed with no device: kept as a row by its path, one step, and read on
 	// the device once it is there (WL-8). A path not well formed is refused.
-	const auto gain = QStringLiteral("device.Config.Gain");
+	const auto gain = QStringLiteral("device/Config.Gain");
 	CHECK(provider->checkWatchPath(gain).value("status") == "missing");
 	CHECK(provider->checkWatchPath(QStringLiteral("device")).value("status") == "error");
 	const auto kept = provider->addWatchPaths({gain, QStringLiteral("device")});
@@ -1125,7 +1125,7 @@ void watchResumesOnSameDevice()
 	      kept.value("refused").toList().size() == 1 && kept.value("added").toInt() == 0 && provider->watchCount() == 1);
 	CHECK(provider->checkWatchPath(gain).value("status") == "watched" && provider->checkWatchPath(gain).value("row") == 0);
 	CHECK(provider->addWatchPaths({gain}).value("already").toInt() == 1 && provider->watchCount() == 1);
-	CHECK(history.count() == 1 && history.undoText() == QStringLiteral("Add device.Config.Gain to the Watchlist"));
+	CHECK(history.count() == 1 && history.undoText() == QStringLiteral("Add device/Config.Gain to the Watchlist"));
 	auto* list = provider->watchlist();
 	const auto bound = [list] {
 		return list->rowCount() == 1 &&
@@ -1215,9 +1215,9 @@ void memberRowWrite()
 	CHECK(provider->writeWatch(0, QStringLiteral("2.0")));
 	CHECK(await([&] { return finished.count() == 1; }));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
-	// "Wrote 22:31:05 · device.Config.Gain = 2 · read back 2" (WL-9 C5): the
+	// "Wrote 22:31:05 · device/Config.Gain = 2 · read back 2" (WL-9 C5): the
 	// time, then the values in the row's form.
-	CHECK(QRegularExpression(QStringLiteral("^Wrote \\d\\d:\\d\\d:\\d\\d · device\\.Config\\.Gain = 2 · read back 2$"))
+	CHECK(QRegularExpression(QStringLiteral("^Wrote \\d\\d:\\d\\d:\\d\\d · device/Config\\.Gain = 2 · read back 2$"))
 	          .match(provider->watchWriteOutcome()).hasMatch() &&
 	      provider->watchWriteKind() == QStringLiteral("confirmed") && provider->watchWriteAt() > 0);
 	CHECK(await([&] { return !provider->watchActive() && text(0) == "2"; }));
@@ -1226,7 +1226,7 @@ void memberRowWrite()
 	CHECK(provider->writeWatch(2, QStringLiteral("-7")));
 	CHECK(await([&] { return finished.count() == 2; }));
 	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Wrote ")) &&
-	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device.Config.Matrix[1][0] = -7 · read back -7")));
+	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device/Config.Matrix[1][0] = -7 · read back -7")));
 	CHECK(await([&] { return !provider->watchActive() && text(2) == "-7"; }));
 	CHECK(text(0) == "2" && text(1) == "18446744073709551615");
 	// An invalid text is refused locally and nothing is written.
@@ -1235,7 +1235,7 @@ void memberRowWrite()
 	CHECK(await([&] { return finished.count() == 3; }));
 	// Said in words: what the text is not, for the row's type (WL-3b).
 	CHECK(!finished.last().at(0).toBool() && peer.nativeWrites() == before &&
-	      provider->watchWriteOutcome() == QStringLiteral("device.Config.Gain not written: “gain” is not a number for f32.") &&
+	      provider->watchWriteOutcome() == QStringLiteral("device/Config.Gain not written: “gain” is not a number for f32.") &&
 	      provider->watchWriteKind() == QStringLiteral("refused"));
 	connection.disconnect();
 }
@@ -1702,7 +1702,7 @@ void watchRowWrite()
 	}));
 	CHECK(finished.last().at(0).toBool() && peer.nativeWrites() == writes + 1);
 	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Wrote ")) &&
-	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device.Setpoint = 1234 · read back 1234")));
+	      provider->watchWriteOutcome().endsWith(QStringLiteral(" · device/Setpoint = 1234 · read back 1234")));
 	CHECK(await([&] {
 		return text(0) == QStringLiteral("1234");
 	}));
@@ -1727,7 +1727,7 @@ void watchRowWrite()
 	}));
 	CHECK(!finished.last().at(0).toBool());
 	CHECK(provider->watchWriteOutcome().startsWith(QStringLiteral("Write refused ")) &&
-	      provider->watchWriteOutcome().contains(QStringLiteral(" · device.Setpoint = 200000 · ")) &&
+	      provider->watchWriteOutcome().contains(QStringLiteral(" · device/Setpoint = 200000 · ")) &&
 	      provider->watchWriteKind() == QStringLiteral("refused"));
 	{
 		auto* watched = provider->watchlist();
@@ -1935,7 +1935,7 @@ ApplicationWindow {
 	// revision moves.
 	{
 		const auto gain = rows->data(rows->index(0, 0), ux::WatchlistModel::NameRole).toString();
-		const QVariantMap own{{gain, QStringLiteral("hex")}, {QStringLiteral("device.Gone"), QStringLiteral("dec")}};
+		const QVariantMap own{{gain, QStringLiteral("hex")}, {QStringLiteral("device/Gone"), QStringLiteral("dec")}};
 		CHECK(provider->setWatchRowFormats(own));
 		// The mark's count (WL-3c): watched rows in a format other than the
 		// Watchlist's; a path not watched now is not one of them.
@@ -2013,7 +2013,7 @@ ApplicationWindow {
 		// Past the limit: refused, nothing changed.
 		QVariantMap many;
 		for (int at = 0; at <= ux::WatchlistModel::formatLimit; ++at)
-			many.insert(QStringLiteral("device.X%1").arg(at), QStringLiteral("hex"));
+			many.insert(QStringLiteral("device/X%1").arg(at), QStringLiteral("hex"));
 		CHECK(!provider->setWatchRowFormats(many) && provider->watchRowFormats().isEmpty());
 		CHECK(provider->setWatchRowFormat({0}, QStringLiteral("hex")));
 	}
@@ -2186,7 +2186,7 @@ ApplicationWindow {
 	const auto mode = endpoint(provider->endpoints(), QStringLiteral("Mode"));
 	CHECK(mode.isValid());
 	const auto modePaths = call(tree, "dragPaths", QVariant::fromValue(mode)).toStringList();
-	CHECK(modePaths.size() == 1 && modePaths.first().endsWith(QStringLiteral(".Mode")));
+	CHECK(modePaths.size() == 1 && modePaths.first().endsWith(QStringLiteral("/Mode")));
 	const int before = provider->watchCount();
 	CHECK(call(plot, "dropPaths", QVariantMap{{"from", "device"}, {"paths", modePaths}}).toBool());
 	CHECK(provider->watchCount() == before + 1 && traces->isPlotted(modePaths.first()));
@@ -2222,7 +2222,7 @@ void presentationPanels()
 	second->setHistory(&history);
 	// Before any device the formats wait for the rows, and a reset and its
 	// Undo work on them all the same (WL-3b).
-	CHECK(second->setWatchRowFormats({{QStringLiteral("device.Config.Gain"), QStringLiteral("hex")}}));
+	CHECK(second->setWatchRowFormats({{QStringLiteral("device/Config.Gain"), QStringLiteral("hex")}}));
 	CHECK(second->resetWatchFormats().value("status") == "ok" && second->watchRowFormats().isEmpty());
 	CHECK(history.undo() && second->watchRowFormats().size() == 1);
 	CHECK(second->setWatchRowFormats({}) && history.redo() && second->watchRowFormats().isEmpty());
@@ -2707,8 +2707,8 @@ void watchUndoKinds()
 		provider->clearWatch();
 		provider->setWatchFormat(QStringLiteral("original"));
 		CHECK(provider->setWatchRowFormats({}));
-		CHECK(provider->addWatchPaths({QStringLiteral("scaling.Value_0"), QStringLiteral("device.Config.Gain"),
-		                               QStringLiteral("scaling.Value_1")})
+		CHECK(provider->addWatchPaths({QStringLiteral("scaling/Value_0"), QStringLiteral("device/Config.Gain"),
+		                               QStringLiteral("scaling/Value_1")})
 		          .value("added")
 		          .toInt() == 3);
 		CHECK(provider->setWatchRowFormat({1}, QStringLiteral("hex")));
@@ -2747,7 +2747,7 @@ void watchUndoKinds()
 		          .value("changed").toInt() == 1);
 	}, missing);
 	rowsCase("add paths", [&] {
-		CHECK(provider->addWatchPaths({QStringLiteral("device.Setpoint"), QStringLiteral("device.Nope")}).value("added").toInt() == 1);
+		CHECK(provider->addWatchPaths({QStringLiteral("device/Setpoint"), QStringLiteral("device/Nope")}).value("added").toInt() == 1);
 	}, done);
 	rowsCase("remove rows", [&] { CHECK(provider->removeWatchRows({0, 1}).value("changed").toInt() == 2); }, missing);
 	rowsCase("remove one row", [&] { provider->removeWatch(1); }, missing);
@@ -2769,7 +2769,7 @@ void watchUndoKinds()
 	const auto third = rows();
 	CHECK(provider->setWatchRowFormat({0}, QStringLiteral("dec")));
 	const auto fourth = formats();
-	CHECK(history.count() == 3 && history.undoText() == QStringLiteral("Show device.Config.Gain in decimal"));
+	CHECK(history.count() == 3 && history.undoText() == QStringLiteral("Show device/Config.Gain in decimal"));
 	CHECK(history.undo() && history.undo() && rows() == second && history.undo() && rows() == first);
 	CHECK(!history.canUndo() && history.redo() && history.redo() && rows() == third && history.redo() &&
 	      formats() == fourth && !history.canRedo());
@@ -2814,12 +2814,12 @@ void watchUndoKinds()
 	CHECK(tick("Value_4").value("changed").toInt() == 1);
 	CHECK(provider->restoreWatchBindings({}).value("status") == "ok" && provider->watchCount() == 0);
 	CHECK(history.count() == 1 && history.undo() && history.count() == 0 && !history.canRedo());
-	CHECK(said == QStringLiteral("Skipped: Add scaling.Value_4 to the Watchlist; scaling.Value_4 is no longer in the Watchlist."));
+	CHECK(said == QStringLiteral("Skipped: Add scaling/Value_4 to the Watchlist; scaling/Value_4 is no longer in the Watchlist."));
 	start();
 	CHECK(provider->removeWatchRows({0, 2}).value("changed").toInt() == 2);
 	CHECK(provider->addWatchBindings({QVariantMap{{"group", "scaling"}, {"name", "Value_0"}}}).value("added").toInt() == 1);
 	CHECK(history.undo() && provider->watchCount() == 3 && history.count() == 1);
-	CHECK(said == QStringLiteral("Undone: Remove 2 values from the Watchlist. scaling.Value_0 is already watched."));
+	CHECK(said == QStringLiteral("Undone: Remove 2 values from the Watchlist. scaling/Value_0 is already watched."));
 	// With no history nothing is recorded, and nothing changes for it.
 	provider->setHistory(nullptr);
 	CHECK(provider->removeWatchRows({0}).value("serial").toInt() == 0 && history.count() == 1);

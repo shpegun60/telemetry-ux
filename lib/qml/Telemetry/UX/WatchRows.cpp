@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "WatchRows.hpp"
+#include "PathGrammar.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
@@ -58,9 +59,18 @@ QVector<WatchRows::Step> WatchRows::steps(const QString& path)
 	const int n = static_cast<int>(path.size());
 	int start = 0;
 	int i = 0;
+	bool slashed = false;
 	while (i < n) {
 		const QChar c = path.at(i);
-		if (c == QLatin1Char('.')) {
+		if (c == QLatin1Char('\\')) {
+			i += 2;
+		} else if (c == QLatin1Char('/')) {
+			// A group: the steps before a "/" (the one grammar).
+			if (i > start)
+				out.append({start, i, true});
+			slashed = true;
+			start = ++i;
+		} else if (c == QLatin1Char('.')) {
 			if (i > start)
 				out.append({start, i});
 			start = ++i;
@@ -82,6 +92,10 @@ QVector<WatchRows::Step> WatchRows::steps(const QString& path)
 	}
 	if (start < n)
 		out.append({start, n});
+	// A path with no "/" (dotted, or the Static provider's): its first step
+	// is the group.
+	if (!slashed && out.size() > 1)
+		out.first().group = true;
 	return out;
 }
 
@@ -169,7 +183,7 @@ void WatchRows::dropSource()
 
 QString WatchRows::parentLabel(const Node& node) const
 {
-	if (!tree_ || node.depth < 2 || node.parent <= 0)
+	if (!tree_ || node.group || node.typeLevel < 1 || node.parent <= 0)
 		return {};
 	const auto& parent = shape_.nodes.at(node.parent);
 	// "[2]" alone reads as "2": an element is named with its array's name,
@@ -654,7 +668,14 @@ WatchRows::Shape WatchRows::build() const
 		entries.append(std::move(entry));
 	}
 
-	auto addValue = [&shape](const Entry& entry, int parent, int labelStart) {
+	// How many of a path's steps are its groups.
+	const auto groupsIn = [](const QVector<Step>& at) {
+		int groups = 0;
+		for (const auto& step : at)
+			groups += step.group ? 1 : 0;
+		return groups;
+	};
+	auto addValue = [&shape](const Entry& entry, int parent, int labelStart, int typeLevel) {
 		Node node;
 		node.path = entry.path;
 		node.labelStart = labelStart;
@@ -663,6 +684,7 @@ WatchRows::Shape WatchRows::build() const
 		node.source = entry.row;
 		node.leaves = 1;
 		node.order = entry.order;
+		node.typeLevel = typeLevel;
 		node.identity = valuePrefix + entry.path;
 		const auto at = static_cast<int>(shape.nodes.size());
 		shape.nodes.append(std::move(node));
@@ -676,12 +698,13 @@ WatchRows::Shape WatchRows::build() const
 			                 [](const Entry& a, const Entry& b) { return pathLess(a.path, b.path); });
 		for (const auto& entry : std::as_const(entries)) {
 			const auto at = steps(entry.path);
-			addValue(entry, 0, at.isEmpty() ? 0 : at.last().start);
+			addValue(entry, 0, at.isEmpty() ? 0 : at.last().start, int(at.size()) - 1 - groupsIn(at));
 		}
 	} else {
 		QHash<QString, int> parents;
 		for (const auto& entry : std::as_const(entries)) {
 			const auto at = steps(entry.path);
+			const int groups = groupsIn(at);
 			int parent = 0;
 			for (qsizetype k = 0; k + 1 < at.size(); ++k) {
 				const auto path = entry.path.left(at.at(k).end);
@@ -694,6 +717,8 @@ WatchRows::Shape WatchRows::build() const
 					node.parent = parent;
 					node.depth = shape.nodes.at(parent).depth + 1;
 					node.order = std::numeric_limits<quint64>::max();
+					node.group = at.at(k).group;
+					node.typeLevel = int(k) - groups;
 					node.identity = identity;
 					const auto made = static_cast<int>(shape.nodes.size());
 					shape.nodes.append(std::move(node));
@@ -702,7 +727,7 @@ WatchRows::Shape WatchRows::build() const
 				}
 				parent = found.value();
 			}
-			addValue(entry, parent, at.isEmpty() ? 0 : at.last().start);
+			addValue(entry, parent, at.isEmpty() ? 0 : at.last().start, int(at.size()) - 1 - groups);
 		}
 		// A child is always made after its parent: from the last node back,
 		// each has its whole subtree counted when its parent takes it.
@@ -717,9 +742,40 @@ WatchRows::Shape WatchRows::build() const
 			std::stable_sort(node.children.begin(), node.children.end(), [&shape](int a, int b) {
 				return shape.nodes.at(a).order < shape.nodes.at(b).order;
 			});
+		joinChains(shape);
 	}
 	walk(shape, 0, shape.rows);
 	return shape;
+}
+
+void WatchRows::joinChains(Shape& shape)
+{
+	// Parents come before their children, so a chain is joined from its top.
+	for (qsizetype i = 1; i < shape.nodes.size(); ++i) {
+		auto& top = shape.nodes[i];
+		if (!top.group || top.source >= 0)
+			continue;
+		while (top.children.size() == 1) {
+			const int only = top.children.first();
+			auto& next = shape.nodes[only];
+			if (!next.group || next.source >= 0)
+				break;
+			// The row is the last group's: its path, identity and children;
+			// its label starts where the chain's first step does.
+			top.path = next.path;
+			top.identity = next.identity;
+			top.typeLevel = next.typeLevel;
+			top.children = std::move(next.children);
+			next.children.clear();
+			for (const int child : std::as_const(top.children))
+				shape.nodes[child].parent = static_cast<int>(i);
+		}
+	}
+	// Depths again from the parents, which come first.
+	for (qsizetype i = 1; i < shape.nodes.size(); ++i) {
+		auto& node = shape.nodes[i];
+		node.depth = shape.nodes.at(node.parent).depth + 1;
+	}
 }
 
 void WatchRows::walk(const Shape& shape, int node, QVector<int>& rows) const
@@ -732,11 +788,40 @@ void WatchRows::walk(const Shape& shape, int node, QVector<int>& rows) const
 	}
 }
 
+bool WatchRows::migrateFolds(const Shape& shape)
+{
+	if (folded_.isEmpty())
+		return false;
+	// A node's path as a project saved it before the one grammar: no "/",
+	// the names joined by ".", unescaped ("device/Config" -> "device.Config").
+	QHash<QString, QString> older;
+	for (qsizetype i = 1; i < shape.nodes.size(); ++i) {
+		const auto& path = shape.nodes.at(i).path;
+		if (path_grammar::slashed(path))
+			older.insert(path_grammar::unescaped(QString(path).replace(QLatin1Char('/'), QLatin1Char('.'))), path);
+	}
+	bool changed = false;
+	for (const auto& saved : QStringList(folded_.cbegin(), folded_.cend())) {
+		const auto now = path_grammar::slashed(saved) ? QString{} : older.value(saved);
+		if (now.isEmpty())
+			continue;
+		folded_.remove(saved);
+		folded_.insert(now);
+		changed = true;
+	}
+	return changed;
+}
+
 void WatchRows::reset()
 {
 	const int before = count();
 	beginResetModel();
 	shape_ = build();
+	// A dotted fold of an older project names its node in the "/" form now.
+	if (tree_ && migrateFolds(shape_)) {
+		shape_ = build();
+		foldsMigrated_ = true;
+	}
 	identities_.clear();
 	identities_.reserve(shape_.rows.size());
 	for (const int node : std::as_const(shape_.rows))
@@ -748,6 +833,8 @@ void WatchRows::reset()
 		rowOfNode_[shape_.rows.at(row)] = static_cast<int>(row);
 	setCount(before);
 	pruneSelection();
+	if (std::exchange(foldsMigrated_, false))
+		Q_EMIT foldedChanged();
 }
 
 void WatchRows::refresh()
@@ -759,11 +846,19 @@ void WatchRows::refresh()
 	refreshing_ = true;
 	do {
 		again_ = false;
-		apply(build());
+		auto shape = build();
+		// A dotted fold of an older project names its node in the "/" form now.
+		if (tree_ && migrateFolds(shape)) {
+			shape = build();
+			foldsMigrated_ = true;
+		}
+		apply(std::move(shape));
 	} while (again_);
 	refreshing_ = false;
 	if (std::exchange(selectionMoved_, false))
 		Q_EMIT selectionChanged();
+	if (std::exchange(foldsMigrated_, false))
+		Q_EMIT foldedChanged();
 }
 
 namespace {
@@ -846,10 +941,12 @@ void WatchRows::apply(Shape next)
 	for (qsizetype row = 0; row < shape_.rows.size(); ++row)
 		rowOfNode_[shape_.rows.at(row)] = static_cast<int>(row);
 	// The rows that stayed may have moved in the source, gained or lost rows
-	// under them, or been folded: their own roles, and a node's summary.
+	// under them, or been folded: their own roles, and a node's summary. A
+	// joined chain of groups split again keeps its last group's row, whose
+	// label now starts further on.
 	if (count() > 0)
 		Q_EMIT dataChanged(index(0), index(count() - 1),
-		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole,
+		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole, LeafStartRole,
 		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, ParentLabelRole,
 		                    HeldBelowRole, ChangedBelowRole});
 	setCount(before);
@@ -1042,11 +1139,11 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 		// A folded parent shows its children's values; a node shows the
 		// outcome of its first value. A group shows only its count.
 		const int parent = shape_.nodes.at(node).parent;
-		if (texts && parent > 0 && shape_.nodes.at(parent).depth > 0 &&
+		if (texts && parent > 0 && !shape_.nodes.at(parent).group &&
 		    folded_.contains(shape_.nodes.at(parent).path))
 			dirtyParents_.insert(parent);
 		if (outcome)
-			for (int p = parent; p > 0 && shape_.nodes.at(p).depth > 0 && firstLeaf(shape_.nodes.at(p)) == source;
+			for (int p = parent; p > 0 && !shape_.nodes.at(p).group && firstLeaf(shape_.nodes.at(p)) == source;
 			     p = shape_.nodes.at(p).parent)
 				dirtyParents_.insert(p);
 		// Every node above shows the format its values share, and a folded
@@ -1195,11 +1292,11 @@ QVariant WatchRows::nodeData(const Node& node, Role role) const
 		case LeafStartRole:
 			return node.labelStart;
 		case TextRole:
-			return node.depth > 0 && folded_.contains(node.path) ? summary(node) : QString{};
+			return !node.group && folded_.contains(node.path) ? summary(node) : QString{};
 		case StatusRole: {
 			// A Field's values are read together: one outcome, for the Field
 			// and every node inside it (the panel words it on the Field).
-			if (node.depth < 1)
+			if (node.group)
 				return QString{};
 			const int leaf = firstLeaf(node);
 			return leaf >= 0 ? sourceData(leaf, StatusRole) : QVariant(QString{});
@@ -1207,17 +1304,17 @@ QVariant WatchRows::nodeData(const Node& node, Role role) const
 		case AccessRole: {
 			// Every node of a Field shows the Field's mark (WL-9 A1): the
 			// Field, its struct members and its elements. Groups have none.
-			if (node.depth < 1)
+			if (node.group)
 				return QString{};
 			const int leaf = firstLeaf(node);
 			return leaf >= 0 ? sourceData(leaf, AccessRole) : QVariant{};
 		}
 		case TypeTextRole: {
 			const int leaf = firstLeaf(node);
-			if (node.depth < 1 || leaf < 0 || pathTypesRole_ < 0 || !source_)
+			if (node.group || node.typeLevel < 0 || leaf < 0 || pathTypesRole_ < 0 || !source_)
 				return QString{};
 			const auto types = source_->index(leaf, 0).data(pathTypesRole_).toStringList();
-			return node.depth - 1 < types.size() ? types.at(node.depth - 1) : QString{};
+			return node.typeLevel < types.size() ? types.at(node.typeLevel) : QString{};
 		}
 		case WritableRole:
 		case SampleExactRole:
@@ -1285,7 +1382,7 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 		case NodeRole:
 			if (node.source >= 0)
 				return QStringLiteral("value");
-			if (node.depth == 0)
+			if (node.group)
 				return QStringLiteral("group");
 			if (!node.children.isEmpty() && element(shape_.nodes.at(node.children.first())))
 				return QStringLiteral("array");
@@ -1293,7 +1390,7 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 		case LeavesRole:
 			return node.leaves;
 		case NestedRole:
-			return tree_ && node.depth >= 2;
+			return tree_ && !node.group && node.typeLevel >= 1;
 		case SelectedRole:
 			return selected_.contains(node.identity);
 		case ParentLabelRole:

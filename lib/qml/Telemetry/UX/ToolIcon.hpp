@@ -31,7 +31,8 @@ class ToolIcon : public QQuickPaintedItem {
 	// "fileText", "fileTable", "fileJson", "fileDescriptor", "fileValues",
 	// "fileIdentity", "fileSession" and "fileCapability"; for the Device tree's
 	// kinds "group" (the folder), "struct" (braces), "array" (brackets),
-	// "value" (a ring), "command" (one arrow) and "service" (two, there and back).
+	// "value" (a ring), "command" (one arrow) and "service" (two, there and
+	// back), and its kinds filter, "filter" (a funnel).
 	Q_PROPERTY(QString name READ name WRITE setName NOTIFY changed)
 	Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY changed)
 
