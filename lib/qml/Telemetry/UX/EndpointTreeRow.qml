@@ -1,8 +1,9 @@
 // One row of the Device tree: a watch box where the Watchlist can hold what
-// the row stands for, and the endpoint's or group's name. The row is the
-// type scale's row height; the box is 16 px inside a 24 px slot that every
-// row keeps, so names line up whether a row has a box or not. The current row
-// is framed while the tree has the keyboard. MIT.
+// the row stands for, a glyph for what it is, and the endpoint's or group's
+// name, then its type or its count. The row is the type scale's row height;
+// the box sits in a slot a row high that every row keeps, the glyph in the
+// next, so every glyph and every name of one depth share an x. The current
+// row is framed while the tree has the keyboard. MIT.
 //
 // The Basic style is imported here only, where the row draws its own box;
 // the panel keeps the style the host chose. Colours come from the panel's
@@ -44,19 +45,38 @@ TreeViewDelegate {
     // the vertical scroll bar.
     property real columnGap: Math.round(Type.bodyPixels * 0.9)
     property real rightClearance: 0
-    // A category's or group's count at the row's right edge ("70", "4 Fields").
+    // A category's or group's count at the row's right edge ("72 Fields").
     property string countText: ""
+    // What the row is (KindIcon): "category", "group", "struct", "array",
+    // "value", "command" or "service". Without one the row works it out.
+    property string kind: ""
+    // The row's category, 1 Field, 2 Command, 3 Service: what a row without a
+    // kind is worked out from.
+    property int category: 0
+    // The row's path for its tooltip's first line ("device.Config"), and an
+    // enum's names for its last.
+    property string pathText: ""
+    property string typeNames: ""
+    // A find in progress: what was typed, and whether this row matches it.
+    // The matched run of the name is marked: info, underlined.
+    property string matchText: ""
+    property bool matched: false
+    // The current branch's guide (the tree's): its level and its rows.
+    property int guideLevel: -1
+    property int guideFrom: 0
+    property int guideTo: -1
     // Why the box is off when the Watchlist cannot hold this row (yet).
     property string watchRefusal: ""
     // Measured texts, so the panel can size its columns to them: each label's
-    // own width, reported again when the row is reused or the panel asks.
+    // own width, reported again when the row is reused or the panel asks. A
+    // type counts only on a Field's row: a signature runs over its own row.
     signal measured(real valueWidth, real typeWidth)
     function remeasure() {
         const cells = rowBody.item
         if (!tableMode || !cells)
             return
         const value = cells.valueLabel ? cells.valueLabel.implicitWidth : 0
-        const type = cells.typeLabel ? cells.typeLabel.implicitWidth : 0
+        const type = cells.typeLabel && fieldRow ? cells.typeLabel.implicitWidth : 0
         measured(value, type)
     }
     TableView.onReused: remeasure()
@@ -78,19 +98,41 @@ TreeViewDelegate {
     // The device's index of this row, whatever is current or selected. Asked
     // again whenever the row may show another node: opening or closing a
     // branch moves nodes to other rows while a row keeps its number, and a
-    // reused row takes another node's roles.
+    // reused row takes another node's roles. A tree over a filter maps it to
+    // the device's model.
     readonly property var sourceIndex: {
         void treeView.rows
         void treeRow.name
         void treeRow.depth
         void treeRow.detail
-        return treeView.modelIndex(Qt.point(0, treeRow.row))
+        const shown = treeView.modelIndex(Qt.point(0, treeRow.row))
+        const model = treeView.model
+        return model && typeof model.mapToSource === "function" ? model.mapToSource(shown) : shown
     }
+    // The kind the row shows: its model's, or worked out for a model without
+    // one (the designer's rule for third-party trees).
+    readonly property string shownKind: kind.length > 0 ? kind
+        : depth === 0 && !isEndpoint ? "category"
+        : !isEndpoint && !previewChild ? "group"
+        : category === 2 ? "command"
+        : category === 3 ? "service"
+        : typeText.endsWith("]") ? "array"
+        : typeText.startsWith("struct") ? "struct" : "value"
+    // Selected while the tree has the keyboard, or under a host's own
+    // highlight: the palette's highlight. Selected without the keyboard: the
+    // quieter fill, and the row's text as at rest (family A9).
+    readonly property bool selectedActive: highlighted && (treeView.activeFocus
+        || !Qt.colorEqual(palette.highlight, Theme.stateSelected))
     // Palette roles, the Theme's by default: a host's palette restyles the rows.
-    readonly property color textColor: highlighted ? palette.highlightedText : palette.buttonText
+    readonly property color textColor: selectedActive ? palette.highlightedText : palette.buttonText
     readonly property color selectedText: palette.highlightedText
+    // The glyph, the type and the access marks.
+    readonly property color markColor: selectedActive ? palette.highlightedText : Theme.textSecondary
     // A category or a group: DemiBold, its count at the right.
-    readonly property bool container: !isEndpoint && !previewChild && hasChildren
+    readonly property bool container: shownKind === "category" || shownKind === "group"
+    // A Field's own row (not a value inside one, not a Command or a Service):
+    // the rows the Type column is measured from.
+    readonly property bool fieldRow: isEndpoint && !previewChild && shownKind !== "command" && shownKind !== "service"
     // The slot the box sits in, kept on every row.
     readonly property int boxSlot: reserveWatchSpace ? Type.rowHeight : 0
     readonly property bool hasMetadata: typeText.length > 0 || accessText.length > 0
@@ -130,8 +172,37 @@ TreeViewDelegate {
     readonly property string secondaryText: [metadataText, stateText].filter(function(part) { return part.length > 0 }).join(" · ")
     readonly property string fullDescription: [hint, metadataText, shownValue, stateText, previewReason]
         .filter(function(part) { return part.length > 0 }).join("\n")
+    // The name's tooltip (family A10): the path, then the row in words, an
+    // enum's names, and what its value says.
+    readonly property string toolTipText: [pathText.length > 0 ? pathText : name, hint, typeNames, shownValue, stateText, previewReason]
+        .filter(function(part) { return part.length > 0 }).join("\n")
     readonly property color secondaryColor: highlighted ? palette.highlightedText
         : failed ? Theme.warning : Theme.textSecondary
+
+    // The row in words, for a screen reader (family A10): "Config, Field,
+    // struct with 3 members, read and write"; "measure, group, 5 Fields".
+    readonly property string kindWords: shownKind === "category" ? qsTr("category")
+        : shownKind === "group" ? qsTr("group")
+        : shownKind === "command" ? qsTr("Command")
+        : shownKind === "service" ? qsTr("Service")
+        : previewChild ? (name.startsWith("[") ? qsTr("element") : qsTr("member"))
+        : qsTr("Field")
+    readonly property string typeWords: {
+        let found = /^struct \((\d+)\)$/.exec(typeText)
+        if (found)
+            return Number(found[1]) === 1 ? qsTr("struct with 1 member") : qsTr("struct with %L1 members").arg(Number(found[1]))
+        found = /^enum \((\d+)\)$/.exec(typeText)
+        if (found)
+            return Number(found[1]) === 1 ? qsTr("enum with 1 value") : qsTr("enum with %L1 values").arg(Number(found[1]))
+        found = /^(.+)\[(\d+)\]$/.exec(typeText)
+        if (found)
+            return qsTr("array of %L1 %2").arg(Number(found[2])).arg(found[1])
+        return typeText
+    }
+    readonly property string accessWords: accessMark === "rw" ? qsTr("read and write")
+        : accessMark === "r-" ? qsTr("read only")
+        : accessMark === "-w" ? qsTr("write only")
+        : accessMark === "--" ? qsTr("no access") : ""
 
     // The box's reason while it is off: the row's own first, then polling.
     readonly property string boxReason: watchRefusal.length > 0 ? watchRefusal : watchOffReason
@@ -146,26 +217,58 @@ TreeViewDelegate {
 
     background: Rectangle {
         // The selection quieter while the tree has no keyboard, unless a host
-        // chose its own highlight; hover a tint of the text over any base.
-        color: treeRow.highlighted
-               ? (treeRow.treeView.activeFocus || !Qt.colorEqual(treeRow.palette.highlight, Theme.stateSelected)
-                  ? treeRow.palette.highlight : Theme.stateSelectedInactive)
-             : treeRow.hovered ? Qt.rgba(treeRow.palette.text.r, treeRow.palette.text.g, treeRow.palette.text.b, 0.07)
+        // chose its own highlight; hover the Theme's hover fill.
+        color: treeRow.selectedActive ? treeRow.palette.highlight
+             : treeRow.highlighted ? Theme.stateSelectedInactive
+             : treeRow.hovered ? Theme.stateHover
              : treeRow.tableMode && treeRow.row % 2 === 1 ? treeRow.palette.alternateBase : "transparent"
+        // Indent guides (as Details'): one 1 px line under each ancestor's
+        // chevron; the current branch's brighter, the one thing the cursor moves.
+        Repeater {
+            model: treeRow.tableMode ? treeRow.depth : 0
+            Rectangle {
+                required property int index
+                objectName: "indentGuide"
+                x: Math.round(treeRow.leftMargin + index * treeRow.indentation + Type.indent / 2)
+                width: 1
+                height: treeRow.height
+                readonly property bool active: index === treeRow.guideLevel
+                    && treeRow.row >= treeRow.guideFrom && treeRow.row <= treeRow.guideTo
+                color: active ? Theme.outline : Theme.outlineVariant
+                Accessible.ignored: true
+            }
+        }
+        // A category after the first reads as a section: a rule on its top
+        // edge, not a row of its own.
+        Rectangle {
+            objectName: "categoryRule"
+            visible: treeRow.tableMode && treeRow.depth === 0 && treeRow.row > 0
+            width: parent.width
+            height: 1
+            color: Theme.outlineVariant
+            Accessible.ignored: true
+        }
     }
     implicitWidth: treeView.width
     implicitHeight: twoLines ? Math.max(Type.rowHeight, nameMetrics.height + metadataMetrics.height + Type.tight * 2) : Type.rowHeight
     rightPadding: tableMode ? 0 : Type.padding
-    readonly property real indentRoom: Math.max(0, nameColumnWidth - boxSlot - Type.tight - Type.padding
-        - Type.bodyPixels * 4 - Type.indent - spacing)
-    indentation: tableMode && depth > 0 ? Math.min(Type.indent, indentRoom / depth) : Type.indent
-    // The panel's padding is the margin; Device files' rows line up with these.
+    // No gap after the chevron: the box slot follows it at once, as the
+    // designer's anatomy has it (6 | depth × 16 | 16 | box 22 | glyph 16 | 4 |
+    // name), the panel's padding the 6 on either side, as Device files' rows.
+    spacing: tableMode ? 0 : 4
     leftMargin: 0
+    // A deep row in a narrow tree indents less before its name gives way.
+    readonly property real indentRoom: Math.max(0, nameColumnWidth - Type.indent - boxSlot
+        - Type.iconSize - Type.spacing - Type.nameFloor)
+    indentation: tableMode && depth > 0 ? Math.min(Type.indent, indentRoom / depth) : Type.indent
     indicator: TreeChevron { row: treeRow }
     text: name
     Accessible.role: Accessible.TreeItem
-    Accessible.name: name
+    Accessible.name: tableMode ? [name, kindWords, container ? countText : typeWords, accessWords]
+        .filter(function(part) { return part.length > 0 }).join(", ") : name
     Accessible.description: [boxWords, fullDescription].filter(function(part) { return part.length > 0 }).join("\n")
+    Accessible.expandable: hasChildren
+    Accessible.expanded: expanded
     FontMetrics { id: nameMetrics; font: treeRow.font }
     FontMetrics { id: metadataMetrics; font.family: treeRow.font.family; font.pointSize: Type.caption }
 
@@ -214,30 +317,79 @@ TreeViewDelegate {
                 readonly property Item typeLabel: tableType
                 // In the content item's coordinates: its right edge, then each
                 // column's left edge, right to left.
-                readonly property real rightEdge: treeRow.width - treeRow.leftPadding - Type.padding - treeRow.rightClearance
+                readonly property real rightEdge: treeRow.width - treeRow.leftPadding - treeRow.rightClearance
                 readonly property real accessX: rightEdge - treeRow.accessColumnWidth
                 readonly property real typeX: accessX - (treeRow.accessColumnWidth > 0 ? treeRow.columnGap : 0)
                                               - treeRow.typeColumnWidth
                 readonly property real valueX: typeX - (treeRow.typeColumnWidth > 0 ? treeRow.columnGap : 0)
                                                - treeRow.valueColumnWidth
+                // The glyph after the box slot, the name after the glyph.
+                readonly property real nameX: treeRow.boxSlot + Type.iconSize + Type.spacing
+                // A value this row shows: the type never crosses it.
+                readonly property bool valueTaken: treeRow.valueColumnWidth > 0 && treeRow.valueShown && !treeRow.container
+                // The type runs on over a blank access cell (design D2), and
+                // moves its start left only as far as its own name allows:
+                // first the name down to its floor, only then the type elides.
+                readonly property real typeRight: treeRow.accessColumnWidth > 0 && treeRow.accessMark !== ""
+                    ? typeX + treeRow.typeColumnWidth : rightEdge
+                readonly property real leftLimit: valueTaken ? valueX + treeRow.valueColumnWidth + treeRow.columnGap
+                    : nameX + Math.min(tableName.implicitWidth, Type.nameFloor) + treeRow.columnGap
+                readonly property real typeLeft: Math.max(leftLimit, Math.min(typeX, typeRight - tableType.implicitWidth))
                 readonly property real nameRight: treeRow.container
                     ? rightEdge - (tableCount.visible ? tableCount.implicitWidth + treeRow.columnGap : 0)
-                    : valueX - (treeRow.valueColumnWidth > 0 ? treeRow.columnGap : 0)
+                    : (valueTaken ? valueX : typeLeft) - treeRow.columnGap
+                KindIcon {
+                    id: kindIcon
+                    x: treeRow.boxSlot
+                    anchors.verticalCenter: parent.verticalCenter
+                    kind: treeRow.shownKind
+                    color: treeRow.markColor
+                }
                 Label {
                     id: tableName
                     objectName: "endpointRowName"
-                    x: treeRow.boxSlot + Type.tight
+                    x: cells.nameX
                     width: Math.max(0, cells.nameRight - x)
                     anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
+                    // The matched run marked while a find is on; the name
+                    // escaped, so a name never reads as markup.
+                    readonly property string marked: treeRow.matched ? panelMark(treeRow.name, treeRow.matchText) : ""
+                    function escaped(text) {
+                        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                    }
+                    function panelMark(text, needle) {
+                        if (needle.length === 0)
+                            return ""
+                        const lower = text.toLocaleLowerCase()
+                        let run = needle.toLocaleLowerCase()
+                        let at = lower.indexOf(run)
+                        // Found by its path ("measure.volt"): the part after the last dot.
+                        if (at < 0 && run.indexOf(".") >= 0) {
+                            run = run.substring(run.lastIndexOf(".") + 1)
+                            at = run.length > 0 ? lower.indexOf(run) : -1
+                        }
+                        if (at < 0)
+                            return ""
+                        const tint = treeRow.selectedActive ? treeRow.palette.highlightedText : Theme.info
+                        return escaped(text.substring(0, at)) + "<u><font color=\"" + tint + "\">"
+                            + escaped(text.substring(at, at + run.length)) + "</font></u>"
+                            + escaped(text.substring(at + run.length))
+                    }
+                    textFormat: marked.length > 0 ? Text.StyledText : Text.PlainText
                     elide: Text.ElideMiddle
-                    text: treeRow.name
+                    text: marked.length > 0 ? marked : treeRow.name
                     color: treeRow.textColor
-                    font.weight: treeRow.container ? Type.headingWeight : Font.Normal
+                    font.weight: treeRow.container ? Type.headingWeight : Type.bodyWeight
                     HoverHandler { id: tableNameHover }
-                    PlainToolTip { visible: tableNameHover.hovered; text: treeRow.fullDescription; delay: 700 }
+                    PlainToolTip {
+                        objectName: "endpointNameToolTip"
+                        visible: tableNameHover.hovered
+                        text: tableNameHover.hovered ? treeRow.toolTipText : ""
+                        delay: 700
+                    }
                 }
-                // A category's bare number, a group's Fields: at the right edge.
+                // Every count in words at the right edge, where the access
+                // marks end: "72 Fields", "5 Fields", "2 Commands".
                 Label {
                     id: tableCount
                     objectName: "endpointRowCount"
@@ -248,7 +400,8 @@ TreeViewDelegate {
                     textFormat: Text.PlainText
                     font.pointSize: Type.caption
                     text: treeRow.countText
-                    color: treeRow.highlighted ? treeRow.selectedText : Theme.textMuted
+                    color: treeRow.selectedActive ? treeRow.selectedText
+                        : treeRow.highlighted ? Theme.textSecondary : Theme.textMuted
                 }
                 Label {
                     id: tableValue
@@ -264,7 +417,7 @@ TreeViewDelegate {
                     font.family: Type.fixedFamily
                     font.italic: treeRow.stale || treeRow.failed
                     text: treeRow.shownValue
-                    color: treeRow.highlighted ? treeRow.selectedText
+                    color: treeRow.selectedActive ? treeRow.selectedText
                         : treeRow.stale || treeRow.failed || treeRow.previewValue.length === 0 ? Theme.textMuted
                         : treeRow.textColor
                     onImplicitWidthChanged: treeRow.remeasure()
@@ -272,19 +425,21 @@ TreeViewDelegate {
                     Accessible.description: treeRow.fullDescription
                     PlainToolTip { visible: tableValueHover.hovered; text: treeRow.fullDescription; delay: 700 }
                 }
+                // Left at the column's x in the fixed face; never hidden: a
+                // long one moves left into its own row's room, then elides.
                 Label {
                     id: tableType
                     objectName: "endpointRowType"
                     visible: treeRow.typeColumnWidth > 0 && !treeRow.container
-                    x: cells.typeX
-                    width: treeRow.typeColumnWidth
+                    x: cells.typeLeft
+                    width: Math.max(0, cells.typeRight - cells.typeLeft)
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     font.family: Type.fixedFamily
                     font.pointSize: Type.caption
                     text: treeRow.typeText
-                    color: treeRow.highlighted ? treeRow.selectedText : Theme.textSecondary
+                    color: treeRow.markColor
                     Component.onCompleted: treeRow.remeasure()
                     onImplicitWidthChanged: treeRow.remeasure()
                     HoverHandler { id: tableTypeHover }
@@ -311,7 +466,8 @@ TreeViewDelegate {
                                 text: treeRow.accessMark.charAt(index)
                                 font.family: Type.fixedFamily
                                 font.pointSize: Type.caption
-                                color: treeRow.highlighted ? treeRow.selectedText
+                                color: treeRow.selectedActive ? treeRow.selectedText
+                                    : treeRow.highlighted ? Theme.textSecondary
                                     : text === "-" ? Theme.textDisabled : Theme.textSecondary
                                 Accessible.ignored: true
                             }

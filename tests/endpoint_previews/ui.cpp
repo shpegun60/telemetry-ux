@@ -450,15 +450,19 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	CHECK(peer.fieldReads() == hiddenReads); // hidden panes have no lease, including TTL expiry.
 	ui.page("tree", 480, 820);
 	CHECK(await([&] { return peer.fieldReads() > hiddenReads && !session.busy(); }));
+	// Find filters the tree in place: the matches stay in view, so their
+	// values keep being read; cleared, the whole tree's rows in view are.
 	auto* search = control(ui.treePanel, "endpointSearch");
 	type(*ui.window, search, QStringLiteral("Config"));
-	CHECK(await([&] { return !ui.treePanel->property("searchRunning").toBool() && !session.busy(); }));
-	const auto searchedReads = peer.fieldReads(); settle(5600);
-	CHECK(peer.fieldReads() == searchedReads); // metadata search has cleared visible preview demand.
+	CHECK(await([&] { return ui.treePanel->property("findText").toString() == QStringLiteral("Config") && !session.busy(); }));
+	const auto searchedReads = peer.fieldReads();
+	CHECK(await([&] { return peer.fieldReads() > searchedReads && !session.busy(); }));
+	const auto foundReads = peer.fieldReads();
 	click(*ui.window, search);
 	QTest::keyClick(ui.window, Qt::Key_A, Qt::ControlModifier);
 	QTest::keyClick(ui.window, Qt::Key_Backspace);
-	CHECK(await([&] { return peer.fieldReads() > searchedReads && !session.busy(); }));
+	CHECK(await([&] { return ui.treePanel->property("findText").toString().isEmpty(); }));
+	CHECK(await([&] { return peer.fieldReads() > foundReads && !session.busy(); }));
 	CHECK(ui.treePanel->setProperty("previewValues", false));
 	ui.page("details", 880, 820);
 }

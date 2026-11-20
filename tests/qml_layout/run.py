@@ -139,7 +139,10 @@ def main():
                 ('undo-keys', 'telemetry_qml_undo_keys', r'Undo keys checks=(\d+) warnings=0', 60),
                 # The Details layout spec's checks 1-16 and the action feedback's
                 # (Details and the Batch at the default body and at 125 %).
-                ('details-layout', 'telemetry_qml_details_layout', r'Details layout checks=(\d+) warnings=0', 1300)):
+                ('details-layout', 'telemetry_qml_details_layout', r'Details layout checks=(\d+) warnings=0', 1300),
+                # The Device tree design's checks 1-14: kinds, types, guides,
+                # keys, find in place and what survives a reconnect.
+                ('device-tree-kinds', 'telemetry_qml_device_tree_kinds', r'Device tree kinds checks=(\d+) warnings=0', 900)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))
             if not found or int(found[1]) < least:

@@ -54,6 +54,28 @@ static QQuickItem* named(QQuickItem* root, const char* name, int row = -1) {
     return nullptr;
 }
 static void settle() { QCoreApplication::processEvents(); QTest::qWait(100); }
+// Whether a row delegate is the one its view shows at its row, not one the
+// view keeps in its pool for reuse (pooled delegates stay visible, culled).
+static bool live(QQuickItem* row) {
+    auto* view = row->parentItem() ? row->parentItem()->parentItem() : nullptr;
+    QQuickItem* shown = nullptr;
+    return view && QMetaObject::invokeMethod(view, "itemAtCell", Q_RETURN_ARG(QQuickItem*, shown),
+                                             Q_ARG(QPoint, QPoint(0, row->property("row").toInt()))) && shown == row;
+}
+// The visible tree row of that name.
+static QQuickItem* rowNamed(QQuickItem* root, const QString& name) {
+    if (!root->isVisible()) return nullptr;
+    if (root->objectName() == QLatin1String("endpointRow") && root->property("name").toString() == name && live(root)) return root;
+    for (auto* child : root->childItems()) if (auto* found = rowNamed(child, name)) return found;
+    return nullptr;
+}
+// The tree shows the model through its find filter: the tree's index of a row.
+static QModelIndex shown(QObject* panel, const QModelIndex& source) {
+    QVariant result;
+    if (!QMetaObject::invokeMethod(panel, "shownOf", Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, QVariant::fromValue(source))))
+        throw std::runtime_error("shownOf");
+    return result.value<QModelIndex>();
+}
 static void click(QQuickWindow* window, QQuickItem* target) {
     CHECK(target && target->isVisible());
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
@@ -206,30 +228,35 @@ int main(int argc, char** argv) {
         window->setWidth(600); settle();
         CHECK(provider->property("selections").toInt() == 0 && provider->property("submissions").toInt() == 0);
         CHECK(provider->property("draft").toString() == QStringLiteral("untouched"));
-        // The same source index has one mark across tree and filtered search.
+        // The same source index has one mark in the tree and in the tree
+        // filtered by a find.
         auto* query = named(panel, "endpointSearch");
         CHECK(query && query->setProperty("text", QStringLiteral("Field 0")));
         QTest::qWait(250);
-        auto* searchCheck = named(panel, "endpointSearchWatchCheck");
+        CHECK(tree->property("rows").toInt() == 1);
+        auto* searchRow = rowNamed(panel, QStringLiteral("Field 0"));
+        auto* searchCheck = searchRow ? named(searchRow, "endpointWatchCheck") : nullptr;
         CHECK(searchCheck && searchCheck->property("checked").toBool());
         click(window, searchCheck);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 0);
         click(window, searchCheck);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
         CHECK(provider->property("selections").toInt() == 0 && provider->property("submissions").toInt() == 0);
-        auto* searchRow = named(panel, "endpointSearchResult");
-        CHECK(searchRow);
-        searchRow->forceActiveFocus(); settle();
+        // Down enters the tree at the match; Space marks it there, as its box.
+        query->forceActiveFocus(); settle();
+        QTest::keyClick(window, Qt::Key_Down); settle();
+        CHECK(tree->hasActiveFocus());
         QTest::keyClick(window, Qt::Key_Space); settle();
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 0);
         QTest::keyClick(window, Qt::Key_Space); settle();
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
         CHECK(provider->property("selections").toInt() == 0);
         CHECK(query->setProperty("text", QString()));
+        QTest::qWait(250);
         settle();
         auto* selection = qobject_cast<QItemSelectionModel*>(tree->property("selectionModel").value<QObject*>());
         CHECK(selection);
-        selection->setCurrentIndex(model.index(1, 0), QItemSelectionModel::NoUpdate);
+        selection->setCurrentIndex(shown(panel, model.index(1, 0)), QItemSelectionModel::NoUpdate);
         tree->forceActiveFocus(); settle();
         QTest::keyClick(window, Qt::Key_Space); settle();
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 2);
@@ -237,7 +264,7 @@ int main(int argc, char** argv) {
         CHECK(provider->property("selections").toInt() == 1);
         CHECK(provider->property("selectedEndpointIndex").value<QModelIndex>() == model.index(1, 0));
         // A Command cannot be marked, even with the keyboard.
-        selection->setCurrentIndex(model.index(40, 0), QItemSelectionModel::NoUpdate);
+        selection->setCurrentIndex(shown(panel, model.index(40, 0)), QItemSelectionModel::NoUpdate);
         QTest::keyClick(window, Qt::Key_Space); settle();
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 2);
         CHECK(provider->setProperty("refuse", true));
@@ -262,10 +289,11 @@ int main(int argc, char** argv) {
         click(window, add);
         CHECK(provider->property("submitted").toList().size() == 40);
         CHECK(provider->property("selections").toInt() == 1);
-        // Search result and model removal: no stale index may survive.
+        // A found row's mark and model removal: no stale index may survive.
         CHECK(query && query->setProperty("text", QStringLiteral("Field 3")));
         QTest::qWait(250);
-        searchCheck = named(panel, "endpointSearchWatchCheck");
+        searchRow = rowNamed(panel, QStringLiteral("Field 3"));
+        searchCheck = searchRow ? named(searchRow, "endpointWatchCheck") : nullptr;
         click(window, searchCheck);
         CHECK(evaluate(panel, "watchMarks.length").toInt() == 1);
         model.removeRow(3);

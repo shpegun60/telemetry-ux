@@ -129,20 +129,29 @@ QString typeText(const rt::RuntimeSchema& schema, TypeId id)
 			return QStringLiteral("()");
 		case TypeKind::Scalar:
 			return scalarName(type->scalarCode);
-		case TypeKind::Enum: {
-			QStringList names;
-			const auto entries = schema.enumEntries(id);
-			for (const auto& entry : entries.first(std::min<std::size_t>(entries.size(), 4)))
-				names << text(entry.name);
-			const auto shown = names.join(QStringLiteral(", "));
-			return entries.size() > 4 ? tr("enum %1, …").arg(shown) : tr("enum %1").arg(shown);
-		}
+		case TypeKind::Enum:
+			// Counted, as a struct is: the names are enumNames' (family A7).
+			return QStringLiteral("enum (%1)").arg(schema.enumEntries(id).size());
 		case TypeKind::Struct:
 			return QStringLiteral("struct (%1)").arg(type->memberCount);
 		case TypeKind::Array:
 			return QStringLiteral("%1[%2]").arg(typeText(schema, type->relatedTypeId)).arg(type->elementCount);
 	}
 	return QStringLiteral("?");
+}
+
+QString enumNames(const rt::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	if (!type || type->kind != TypeKind::Enum)
+		return {};
+	QStringList names;
+	const auto entries = schema.enumEntries(id);
+	for (const auto& entry : entries.first(std::min<std::size_t>(entries.size(), 16)))
+		names << text(entry.name);
+	if (entries.size() > 16)
+		names << QStringLiteral("…");
+	return names.join(QStringLiteral(", "));
 }
 
 namespace {

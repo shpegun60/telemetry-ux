@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  *
  * Shared by the Descriptor and Values views and the Device tree so a type
- * reads the same in each ("f32[3]", "enum Idle, Run", "struct (4)") and a value is
+ * reads the same in each ("f32[3]", "enum (2)", "struct (4)") and a value is
  * written one way everywhere: integers in decimal, floats as the shortest
  * text that reads back to the same number, enums by name. Internal to the
  * module; not installed.
@@ -23,8 +23,11 @@
 namespace telemetry::ux::schema_text {
 QString text(std::string_view view);
 // The type in words, short enough for one column: "f32", "struct (3)",
-// "u8[16]", "enum Idle, Run".
+// "u8[16]", "enum (2)".
 QString typeText(const runtime::RuntimeSchema& schema, TypeId id);
+// An enum's names, for a tooltip: "Idle, Run"; the first 16, then "…".
+// Empty for any other type.
+QString enumNames(const runtime::RuntimeSchema& schema, TypeId id);
 // A Command's arguments as a signature: "()", "(bool)", "(f32, f32)".
 QString argumentsText(const runtime::RuntimeSchema& schema, TypeId id);
 // A Command's (returns false) or a Service's whole signature:

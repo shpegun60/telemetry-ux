@@ -11,7 +11,9 @@
 		{
 			auto root = rig.row(0);
 			CHECK(str(root, "name") == QStringLiteral("Config") && str(root, "type") == QStringLiteral("struct (4)"));
-			CHECK(root.value("heading").toBool());
+			// Regular as every row (the Device tree design, 18 November 2026,
+			// check 10): the glyph and the root's place say what it is.
+			CHECK(!root.value("heading").toBool() && root.value("weight").toInt() == QFont::Normal);
 			CHECK(str(root, "valueText").isEmpty() && str(root, "summary").isEmpty());
 			CHECK(root.value("expanded").toBool());
 			auto calibRow = rig.row(rig.rowOf(QStringLiteral("Calib")));

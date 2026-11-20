@@ -1759,3 +1759,108 @@ a Service's response before a call, busy words, the flashes),
 `tests/dynamic_batch` (the status, outcomes, response structure and the
 tables kept while a run is in flight), `tests/endpoint_previews/ui.cpp` (a
 slow device's busy words over TCP, "took N ms" after).
+
+## The Device tree: each kind told apart, types always shown, find in place (November 2026)
+
+The Device tree design (18 November 2026, with the owner's decisions of that
+day and of 20 November): a glyph and a weight for what each row is, the Type
+column in the fixed face at one x and never hidden, counts in words,
+indent guides with the current branch brighter, a rule above Commands and
+Services, and a find that filters the tree in place.
+
+QML, `EndpointTreePanel` and `EndpointTreeRow`:
+- A host that shows the Device tree (alone or in `Configurator`) over its own
+  model calls `telemetry::ux::registerQmlTypes()` before loading QML: the
+  tree now uses two of the module's C++ types, `TreeFilter` and `ToolIcon`
+  (through the new `KindIcon`). A host whose provider holds an
+  `EndpointModel` (the Dynamic provider, `QtConnectionBinding`) has them
+  registered by the model.
+- Every row has a kind glyph (`kindIcon`, a `KindIcon`) in a 16 px slot after
+  the box slot: a folder for a category or a group, `{}` a struct, `[]` an
+  array, a ring a scalar or an enum, an arrow a Command, two a Service.
+  Categories and groups DemiBold, everything else Regular. The row takes
+  `kind` (the model's `kind` role; without one it is worked out from the
+  depth, `isEndpoint`, `previewChild`, `category` and the type), `category`,
+  `pathText`, `typeNames`, `matchText`, `matched`, `guideLevel`, `guideFrom`
+  and `guideTo`, and says `shownKind`.
+- The row's geometry: no gap after the chevron (`spacing` 0 in table mode),
+  the name at the box slot + `Type.iconSize` + `Type.spacing`
+  (`64 + 16 × depth` from a dock's edge); the right edge is the scroll bar's,
+  the panel's padding the margin on both sides. `nameStart` is
+  `Type.padding + Type.indent * 3 + Type.rowHeight + Type.iconSize +
+  Type.spacing`.
+- Type column: as wide as `EndpointModel.widestFieldType` (a model without
+  it: the widest type a Field's row has shown), 2 to 9.6 body heights, and
+  never hidden. rw gives way first (the name keeps 7.2 body heights), then
+  Value narrows to its least, then names elide in the middle down to
+  `Type.nameFloor` (new, 4 body heights), only then a type elides right, row
+  by row, with its tooltip. A type runs on over a blank rw cell and moves
+  left into its own row's room. Previews off, the column is always W.
+- Counts in words on categories too: "72 Fields", "3 Commands", "1 Service"
+  (`countText(count, category)`; the depth argument is gone).
+- Indent guides (`indentGuide`, outlineVariant; the current branch's
+  outline) and a 1 px `categoryRule` on the top edge of every category after
+  the first. Hover `Theme.stateHover`; a selection without the keyboard
+  `stateSelectedInactive` with the row's text as at rest.
+- rw on every row of a Field, its values included (the owner, 20 November):
+  `EndpointModel` gives a value inside a Field its Field's `readable` and
+  `writable`.
+- Accessible name in words: "Config, Field, struct with 3 members, read and
+  write", "measure, group, 5 Fields". The name's tooltip: the path, then the
+  row in words, then an enum's names.
+- Find filters the tree in place: the tree's model is a `TreeFilter` over the
+  provider's `endpoints` (`endpointTreeFilter`); `sourceOf(index)` and
+  `shownOf(index)` map between the tree's rows and the provider's. The
+  provider still gets and gives its own indexes; a host that sets the tree's
+  `selectionModel` current index maps it with `shownOf`. Groups, Fields,
+  Commands and Services are found by name or path ("/" reads as "."); the
+  values inside a Field and the categories are not. The matches' parents
+  open, the matches stay folded, the matched run is marked (info, underlined).
+  `endpointSearchStatus` says "4 matches", "2 of 4 matches", "Nothing matches
+  “volt”." with `endpointSearchClearLink`. Enter in the field makes the next
+  match current and selected (Shift+Enter the previous, wrapping; F3 and
+  Shift+F3 from the tree) - it no longer watches the first; Down enters the
+  tree at the match; Esc clears it and restores what was open before, the
+  current row kept and in view. Removed: `endpointSearchResults`,
+  `endpointSearchResult`, `endpointSearchWatchCheck`, `searchResults`,
+  `searchRunning`, `searchLimited`, `searchGeneration`, `searchLimit`,
+  `enterPending`, `activateFirstResult`, `searchEnter`, `enterHint`,
+  `scheduleSearch`, `scanSearch`, `cancelSearch`. New: `findText`, `finding`,
+  `findCount`, `findStep`, `findStatus`, `applyFind()`, `stepFind(delta)`.
+  The header stays during a find, and previews go on for the rows in view.
+- Keys: Right opens a folded branch and on an open one steps to its first
+  child; Left closes an open branch, else steps to the parent; `*` opens every
+  container under the row (a struct or array Field all its values); `-`
+  closes everything under it; Home and End; Enter on a category or a group
+  folds it, on a Field, Command or Service opens Details. The row menu adds
+  "Expand all under\t*", "Collapse all under\t-" and "Collapse all"
+  (`treeMenuExpandAll`, `treeMenuCollapseUnder`, `treeMenuCollapseAll`).
+- `reveal(index, current)` brings a row into view, opening only the path to
+  it; a selection made elsewhere (`selectedEndpointIndex`) is revealed and
+  made current. What is open survives a reconnect: the panel keeps the open
+  branches and the current row of every descriptor seen in the session
+  (`foldMemory`), and `openOnLoad` applies only to one never seen.
+
+C++:
+- `EndpointModel`: `KindRole` (`kind`: "category", "group", "struct",
+  "array", "value", "command", "service"), `TypeNamesRole` (`typeNames`, an
+  enum's names), `widestFieldType` (property), `indexOfPath(path)` (names
+  from the root joined by "/": "Fields/device/Config"; fetches a Field's
+  values on the way). A value's detail reads "f32 · 4 bytes", no type id.
+- `TreeFilter`: a QML element (`TreeFilter { sourceModel: ... }`, roles found
+  by name), `count`, `found()`, `nameOf()`, `namePath()`, `sourceAt()`,
+  `value()`; `mapToSource`/`mapFromSource` give none for another model's
+  index instead of a warning. The descriptor view's use is unchanged.
+- `ToolIcon`: "group", "struct", "array", "value", "command", "service".
+- `schema_text::typeText` reads an enum as "enum (3)" (was "enum Off, Low,
+  High"), in the Descriptor and Values views and the Watchlist too;
+  `schema_text::enumNames` gives the names.
+- `Type.nameFloor`. `EndpointPanel`: the Field's root row is Regular.
+
+Checks: `tests/qml_layout/DeviceTreeKinds.cpp` (the design's checks 1-14 over
+a real `EndpointModel` of the demo device, screenshots
+`device-tree-kinds-280.png`, `-420.png`, `-filter.png`), `TreeActions.cpp`
+(Enter, Space, Down and the menu with the find in place; a model without a
+kind role), `main.cpp`, `SearchProviders.cpp` and `Bulk.cpp` (the find in
+place), `DetailsTreeChecks.inc` (the root row Regular), `tests/theme_contrast`
+(info on the row fills, textSecondary on a quiet selection).

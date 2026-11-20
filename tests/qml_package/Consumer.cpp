@@ -2,6 +2,7 @@
  * A user-owned presentation provider, without Telemetry SDK or I/O.
  * Authors: Ruslan Kovtun (shpegun60), codexAi. SPDX-License-Identifier: MIT.
  */
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -298,6 +299,8 @@ bool containsText(QObject& object, const QString& text)
 int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
+	// The Device tree (in Configurator) shows its rows through the module's C++ types.
+	telemetry::ux::registerQmlTypes();
 	if (argc != 2)
 		return 1;
 	OwnerProvider owner;

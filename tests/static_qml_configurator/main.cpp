@@ -1,4 +1,5 @@
 // Real generated API -> one DeviceClient FIFO -> native Model -> shared Qt view. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include "../codegen_qml/configurator/Harness.hpp"
 #include <Telemetry/UX/StaticConfiguratorProvider.hpp>
 #include <QGuiApplication>
@@ -654,6 +655,8 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	QGuiApplication app(argc, argv);
+	// The Device tree (in Configurator) shows its rows through the module's C++ types.
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
 			++warnings;
