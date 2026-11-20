@@ -2085,7 +2085,7 @@ Pane {
                 // what the device holds then, not what the row last showed. One
                 // quiet line under the cell says so, every time a member is
                 // edited; the long explanation is that line's tooltip.
-                function tail(path) { return path.substring(path.lastIndexOf(".") + 1) }
+                function tail(path) { return path.substring(Math.max(path.lastIndexOf("."), path.lastIndexOf("/")) + 1) }
                 readonly property string scopeNote: {
                     if (!writeScope)
                         return ""

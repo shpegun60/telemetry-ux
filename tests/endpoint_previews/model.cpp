@@ -550,7 +550,7 @@ void watchLeavesAndPaths() {
 	// A path names a range of values (WL-4b): a leaf, or all of a struct's or
 	// an array's; or says in words why not.
 	{
-		const auto path = QStringLiteral("device.Config");
+		const auto path = QStringLiteral("device/Config");
 		const auto all = leaves.range(config, u"", path);
 		CHECK(all.error.isEmpty() && all.first == 0 && all.count == 306);
 		const auto run = leaves.range(config, u"samples", path);
@@ -558,14 +558,14 @@ void watchLeavesAndPaths() {
 		const auto one = leaves.range(config, u"samples[3]", path);
 		CHECK(one.error.isEmpty() && one.first == 9 && one.count == 1);
 		CHECK(leaves.range(config, u"mode", path).first == 5 && leaves.range(config, u"mode", path).count == 1);
-		CHECK(leaves.range(samples, u"[7]", QStringLiteral("data.Samples")).first == 7);
-		CHECK(leaves.range(config, u"gian", path).error == "device.Config has no member gian. Did you mean gain?");
-		CHECK(leaves.range(config, u"zzzzzz", path).error == "device.Config has no member zzzzzz.");
+		CHECK(leaves.range(samples, u"[7]", QStringLiteral("data/Samples")).first == 7);
+		CHECK(leaves.range(config, u"gian", path).error == "device/Config has no member gian. Did you mean gain?");
+		CHECK(leaves.range(config, u"zzzzzz", path).error == "device/Config has no member zzzzzz.");
 		CHECK(leaves.range(config, u"samples[300]", path).error ==
-		      "device.Config.samples has 300 elements, [0] to [299].");
-		CHECK(leaves.range(config, u"mode[0]", path).error == "device.Config.mode is not an array.");
+		      "device/Config.samples has 300 elements, [0] to [299].");
+		CHECK(leaves.range(config, u"mode[0]", path).error == "device/Config.mode is not an array.");
 		CHECK(leaves.range(config, u"samples[3].x", path).error ==
-		      "device.Config.samples[3] is not a struct, so it has no member x.");
+		      "device/Config.samples[3] is not a struct, so it has no member x.");
 		for (const auto bad : {u"samples[3", u"samples[]", u"gain.", u"samples.[3]", u".mode", u"samples[x]"})
 			CHECK(!leaves.range(config, bad, path).error.isEmpty() && leaves.range(config, bad, path).count == 0);
 		bool ranges = true;
@@ -591,26 +591,26 @@ void watchLeavesAndPaths() {
 		                 model.data(index, ux::EndpointModel::WatchLeafCountRole).toUInt()};
 	};
 	CHECK(model.pathOf(model.parent(field)) == "device" && range(model.parent(field)) == std::pair{0u, 0u});
-	CHECK(model.pathOf(field) == "device.Config" && range(field) == std::pair{0u, 306u});
-	CHECK(model.pathOf(scalar) == "device.Serial" && range(scalar) == std::pair{0u, 1u});
-	CHECK(model.pathOf(command) == "device.Reset" && range(command) == std::pair{0u, 0u});
-	CHECK(model.data(field, ux::EndpointModel::PathRole).toString() == "device.Config" && model.pathOf({}).isEmpty());
+	CHECK(model.pathOf(field) == "device/Config" && range(field) == std::pair{0u, 306u});
+	CHECK(model.pathOf(scalar) == "device/Serial" && range(scalar) == std::pair{0u, 1u});
+	CHECK(model.pathOf(command) == "device/Reset" && range(command) == std::pair{0u, 0u});
+	CHECK(model.data(field, ux::EndpointModel::PathRole).toString() == "device/Config" && model.pathOf({}).isEmpty());
 	const auto gainRow = child(model, field, QStringLiteral("gain"));
 	const auto modeRow = child(model, field, QStringLiteral("mode"));
 	const auto samplesRow = child(model, field, QStringLiteral("samples"));
-	CHECK(model.pathOf(gainRow) == "device.Config.gain" && range(gainRow) == std::pair{2u, 1u});
-	CHECK(model.pathOf(modeRow) == "device.Config.mode" && range(modeRow) == std::pair{5u, 1u});
-	CHECK(model.pathOf(samplesRow) == "device.Config.samples" && range(samplesRow) == std::pair{6u, 300u});
+	CHECK(model.pathOf(gainRow) == "device/Config.gain" && range(gainRow) == std::pair{2u, 1u});
+	CHECK(model.pathOf(modeRow) == "device/Config.mode" && range(modeRow) == std::pair{5u, 1u});
+	CHECK(model.pathOf(samplesRow) == "device/Config.samples" && range(samplesRow) == std::pair{6u, 300u});
 	const auto firstRange = child(model, samplesRow, QStringLiteral("[0 … 255]"));
 	const auto secondRange = child(model, samplesRow, QStringLiteral("[256 … 299]"));
-	CHECK(model.pathOf(firstRange) == "device.Config.samples[0 … 255]" && range(firstRange) == std::pair{6u, 256u});
-	CHECK(model.pathOf(secondRange) == "device.Config.samples[256 … 299]" && range(secondRange) == std::pair{262u, 44u});
+	CHECK(model.pathOf(firstRange) == "device/Config.samples[0 … 255]" && range(firstRange) == std::pair{6u, 256u});
+	CHECK(model.pathOf(secondRange) == "device/Config.samples[256 … 299]" && range(secondRange) == std::pair{262u, 44u});
 	const auto third = child(model, firstRange, QStringLiteral("[3]"));
 	const auto last = child(model, secondRange, QStringLiteral("[299]"));
-	CHECK(model.pathOf(third) == "device.Config.samples[3]" && range(third) == std::pair{9u, 1u});
-	CHECK(model.pathOf(last) == "device.Config.samples[299]" && range(last) == std::pair{305u, 1u});
+	CHECK(model.pathOf(third) == "device/Config.samples[3]" && range(third) == std::pair{9u, 1u});
+	CHECK(model.pathOf(last) == "device/Config.samples[299]" && range(last) == std::pair{305u, 1u});
 	const auto lastLeaf = leaves.locate(config, 305);
-	CHECK(lastLeaf && "device.Config" + lastLeaf->suffix == model.pathOf(last));
+	CHECK(lastLeaf && "device/Config" + lastLeaf->suffix == model.pathOf(last));
 }
 
 int main(int argc, char** argv) {

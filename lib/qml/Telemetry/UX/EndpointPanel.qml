@@ -516,10 +516,17 @@ Pane {
     // Bumped when the columns are measured again (zoom, another selection).
     property int columnEpoch: 0
 
-    // The tail of a path "device.Config" -> "Config".
+    // The tail of a path, after its last "/" or "." a backslash does not
+    // escape: "device/Config" -> "Config" (an older "device.Config" too),
+    // "power\.meter/Voltage" -> "Voltage"; a name's own escapes dropped.
     function lastSegment(path, fallback) {
-        const cut = path.lastIndexOf(".")
-        const tail = cut >= 0 ? path.substring(cut + 1) : path
+        let cut = -1
+        for (let i = 0; i < path.length; ++i) {
+            if (path[i] === "\\") { ++i; continue }
+            if (path[i] === "/" || path[i] === ".")
+                cut = i
+        }
+        const tail = (cut >= 0 ? path.substring(cut + 1) : path).replace(/\\(.)/g, "$1")
         return tail.length > 0 ? tail : fallback
     }
     function setCurrentRow(view, row) {

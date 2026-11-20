@@ -124,7 +124,7 @@ ux::BatchRow readRow(Peer& peer, quint32 id = 1)
 	row.operation = cl::Operation::FieldRead;
 	row.id = id;
 	row.session = peer.session;
-	row.name = QStringLiteral("device.Serial");
+	row.name = QStringLiteral("device/Serial");
 	row.responseType = endpoint.endpoint.responseType();
 	row.responseBytes = endpoint.endpoint.responseBytes();
 	return row;
@@ -403,8 +403,8 @@ void requestArguments()
 	namespace ra = ux::request_arguments;
 	f::Backing backing;
 	const auto& schema = backing.schema;
-	const auto* config = schema.findField("device.Config");
-	const auto* inspect = schema.findService("device.Inspect");
+	const auto* config = schema.findField("device/Config");
+	const auto* inspect = schema.findService("device/Inspect");
 	CHECK(config && inspect);
 	// The inputs, in order, with their types and choices.
 	const auto inputs = ra::arguments(schema, config->typeId);
@@ -416,7 +416,7 @@ void requestArguments()
 	CHECK(ra::signatureText(schema, config->typeId) == "(serial: u64, offset: i64, gain: f32, precise: f64, …)");
 	CHECK(ra::valueType(schema, inputs[5].type).enumeration && !ra::valueType(schema, inputs[6].type).valid());
 	// A request that takes no input has no arguments.
-	const auto* ping = schema.findService("device.Ping");
+	const auto* ping = schema.findService("device/Ping");
 	CHECK(ping && ra::signatureText(schema, ping->typeId) == "()");
 }
 
@@ -429,7 +429,7 @@ void requestArguments()
 // A Service item of device.Inspect, its request at its initial values.
 ux::BatchRow serviceRow(Peer& peer)
 {
-	const auto* inspect = peer.storage->schema.findService("device.Inspect");
+	const auto* inspect = peer.storage->schema.findService("device/Inspect");
 	CHECK(inspect);
 	const auto bound = peer.storage->owner.bindService(inspect->id);
 	CHECK(bound);
@@ -437,7 +437,7 @@ ux::BatchRow serviceRow(Peer& peer)
 	row.operation = cl::Operation::Service;
 	row.id = inspect->id;
 	row.session = peer.session;
-	row.name = QStringLiteral("device.Inspect");
+	row.name = QStringLiteral("device/Inspect");
 	row.requestType = bound.endpoint.requestType();
 	row.responseType = bound.endpoint.responseType();
 	row.responseBytes = bound.endpoint.responseBytes();
@@ -631,7 +631,7 @@ void batchUndoKinds()
 		if (!peer.current)
 			back();
 		CHECK(batch.clear());
-		CHECK(batch.add(std::vector<ux::BatchRow>{named("device.A"), named("device.B"), named("device.C")}));
+		CHECK(batch.add(std::vector<ux::BatchRow>{named("device/A"), named("device/B"), named("device/C")}));
 		history.clear();
 		now += 10000;
 	};
@@ -645,8 +645,8 @@ void batchUndoKinds()
 		cases.push_back({QStringLiteral("batch.items"), QString::fromLatin1(name), &history, start, std::move(act), rows,
 		                 away, back, otherSession, done});
 	};
-	add("add an item", [&] { CHECK(batch.add(named("device.D"))); });
-	add("add items", [&] { CHECK(batch.add(std::vector<ux::BatchRow>{named("device.D"), named("device.E")})); });
+	add("add an item", [&] { CHECK(batch.add(named("device/D"))); });
+	add("add items", [&] { CHECK(batch.add(std::vector<ux::BatchRow>{named("device/D"), named("device/E")})); });
 	add("remove an item", [&] { CHECK(batch.remove(1)); });
 	add("move an item twice", [&] {
 		CHECK(batch.move(0, 1));
@@ -683,12 +683,12 @@ void batchUndoKinds()
 
 	// The words, each with its serial.
 	start();
-	CHECK(batch.add(named("device.D")) && batch.lastSerial() == history.undoSerial() &&
-	      history.undoText() == QStringLiteral("Add device.D to the Batch"));
-	CHECK(batch.add(std::vector<ux::BatchRow>{named("device.E"), named("device.F")}) &&
+	CHECK(batch.add(named("device/D")) && batch.lastSerial() == history.undoSerial() &&
+	      history.undoText() == QStringLiteral("Add device/D to the Batch"));
+	CHECK(batch.add(std::vector<ux::BatchRow>{named("device/E"), named("device/F")}) &&
 	      history.undoText() == QStringLiteral("Add 2 items to the Batch"));
-	CHECK(batch.remove(0) && history.undoText() == QStringLiteral("Remove device.A from the Batch"));
-	CHECK(batch.move(0, 1) && history.undoText() == QStringLiteral("Move device.B to item 2 in the Batch"));
+	CHECK(batch.remove(0) && history.undoText() == QStringLiteral("Remove device/A from the Batch"));
+	CHECK(batch.move(0, 1) && history.undoText() == QStringLiteral("Move device/B to item 2 in the Batch"));
 	now += 500;
 	// Moved back where it started within two seconds: no step is left.
 	const auto steps = history.count();
@@ -704,16 +704,16 @@ void batchUndoKinds()
 			return all;
 		};
 		const auto before = order();
-		CHECK(before == QStringList({"device.B", "device.C", "device.D", "device.E", "device.F"}));
+		CHECK(before == QStringList({"device/B", "device/C", "device/D", "device/E", "device/F"}));
 		CHECK(!batch.moveTo(0, 0) && !batch.moveTo(0, 5) && !batch.moveTo(-1, 2));
 		const auto dragSteps = history.count();
 		CHECK(batch.moveTo(0, 2) && history.count() == dragSteps + 1 &&
-		      history.undoText() == QStringLiteral("Move device.B to item 3 in the Batch"));
-		CHECK(order() == QStringList({"device.C", "device.D", "device.B", "device.E", "device.F"}));
+		      history.undoText() == QStringLiteral("Move device/B to item 3 in the Batch"));
+		CHECK(order() == QStringList({"device/C", "device/D", "device/B", "device/E", "device/F"}));
 		CHECK(history.undo() && order() == before);
 		now += 10000;
 		CHECK(batch.moveTo(4, 1) && history.count() == dragSteps + 1 &&
-		      order() == QStringList({"device.B", "device.F", "device.C", "device.D", "device.E"}));
+		      order() == QStringList({"device/B", "device/F", "device/C", "device/D", "device/E"}));
 		CHECK(history.undo() && order() == before);
 	}
 	CHECK(batch.clear() && history.undoText() == QStringLiteral("Clear the Batch") && batch.count() == 0);
@@ -726,7 +726,7 @@ void batchUndoKinds()
 	      role(batch, 0, ux::BatchListModel::HistoricalRole).toBool() && !batch.canExecute());
 	// Execute is never a step; a step waits while the Batch is in flight.
 	CHECK(batch.clear());
-	CHECK(batch.add(named("device.G")));
+	CHECK(batch.add(named("device/G")));
 	const auto serial = history.undoSerial();
 	CHECK(batch.canExecute() && batch.execute());
 	CHECK(history.undoSerial() == serial && !history.canUndo() &&
@@ -737,7 +737,7 @@ void batchUndoKinds()
 	CHECK(history.canUndo() && history.blockedReason().isEmpty() && history.undo() && batch.count() == 0);
 	// Without a history nothing is recorded.
 	batch.setHistory(nullptr);
-	CHECK(batch.add(named("device.H")) && batch.lastSerial() == 0);
+	CHECK(batch.add(named("device/H")) && batch.lastSerial() == 0);
 }
 
 int main(int argc, char** argv)

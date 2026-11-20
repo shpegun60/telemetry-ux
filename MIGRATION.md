@@ -2000,3 +2000,139 @@ kinds design's 10, "-"), `DeviceTreeKinds.cpp` (20), `TypedWatch.cpp`,
 `DetailsTreeChecks.inc`, `tests/theme_contrast` (16),
 `tests/dynamic_watchlist` (the forms and words), `tests/qt_connection` (the
 write words, a held refusal, Details' refused Apply on the demo device).
+
+## Device tree: one tree of groups, a kinds filter, paths that read the same everywhere (November 2026)
+
+The designer's review of 20 November 2026 (section 14 of the named-types
+plan, reconciled in section 15), part A: everything that works on today's
+flat (v3.0) descriptors. Part B (nested group records, full type names
+`scope::name`, the depth and path ceilings) follows the SDK's group tree.
+
+Paths, one grammar everywhere (`PathGrammar.hpp`, new, in the base library):
+- Groups and the endpoint join with "/", members with ".", elements as
+  `[i]`: `device/Config.Gain`, `data/Samples[3]`,
+  `metrology/harmonics/phaseA/Spectrum.Window`. Was `device.Config.Gain`.
+  The "/" part is what device code reads, so Copy path pastes into it. A
+  flat group or endpoint name holding "/", ".", "[", "]" or "\" escapes it
+  with "\" (`power\.meter/Voltage`).
+- Every path the UX writes is in this form: `EndpointModel`'s `path` role
+  and `pathOf()`, `fieldPath()`, `EndpointEntry::path`, the Dynamic
+  provider's `selection`, the Watchlist's row names (`WatchEntry::name`), the
+  Batch's item paths, the words of the write and watch messages, the Plot's
+  and the Trend's lane names, and the log lines made from them.
+- Everything typed or saved is read in either form: the Watchlist's "+" row
+  (`checkWatchPath`, `addWatchPaths`, `watchPathCandidates`, which now
+  completes one segment at a time: `device/`, then `device/Config`), the
+  Batch's lines (`checkBatchPath`, `batchPathCandidates`, `addBatchPaths`),
+  and a row saved without a device. An older dotted key is read against the
+  device's group names: the longest one it starts with and that a "." follows,
+  then the endpoint, then the members (a group named `a.b` still resolves).
+  Saved Watchlists keep their `{group, name, member}` bindings unchanged.
+- `WatchlistModel`'s `leafStart` and `WatchRows::steps()` follow the grammar;
+  a step before a "/" is a group (`Step::group`). `path_grammar::escaped`,
+  `unescaped`, `endpoint`, `compose`, `parse`, `parseDotted`, `parseAny`,
+  `canonical`, `canonicalPrefix`, `leafStart`, `lastSeparator`, `slashed`.
+
+Model, `EndpointModel`:
+- No category rows. The top rows are the groups; a flat descriptor's
+  same-named catalogs of the three families are one group, the groups in the
+  order the families first name them (the Fields', then the Commands', then
+  the Services'). Inside a group: its subgroups, then its Fields, Commands and
+  Services, each in declaration order. `GroupOutline` (new) is the outline the
+  tree is built from; `outlineOf()` makes it from a flat descriptor, and part
+  B's group records replace that one function.
+- A group row: `kind` "group", `category` 0 (was the family's), `count`
+  everything under it, new roles `fieldCount`, `commandCount`,
+  `serviceCount`, `groupCount` (everything under it), `detail` "7 Fields · 1
+  Command in 4 groups", `path` the group's path ("metrology/harmonics").
+  `typeName` (new, `TypeNameRole`): a named type, empty until part B.
+- Properties `fieldTotal`, `commandTotal`, `serviceTotal` (the device's
+  totals, for the kinds filter) and `deepestGroup` (0 for a flat descriptor,
+  -1 for none), signal `totalsChanged`; `groupNames()`;
+  `indexOfGroupPath(path)` (new). `indexOfPath()` takes names from the root
+  without a category ("device/Config/Gain", was "Fields/device/Config/Gain");
+  a name may escape its own "/" as "\/".
+
+`TreeFilter`:
+- Matches by path segments: "/" and "." are one separator, the segments of
+  the text match a row's path segments in order with gaps, the last in the
+  row's own name (`harm/H3`); text of one segment matches the name, or a
+  `typeName` as a whole. `kinds` (Fields 1, Commands 2, Services 4) narrows
+  it to endpoints of those kinds, with or without text; `active`, `run(index)`
+  (where the text matched: `{in: "name" | "type", start, length}`). The device
+  files' views (constructed with role numbers) match as before.
+
+QML, `EndpointTreePanel` and `EndpointTreeRow`:
+- A funnel, `endpointKindsFilter` (an `IconToolButton`, new `ToolIcon`
+  "filter"), one Tab stop after the find field; its menu `endpointKindsMenu`
+  has checkable `KindsMenuItem`s (new) "Fields", "Commands", "Services" with
+  the device's totals muted, and "Show all". `kindsShown` (bits as
+  `TreeFilter.kinds`), `kindsOn`, `kindsWords`, `toggleKind(bit)`; the
+  status line reads "Commands only · 3 matches".
+- Group counts in words, Fields first, from the new roles (`countParts(model)`,
+  `countFull(model)`; `countText(count, category)` is gone); whole parts drop
+  from the right with "· …" when room is short; the tooltip and the
+  accessible name carry the whole, with "in N groups". The row takes
+  `countParts`, `countFull` (was `countText`).
+- One indent step for the whole tree, `indentStep` (16 px while a name at
+  `indentDepth`, the deepest group + 2, keeps 6 body heights, then evenly
+  less, never under 8); the row's `indentStep` sets its `indentation` (the
+  per-row `indentRoom` is gone). rw now gives way measured on a depth-3 row.
+- A context line, `endpointTreeContext`, over the tree under its header once
+  it is scrolled: the folder glyph and the group's path (`contextPath`) as a
+  `PathLabel` whose segments are links (`revealGroupPath(path)`); it never
+  covers the current row. A provider signal `revealGroupRequested(path)` makes
+  every tree show a group.
+- A new descriptor opens its groups one level when there are 7 or fewer
+  (`openLimit`), else none (was: the categories and their catalogs).
+  "Collapse all" leaves the top-level groups.
+- Find's placeholder is "Find by name, path or type (Ctrl+F)"; the row's
+  `matchRun` (was `matchText`, `matched` is now derived) marks the run in the
+  name or in the Type cell. A model without a `kind` role: a row that is not
+  an endpoint is a group at any depth (was "category" at the top).
+- The category rule (`categoryRule`) is gone.
+
+QML, `PathLabel` (new): the one path label for the Watchlist's List, Details'
+title, the Batch's list (`batchRowPath`; `BatchPanel.pathMarkup()` is gone)
+and the context line. Prefix and separators `textMuted`, the leaf
+`textPrimary` (or `leafWeight`); whole segments drop under one "…" (the
+middle groups nearest the branch, then the branch, then the remaining
+groups, then the endpoint; the nearest parent last), and only then the leaf
+elides in its middle; `spokenName` is leaf first ("H3, in metrology,
+harmonics, phaseA"); the tooltip breaks after each "/"; left to right in a
+mirrored layout. `interactive`: the prefix's groups are links
+(`segmentActivated(groupPath)`), one Tab stop, Left and Right between them,
+Enter shows one. `path`, `font`, `prefixColor`, `leafColor`, `tabStop`,
+`leafLink`, `elided`, `drops`, `shown`, `usedWidth`, `prefixObjectName`,
+`leafObjectName`.
+
+QML, `WatchlistPanel`:
+- The List's name is a `PathLabel` (`watchRowPath`; its texts keep the names
+  `watchRowPrefix` and `watchRowLeaf`).
+- The Name column's cap has a ceiling: `max(24 × bodyPixels, min(nameSeen +
+  columnGap, 40 × bodyPixels))`. Only a path past it elides, by whole
+  segments (amends WL-9's "the cap never elides a name").
+- The tree joins a chain of single-child groups into one row
+  (`metrology/harmonics/phaseA`), its box and count the last group's; a second
+  child splits it (`WatchRows::joinChains`).
+
+QML, `EndpointPanel` (Details): the title (`endpointSelectionTitle`) is a
+breadcrumb, an interactive `PathLabel` with its leaf DemiBold; a group's link
+calls `revealGroup(path)`, which emits `groupRevealRequested(path)` and asks
+the provider's `revealGroup(path)` where it has one.
+
+`DynamicConfiguratorProvider`: `revealGroup(path)` and the signal
+`revealGroupRequested(path)`; `watchRefusal` gives none for a group with no
+Fields (it has no box, as a Command has none).
+
+Checks: `tests/qml_layout/DeviceTreeGroups.cpp` (new: the path grammar, groups
+inside groups over a model shaped as a group tree, counts with their groups,
+the indent step, the context line, find by path and type, the kinds filter,
+the path label alone, the opening rule; `device-tree-groups-*.png`),
+`DeviceTreeKinds.cpp` (the one tree on the demo device, the merged folder,
+the kinds filter with the device's totals, the context line, find by
+segments; `device-tree-context-*.png`, `device-tree-kinds-funnel-*.png`),
+`WatchLook.cpp` (22: the path label, the ceiling, joined chains;
+`watch-list-long-path-*.png`, `watch-tree-chains-560.png`),
+`DetailsLayout.cpp` (the breadcrumb; `details-breadcrumb-*.png`),
+`TreeActions.cpp`, and the provider suites' paths.

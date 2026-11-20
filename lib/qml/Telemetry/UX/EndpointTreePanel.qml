@@ -1540,7 +1540,8 @@ Pane {
                 visible: panel.finding && panel.findCount === 0
                 text: qsTr("Clear the search")
                 font.pointSize: Type.caption
-                onClicked: { searchInput.clear(); panel.applyFind(); searchInput.forceActiveFocus() }
+                // The way back is the whole tree: the text and the kinds.
+                onClicked: { searchInput.clear(); panel.kindsShown = 0; panel.applyFind(); searchInput.forceActiveFocus() }
             }
         }
         Item {

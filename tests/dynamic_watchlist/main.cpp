@@ -283,8 +283,8 @@ void numberFormats()
 
 	// The model: the Watchlist's form, a row's own, remembered by path.
 	ux::WatchlistModel model;
-	CHECK(model.add(ux::WatchEntry::of(1, "device.Gain")));
-	CHECK(model.add(ux::WatchEntry::of(2, "device.Mode")));
+	CHECK(model.add(ux::WatchEntry::of(1, "device/Gain")));
+	CHECK(model.add(ux::WatchEntry::of(2, "device/Mode")));
 	CHECK(model.setResult(0, "Ok", "1.5", ux::WatchSample::ofUnsigned(1), bits(ux::WatchScalar::F32, 4, 0x3fc00000)));
 	CHECK(model.setResult(1, "Ok", "7", ux::WatchSample::ofUnsigned(7), bits(ux::WatchScalar::U16, 2, 7)));
 	const auto shown = [&](int row) { return model.data(model.index(row, 0), ux::WatchlistModel::ShownTextRole).toString(); };
@@ -297,14 +297,14 @@ void numberFormats()
 	CHECK(role(1, ux::WatchlistModel::EditorTextRole) == "0x0007");  // a number's editor opens in hex
 	CHECK(model.setRowFormat(0, WatchNumberFormat::Original) && shown(0) == "1.5" && shown(1) == "0x0007");
 	CHECK(role(0, ux::WatchlistModel::FormatRole) == "original" && role(0, ux::WatchlistModel::EditorTextRole) == "1.5");
-	CHECK(model.pathFormats().value("device.Gain") == WatchNumberFormat::Original && model.pathFormats().size() == 1);
+	CHECK(model.pathFormats().value("device/Gain") == WatchNumberFormat::Original && model.pathFormats().size() == 1);
 	CHECK(model.valueType(0).scalar == ux::WatchScalar::F32 && !model.valueType(9).valid());
 	// Removed and added again, the value comes back in its own form.
 	const auto removed = model.removeIds({1});
 	CHECK(removed.size() == 1);
-	CHECK(model.add(ux::WatchEntry::of(1, "device.Gain")) && model.rowFormat(1) == WatchNumberFormat::Original);
+	CHECK(model.add(ux::WatchEntry::of(1, "device/Gain")) && model.rowFormat(1) == WatchNumberFormat::Original);
 	CHECK(model.setRowFormat(1, std::nullopt) && model.pathFormats().isEmpty());
-	CHECK(model.setPathFormats({{"device.Mode", WatchNumberFormat::Dec}}));
+	CHECK(model.setPathFormats({{"device/Mode", WatchNumberFormat::Dec}}));
 	CHECK(shown(0) == "7" && model.rowFormat(0) == WatchNumberFormat::Dec && !model.rowFormat(1));
 	// Not read yet: no form to show.
 	CHECK(shown(1).isEmpty());
@@ -1293,7 +1293,7 @@ QVector<ux::WatchEntry> configEntries(std::initializer_list<quint32> ordinals)
 	QVector<ux::WatchEntry> entries;
 	for (const auto ordinal : ordinals)
 		entries.push_back(entryOf(ux::watch_key::member(members::config, ordinal),
-		                          QStringLiteral("device.Config #%1").arg(ordinal)));
+		                          QStringLiteral("device/Config #%1").arg(ordinal)));
 	return entries;
 }
 
@@ -1309,10 +1309,10 @@ void missingRows()
 	watch.setSource(peer.source());
 	auto* model = qobject_cast<ux::WatchlistModel*>(watch.model());
 	CHECK(model);
-	const auto nope = watch.missingEntry(QStringLiteral("device.Nope"));
-	CHECK(ux::watch_key::isUnresolved(nope.key) && nope.name == "device.Nope");
-	const auto enabled = watch.resolvePath(QStringLiteral("device.Config.enabled")).entries;
-	const auto gain = watch.resolvePath(QStringLiteral("device.Config.gain")).entries;
+	const auto nope = watch.missingEntry(QStringLiteral("device/Nope"));
+	CHECK(ux::watch_key::isUnresolved(nope.key) && nope.name == "device/Nope");
+	const auto enabled = watch.resolvePath(QStringLiteral("device/Config.enabled")).entries;
+	const auto gain = watch.resolvePath(QStringLiteral("device/Config.gain")).entries;
 	CHECK(enabled.size() == 1 && gain.size() == 1);
 	CHECK(watch.addEntries({enabled.first(), nope, gain.first()}).value("added").toInt() == 3);
 	CHECK(model->isUnbound(1) && model->data(model->index(1, 0), ux::WatchlistModel::StatusRole) == "Missing");
@@ -1332,7 +1332,7 @@ void missingRows()
 	CHECK(unbound(watch, 3) && changed.count() == 1);
 	// With no device a row says nothing of devices, even one the last lacked.
 	CHECK(model->data(model->index(1, 0), ux::WatchlistModel::StatusRole).toString().isEmpty());
-	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole) == "device/Config.gain");
 	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::StatusRole) == "Stale");
 	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::TextRole) == read);
 	// While it is away, polling unbinds nothing again and says nothing.
@@ -1349,18 +1349,18 @@ void missingRows()
 	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::TextRole) == read);
 	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::AccessRole).toString().size() == 2);
 	// A row typed for a whole struct becomes its values, in its place.
-	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Config"))}).value("added").toInt() == 1);
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device/Config"))}).value("added").toInt() == 1);
 	watch.retire(true);
 	events();
 	watch.setSource(peer.source());
 	events();
 	// enabled, Nope, gain, then Config's 300 samples (gain and enabled are watched).
 	CHECK(model->count() == int(members::leaves) + 1 && model->isUnbound(1) && !model->isUnbound(3));
-	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::NameRole) == "device.Config.samples[0]");
-	CHECK(model->data(model->index(model->count() - 1, 0), ux::WatchlistModel::NameRole) == "device.Config.samples[299]");
+	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::NameRole) == "device/Config.samples[0]");
+	CHECK(model->data(model->index(model->count() - 1, 0), ux::WatchlistModel::NameRole) == "device/Config.samples[299]");
 	// Only rows not on this device: Start has nothing to read and says so.
 	watch.clear();
-	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Nope"))}).value("added").toInt() == 1);
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device/Nope"))}).value("added").toInt() == 1);
 	const auto calls = peer.calls.size();
 	CHECK(!watch.begin(true) && !watch.begin(false));
 	events();
@@ -1379,12 +1379,12 @@ void missingRows()
 		events();
 	};
 	watch.clear();
-	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device.Config")),
-	                        watch.missingEntry(QStringLiteral("device.Config.gain"))})
+	CHECK(watch.addEntries({watch.missingEntry(QStringLiteral("device/Config")),
+	                        watch.missingEntry(QStringLiteral("device/Config.gain"))})
 	          .value("added").toInt() == 2);
 	reattach();
 	CHECK(model->count() == int(members::leaves) && !model->isUnbound(0) && model->hasBound());
-	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole) == "device/Config.gain");
 	// Not enough room for the struct's values: it claims none, says why, and the
 	// member below keeps its own value.
 	watch.clear();
@@ -1394,14 +1394,14 @@ void missingRows()
 	constexpr int pads = ux::watchlistRowLimit - 2;
 	for (int i = 0; i < pads; ++i)
 		crowd.push_back(watch.missingEntry(QStringLiteral("pad.P%1").arg(i)));
-	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config")));
-	crowd.push_back(watch.missingEntry(QStringLiteral("device.Config.gain")));
+	crowd.push_back(watch.missingEntry(QStringLiteral("device/Config")));
+	crowd.push_back(watch.missingEntry(QStringLiteral("device/Config.gain")));
 	CHECK(watch.addEntries(crowd).value("added").toInt() == pads + 2);
 	reattach();
 	CHECK(model->count() == pads + 2 && model->isUnbound(pads) && !model->isUnbound(pads + 1));
 	CHECK(model->data(model->index(pads, 0), ux::WatchlistModel::StatusRole) == "Unwatchable");
 	CHECK(model->data(model->index(pads, 0), ux::WatchlistModel::WriteRefusalRole).toString().contains("do not fit"));
-	CHECK(model->data(model->index(pads + 1, 0), ux::WatchlistModel::NameRole) == "device.Config.gain");
+	CHECK(model->data(model->index(pads + 1, 0), ux::WatchlistModel::NameRole) == "device/Config.gain");
 }
 
 // A typed path as the rows it adds, and what may come next (WL-4b).
@@ -1412,30 +1412,30 @@ void pathResolution()
 	peer.schema = std::make_shared<members::Schema>();
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
-	auto r = watch.resolvePath(QStringLiteral(" device.Config.gain "));
-	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "device.Config.gain" && r.already == 0);
-	CHECK(watch.resolvePath("device.Config.samples").entries.size() == 300);
-	CHECK(watch.resolvePath("device.Config").entries.size() == int(members::leaves));
-	r = watch.resolvePath("device.Config.samples[3]");
-	CHECK(r.entries.size() == 1 && r.entries[0].name == "device.Config.samples[3]" &&
+	auto r = watch.resolvePath(QStringLiteral(" device/Config.gain "));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "device/Config.gain" && r.already == 0);
+	CHECK(watch.resolvePath("device/Config.samples").entries.size() == 300);
+	CHECK(watch.resolvePath("device/Config").entries.size() == int(members::leaves));
+	r = watch.resolvePath("device/Config.samples[3]");
+	CHECK(r.entries.size() == 1 && r.entries[0].name == "device/Config.samples[3]" &&
 	      r.entries[0].key == ux::watch_key::member(members::config, 5));
-	r = watch.resolvePath("device.Counter");
-	CHECK(r.entries.size() == 1 && ux::watch_key::isWhole(r.entries[0].key) && r.entries[0].name == "device.Counter");
-	CHECK(watch.resolvePath("device.Config.gian").error == "device.Config has no member gian. Did you mean gain?");
-	CHECK(watch.resolvePath("device.Config.samples[300]").error ==
-	      "device.Config.samples has 300 elements, [0] to [299].");
-	r = watch.resolvePath("device.Nope");
-	CHECK(r.missing && r.entries.isEmpty() && r.error == "device.Nope is not on this device.");
-	for (const auto bad : {"nope", "device.", ".Config", "device.Config."}) {
+	r = watch.resolvePath("device/Counter");
+	CHECK(r.entries.size() == 1 && ux::watch_key::isWhole(r.entries[0].key) && r.entries[0].name == "device/Counter");
+	CHECK(watch.resolvePath("device/Config.gian").error == "device/Config has no member gian. Did you mean gain?");
+	CHECK(watch.resolvePath("device/Config.samples[300]").error ==
+	      "device/Config.samples has 300 elements, [0] to [299].");
+	r = watch.resolvePath("device/Nope");
+	CHECK(r.missing && r.entries.isEmpty() && r.error == "device/Nope is not on this device.");
+	for (const auto bad : {"nope", "device.", ".Config", "device/Config."}) {
 		r = watch.resolvePath(QString::fromLatin1(bad));
 		CHECK(!r.missing && r.entries.isEmpty() && !r.error.isEmpty());
 	}
-	CHECK(!watch.resolvePath("device.Counter.x").error.isEmpty());
+	CHECK(!watch.resolvePath("device/Counter.x").error.isEmpty());
 	// Watched already: nothing to add, and which row has it.
-	CHECK(watch.addEntries(watch.resolvePath("device.Config.gain").entries).value("added").toInt() == 1);
-	r = watch.resolvePath("device.Config.gain");
+	CHECK(watch.addEntries(watch.resolvePath("device/Config.gain").entries).value("added").toInt() == 1);
+	r = watch.resolvePath("device/Config.gain");
 	CHECK(r.entries.isEmpty() && r.already == 1 && r.firstWatched == ux::watch_key::member(members::config, 0));
-	r = watch.resolvePath("device.Config");
+	r = watch.resolvePath("device/Config");
 	CHECK(r.entries.size() == int(members::leaves) - 1 && r.already == 1);
 
 	// Candidates: groups, Fields, members, elements; then the word anywhere.
@@ -1446,22 +1446,23 @@ void pathResolution()
 		return out;
 	};
 	auto c = watch.pathCandidates("dev");
-	CHECK(c.size() == 1 && c[0].path == "device." && c[0].container && c[0].values == 2);
-	c = watch.pathCandidates("device.C");
-	CHECK(c.size() == 2 && c[0].path == "device.Counter" && !c[0].container && c[0].values == 1);
-	CHECK(c[1].path == "device.Config" && c[1].container && c[1].typeText == "struct (3)" &&
+	CHECK(c.size() == 1 && c[0].path == "device/" && c[0].container && c[0].values == 2);
+	c = watch.pathCandidates("device/C");
+	CHECK(c.size() == 2 && c[0].path == "device/Counter" && !c[0].container && c[0].values == 1);
+	CHECK(c[1].path == "device/Config" && c[1].container && c[1].typeText == "struct (3)" &&
 	      c[1].values == members::leaves && !c[1].watched);
-	CHECK(paths("device.Config.") ==
-	      QStringList({"device.Config.gain", "device.Config.enabled", "device.Config.samples"}));
-	CHECK(paths("device.Config.sa") == QStringList({"device.Config.samples"}));
-	c = watch.pathCandidates("device.Config.samples[");
-	CHECK(c.size() == 1 && c[0].path == QStringLiteral("device.Config.samples[0 … 299]") && c[0].typeText == "u16");
-	CHECK(paths("gain").contains("device.Config.gain"));
-	CHECK(watch.pathCandidates("device.Config.samples[", 0).isEmpty());
+	CHECK(paths("device/Config.") ==
+	      QStringList({"device/Config.gain", "device/Config.enabled", "device/Config.samples"}));
+	CHECK(paths("device/Config.sa") == QStringList({"device/Config.samples"}));
+	c = watch.pathCandidates("device/Config.samples[");
+	CHECK(c.size() == 1 && c[0].path == QStringLiteral("device/Config.samples[0 … 299]") && c[0].typeText == "u16");
+	CHECK(paths("gain").contains("device/Config.gain"));
+	CHECK(watch.pathCandidates("device/Config.samples[", 0).isEmpty());
 }
 
-// A group whose name holds dots ("power.meter"): a path is read with the
-// longest group it starts with, then the Field (WL-8).
+// A group whose name holds dots ("power.meter"): in the one grammar its dot is
+// escaped ("power\.meter/Voltage"); an older dotted key is read with the
+// longest group it starts with, then the Field (WL-8, the review's 15.1).
 void dottedGroups()
 {
 	QObject owner;
@@ -1475,25 +1476,36 @@ void dottedGroups()
 			out << c.path;
 		return out;
 	};
-	auto r = watch.resolvePath(QStringLiteral("power.meter.Voltage"));
-	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "power.meter.Voltage" &&
+	auto r = watch.resolvePath(QStringLiteral("power\\.meter/Voltage"));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "power\\.meter/Voltage" &&
 	      ux::watch_key::isWhole(r.entries[0].key));
 	const auto voltage = r.entries[0].key;
-	r = watch.resolvePath(QStringLiteral("power.Total"));
+	// The older key names the same value, written in the one grammar.
+	r = watch.resolvePath(QStringLiteral("power.meter.Voltage"));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].key == voltage &&
+	      r.entries[0].name == "power\\.meter/Voltage");
+	r = watch.resolvePath(QStringLiteral("power/Total"));
 	CHECK(r.error.isEmpty() && r.entries.size() == 1 && ux::watch_key::isWhole(r.entries[0].key) &&
 	      r.entries[0].key != voltage);
+	r = watch.resolvePath(QStringLiteral("power.Total"));
+	CHECK(r.error.isEmpty() && r.entries.size() == 1 && r.entries[0].name == "power/Total");
+	r = watch.resolvePath(QStringLiteral("power\\.meter/Nope"));
+	CHECK(r.missing && r.error == "power\\.meter/Nope is not on this device.");
 	r = watch.resolvePath(QStringLiteral("power.meter.Nope"));
 	CHECK(r.missing && r.error == "power.meter.Nope is not on this device.");
-	CHECK(paths("pow") == QStringList({"power.", "power.meter."}));
-	// "power." offers the group that goes on from it, then power's own Fields.
-	CHECK(paths("power.") == QStringList({"power.meter.", "power.Total"}));
-	CHECK(paths("power.m") == QStringList({"power.meter."}));
-	CHECK(paths("power.meter.") == QStringList({"power.meter.Voltage", "power.meter.Current"}));
-	CHECK(paths("power.meter.C") == QStringList({"power.meter.Current"}));
-	// Added by the path, saved by its group and name.
-	CHECK(watch.addEntries(watch.resolvePath("power.meter.Current").entries).value("added").toInt() == 1);
+	// One segment at a time: the groups that go on from what is typed,
+	// escaped, then a group's Fields.
+	CHECK(paths("pow") == QStringList({"power/", "power\\.meter/"}));
+	CHECK(paths("power/") == QStringList({"power/Total"}));
+	CHECK(paths("power\\.") == QStringList({"power\\.meter/"}));
+	CHECK(paths("power\\.meter/") == QStringList({"power\\.meter/Voltage", "power\\.meter/Current"}));
+	CHECK(paths("power\\.meter/C") == QStringList({"power\\.meter/Current"}));
+	// An older dotted start reads as the "/" path it begins.
+	CHECK(paths("power.meter.") == QStringList({"power\\.meter/Voltage", "power\\.meter/Current"}));
+	// Added by the path, saved by its group and name, as before.
+	CHECK(watch.addEntries(watch.resolvePath("power\\.meter/Current").entries).value("added").toInt() == 1);
 	CHECK(watch.binding(0) == QVariantMap({{"group", "power.meter"}, {"name", "Current"}}));
-	// Kept without the Field, saved by the same group.
+	// Kept without the Field (an older key), saved by the same group.
 	CHECK(watch.addEntries({watch.missingEntry("power.meter.Frequency")}).value("added").toInt() == 1);
 	watch.rebindRows();
 	CHECK(watch.binding(1) == QVariantMap({{"group", "power.meter"}, {"name", "Frequency"}}));
@@ -1507,15 +1519,15 @@ void memberPlan()
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
 	auto* model = watch.model();
-	QVector<ux::WatchEntry> rows{entryOf(ux::watch_key::whole(2), "device.Two")};
+	QVector<ux::WatchEntry> rows{entryOf(ux::watch_key::whole(2), "device/Two")};
 	rows += configEntries({5});
-	rows.push_back(entryOf(ux::watch_key::whole(3), "device.Three"));
+	rows.push_back(entryOf(ux::watch_key::whole(3), "device/Three"));
 	rows += configEntries({0});
-	rows.push_back(entryOf(ux::watch_key::whole(4), "device.Four"));
+	rows.push_back(entryOf(ux::watch_key::whole(4), "device/Four"));
 	// Refused: past the last value, a scalar Field's "member", a wrong member text.
 	rows += configEntries({members::leaves});
-	rows.push_back(entryOf(ux::watch_key::member(0, 0), "device.Counter"));
-	rows.push_back(entryOf(ux::watch_key::member(members::config, 1), "device.Config.enabled", "gain"));
+	rows.push_back(entryOf(ux::watch_key::member(0, 0), "device/Counter"));
+	rows.push_back(entryOf(ux::watch_key::member(members::config, 1), "device/Config.enabled", "gain"));
 	rows += configEntries({5});
 	const auto added = watch.addEntries(rows);
 	CHECK(added.value("status") == "ok" && added.value("added").toInt() == 5);
@@ -1574,31 +1586,31 @@ void memberPlan()
 	// Taken out by key, put back in place by path (UR-1): kept by its path,
 	// then found on the device - the schema has device.Config.gain, not the
 	// Peer's whole Field 3, which stays a row that says so. (This fixture
-	// names its rows "device.Config #0"; a path is what is put back.)
+	// names its rows "device/Config #0"; a path is what is put back.)
 	const auto removed = watch.removeMany({ux::watch_key::member(members::config, 0), 3});
 	CHECK(removed.size() == 2 && removed[0].row == 2 && removed[1].row == 3 && watch.count() == 3);
 	CHECK(removed[1].entry.member == "gain" && removed[1].entry.type != 0);
-	CHECK(watch.putBack({{removed[1].row, QStringLiteral("device.Config.gain")}, {removed[0].row, removed[0].entry.name}}) &&
+	CHECK(watch.putBack({{removed[1].row, QStringLiteral("device/Config.gain")}, {removed[0].row, removed[0].entry.name}}) &&
 	      watch.count() == 5);
 	watch.rebindRows();
 	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::MemberRole).toString() == "gain" &&
 	      model->data(model->index(3, 0), ux::WatchlistModel::WatchKeyRole).toULongLong() ==
 	          ux::watch_key::member(members::config, 0));
-	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole).toString() == "device.Three" &&
+	CHECK(model->data(model->index(2, 0), ux::WatchlistModel::NameRole).toString() == "device/Three" &&
 	      model->data(model->index(2, 0), ux::WatchlistModel::StatusRole).toString() == "Missing");
 	// Past the room: refused, nothing put back.
 	QVector<ux::DynamicWatchlist::PathRow> tooMany;
 	for (int at = 0; at <= ux::WatchlistModel::maxRows - watch.count(); ++at)
-		tooMany.push_back({at, QStringLiteral("device.X%1").arg(at)});
+		tooMany.push_back({at, QStringLiteral("device/X%1").arg(at)});
 	CHECK(!watch.putBack(tooMany) && watch.count() == 5);
 	// With no device, rows go back as a disconnect keeps them: by path,
 	// saying nothing of devices, at their places cut to the rows there.
 	watch.retire();
 	events();
-	CHECK(watch.putBack({{99, QStringLiteral("device.Config.enabled")}, {0, QStringLiteral("device.Five")}}) &&
+	CHECK(watch.putBack({{99, QStringLiteral("device/Config.enabled")}, {0, QStringLiteral("device/Five")}}) &&
 	      watch.count() == 7);
-	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole).toString() == "device.Five" &&
-	      model->data(model->index(6, 0), ux::WatchlistModel::NameRole).toString() == "device.Config.enabled" &&
+	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::NameRole).toString() == "device/Five" &&
+	      model->data(model->index(6, 0), ux::WatchlistModel::NameRole).toString() == "device/Config.enabled" &&
 	      model->data(model->index(6, 0), ux::WatchlistModel::StatusRole).toString().isEmpty() &&
 	      ux::watch_key::isUnresolved(model->data(model->index(6, 0), ux::WatchlistModel::WatchKeyRole).toULongLong()));
 }
@@ -1654,7 +1666,7 @@ void memberUrgent()
 	ux::DynamicWatchlist watch(&owner);
 	watch.setSource(peer.source());
 	auto rows = configEntries({1, 0});
-	rows.push_back(entryOf(ux::watch_key::whole(2), "device.Two"));
+	rows.push_back(entryOf(ux::watch_key::whole(2), "device/Two"));
 	CHECK(watch.addEntries(rows).value("added").toInt() == 3);
 	std::vector<ux::WatchFrame> frames;
 	watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
@@ -1700,7 +1712,7 @@ void memberFailure()
 		ux::DynamicWatchlist watch(&owner);
 		watch.setSource(peer.source());
 		auto rows = configEntries({0, 1});
-		rows.push_back(entryOf(ux::watch_key::whole(2), "device.Two"));
+		rows.push_back(entryOf(ux::watch_key::whole(2), "device/Two"));
 		CHECK(watch.addEntries(rows).value("added").toInt() == 3);
 		std::vector<ux::WatchFrame> frames;
 		watch.setCompletionObserver([&](const ux::WatchFrame& frame) { frames.push_back(frame); });
@@ -2071,7 +2083,7 @@ QVector<ux::WatchEntry> twinEntries(quint32 field, std::initializer_list<quint32
 	for (const auto ordinal : ordinals) {
 		ux::WatchEntry entry;
 		entry.key = ux::watch_key::member(field, ordinal);
-		entry.name = QStringLiteral("device.F%1 #%2").arg(field).arg(ordinal);
+		entry.name = QStringLiteral("device/F%1 #%2").arg(field).arg(ordinal);
 		entries.push_back(entry);
 	}
 	return entries;
