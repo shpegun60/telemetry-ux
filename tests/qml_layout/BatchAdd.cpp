@@ -6,6 +6,7 @@
 // a refusal is said in the error colour, several pasted lines go in one call,
 // and the row is off while the Batch runs. A fixture provider stands in for
 // the device. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QtCore/QDir>
 #include <QtGui/QColor>
 #include <QtCore/QVariantMap>
@@ -219,6 +220,8 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	// Details shows each row's kind with KindIcon (a ToolIcon).
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;

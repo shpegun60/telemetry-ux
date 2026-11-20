@@ -77,3 +77,20 @@ where Ctrl+Z still takes a step and an inert area in it does nothing. `WatchTree
 target) with a router in their windows, and check the notices' `undoNoticeLink`
 (Undo, then Redo), Clear and removal with no question, and a tree with
 `watchBoxes: false` offering no watching.
+
+`WatchLook.cpp` holds the Watchlist to its design of 20 November 2026 (WL-9,
+section H, checks 1-15, 19 and 21) at 100 % and 125 %, over the fixture of its
+section F - the demo device and the enum `device.Mode` - and a fake provider
+that formats with the real `watch_format`, refuses Gain above 10, answers when
+told and counts reads: rw on every row of a Field, words with their codes in
+Original, Dec and Hex, a float's every digit in Dec, the folded summary, line 2
+whole (its height from its laid-out lines, clear of the focus frame), the
+commit rules with Enter refused and no trap, a refused or invalid text held
+struck with what the device holds and one read after a refusal, the write's
+feedback (the typed value, a progress line from 400 ms, one flash, the time
+flashed), one last-action line, the pace in the bar or under it, the grid's
+left line, the Name cap with × after the last column, the give-way, the kinds'
+glyphs and guides, and the change mark (`watch-wl9-*.png`). `DetailsTree.cpp`
+adds Details' refused Apply (H 18, `details-refused-560.png`), Enter refused in
+a u8 cell (H 19), each row's kind glyph (the kinds design's J 10) and "-";
+`DeviceTreeKinds.cpp` rw on Config's members (H 20).

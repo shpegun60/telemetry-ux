@@ -2,6 +2,7 @@
 // read: a real selection driven three times (Config, another Field, Config) and
 // the rows counted each time. The model is the twin of the provider's own filter.
 // MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtGui/QGuiApplication>
@@ -123,6 +124,8 @@ int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
+	// Details shows each row's kind with KindIcon (a ToolIcon).
+	telemetry::ux::registerQmlTypes();
 	qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
 		if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
 			++warnings;

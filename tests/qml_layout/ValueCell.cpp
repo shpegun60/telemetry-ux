@@ -11,6 +11,7 @@
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
 #include <QtTest/QTest>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 
@@ -156,14 +157,37 @@ int main(int argc, char** argv)
 		CHECK(text(gainCaption) == QStringLiteral("Enter a number from 0 to 255."));
 		CHECK(gain->height() > rowHeight + 4);
 		CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("value-cell-invalid.png"))));
-		// Enter with no value: the last value comes back, the cell closes, and
-		// the caption says it was not changed and why.
+		// Enter on text that is no value is refused (WL-9 C2): the cell stays
+		// open with its words, its border in the error colour, the row keeps its
+		// last value, and the refusal is said once; Ctrl+Enter too, never
+		// going on to the owner.
+		QTest::keyClick(window, Qt::Key_Return);
+		settle();
+		CHECK(gain->property("open").toBool() && gain->property("invalid").toBool() && gainCaption->isVisible());
+		CHECK(gain->property("announced").toInt() == 1 &&
+		      gain->property("lastAnnounced").toString() == QStringLiteral("Enter a number from 0 to 255."));
+		QTest::keyClick(window, Qt::Key_Return, Qt::ControlModifier);
+		settle();
+		CHECK(gain->property("open").toBool() && gain->property("announced").toInt() == 2);
+		CHECK(text(gainRow) == QStringLiteral("12") && gainRow->property("finishedByKey").toInt() == 0);
+		// The text made a value again, Enter keeps it and closes.
+		QTest::keyClick(window, Qt::Key_Backspace);
+		settle();
 		QTest::keyClick(window, Qt::Key_Return);
 		settle();
 		CHECK(!gain->property("open").toBool() && !gain->property("invalid").toBool());
 		CHECK(text(gainRow) == QStringLiteral("12") && text(gainText) == QStringLiteral("12"));
-		CHECK(gainRow->property("finishedByKey").toInt() == 1);
-		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: Enter a number from 0 to 255."));
+		CHECK(gainRow->property("finishedByKey").toInt() == 1 && !gainCaption->isVisible());
+		// Leaving with text that is no value puts the last value back and says
+		// so, echoing the text, which is nowhere else then.
+		CHECK(QMetaObject::invokeMethod(gain, "begin"));
+		settle();
+		typeText(window, QStringLiteral("12x"));
+		settle();
+		QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, centre(named(content, QStringLiteral("elsewhere"))));
+		settle();
+		CHECK(!gain->property("open").toBool() && text(gainRow) == QStringLiteral("12"));
+		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: “12x” · Enter a number from 0 to 255."));
 		// Opened again, the words go.
 		CHECK(QMetaObject::invokeMethod(gain, "begin"));
 		settle();
@@ -205,7 +229,7 @@ int main(int argc, char** argv)
 		settle();
 		CHECK(!gain->property("open").toBool() && text(gainRow) == QStringLiteral("9"));
 		// Never in silence: the caption says why the value stayed.
-		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: Enter a number from 0 to 255."));
+		CHECK(gainCaption->isVisible() && text(gainCaption) == QStringLiteral("Not changed: “-” · Enter a number from 0 to 255."));
 		// Enter and Escape gave the keys back; Tab and a click elsewhere did not.
 		CHECK(gainRow->property("finishedByKey").toInt() == 3);
 		// A click elsewhere keeps a valid value, as Enter does.
@@ -369,7 +393,8 @@ int main(int argc, char** argv)
 		CHECK(text(piCaption) == QStringLiteral("Encoded: 0.100000001 (f32)"));
 		CHECK(piCaption->property("lineCount").toInt() == 1);
 		CHECK(qAbs(piCaption->mapToScene(QPointF(piCaption->width(), 0)).x() - pi->mapToScene(QPointF(pi->width(), 0)).x()) < 1.5);
-		CHECK(pi->height() <= 42 && pi->height() > rowHeight + 8);
+		// One line 2: the line, `tight`, the caption's laid-out height and `spacing` below (WL-9 C3).
+		CHECK(qAbs(pi->height() - (rowHeight + 3 + std::ceil(piCaption->property("contentHeight").toDouble()) + 4)) < 1.01);
 		// Enter closes the editor: nothing selected, the editor gone.
 		QTest::keyClick(window, Qt::Key_Return);
 		settle();
@@ -422,9 +447,25 @@ int main(int argc, char** argv)
 		typeText(window, QStringLiteral("300"));
 		settle();
 		CHECK(draft->property("invalid").toBool() && draftCaption->property("lineCount").toInt() <= 2);
+		// Enter is refused and the cell stays open; Tab leaves it, nothing
+		// written, the text held by the owner with why (WL-9 C4).
 		QTest::keyClick(window, Qt::Key_Return);
 		settle();
-		CHECK(committed() == 1 && text(draft, "refusal") == QStringLiteral("Not changed: Enter a number from 0 to 255."));
+		CHECK(committed() == 1 && draft->property("open").toBool());
+		QTest::keyClick(window, Qt::Key_Tab);
+		settle();
+		CHECK(committed() == 1 && !draft->property("open").toBool());
+		CHECK(draftLog->property("held").toString() == QStringLiteral("300") &&
+		      draftLog->property("heldReason").toString() == QStringLiteral("Not written: Enter a number from 0 to 255."));
+		// Held, it shows struck with its reason under it, and opens with it.
+		CHECK(text(named(draft, QStringLiteral("valueHeldText"))) == QStringLiteral("300"));
+		CHECK(text(draftCaption) == QStringLiteral("Not written: Enter a number from 0 to 255."));
+		CHECK(QMetaObject::invokeMethod(draft, "begin"));
+		settle();
+		CHECK(text(named(draft, QStringLiteral("scalarEditor"))) == QStringLiteral("300") && draft->property("invalid").toBool());
+		QTest::keyClick(window, Qt::Key_Escape);
+		settle();
+		draftLog->setProperty("held", QString());
 		// Focus going elsewhere commits once.
 		CHECK(QMetaObject::invokeMethod(draft, "begin"));
 		settle();

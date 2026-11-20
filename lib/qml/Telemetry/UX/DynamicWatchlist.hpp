@@ -240,6 +240,12 @@ public:
 	int interval() const;
 	void setInterval(int milliseconds);
 	bool begin(bool polling);
+	// Reads every row once while the Watchlist is not polling (WL-9 C4):
+	// what the device holds after a write, confirmed, refused or of unknown
+	// outcome; a write leaves every value stale, not only its Field's. Not
+	// counted in the pace; the status stays. False when nothing was started
+	// (polling, busy, or no row on this device).
+	bool readQuietly();
 	void stop();
 	// Polling begun and stopped by nothing but the link going (WL-8): not by
 	// stop(), clear(), or a failure while the device is still there. The

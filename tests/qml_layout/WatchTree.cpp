@@ -8,6 +8,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QLocale>
 #include <QtGui/QClipboard>
+#include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
 #include <QtGui/QWheelEvent>
@@ -349,10 +350,17 @@ int main(int argc, char** argv)
 				return text->mapToScene(QPointF(0, 0)).x();
 			};
 			CHECK(x(3) > x(2) && x(2) > x(0) && x(1) == x(2));
-			// Inside a Field: no status or rw of its own; the Field has its type.
-			CHECK(rowShown(list, 3)->property("accessText").toString().isEmpty());
+			// Inside a Field: no status of its own, but the Field's rw (WL-9
+			// A1); the Field has its type.
+			CHECK(rowShown(list, 3)->property("accessText").toString() == QStringLiteral("rw"));
 			CHECK(rowShown(list, 2)->property("accessText").toString() == QStringLiteral("rw"));
 			CHECK(rowShown(list, 2)->property("typeText").toString() == QStringLiteral("struct (3)"));
+			// The kinds design's check 10: the same glyph in all three trees.
+			CHECK(shown(rowShown(list, 2), "kindIcon")->property("name").toString() == QStringLiteral("struct"));
+			CHECK(shown(rowShown(list, 3), "kindIcon")->property("name").toString() == QStringLiteral("value"));
+			CHECK(shown(rowShown(list, 0), "kindIcon")->property("name").toString() == QStringLiteral("group"));
+			for (const int row : {2, 3})
+				CHECK(shown(rowShown(list, row), "watchRowLeaf")->property("font").value<QFont>().weight() == QFont::Normal);
 			shot(window, argc, argv, QStringLiteral("watch-tree-480"));
 
 			// The number format (WL-3): the Watchlist's from its segments, a
@@ -633,15 +641,14 @@ int main(int argc, char** argv)
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, 'x');
 			settle();
-			// Why not, in the cell's caption; Enter closes it, writes nothing and
-			// says it was not changed.
+			// Why not, in the cell's caption; Enter is refused (WL-9 C2): the
+			// editor stays open, nothing is written, and the refusal is said.
 			CHECK(textOf(gain, "valueCaption") == QStringLiteral("x is not a number a f32 holds."));
 			key(window, Qt::Key_Return);
-			CHECK(!gain->property("editing").toBool() && calls.writes == 0);
-			CHECK(textOf(gain, "valueCaption") == QStringLiteral("Not changed: x is not a number a f32 holds."));
+			CHECK(gain->property("editing").toBool() && calls.writes == 0);
+			CHECK(textOf(gain, "valueCaption") == QStringLiteral("x is not a number a f32 holds."));
 			shot(window, argc, argv, QStringLiteral("watch-edit-refused-480"));
 			// What Enter would write, in the other form, on the caption line.
-			key(window, Qt::Key_F2);
 			CHECK(gain->property("editing").toBool());
 			QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
 			QTest::keyClick(window, '2');

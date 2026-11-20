@@ -95,6 +95,9 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 	// next cycle follows this one at once.
 	std::vector<quint32> urgent;
 	bool rerun = false;
+	// A read of every row after a write (readQuietly, WL-9 C4): what the
+	// device holds now, not counted in the pace and saying nothing.
+	bool quiet = false;
 	// 0 reads continuously: each cycle follows the last, still one portion at
 	// a time and only while nothing else is in flight. The timer then only
 	// backs it up.
@@ -509,7 +512,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 
 	void retire(bool clearRows)
 	{
-		running = cycle = false;
+		running = cycle = quiet = false;
 		urgent.clear();
 		rerun = false;
 		timer.stop();
@@ -714,7 +717,7 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			resume = false;
 		urgent.clear();
 		rerun = false;
-		running = cycle = false;
+		running = cycle = quiet = false;
 		timer.stop();
 		status = std::move(message);
 		changed();
@@ -749,6 +752,11 @@ struct DynamicWatchlist::Impl : std::enable_shared_from_this<Impl> {
 			return;
 		if (cursor >= int(plan.size())) {
 			cycle = false;
+			if (std::exchange(quiet, false)) {
+				// The read after a write: no pace, no status.
+				changed();
+				return;
+			}
 			finishPace();
 			// Rows kept for paths this device lacks are never read (WL-4c).
 			const bool readable = model.hasBound();
@@ -2029,9 +2037,13 @@ bool DynamicWatchlist::begin(bool polling)
 	if (p->reportingCompletion) return false;
 	if (polling && p->cycle && !p->running && !p->guarded() && p->current()) {
 		// Start while a Read once runs: that cycle becomes the first one of
-		// polling instead of the Start being refused.
+		// polling instead of the Start being refused. The quiet read after a
+		// write starts the pace afresh.
+		if (std::exchange(p->quiet, false))
+			p->resetPace(true);
 		p->running = true;
 		p->resume = true;
+		p->model.forgetChanges();
 		p->timer.start();
 		p->changed();
 		return true;
@@ -2053,7 +2065,11 @@ bool DynamicWatchlist::begin(bool polling)
 	p->urgent.clear();
 	p->rerun = false;
 	p->running = polling;
+	p->quiet = false;
 	p->resetPace(polling);
+	// The first reading after Start has nothing to compare with (WL-9 E5).
+	if (polling)
+		p->model.forgetChanges();
 	if (!p->startCycle()) return false;
 	if (polling)
 		p->timer.start();
@@ -2062,6 +2078,24 @@ bool DynamicWatchlist::begin(bool polling)
 	if (started && polling)
 		p->resume = true;
 	return started;
+}
+
+bool DynamicWatchlist::readQuietly()
+{
+	auto p = d;
+	if (p->reportingCompletion || p->guarded() || p->active() || !p->current() || p->unavailable() ||
+	    !p->model.hasBound())
+		return false;
+	p->urgent.clear();
+	p->rerun = false;
+	p->running = false;
+	p->quiet = true;
+	if (!p->startCycle()) {
+		p->quiet = false;
+		return false;
+	}
+	p->next();
+	return p->cycle || bool(p->request);
 }
 
 bool DynamicWatchlist::resumes() const
@@ -2097,7 +2131,7 @@ void DynamicWatchlist::stop()
 	auto p = d;
 	if (p->guarded())
 		return;
-	p->running = p->cycle = false;
+	p->running = p->cycle = p->quiet = false;
 	p->resume = false;
 	p->urgent.clear();
 	p->rerun = false;

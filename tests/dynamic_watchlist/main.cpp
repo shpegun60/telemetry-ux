@@ -184,11 +184,32 @@ void numberFormats()
 	CHECK(all(bits(ux::WatchScalar::S16, 2, 0xffff)) == QStringList({"-1", "-1", "0xFFFF"}));
 	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x3fc00000)) == QStringList({"1.5", "1.5", "0x3FC00000"}));
 	CHECK(all(bits(ux::WatchScalar::F64, 8, 0x3ff8000000000000ULL)) == QStringList({"1.5", "1.5", "0x3FF8000000000000"}));
-	CHECK(all(bits(ux::WatchScalar::Boolean, 1, 1)) == QStringList({"true", "1", "0x01"}));
+	// WL-9 B1: Original a float's shortest exact text, Dec every digit its bits
+	// hold, Hex its bits; exact decimals stay short in Dec.
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x3dcccccd)) == QStringList({"0.1", "0.100000001", "0x3DCCCCCD"}));
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x4365deb8)) == QStringList({"229.87", "229.869995", "0x4365DEB8"}));
+	CHECK(all(bits(ux::WatchScalar::F64, 8, 0x3fb999999999999aULL)) ==
+	      QStringList({"0.1", "0.10000000000000001", "0x3FB999999999999A"}));
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x80000000)) == QStringList({"-0", "-0", "0x80000000"}));
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x7fc00000)) == QStringList({"NaN", "NaN", "0x7FC00000"}));
+	CHECK(all(bits(ux::WatchScalar::F32, 4, 0x43660000)) == QStringList({"230", "230", "0x43660000"}));
+	CHECK(all(bits(ux::WatchScalar::F64, 8, 0x8010000000000000ULL))[1] == "-2.2250738585072014e-308");
+	// A bool or an enum: its word with its code in every form; Hex turns
+	// only the code, at the type's width (a negative code is its bits).
+	CHECK(all(bits(ux::WatchScalar::Boolean, 1, 1)) == QStringList({"true (1)", "true (1)", "true (0x01)"}));
+	CHECK(all(bits(ux::WatchScalar::Boolean, 1, 0)) == QStringList({"false (0)", "false (0)", "false (0x00)"}));
+	CHECK(all(bits(ux::WatchScalar::Boolean, 1, 2)) == QStringList({"true (2)", "true (2)", "true (0x02)"}));
 	const QHash<quint64, QString> names{{2, "High"}, {0xff, "Off"}};
-	CHECK(all(bits(ux::WatchScalar::U8, 1, 2, true), &names) == QStringList({"High", "2", "0x02"}));
-	CHECK(all(bits(ux::WatchScalar::S8, 1, 0xff, true), &names) == QStringList({"Off", "-1", "0xFF"}));
-	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 5, true), WatchNumberFormat::Original, &names) == "Unknown (5)");
+	CHECK(all(bits(ux::WatchScalar::U8, 1, 2, true), &names) == QStringList({"High (2)", "High (2)", "High (0x02)"}));
+	CHECK(all(bits(ux::WatchScalar::S8, 1, 0xff, true), &names) == QStringList({"Off (-1)", "Off (-1)", "Off (0xFF)"}));
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 7, true), WatchNumberFormat::Original, &names) == "Unknown (7)");
+	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 7, true), WatchNumberFormat::Hex, &names) == "Unknown (0x07)");
+	{
+		const auto parts = wf::parts(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Hex, &names);
+		CHECK(parts.word == "High" && parts.code == "0x02");
+		const auto number = wf::parts(bits(ux::WatchScalar::U16, 2, 230), WatchNumberFormat::Original);
+		CHECK(number.word.isEmpty() && number.code == "230");
+	}
 	// Without the type's names, Original has nothing to add: the row keeps its text.
 	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Original).isEmpty());
 	CHECK(wf::text(bits(ux::WatchScalar::U8, 1, 2, true), WatchNumberFormat::Hex) == "0x02");
@@ -227,27 +248,29 @@ void numberFormats()
 	CHECK(wf::text(encode("2", type(ux::WatchScalar::F32, 4)).value, WatchNumberFormat::Hex) == "0x40000000");
 	CHECK(wf::text(encode("0x3FC00000", type(ux::WatchScalar::F32, 4)).value, WatchNumberFormat::Dec) == "1.5");
 	CHECK(wf::text(encode("-1", type(ux::WatchScalar::S16, 2)).value, WatchNumberFormat::Hex) == "0xFFFF");
-	CHECK(wf::text(encode("true", type(ux::WatchScalar::Boolean, 1)).value, WatchNumberFormat::Hex) == "0x01");
+	// A bool keeps its word in every format; Hex turns only its code (WL-9 B1).
+	CHECK(wf::text(encode("true", type(ux::WatchScalar::Boolean, 1)).value, WatchNumberFormat::Hex) == "true (0x01)");
 	CHECK(wf::range(type(ux::WatchScalar::U16, 2)) == "0 to 65535 (0x0000 to 0xFFFF)");
 	CHECK(wf::range(type(ux::WatchScalar::S16, 2)) == "-32768 to 32767, or 0x0000 to 0xFFFF as bits");
 	CHECK(wf::range(type(ux::WatchScalar::F32, 4)).isEmpty());
-	CHECK(encode("65536", type(ux::WatchScalar::U16, 2)).error ==
-	      "“65536” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
-	CHECK(encode("0x10000", type(ux::WatchScalar::U16, 2)).error ==
-	      "“0x10000” is out of range for u16. Enter a number from 0 to 65535 (0x0000 to 0xFFFF).");
-	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error.contains("Enter a number from 0 to 255 (0x00 to 0xFF)"));
+	// The range in words, the typed text not echoed (WL-9 C3).
+	CHECK(encode("65536", type(ux::WatchScalar::U16, 2)).error == "u16 takes 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("0x10000", type(ux::WatchScalar::U16, 2)).error == "u16 takes 0 to 65535 (0x0000 to 0xFFFF).");
+	CHECK(encode("-1", type(ux::WatchScalar::U8, 1)).error == "u8 takes 0 to 255 (0x00 to 0xFF).");
+	CHECK(encode("123455555555555", type(ux::WatchScalar::U32, 4)).error ==
+	      "u32 takes 0 to 4294967295 (0x00000000 to 0xFFFFFFFF).");
 	CHECK(encode("40000", type(ux::WatchScalar::S16, 2)).error ==
-	      "“40000” is out of range for i16. Enter a number from -32768 to 32767, or 0x0000 to 0xFFFF as bits.");
+	      "i16 takes -32768 to 32767, or 0x0000 to 0xFFFF as bits.");
 	// A row shown in hex hears its range in hex first (WL-8).
 	CHECK(wf::encode(u"65536", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex).error ==
-	      "“65536” is out of range for u16. Enter a number from 0x0000 to 0xFFFF (0 to 65535).");
+	      "u16 takes 0x0000 to 0xFFFF (0 to 65535).");
 	CHECK(wf::encode(u"0x10000", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex).error ==
-	      "“0x10000” is out of range for u16. Enter a number from 0x0000 to 0xFFFF (0 to 65535).");
+	      "u16 takes 0x0000 to 0xFFFF (0 to 65535).");
 	CHECK(wf::fromHex(u"0x100", type(ux::WatchScalar::U8, 1), WatchNumberFormat::Hex).error ==
-	      "“0x100” is out of range for u8. Enter a number from 0x00 to 0xFF (0 to 255).");
+	      "u8 takes 0x00 to 0xFF (0 to 255).");
 	CHECK(wf::encode(u"40000", type(ux::WatchScalar::S16, 2), WatchNumberFormat::Hex).error ==
-	      "“40000” is out of range for i16. Enter a number from 0x0000 to 0xFFFF as bits, or -32768 to 32767.");
-	CHECK(wf::encode(u"65536", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Dec).error.contains("from 0 to 65535 (0x0000"));
+	      "i16 takes 0x0000 to 0xFFFF as bits, or -32768 to 32767.");
+	CHECK(wf::encode(u"65536", type(ux::WatchScalar::U16, 2), WatchNumberFormat::Dec).error.contains("takes 0 to 65535 (0x0000"));
 	CHECK(wf::range(type(ux::WatchScalar::U16, 2), WatchNumberFormat::Hex) == "0x0000 to 0xFFFF (0 to 65535)");
 	CHECK(encode("abc", type(ux::WatchScalar::U16, 2)).error == "“abc” is not a number for u16.");
 	CHECK(encode("+7", type(ux::WatchScalar::U16, 2)).error == "“+7”: write it without the + sign.");
@@ -356,7 +379,9 @@ void typedEditors()
 	      !data(ux::WatchlistModel::SampleExactRole).toBool());
 	CHECK(model.setResult(0, "Ok", "0.1", ux::WatchSample::ofFloating(0.1f),
 	                      bits(ux::WatchScalar::F32, 4, 0x3dcccccd)));
-	CHECK(data(ux::WatchlistModel::EditorTextRole) == "0.100000001" &&
+	// Original opens a float in its shortest exact text (WL-9 B1); it reads
+	// back to the same bits.
+	CHECK(data(ux::WatchlistModel::EditorTextRole) == "0.1" &&
 	      !data(ux::WatchlistModel::CategoricalRole).toBool());
 	CHECK(model.setResult(0, "Ok", "negative zero", ux::WatchSample::ofFloating(-0.0),
 	                      bits(ux::WatchScalar::F64, 8, UINT64_C(0x8000000000000000))));

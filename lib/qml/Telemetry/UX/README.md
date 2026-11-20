@@ -78,14 +78,21 @@ Actions retain the existing provider signatures:
   on its row, then an editor in place, one row tall: a text field, or a choice
   for a bool or an enum (with "Enter code…"). Edits are live. Enter keeps the
   value, Tab and Shift+Tab keep it and open the next or previous cell, Escape
-  puts back the value the cell had when it was opened, and leaving with text
-  that is no value puts back the last value. Ctrl+Enter applies the draft, or
-  executes or calls. A cell opens only on a row whose `editable` role is true
-  and never while changes are off or the provider is busy. While its text is
-  no value the cell says what it takes, from the row's `takes` role ("Enter a
-  number from 0 to 255.", "Enter a number.", "Enter true or false.", "Enter
-  Idle, Run or Stop, or a code."); a float says what it encodes. Integers also
-  take hex, the value's bits at its width (0xFF, 0x3F800000).
+  puts back the value the cell had when it was opened. On text that is no
+  value Enter and Ctrl+Enter are refused (WL-9 C2): the editor stays open, its
+  border and line 2 in the error colour, the refusal announced; Escape, Tab,
+  Shift+Tab and a click always leave, and leaving puts back the last value
+  with "Not changed: “300” · u8 takes 0 to 255." under the cell. Ctrl+Enter
+  applies the draft, or executes or calls, never from text that is no value.
+  A cell opens only on a row whose `editable` role is true and never while
+  changes are off or the provider is busy. While its text is no value the
+  cell says what it takes, from the row's `takes` role ("u8 takes 0 to 255.",
+  "Enter a number.", "Enter true or false.", "Enter Idle, Run or Stop, or a
+  code."); a float says what it encodes. Integers also take hex, the value's
+  bits at its width (0xFF, 0x3F800000). Line 2 is whole: its laid-out
+  height with `spacing` below, wrapped up to three lines from the name's x.
+  After an Apply the device refused, each edited value keeps its text and
+  shows its `note` role ("Not applied · device holds 3") under it.
 - **No Edit button.** A Field's values are editable while it has been read,
   is writable and changes are allowed (`ValueModel::setEditOffer`, which the
   Dynamic provider and the Inspector example keep up to date; the Static
@@ -144,11 +151,15 @@ Actions retain the existing provider signatures:
   or `"hex"`) is how the Watchlist shows its numbers; a row may have its own
   (`setWatchRowFormat(QVariantList of rows, format) -> bool`, `""` to follow
   the Watchlist's). Formats are made from each reading's exact bits, never a
-  new read: Original as the type means it (an enum by its name, `true`, f32
-  `1.5`), Dec integers and codes in decimal (a bool `1`), Hex `0x`, uppercase,
-  padded to the type's width, floats as their raw bits (`0x3FC00000`). Rows
-  carry `shownText` (the value in the row's form) and `format` (the row's own,
-  or `""`); `text` keeps its fixed form for recording and Trend. A row's own
+  new read (WL-9 B1): Original as the type means it (a float in its shortest
+  exact text, `0.1`; a bool or an enum its word with its code, `false (0)`,
+  `Idle (2)`), Dec as Original but a float with every digit its bits hold
+  (`0.100000001`), Hex `0x`, uppercase, padded to the type's width, floats as
+  their raw bits (`0x3FC00000`), a word keeping its word and only its code in
+  hex (`Idle (0x02)`). Rows carry `shownText` (the value in the row's form),
+  `valueWord` and `valueCode` (a bool's or an enum's two parts) and `format`
+  (the row's own, or `""`); `text` keeps its fixed form for recording and
+  Trend. A row's own
   format is remembered by path, so a value removed and added again, after a
   reconnect or from a project, comes back in it: `watchRowFormats() ->
   QVariantMap` (`{"device.Config.Gain": "hex"}`) and `setWatchRowFormats(map)`
@@ -416,11 +427,21 @@ The Static provider does not expose this method or `canWriteWatch`; the shared
 view therefore leaves its rows read-only.
 
 The shared `WatchlistPanel` draws the row family's columns (Name, Value, Type,
-rw, Status, ×): Value, Type and Status are as wide as the widest text they have
-shown and only grow until the list is cleared or the zoom changes; as the room
-for names shrinks, rw hides, Type narrows then hides, and Status becomes a mark
-whose word is in its tooltip. A good reading is its value alone (no dot); a
-reading not made yet is "–". A row is one line except while it is edited.
+rw, Status, ×), each at one x on every row (WL-9): Value, Type and Status are
+as wide as the widest text they have shown and only grow until the list is
+cleared or the zoom changes; the Name column stops at the widest name plus a
+gap (at least 24 body heights), so values stay beside their names and × beside
+the last column. As the room for names shrinks, rw hides, Status becomes a
+mark whose word is in its tooltip, names elide to their floor, then a row's
+type gives way at its right; Type never hides. rw shows on every row of a
+Field, its members included. A good reading is its value alone (no dot); a
+reading not made yet is "–". A row is one line, or two to four while its line
+2 says something. A refused text stays held in its row, struck, with what the
+device holds under it (`holdWatchText`, `dropWatchHeld`, the roles
+`heldText`, `heldReason`, `heldKind`); a write shows as it runs and how it
+ended (`writeState`, `writtenText`, `writtenAt`); a value that changed is
+marked for a second (`changedAt`). The panel uses `KindIcon` and
+`ToolIcon`: a host calls `registerQmlTypes()` before loading it.
 
 Adding, group-adding and removing Fields inserts or removes rows (only Clear
 resets the model), so a persistent index — a view's current row, a Trend's

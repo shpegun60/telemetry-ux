@@ -1334,6 +1334,8 @@ struct ValueModel::Impl {
 	int deepestDepth = 0;
 	// The values sent last, by path ("" for a scalar root, "factor", "a.b[2]").
 	QHash<QString, QString> baseline;
+	// A quiet line under a closed cell, by path (NoteRole, WL-9 C4).
+	QHash<QString, QString> notes;
 	// A structure-only state (resetShape): Qt-owned rows, always current,
 	// nothing to fetch; and which table it is shown in.
 	bool shape = false;
@@ -1645,6 +1647,7 @@ void ValueModel::clear()
 	impl_->tree.clear();
 	impl_->inspector = {};
 	impl_->baseline.clear();
+	impl_->notes.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
 	impl_->shape = false;
@@ -1753,6 +1756,7 @@ void ValueModel::resetSource(const Inspector* inspector, const Workbench* workbe
 	beginResetModel();
 	impl_->tree.clear();
 	impl_->baseline.clear();
+	impl_->notes.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
 	impl_->shape = false;
@@ -1804,6 +1808,7 @@ void ValueModel::resetShape(const telemetry::runtime::RuntimeSchema& schema, Typ
 	beginResetModel();
 	impl_->tree.clear();
 	impl_->baseline.clear();
+	impl_->notes.clear();
 	impl_->stale = false;
 	impl_->staleNote.clear();
 	impl_->beginRows();
@@ -1938,6 +1943,13 @@ QVariant ValueModel::data(const QModelIndex& index, int role) const
 			return impl_->stale;
 		case StaleNoteRole:
 			return impl_->staleNote;
+		case KindRole:
+			// The kind's glyph (the Device tree design): a struct, an array (a
+			// range of one too), or a value.
+			return row->aggregate ? (row->type == QStringLiteral("struct") ? QStringLiteral("struct") : QStringLiteral("array"))
+			                      : QStringLiteral("value");
+		case NoteRole:
+			return row->scalar ? impl_->notes.value(Impl::pathKey(row->valuePath)) : QString{};
 		case TakesRole: {
 			if (!row->scalar)
 				return QString{};
@@ -1998,7 +2010,51 @@ QHash<int, QByteArray> ValueModel::roleNames() const
 	        {PathRole, "path"},
 	        {SummaryPartsRole, "summaryParts"},
 	        {SummaryKindRole, "summaryKind"},
-	        {UpdatedRole, "updated"}};
+	        {UpdatedRole, "updated"},
+	        {KindRole, "kind"},
+	        {NoteRole, "note"}};
+}
+
+QHash<QString, QString> ValueModel::unsentTexts() const
+{
+	QHash<QString, QString> out;
+	if (!impl_->current() || impl_->shape)
+		return out;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->scalar && impl_->unsentLeaf(*row))
+			out.insert(Impl::pathKey(row->valuePath), row->editorText);
+	return out;
+}
+
+void ValueModel::setNotes(const QHash<QString, QString>& notes)
+{
+	impl_->notes = notes;
+	if (changing())
+		return;
+	QVector<QModelIndex> indices;
+	for (const auto* row : std::as_const(impl_->tree.rows))
+		if (row->scalar)
+			indices.append(createIndex(row->row, 0, row->token));
+	const QPointer<ValueModel> alive(this);
+	for (const auto& index : indices) {
+		if (!alive)
+			return;
+		if (impl_->tree.at(this, index))
+			Q_EMIT dataChanged(index, index, {NoteRole});
+	}
+}
+
+void ValueModel::clearNote(const QModelIndex& index)
+{
+	const auto* row = impl_->tree.at(this, index);
+	if (!row || !impl_->notes.remove(Impl::pathKey(row->valuePath)) || changing())
+		return;
+	Q_EMIT dataChanged(index, index, {NoteRole});
+}
+
+bool ValueModel::hasNotes() const noexcept
+{
+	return !impl_->notes.isEmpty();
 }
 
 QHash<QString, QString> ValueModel::texts() const

@@ -131,6 +131,10 @@ def main():
         # since WL-2 and BA-1 but not run here until LP-1; and the live Plot.
         for name, binary_name, pattern, least in (
                 ('watch-tree', 'telemetry_qml_watch_tree', r'Watch tree checks=(\d+) warnings=0', 240),
+                # The Watchlist design of 20 November 2026 (WL-9, section H):
+                # words and codes, the commit rules, held refused texts, write
+                # feedback, one last-action line, the Name cap, the change mark.
+                ('watch-look', 'telemetry_qml_watch_look', r'Watch look checks=(\d+) warnings=0', 300),
                 ('batch-add', 'telemetry_qml_batch_add', r'Batch add checks=(\d+) warnings=0', 45),
                 ('trace-plot', 'telemetry_qml_trace_plot', r'Trace plot checks=(\d+) warnings=0', 40),
                 ('value-cell', 'telemetry_qml_value_cell', r'Value cell checks=(\d+) warnings=0', 60),

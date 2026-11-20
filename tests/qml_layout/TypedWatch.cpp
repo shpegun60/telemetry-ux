@@ -1,4 +1,5 @@
 // Real keyboard/pointer checks over the reusable typed Watchlist editor. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QtCore/QDir>
 #include <QtGui/QColor>
 #include <QtGui/QGuiApplication>
@@ -93,6 +94,8 @@ void click(QQuickWindow* window, QQuickItem* target) {
 int main(int argc, char** argv) {
     QGuiApplication app(argc,argv);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+    // The Watchlist's tree uses the module's KindIcon (ToolIcon).
+    telemetry::ux::registerQmlTypes();
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& text) {
         if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ++warnings;
         std::fprintf(stderr,"%s\n",qPrintable(text));
@@ -260,10 +263,25 @@ int main(int argc, char** argv) {
             CHECK(caption->isVisible() && caption->property("text").toString() == "Enter a whole number." && caption->property("lineCount").toInt() <= 2);
             if (argc > 1)
                 CHECK(window->grabWindow().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QStringLiteral("watch-edit-480-error.png"))));
+            // Enter is refused (WL-9 C2): the editor stays open, its border in
+            // the error colour, the refusal said; Tab leaves and holds the text
+            // in the row, struck, with why under it.
             QTest::keyClick(window,Qt::Key_Return); settle();
+            CHECK(row->property("editing").toBool() && writes.count == base + 3);
+            CHECK(cellOf(row)->property("announced").toInt() == 1 &&
+                  cellOf(row)->property("lastAnnounced").toString() == "Enter a whole number.");
+            QTest::keyClick(window,Qt::Key_Tab); settle();
             CHECK(!row->property("editing").toBool() && writes.count == base + 3);
+            CHECK(rowAt(list,3)->property("editing").toBool());
+            QTest::keyClick(window,Qt::Key_Escape); settle();
+            CHECK(named(row,"valueHeldText") && named(row,"valueHeldText")->property("text").toString() == "4x");
             caption = named(row,"valueCaption");
-            CHECK(caption->isVisible() && caption->property("text").toString() == "Not changed: Enter a whole number.");
+            CHECK(caption->isVisible() && caption->property("text").toString()
+                  == "Not written: Enter a whole number · device holds 18446744073709551615");
+            // Esc on the row lets go of it.
+            list->setProperty("currentIndex",2); list->forceActiveFocus(); settle();
+            QTest::keyClick(window,Qt::Key_Escape); settle();
+            CHECK(!named(row,"valueHeldText") || !named(row,"valueHeldText")->isVisible());
             for (const int width : {1900,560,360}) {
                 window->setWidth(width); settle();
                 row = edit(0);

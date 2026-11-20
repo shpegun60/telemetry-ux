@@ -5,6 +5,11 @@
 		const double bodyPx = rig.call("bodyPixels").toDouble();
 		const double indent = rig.call("indentPixels").toDouble();
 		const double padding = rig.call("paddingPixels").toDouble();
+		// The kind glyph's slot before each name (the kinds design, F): its
+		// size and a gap. The name starts after it; the step's room and the
+		// hard cap leave room for it.
+		const double glyph = rig.call("glyphPixels").toDouble();
+		const double floorPx = rig.call("nameFloorPixels").toDouble();
 		CHECK(bodyPx > 8 && indent > 8 && padding > 2);
 
 		// 1. One root per table.
@@ -44,13 +49,13 @@
 			// The step the design's rule gives from the measured columns: 16 px
 			// while the deepest level keeps 80 px for its name.
 			const double nameEnd = num(rig.row(0), "cellSceneX") - num(rig.row(0), "treeX") - gap;
-			const double step = std::max(std::floor(indent / 2), std::min(indent, std::floor((nameEnd - (padding + indent) - 6 * bodyPx) / 4)));
+			const double step = std::max(std::floor(indent / 2), std::min(indent, std::floor((nameEnd - (padding + indent) - 6 * bodyPx - glyph) / 4)));
 			if (width >= 360) CHECK(step == indent);
 			for (const auto& item : rig.rows()) {
 				const auto row = item.toMap();
 				const double depth = num(row, "depth");
-				if (std::abs(num(row, "nameX") - (padding + step * depth + indent)) >= 0.6) qWarning() << width << step << nameEnd << row.value("name") << depth << num(row, "nameX");
-				CHECK(std::abs(num(row, "nameX") - (padding + step * depth + indent)) < 0.6);
+				if (std::abs(num(row, "nameX") - (padding + step * depth + indent + glyph)) >= 0.6) qWarning() << width << step << nameEnd << row.value("name") << depth << num(row, "nameX");
+				CHECK(std::abs(num(row, "nameX") - (padding + step * depth + indent + glyph)) < 0.6);
 				CHECK(std::abs(num(row, "chevronX") - (padding + step * depth)) < 0.6);
 				CHECK(row.value("chevronVisible").toBool() == row.value("hasChildren").toBool());
 			}
@@ -89,16 +94,16 @@
 			for (const auto& item : rig.rows()) {
 				const auto row = item.toMap();
 				const double depth = num(row, "depth");
-				if (depth == 1) step = num(row, "nameX") - (padding + indent);
+				if (depth == 1) step = num(row, "nameX") - (padding + indent + glyph);
 			}
 			const double nameEnd280 = num(rig.row(0), "cellSceneX") - num(rig.row(0), "treeX") - gap;
-			const double expected = std::max(std::floor(indent / 2), std::min(indent, std::floor((nameEnd280 - (padding + indent) - 6 * bodyPx) / 4)));
+			const double expected = std::max(std::floor(indent / 2), std::min(indent, std::floor((nameEnd280 - (padding + indent) - 6 * bodyPx - glyph) / 4)));
 			CHECK(step < indent && step >= std::floor(indent / 2) && step == expected);
 			for (const auto& item : rig.rows()) {
 				const auto row = item.toMap();
 				const double depth = num(row, "depth");
-				CHECK(std::abs(num(row, "nameX") - (padding + indent + step * depth)) < 0.6);
-				CHECK(num(row, "nameW") >= 4 * bodyPx - 1);
+				CHECK(std::abs(num(row, "nameX") - (padding + indent + step * depth + glyph)) < 0.6);
+				CHECK(num(row, "nameW") >= floorPx - 1);
 			}
 		}
 		rig.call("use", QStringLiteral("deep"));
@@ -110,7 +115,7 @@
 			double previousX = -1;
 			for (const auto& item : rig.rows()) {
 				const auto row = item.toMap();
-				CHECK(num(row, "nameW") >= 4 * bodyPx - 1);
+				CHECK(num(row, "nameW") >= floorPx - 1);
 				CHECK(num(row, "nameX") > previousX);
 				previousX = num(row, "nameX");
 			}

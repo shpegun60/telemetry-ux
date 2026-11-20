@@ -108,6 +108,8 @@ ApplicationWindow {
                 x: parent.width - width
                 width: 60
                 editorRoom: parent.width - width - Type.bodyPixels * 2
+                // Line 2's room to the left, as Details gives it (WL-9 C3).
+                captionRoom: parent.width - width - Type.bodyPixels * 2
                 name: "Pi"; typeText: "f32"; editable: true
                 value: piRow.text; editorText: piRow.text
                 canonicalText: piRow.text === "0.1" ? "0.100000001" : piRow.text
@@ -115,7 +117,7 @@ ApplicationWindow {
                 setText: function(text) { return piRow.set(text) }
             }
         }
-        QtObject { id: draftLog; objectName: "draftLog"; property var committed: []; property int checked: 0; property string shown: "3" }
+        QtObject { id: draftLog; objectName: "draftLog"; property var committed: []; property int checked: 0; property string shown: "3"; property string held: ""; property string heldReason: "" }
         // The Watchlist's cell: a draft, written only when kept.
         ValueCell {
             id: draftCell
@@ -127,6 +129,9 @@ ApplicationWindow {
             note: "Writes all 3 members of Config."
             noteDetail: "Enter reads Config, sets Gain in it and writes all 3 members back."
             commitText: function(text) { draftLog.committed = draftLog.committed.concat([text]); draftLog.shown = text }
+            heldText: draftLog.held
+            heldReason: draftLog.heldReason
+            onTextHeld: function(text, reason) { draftLog.held = text; draftLog.heldReason = reason }
             checkText: function(text) {
                 draftLog.checked++
                 return /^\d+$/.test(text) && Number(text) <= 255 ? ({ ok: true, preview: "" })

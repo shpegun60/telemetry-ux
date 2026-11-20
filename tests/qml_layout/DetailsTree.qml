@@ -32,8 +32,35 @@ Window {
         property var values: fieldModel
         property var responses: emptyResponses
         signal readFinished(bool published)
-        function refresh() { }
-        function setScalarText(index, text) { return values.setScalar(index, text) }
+        // WL-9 C4: a device that refuses every Apply, said once in the status
+        // line; the draft stays, the Field is read once, no cell is blamed.
+        property var detailsStatus: null
+        property int applies: 0
+        property int reads: 0
+        // The first change opens a draft, as the real provider's (only in the
+        // WL-9 checks: the earlier ones edit with no draft).
+        property bool draftOpens: false
+        function refresh() { ++reads }
+        function setScalarText(index, text) {
+            const taken = values.setScalar(index, text)
+            if (taken && draftOpens) {
+                editing = true
+                detailsStatus = null
+            }
+            return taken
+        }
+        function apply() {
+            ++applies
+            detailsStatus = { text: "Apply refused " + Qt.formatTime(new Date(), "HH:mm:ss")
+                                    + " · the device does not take these values", failed: true, tip: "" }
+            refresh()
+            values.refuse()
+        }
+        function cancelEdit() {
+            values.cancelDraft()
+            editing = false
+            detailsStatus = null
+        }
     }
     EndpointPanel {
         id: panel
@@ -72,6 +99,9 @@ Window {
     function bodyPixels() { return Type.bodyPixels }
     function indentPixels() { return Type.indent }
     function paddingPixels() { return Type.padding }
+    function glyphPixels() { return Type.iconSize + Type.spacing }
+    function setBody(points) { Type.body = points }
+    function nameFloorPixels() { return Type.nameFloor }
     function valueSeen() { return panel.valueSeen }
     function panelWidth() { return panel.width }
     function openRowMenu(r) { panel.openMenu(view(), r) }
@@ -101,6 +131,9 @@ Window {
         } else if (kind === "other") {
             fake.commandSelected = false; fake.serviceSelected = false
             fake.selection = "device.Other"; fake.values = fieldModel
+        } else if (kind === "byte") {
+            fake.commandSelected = false; fake.serviceSelected = false
+            fake.selection = "device.Bytes"; fake.values = byteModel
         }
         fake.readFinished(true)
     }
@@ -213,6 +246,16 @@ Window {
     function contentWidth() { return view().contentWidth }
     function viewWidth() { return view().width }
     function headingCount(name) { return findAll(panel, name, []).filter(i => i.visible).length }
+    // WL-9: the cell of a row, the status line, the provider.
+    function cellAt(r) {
+        const it = view().itemAtCell(Qt.point(0, r))
+        return it ? it.valueItem : null
+    }
+    function rowItem(r) { return view().itemAtCell(Qt.point(0, r)) }
+    function provider() { return fake }
+    function statusText() { const l = find(panel, "endpointStatusLine"); return l && l.visible ? l.text : "" }
+    function statusGlyph() { const g = find(panel, "endpointStatusGlyph"); return !!g && g.visible }
+    function color(name) { return String(Theme[name]) }
     function valueTextTruncated(r) {
         const it = view().itemAtCell(Qt.point(0, r))
         const t = find(it, "valueText")

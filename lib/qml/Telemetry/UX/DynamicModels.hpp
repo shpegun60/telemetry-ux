@@ -229,7 +229,13 @@ public:
 		// The value differs from the one the table showed before the action
 		// that just finished (noteUpdate()): the cell flashes once. False on
 		// a branch, and on every row of a table shown for the first time.
-		UpdatedRole
+		UpdatedRole,
+		// What the row is, for its glyph (the Device tree design, 18 Nov
+		// 2026): "struct", "array" (a range of an array too) or "value".
+		KindRole,
+		// A quiet line under the value's closed cell (WL-9 C4): "Not applied
+		// · device holds 3" on a value kept after a refused Apply; "" else.
+		NoteRole
 	};
 	Q_ENUM(Role)
 	// Which table a structure-only state is shown in: a Field's value (with
@@ -297,6 +303,14 @@ public:
 	[[nodiscard]] QString baselineLine() const;
 	// The rows whose value is not yet sent.
 	[[nodiscard]] int unsentCount() const;
+	// The values not yet sent, by path, as typed (editorText): a draft's
+	// edited values, kept when the device refuses its Apply (WL-9 C4).
+	[[nodiscard]] QHash<QString, QString> unsentTexts() const;
+	// Quiet lines under closed cells, by path (NoteRole); a reset drops them,
+	// clearNote drops one (the user edits its value).
+	void setNotes(const QHash<QString, QString>& notes);
+	void clearNote(const QModelIndex& index);
+	[[nodiscard]] bool hasNotes() const noexcept;
 	// Every row is from an earlier run; note says which, for the tooltip.
 	void setStale(bool stale, const QString& note = {});
 	[[nodiscard]] bool stale() const noexcept;

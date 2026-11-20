@@ -5,14 +5,19 @@
  * SPDX-License-Identifier: MIT
  *
  * The Watchlist keeps every reading as the value's little-endian bits, so a
- * form is chosen without a new read and never through a double:
- *  - Original, as the type means it: an enum by its name, a bool true/false,
- *    numbers as the device sent them (f32 1.5, i16 -1).
- *  - Dec: integers and enum codes in decimal, signed at their width; a bool
- *    1/0; floats as in Original.
+ * form is chosen without a new read and never through a double (WL-9 B1):
+ *  - Original, as the type means it: integers in decimal; a float in the
+ *    shortest decimal that reads back to the same bits (f32 0.1); a bool or
+ *    an enum its word with its code, as its choice list labels it:
+ *    "false (0)", "Idle (2)", "Unknown (7)", a bool byte of 2 "true (2)".
+ *  - Dec: as Original, except that a float shows every significant digit
+ *    its bits hold, 9 for f32 and 17 for f64, trailing zeros dropped
+ *    (0.100000001): the stored value, not the rounded one.
  *  - Hex: "0x", uppercase, zero-padded to the type's width, the number's bits
  *    most significant first (not the byte order in memory); f32 and f64 their
- *    raw bits, 0x3FC00000; a bool 0x01; an enum its code.
+ *    raw bits, 0x3FC00000; a signed type its two's complement. A bool or an
+ *    enum keeps its word, only its code turns: "Idle (0x02)", "Off (0xFF)".
+ * No digit grouping and "." as the decimal separator in every form.
  * A write may be typed in hex whatever is shown: fromHex turns it into the
  * value's canonical text, the form the provider's write takes. Qt only.
  */
@@ -35,8 +40,17 @@ namespace watch_format {
 [[nodiscard]] std::optional<WatchNumberFormat> parse(QStringView name);
 [[nodiscard]] QString name(WatchNumberFormat format);
 
-// The value in format; empty without a value. names maps an enum's codes (its
-// bits at its width) to their names, for Original.
+// A value as its two parts: a bool's or an enum's word ("Idle", "false",
+// "Unknown") and its code in the form ("2", "0x02"); a number has its text as
+// the code and no word. names maps an enum's codes (its bits at its width) to
+// their names; without them an enum has no word, and Original nothing at all.
+struct Parts {
+	QString word;
+	QString code;
+};
+[[nodiscard]] Parts parts(const WatchValueBits& value, WatchNumberFormat format,
+                          const QHash<quint64, QString>* names = nullptr);
+// The value in format, "Idle (2)" or "0.1"; empty without a value.
 [[nodiscard]] QString text(const WatchValueBits& value, WatchNumberFormat format,
                            const QHash<quint64, QString>* names = nullptr);
 
@@ -55,7 +69,9 @@ struct Parsed {
 
 // What a typed value would write - decimal, hex (0x...), true or false - as
 // the value's bits at its type, or why not in words: a number out of range
-// says the type's range in decimal and in hex, the row's form (form) first.
+// says the type's range in decimal and in hex, the row's form (form) first,
+// without the typed text ("u32 takes 0 to 4294967295 (0x00000000 to
+// 0xFFFFFFFF).", WL-9 C3): the text is in the editor or held in the cell.
 // Empty text gives neither. An enum takes its code; its names are the editor's.
 struct Encoded {
 	WatchValueBits value;

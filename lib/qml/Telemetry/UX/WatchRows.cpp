@@ -6,6 +6,7 @@
  */
 #include "WatchRows.hpp"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QStringView>
 #include <algorithm>
@@ -17,10 +18,13 @@ namespace telemetry::ux {
 namespace {
 
 // The source's roles this model passes on, by name, in Role order from NameRole.
-constexpr std::array<const char*, 19> forwarded{
+constexpr std::array<const char*, 28> forwarded{
     "name", "status", "text", "writable", "sampleValue", "sampleExact", "editorText", "editorKind",
     "editorChoices", "editorChoicesTruncated", "typeText", "access", "leafStart", "writeScope",
-    "writeRefusal", "watchKey", "member", "shownText", "format"};
+    "writeRefusal", "watchKey", "member", "shownText", "format", "valueWord", "valueCode",
+    "heldText", "heldReason", "heldKind", "writeState", "writtenText", "writtenAt", "changedAt"};
+static_assert(forwarded.size() == WatchRows::ChangedAtRole - WatchRows::NameRole + 1,
+              "every forwarded name has its role, in order");
 
 const QString valuePrefix = QStringLiteral("v\x1f");
 const QString nodePrefix = QStringLiteral("p\x1f");
@@ -289,6 +293,26 @@ int WatchRows::parentRow(int row) const
 		return -1;
 	const auto parent = shape_.nodes.at(shape_.rows.at(row)).parent;
 	return parent > 0 ? rowOfNode_.value(parent, -1) : -1;
+}
+
+QVariantMap WatchRows::branchSpan(int row) const
+{
+	const QVariantMap none{{QStringLiteral("level"), -1}, {QStringLiteral("from"), 0}, {QStringLiteral("to"), -1}};
+	if (!tree_ || !settled() || row < 0 || row >= count())
+		return none;
+	const auto& node = shape_.nodes.at(shape_.rows.at(row));
+	int branch = row;
+	if (node.children.isEmpty() || folded_.contains(node.path))
+		branch = parentRow(row);
+	if (branch < 0)
+		return none;
+	const int level = shape_.nodes.at(shape_.rows.at(branch)).depth;
+	int last = branch;
+	for (int at = branch + 1; at < count() && shape_.nodes.at(shape_.rows.at(at)).depth > level; ++at)
+		last = at;
+	if (last == branch)
+		return none;
+	return {{QStringLiteral("level"), level}, {QStringLiteral("from"), branch + 1}, {QStringLiteral("to"), last}};
 }
 
 void WatchRows::unfoldAbove(const QString& path)
@@ -826,7 +850,8 @@ void WatchRows::apply(Shape next)
 	if (count() > 0)
 		Q_EMIT dataChanged(index(0), index(count() - 1),
 		                   {SourceRowRole, DepthRole, BranchRole, ExpandedRole, NodeRole, LeavesRole, NestedRole,
-		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, ParentLabelRole});
+		                    TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, ParentLabelRole,
+		                    HeldBelowRole, ChangedBelowRole});
 	setCount(before);
 	// A row that went, or that a fold hid, leaves the selection.
 	pruneSelection();
@@ -953,12 +978,13 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 	bool texts = roles.isEmpty();
 	bool outcome = roles.isEmpty();
 	bool formats = roles.isEmpty();
+	bool marks = roles.isEmpty();
 	QList<int> own;
 	if (!roles.isEmpty()) {
 		if (roles != lastSource_) {
 			lastSource_ = roles;
 			lastOwn_.clear();
-			lastTexts_ = lastOutcome_ = lastFormat_ = false;
+			lastTexts_ = lastOutcome_ = lastFormat_ = lastMarks_ = false;
 			for (const int role : roles) {
 				if (role == nameRole) {
 					lastSource_.clear();
@@ -970,17 +996,20 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 				if (found == ownRole_.cend())
 					continue;
 				lastOwn_.append(found.value());
-				lastTexts_ = lastTexts_ || found.value() == TextRole || found.value() == ShownTextRole;
+				lastTexts_ = lastTexts_ || found.value() == TextRole || found.value() == ShownTextRole ||
+				             found.value() == ValueWordRole;
 				lastOutcome_ = lastOutcome_ || found.value() == StatusRole || found.value() == AccessRole ||
 				               found.value() == TypeTextRole;
 				lastFormat_ = lastFormat_ || found.value() == FormatRole;
+				lastMarks_ = lastMarks_ || found.value() == HeldTextRole || found.value() == ChangedAtRole;
 			}
 		}
 		own = lastOwn_;
 		texts = lastTexts_;
 		outcome = lastOutcome_;
 		formats = lastFormat_;
-		if (own.isEmpty() && !texts && !outcome && !formats)
+		marks = lastMarks_;
+		if (own.isEmpty() && !texts && !outcome && !formats && !marks)
 			return;
 	} else if (nameRole >= 0) {
 		// Every role at once may hide a new path, or in the tree a new place
@@ -1020,8 +1049,9 @@ void WatchRows::sourceDataChanged(const QModelIndex& topLeft, const QModelIndex&
 			for (int p = parent; p > 0 && shape_.nodes.at(p).depth > 0 && firstLeaf(shape_.nodes.at(p)) == source;
 			     p = shape_.nodes.at(p).parent)
 				dirtyParents_.insert(p);
-		// Every node above shows the format its values share.
-		if (formats)
+		// Every node above shows the format its values share, and a folded
+		// one the held texts and the changes under it.
+		if (formats || marks)
 			for (int p = parent; p > 0; p = shape_.nodes.at(p).parent)
 				dirtyParents_.insert(p);
 	}
@@ -1046,7 +1076,8 @@ void WatchRows::tellParents()
 		const int row = rowOfNode_.value(node, -1);
 		if (row >= 0)
 			Q_EMIT dataChanged(index(row), index(row),
-			                   {TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, FormatRole});
+			                   {TextRole, ShownTextRole, StatusRole, TypeTextRole, AccessRole, FormatRole,
+			                    HeldBelowRole, ChangedBelowRole});
 	}
 }
 
@@ -1100,8 +1131,11 @@ QString WatchRows::summary(const Node& node) const
 		const auto& at = shape_.nodes.at(child);
 		QString value;
 		if (at.source >= 0) {
+			// A glance: a bool's or an enum's word without its code (WL-9 B2),
+			// a number in the row's format.
+			const auto word = sourceData(at.source, ValueWordRole).toString();
 			const auto shown = sourceData(at.source, ShownTextRole);
-			value = shown.isValid() ? shown.toString() : sourceData(at.source, TextRole).toString();
+			value = !word.isEmpty() ? word : shown.isValid() ? shown.toString() : sourceData(at.source, TextRole).toString();
 			if (value.isEmpty())
 				value = QStringLiteral("–");
 		} else {
@@ -1111,6 +1145,46 @@ QString WatchRows::summary(const Node& node) const
 		parts.append(at.path.mid(at.labelStart) + QLatin1Char(' ') + value);
 	}
 	return QLatin1Char('{') + parts.join(QStringLiteral(", ")) + QLatin1Char('}');
+}
+
+QString WatchRows::heldBelow(const Node& node) const
+{
+	QStringList lines;
+	QVector<const Node*> stack{&node};
+	while (!stack.isEmpty()) {
+		const Node* at = stack.takeLast();
+		if (at->source >= 0) {
+			const auto held = sourceData(at->source, HeldTextRole).toString();
+			if (held.isEmpty())
+				continue;
+			const auto label = at->path.mid(at->labelStart);
+			lines << (sourceData(at->source, HeldKindRole).toString() == QStringLiteral("refused")
+			              ? QCoreApplication::translate("WatchRows", "%1: the device refused %2").arg(label, held)
+			              : QCoreApplication::translate("WatchRows", "%1: %2 was not written").arg(label, held));
+			continue;
+		}
+		for (auto child = at->children.crbegin(); child != at->children.crend(); ++child)
+			stack.append(&shape_.nodes.at(*child));
+	}
+	return lines.join(QLatin1Char('\n'));
+}
+
+QVariantList WatchRows::changedBelow(const Node& node) const
+{
+	QVariantList out;
+	QVector<const Node*> stack{&node};
+	while (!stack.isEmpty()) {
+		const Node* at = stack.takeLast();
+		if (at->source >= 0) {
+			const auto changed = sourceData(at->source, ChangedAtRole).toDouble();
+			if (changed > 0)
+				out.append(changed);
+			continue;
+		}
+		for (const int child : at->children)
+			stack.append(&shape_.nodes.at(child));
+	}
+	return out;
 }
 
 QVariant WatchRows::nodeData(const Node& node, Role role) const
@@ -1131,7 +1205,9 @@ QVariant WatchRows::nodeData(const Node& node, Role role) const
 			return leaf >= 0 ? sourceData(leaf, StatusRole) : QVariant(QString{});
 		}
 		case AccessRole: {
-			if (node.depth != 1)
+			// Every node of a Field shows the Field's mark (WL-9 A1): the
+			// Field, its struct members and its elements. Groups have none.
+			if (node.depth < 1)
 				return QString{};
 			const int leaf = firstLeaf(node);
 			return leaf >= 0 ? sourceData(leaf, AccessRole) : QVariant{};
@@ -1151,7 +1227,17 @@ QVariant WatchRows::nodeData(const Node& node, Role role) const
 		case EditorTextRole:
 		case MemberRole:
 		case WriteRefusalRole:
+		case ValueWordRole:
+		case ValueCodeRole:
+		case HeldTextRole:
+		case HeldReasonRole:
+		case HeldKindRole:
+		case WriteStateRole:
+		case WrittenTextRole:
 			return QString{};
+		case WrittenAtRole:
+		case ChangedAtRole:
+			return 0.0;
 		case FormatRole: {
 			QString shared;
 			bool first = true;
@@ -1212,10 +1298,14 @@ QVariant WatchRows::data(const QModelIndex& index, int role) const
 			return selected_.contains(node.identity);
 		case ParentLabelRole:
 			return parentLabel(node);
+		case HeldBelowRole:
+			return node.source >= 0 || !folded_.contains(node.path) ? QString{} : heldBelow(node);
+		case ChangedBelowRole:
+			return node.source >= 0 || !folded_.contains(node.path) ? QVariantList{} : changedBelow(node);
 		default:
 			break;
 	}
-	if (role < NameRole || role > FormatRole)
+	if (role < NameRole || role > ChangedAtRole)
 		return {};
 	if (node.source < 0)
 		return nodeData(node, static_cast<Role>(role));
@@ -1241,6 +1331,8 @@ QHash<int, QByteArray> WatchRows::roleNames() const
 	names.insert(NestedRole, "nested");
 	names.insert(SelectedRole, "selected");
 	names.insert(ParentLabelRole, "parentLabel");
+	names.insert(HeldBelowRole, "heldBelow");
+	names.insert(ChangedBelowRole, "changedBelow");
 	return names;
 }
 

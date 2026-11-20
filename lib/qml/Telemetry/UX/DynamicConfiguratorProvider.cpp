@@ -13,6 +13,7 @@
 #include "WatchTraces.hpp"
 #include "WatchFormat.hpp"
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QTime>
 #include <QtCore/QPersistentModelIndex>
@@ -387,6 +388,27 @@ struct DynamicConfiguratorProvider::Impl {
 	std::optional<WatchLeaves::Leaf> writeLeaf;
 	QString writeIntended;
 	bool watchWroteLast = false;
+	// WL-9 C4/C5: the row written, by key; the text as typed (what a refusal
+	// holds in the row); when the outcome came (ms since the epoch, 0 while
+	// writing); and whether the outcome line adds what the device holds now.
+	WatchKey writeKey = 0;
+	QString writeTyped;
+	double watchWriteAt = 0;
+	bool watchWriteHolds = false;
+	WatchlistModel* watchModel() const
+	{
+		return qobject_cast<WatchlistModel*>(watch.model());
+	}
+	int writeRow() const
+	{
+		const auto* model = watchModel();
+		return model && writeKey ? model->rowOf(writeKey) : -1;
+	}
+	// Details' Apply the device refused (WL-9 C4): the draft's edited values
+	// by path, put back over what the one read after it finds; whether that
+	// read runs; and whether the status line still says the refusal.
+	QHash<QString, QString> refusedDraft;
+	bool rereadRefused = false, applyRefused = false;
 	EndpointModel endpoints;
 	EndpointDefinitionModel definitions;
 	// The selected Batch item's Field, for its structure before it is read.
@@ -1015,6 +1037,10 @@ struct DynamicConfiguratorProvider::Impl {
 	// the same descriptor fingerprint (WL-8); another device forgets it.
 	void resumeWatch()
 	{
+		// A text held in a row lives across a reconnect to the same device
+		// only (WL-9 C4): another descriptor drops it.
+		if (auto* model = watchModel(); model && current())
+			model->dropHeldExcept(binding->fingerprint());
 		if (!watch.resumes() || watch.active() || !current())
 			return;
 		const auto device = binding->fingerprint();
@@ -1211,6 +1237,9 @@ struct DynamicConfiguratorProvider::Impl {
 		updating = true;
 		std::optional<bool> readDone, applyDone, watchWriteDone;
 		bool continueWatchWrite = false;
+		// A refused Apply's one read (WL-9 C4): asked for after this turn, and
+		// its draft put back over the values it brings.
+		bool rereadNow = false, restoreDraft = false;
 		if (writer && writer->read) {
 			writer->read.reset();
 			writer->action = DynamicViewState::Action::None;
@@ -1224,29 +1253,58 @@ struct DynamicConfiguratorProvider::Impl {
 			watchWriteDone = written && result.refreshCompleted && result.refresh.operation.succeeded() &&
 			                 result.refresh.published;
 			const auto back = *watchWriteDone ? readBack() : QString{};
-			const auto words = [](const char* text) {
-				return QCoreApplication::translate("DynamicConfiguratorProvider", text);
+			// The outcome in words with its time, the values in the row's
+			// format (WL-9 C5); the row shows it too: its write state, and a
+			// refused text held in it (C4).
+			auto* model = watchModel();
+			const int row = writeRow();
+			const auto shown = [&](const QString& text) {
+				return model && row >= 0 ? model->shownFor(row, text) : text;
 			};
+			const auto at = clockText();
+			const auto intended = shown(writeIntended);
+			watchWriteAt = double(QDateTime::currentMSecsSinceEpoch());
+			watchWriteHolds = false;
+			QString rowState;
+			bool held = false;
 			if (written && !back.isEmpty()) {
-				watchWrite = (back == writeIntended ? words("Wrote %1 = %2 · read back %3.")
-				                                    : words("Wrote %1 = %2; the device reads back %3."))
-				                 .arg(writeName, writeIntended, back);
-				watchWriteKind = back == writeIntended ? QStringLiteral("confirmed") : QStringLiteral("differs");
+				const bool same = back == writeIntended;
+				watchWrite = (same ? said("Wrote %1 · %2 = %3 · read back %4")
+				                   : said("Wrote %1 · %2 = %3 · the device reads back %4"))
+				                 .arg(at, writeName, intended, shown(back));
+				watchWriteKind = same ? QStringLiteral("confirmed") : QStringLiteral("differs");
+				rowState = watchWriteKind;
 			} else if (written) {
-				watchWrite = words("Wrote %1 = %2; it could not be read back.").arg(writeName, writeIntended);
-				watchWriteKind = QStringLiteral("unconfirmed");
+				const auto why = !result.refreshCompleted                  ? said("no reply in time")
+				                 : !result.refresh.operation.succeeded() ? whyText(result.refresh.operation)
+				                                                         : said("the reply could not be read");
+				watchWrite = said("Wrote %1 · %2 = %3 · not read back: %4").arg(at, writeName, intended, why);
+				watchWriteKind = rowState = QStringLiteral("unconfirmed");
 			} else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
 			                         result.write.status == cl::Status::BufferTooSmall)) {
-				watchWrite = words("%1 is larger than one write, so a value in it can't be written on its own.")
+				watchWrite = said("Not written · %1 is larger than one write, so a value in it can't be written on its own.")
 				                 .arg(endpoints.fieldPath(writeId));
 				watchWriteKind = QStringLiteral("refused");
+			} else if (result.write.status == cl::Status::OutcomeUnknown) {
+				watchWrite = said("Write not confirmed %1 · %2 = %3 · the reply was lost; it may have been written")
+				                 .arg(at, writeName, intended);
+				watchWriteKind = rowState = QStringLiteral("unconfirmed");
+				watchWriteHolds = true;
 			} else {
-				watchWrite = writeName + (result.write.status == cl::Status::OutcomeUnknown
-				                              ? QStringLiteral(": ")
-				                              : QStringLiteral(" not written: ")) +
-				             operationText(result.write);
-				watchWriteKind = result.write.status == cl::Status::OutcomeUnknown ? QStringLiteral("unconfirmed")
-				                                                                   : QStringLiteral("refused");
+				const auto why = whyText(result.write);
+				watchWrite = said("Write refused %1 · %2 = %3 · %4").arg(at, writeName, intended, why);
+				watchWriteKind = QStringLiteral("refused");
+				watchWriteHolds = true;
+				held = model && row >= 0 &&
+				       model->setHeld(row, writeTyped, said("Refused: %1").arg(why), QStringLiteral("refused"),
+				                      binding ? binding->fingerprint() : QString{});
+			}
+			if (model && row >= 0) {
+				model->setWriteState(row, rowState);
+				// A write that went out drops what the row held; a refusal
+				// replaces it.
+				if (!held && watchWriteKind != QStringLiteral("refused"))
+					model->dropHeld(row);
 			}
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
@@ -1260,7 +1318,17 @@ struct DynamicConfiguratorProvider::Impl {
 				           snapshot.revision == result.revision;
 				status =
 				    *readDone ? QStringLiteral("Read complete") : operationText(result.operation);
-				if (*readDone) {
+				if (std::exchange(rereadRefused, false)) {
+					// The read after a refused Apply: the status line keeps the
+					// refusal, and the draft goes back over what it read.
+					restoreDraft = *readDone;
+					if (*readDone) {
+						valuesAt = clockText();
+						valuesFailed = false;
+					} else {
+						refusedDraft.clear();
+					}
+				} else if (*readDone) {
 					valuesAt = clockText();
 					valuesFailed = false;
 					finished(said("Read %1 · took %L2 ms").arg(valuesAt).arg(took()), false);
@@ -1288,9 +1356,21 @@ struct DynamicConfiguratorProvider::Impl {
 					finished(said("Applied %1 · read back").arg(valuesAt), false);
 				} else if (result.writeCompleted && result.write.succeeded()) {
 					finished(said("Applied %1 · not read back").arg(clockText()), false);
+				} else if (result.writeCompleted && result.write.status == cl::Status::Ok) {
+					// The device refused the Field's write as a whole and does
+					// not say which value it disliked (WL-9 C4): said once here,
+					// no cell blamed; the draft stays and the Field is read once.
+					auto why = whyText(result.write);
+					if (why == said("the device does not take this value"))
+						why = said("the device does not take these values");
+					finished(said("Apply refused %1 · %2").arg(clockText(), why), true);
+					rereadNow = !refusedDraft.isEmpty();
 				} else {
 					finished(said("Write failed %1 · %2").arg(clockText(), whyText(result.write)), true);
+					rereadNow = !refusedDraft.isEmpty();
 				}
+				if (!rereadNow)
+					refusedDraft.clear();
 			}
 			if (state->commanded) {
 				const auto result = *state->commanded;
@@ -1378,14 +1458,19 @@ struct DynamicConfiguratorProvider::Impl {
 					// a failed action's table, which keeps it.
 					const auto valuesBefore = values.shownTexts();
 					const auto responseBefore = responses.shownTexts();
-					if (readDone.value_or(false) || applyDone.value_or(false))
+					if ((readDone.value_or(false) && !restoreDraft) || applyDone.value_or(false))
 						values.noteUpdate();
 					if (serviceDone && serviceDone->first)
 						responses.noteUpdate();
-					values.resetSnapshot(state->view);
+					// A refused Apply's draft stays in view, as sent, until
+					// the read after it (WL-9 C4).
+					if (!rereadNow)
+						values.resetSnapshot(state->view);
 					responses.resetServiceResponse(state->view);
 					values.dropUpdate();
 					responses.dropUpdate();
+					if (restoreDraft)
+						restoreRefusedDraft();
 					if (category == 1 && valuesFailed && !valuesAt.isEmpty() && !valuesBefore.isEmpty()) {
 						// A read that failed: the values from before, marked so.
 						shapeValues(valuesBefore);
@@ -1410,14 +1495,18 @@ struct DynamicConfiguratorProvider::Impl {
 		if (watchWriteDone.has_value()) {
 			// After any finished write attempt (confirmed, refused or of unknown
 			// outcome) the row shows the device's value: read it again at once
-			// while a cycle runs, otherwise read the list once.
+			// while a cycle runs, otherwise read the list once, quietly (WL-9
+			// C4): the write left every value stale, and that read is not the
+			// operator's, so it is not counted in the pace.
 			if (watch.active())
 				watch.wake(writeId);
 			else
-				watch.begin(false);
+				watch.readQuietly();
 		}
 		if (continueWatchWrite)
 			submitWatchWrite();
+		if (rereadNow)
+			readRefused();
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive && readDone)
@@ -1490,12 +1579,90 @@ struct DynamicConfiguratorProvider::Impl {
 		return canonical.isEmpty() ? text.trimmed() : canonical;
 	}
 
+	// The one read after a refused Apply (WL-9 C4): its values are what the
+	// device holds; the draft goes back over them (restoreRefusedDraft).
+	void readRefused()
+	{
+		if (!state || !current() || category != 1) {
+			refusedDraft.clear();
+			return;
+		}
+		auto target = state;
+		const auto submitted = state->view.refresh([target](const ins::ReadResult& value) noexcept {
+			target->read = value;
+			target->dirty = true;
+		});
+		if (!submitted) {
+			refusedDraft.clear();
+			updating = true;
+			values.resetSnapshot(state->view);
+			updating = false;
+			return;
+		}
+		state->action = DynamicViewState::Action::Read;
+		state->staleData = false;
+		state->submittedSession = state->view.session();
+		state->sequence = submitted.handle.sequence;
+		state->eventReported = false;
+		rereadRefused = true;
+		if (binding)
+			binding->requestSubmitted();
+	}
+
+	// The refused draft back over the values just read: each edited value
+	// keeps its text, live, with "Not applied · device holds 3" under it; the
+	// unedited ones show what the device holds.
+	void restoreRefusedDraft()
+	{
+		const auto draft = std::exchange(refusedDraft, {});
+		if (draft.isEmpty() || category != 1 || !state || state->view.beginEdit() != rt::Status::Ok)
+			return;
+		const auto device = values.shownTexts();
+		QHash<QString, QString> notes;
+		for (auto it = draft.cbegin(); it != draft.cend(); ++it) {
+			const auto index = values.indexOfPath(it.key());
+			const auto node = values.node(index);
+			if (!index.isValid() || !node)
+				continue;
+			const auto info = state->view.info(node.value);
+			if (!info)
+				continue;
+			bool parsed = false;
+			if (detail::setScalarText(state->view, node.value, info.value.code, it.value(), parsed) != rt::Status::Ok ||
+			    !parsed)
+				continue;
+			values.updateScalar(index);
+			const auto held = device.value(it.key());
+			notes.insert(it.key(), held.isEmpty() ? said("Not applied")
+			                                      : said("Not applied · device holds %1").arg(held));
+		}
+		// The device holds every value of the draft already: nothing to keep.
+		if (!state->view.dirty()) {
+			state->view.cancelEdit();
+			return;
+		}
+		values.setNotes(notes);
+		applyRefused = true;
+	}
+
+	// "Writing device.Config.Gain = 345…", the value in the row's format.
+	QString writingText() const
+	{
+		const auto* model = watchModel();
+		const int row = writeRow();
+		return said("Writing %1 = %2…").arg(writeName, model && row >= 0 ? model->shownFor(row, writeIntended) : writeIntended);
+	}
+
 	void failWatchWrite(QString text)
 	{
 		if (writer && writer->view.editing())
 			writer->view.cancelEdit();
 		watchWrite = std::move(text);
 		watchWriteKind = QStringLiteral("refused");
+		watchWriteAt = double(QDateTime::currentMSecsSinceEpoch());
+		watchWriteHolds = false;
+		if (auto* model = watchModel(); model && writeRow() >= 0)
+			model->setWriteState(writeRow(), QString{});
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive)
@@ -1551,7 +1718,7 @@ struct DynamicConfiguratorProvider::Impl {
 		writer->eventReported = false;
 		if (binding)
 			binding->requestSubmitted();
-		watchWrite = QStringLiteral("Writing ") + writeName;
+		watchWrite = writingText();
 		watchWriteKind = QStringLiteral("writing");
 		watchWroteLast = true;
 		if (binding)
@@ -3443,7 +3610,45 @@ QString DynamicConfiguratorProvider::watchWriteKind() const
 
 QString DynamicConfiguratorProvider::watchWriteOutcome() const
 {
-	return d->history(d->watchWrite, d->watchWriteSession);
+	auto text = d->history(d->watchWrite, d->watchWriteSession);
+	// A refusal or a lost reply says what the device holds once it is read
+	// (WL-9 C5), in the row's format; it follows each reading.
+	if (d->watchWriteHolds && !text.isEmpty() && d->current() && d->writer &&
+	    d->watchWriteSession == d->writer->view.session()) {
+		const auto* model = d->watchModel();
+		const int row = d->writeRow();
+		if (model && row >= 0 &&
+		    model->data(model->index(row, 0), WatchlistModel::StatusRole).toString() == QStringLiteral("Ok"))
+			text += said(" · it holds %1").arg(model->shownText(row));
+	}
+	return text;
+}
+
+double DynamicConfiguratorProvider::watchWriteAt() const
+{
+	return watchWriteOutcome().isEmpty() ? 0.0 : d->watchWriteAt;
+}
+
+bool DynamicConfiguratorProvider::holdWatchText(int row, const QString& text, const QString& reason)
+{
+	auto* model = d->watchModel();
+	if (!model || row < 0 || row >= model->rowCount() || text.isEmpty())
+		return false;
+	return model->setHeld(row, text, reason, QStringLiteral("invalid"),
+	                      d->current() ? d->binding->fingerprint() : QString{});
+}
+
+bool DynamicConfiguratorProvider::dropWatchHeld(int row)
+{
+	auto* model = d->watchModel();
+	if (!model || row < 0 || row >= model->rowCount())
+		return false;
+	// Esc on the row lets go of a doubtful write's mark too.
+	const auto state = model->data(model->index(row, 0), WatchlistModel::WriteStateRole).toString();
+	const bool marked = state == QStringLiteral("differs") || state == QStringLiteral("unconfirmed");
+	if (marked)
+		model->setWriteState(row, QString{});
+	return model->dropHeld(row) || marked;
 }
 
 bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
@@ -3517,10 +3722,18 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 	p->writeIntended = typed;
 	p->writeText = typed;
 	p->writeName = model->data(index, WatchlistModel::NameRole).toString();
-	const auto* watchedRow = qobject_cast<const WatchlistModel*>(model);
+	auto* watchedRow = qobject_cast<WatchlistModel*>(model);
 	p->writeType = watchedRow ? watchedRow->valueType(row) : WatchValueType{};
 	p->writeForm = watchedRow ? watchedRow->rowFormat(row).value_or(watchedRow->format()) : WatchNumberFormat::Original;
-	p->watchWrite = QStringLiteral("Writing ") + p->writeName;
+	// The row shows what was typed while the write runs (WL-9 C5), and
+	// holds it if the device refuses it (C4).
+	p->writeKey = key;
+	p->writeTyped = text.trimmed();
+	p->watchWriteAt = 0;
+	p->watchWriteHolds = false;
+	if (watchedRow)
+		watchedRow->setWriteState(row, QStringLiteral("pending"), watchedRow->shownFor(row, typed));
+	p->watchWrite = p->writingText();
 	p->watchWriteKind = QStringLiteral("writing");
 	// Never a step: the first Ctrl+Z says so instead (UR-1).
 	if (p->undoHistory)
@@ -3684,6 +3897,11 @@ QVariantMap DynamicConfiguratorProvider::detailsStatus() const
 		default:
 			break;
 	}
+	// A refused Apply's draft, kept as it was: the refusal, said once (WL-9 C4).
+	if (p.category == 1 && editing() && p.applyRefused) {
+		if (const auto& last = p.outcomes[0]; !last.text.isEmpty() && last.id == p.state->endpointId)
+			return line(last.text, last.failed, last.tip);
+	}
 	if (p.category == 1 && editing()) {
 		const auto changes = p.values.unsentCount();
 		return line(changes == 0   ? said("Edited, not applied")
@@ -3735,6 +3953,8 @@ bool DynamicConfiguratorProvider::selectEndpoint(const QModelIndex& index)
 		return false;
 	}
 	p->updating = true;
+	p->refusedDraft.clear();
+	p->rereadRefused = p->applyRefused = false;
 	p->selection = endpoint.value(QStringLiteral("path")).toString();
 	p->category = category;
 	p->state->endpointId = id;
@@ -3815,6 +4035,8 @@ void DynamicConfiguratorProvider::cancelEdit()
 	p->state->view.cancelEdit();
 	p->state->staleData = false;
 	p->invalid.clear();
+	p->refusedDraft.clear();
+	p->applyRefused = false;
 	p->updating = true;
 	p->values.resetSnapshot(p->state->view);
 	p->updating = false;
@@ -3827,6 +4049,8 @@ bool DynamicConfiguratorProvider::apply()
 	if (!canApply())
 		return false;
 	auto state = p->state;
+	// What the draft changed, kept should the device refuse it (WL-9 C4).
+	auto draft = p->values.unsentTexts();
 	const auto submitted = state->view.apply([state](const wb::ApplyResult& value) noexcept {
 		state->applied = value;
 		state->dirty = true;
@@ -3838,6 +4062,8 @@ bool DynamicConfiguratorProvider::apply()
 		return false;
 	}
 	state->action = DynamicViewState::Action::Apply;
+	p->refusedDraft = std::move(draft);
+	p->applyRefused = false;
 	p->writeSession = state->view.session();
 	state->submittedSession = state->view.session();
 	state->sequence = submitted.handle.sequence;
@@ -3980,6 +4206,10 @@ bool DynamicConfiguratorProvider::setScalarText(const QModelIndex& index, const 
 		p->invalid.remove(index.internalId());
 		p->updating = true;
 		p->values.updateScalar(index);
+		// An edit clears its cell's "Not applied" line, and the draft is the
+		// user's again rather than the refused one (WL-9 C4).
+		p->values.clearNote(index);
+		p->applyRefused = false;
 		p->updating = false;
 	} else
 		p->invalid.insert(index.internalId());

@@ -7,6 +7,7 @@
 #include "WatchlistModel.hpp"
 #include "ScalarEditorMetadata.hpp"
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QSet>
 #include <array>
 #include <algorithm>
@@ -40,10 +41,19 @@ QString canonicalText(const WatchValueBits& value)
 	if (!value.type.valid() || value.size != value.type.width) return {};
 	const auto code = scalarCode(value.type.scalar);
 	if (!code) return {};
+	// A float in its shortest exact text, as Original shows it (WL-9 B1): it
+	// reads back to the same bits.
+	if (*code == ScalarCode::F32 || *code == ScalarCode::F64)
+		return watch_format::parts(value, WatchNumberFormat::Original).code;
 	std::uint64_t bits = 0;
 	for (unsigned i = 0; i < value.size; ++i)
 		bits |= std::uint64_t(std::to_integer<unsigned char>(value.bytes[i])) << (8 * i);
 	return detail::scalarEditorBits(bits, *code);
+}
+
+qint64 nowMs()
+{
+	return QDateTime::currentMSecsSinceEpoch();
 }
 
 // An enum's choices in the row's form: "Idle (0x00)" when the row shows hex
@@ -173,7 +183,7 @@ void WatchlistModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& 
 	if (count_)
 		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
 		                   {EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
-		                    TypeTextRole, CategoricalRole, ShownTextRole, EditorTextRole});
+		                    TypeTextRole, CategoricalRole, ShownTextRole, EditorTextRole, ValueWordRole, ValueCodeRole});
 }
 
 void WatchlistModel::bind(const Workbench& owner) noexcept
@@ -419,7 +429,7 @@ void WatchlistModel::invalidateValues()
 	}
 	Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
 	                   {StatusRole, TextRole, ShownTextRole, SampleTextRole, SampleValueRole, SampleExactRole,
-	                    StatusCodeRole, EditorTextRole});
+	                    StatusCodeRole, EditorTextRole, ValueWordRole, ValueCodeRole});
 }
 
 bool WatchlistModel::setResult(int row, QString status, QString text, WatchSample sample,
@@ -428,21 +438,129 @@ bool WatchlistModel::setResult(int row, QString status, QString text, WatchSampl
 	if (changing_ || row < 0 || row >= count_)
 		return false;
 	Mutation mutation{changing_};
-	rows_[row].status = std::move(status);
-	rows_[row].text = std::move(text);
-	if (rows_[row].status == QStringLiteral("Ok") &&
-	    rows_[row].sampleRevision != std::numeric_limits<quint64>::max()) {
-		rows_[row].sampleText = rows_[row].text;
-		rows_[row].sample = sample;
-		rows_[row].value = value;
-		++rows_[row].sampleRevision;
+	auto& r = rows_[row];
+	r.status = std::move(status);
+	r.text = std::move(text);
+	bool marked = false;
+	if (r.status == QStringLiteral("Ok") && r.sampleRevision != std::numeric_limits<quint64>::max()) {
+		// A change between two readings is the device's (WL-9 E5): the first
+		// reading compares with nothing, and the one after the user's write
+		// is the write's own change.
+		const bool differs = r.value.size != value.size ||
+		                     !std::equal(r.value.bytes.begin(), r.value.bytes.begin() + value.size, value.bytes.begin());
+		if (r.ownChange) {
+			if (r.writeState != QStringLiteral("pending"))
+				r.ownChange = false;
+		} else if (r.compared && r.value.size && differs) {
+			r.changedAt = nowMs();
+			marked = true;
+		}
+		r.compared = true;
+		r.sampleText = r.text;
+		r.sample = sample;
+		r.value = value;
+		++r.sampleRevision;
 	}
-	Q_EMIT dataChanged(index(row, 0), index(row, 0),
-	                   {StatusRole, TextRole, ShownTextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
-	                    SampleValueRole, SampleExactRole, StatusCodeRole, EditorTextRole,
-	                    EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
-	                    TypeTextRole, CategoricalRole});
+	// A write not read back shows what was typed until a reading (WL-9 C5).
+	const bool read = r.status == QStringLiteral("Ok") && r.writeState == QStringLiteral("unconfirmed");
+	if (read)
+		r.writeState.clear();
+	QList<int> roles{StatusRole, TextRole, ShownTextRole, SampleRevisionRole, SampleTextRole, SampleEpochRole,
+	                 SampleValueRole, SampleExactRole, StatusCodeRole, EditorTextRole,
+	                 EditorKindRole, EditorChoicesRole, EditorChoicesTruncatedRole,
+	                 TypeTextRole, CategoricalRole, ValueWordRole, ValueCodeRole};
+	if (marked)
+		roles.append(ChangedAtRole);
+	if (read)
+		roles.append(WriteStateRole);
+	Q_EMIT dataChanged(index(row, 0), index(row, 0), roles);
 	return true;
+}
+
+QString WatchlistModel::shownText(int row) const
+{
+	return row >= 0 && row < count_ ? data(index(row, 0), ShownTextRole).toString() : QString{};
+}
+
+QString WatchlistModel::shownFor(int row, const QString& text) const
+{
+	if (row < 0 || row >= count_ || !rows_[row].value.type.valid())
+		return text;
+	const auto& r = rows_[row];
+	const auto form = r.format.value_or(format_);
+	const auto typed = watch_format::isHex(text) ? watch_format::fromHex(text, r.value.type).canonical : text;
+	const auto encoded = watch_format::encode(typed.isEmpty() ? text : typed, r.value.type, form);
+	if (!encoded.error.isEmpty() || !encoded.value.size)
+		return text;
+	const bool unbound = watch_key::isUnresolved(r.key);
+	const auto* metadata = unbound ? nullptr : r.type ? metadata_->type(r.type) : metadata_->field(watch_key::field(r.key));
+	const auto shown = watch_format::text(encoded.value, form, metadata ? &metadata->names : nullptr);
+	return shown.isEmpty() ? text : shown;
+}
+
+bool WatchlistModel::setHeld(int row, const QString& text, const QString& reason, const QString& kind,
+                             const QString& device)
+{
+	if (changing_ || row < 0 || row >= count_)
+		return false;
+	auto& r = rows_[row];
+	r.heldText = text;
+	r.heldReason = reason;
+	r.heldKind = kind;
+	r.heldDevice = device;
+	Q_EMIT dataChanged(index(row, 0), index(row, 0), {HeldTextRole, HeldReasonRole, HeldKindRole});
+	return true;
+}
+
+bool WatchlistModel::dropHeld(int row)
+{
+	if (changing_ || row < 0 || row >= count_ || rows_[row].heldText.isEmpty())
+		return false;
+	return setHeld(row, {}, {}, {});
+}
+
+void WatchlistModel::dropHeldExcept(const QString& device)
+{
+	for (int row = 0; row < count_; ++row)
+		if (!rows_[row].heldText.isEmpty() && rows_[row].heldDevice != device)
+			dropHeld(row);
+}
+
+QString WatchlistModel::heldText(int row) const
+{
+	return row >= 0 && row < count_ ? rows_[row].heldText : QString{};
+}
+
+bool WatchlistModel::setWriteState(int row, const QString& state, const QString& written)
+{
+	if (changing_ || row < 0 || row >= count_)
+		return false;
+	auto& r = rows_[row];
+	r.writeState = state;
+	if (state == QStringLiteral("pending")) {
+		r.writtenText = written;
+		r.writtenAt = nowMs();
+		r.ownChange = true;
+	} else if (!written.isEmpty()) {
+		r.writtenText = written;
+	}
+	Q_EMIT dataChanged(index(row, 0), index(row, 0), {WriteStateRole, WrittenTextRole, WrittenAtRole});
+	return true;
+}
+
+void WatchlistModel::forgetChanges()
+{
+	for (int row = 0; row < count_; ++row)
+		rows_[row].compared = false;
+}
+
+watch_format::Parts WatchlistModel::partsOf(const Row& row) const
+{
+	const bool unbound = watch_key::isUnresolved(row.key);
+	if (!row.value.size || (row.status != QStringLiteral("Ok") && !(unbound && row.status == QStringLiteral("Stale"))))
+		return {};
+	const auto* metadata = unbound ? nullptr : row.type ? metadata_->type(row.type) : metadata_->field(watch_key::field(row.key));
+	return watch_format::parts(row.value, row.format.value_or(format_), metadata ? &metadata->names : nullptr);
 }
 
 void WatchlistModel::setFormat(WatchNumberFormat format)
@@ -451,7 +569,8 @@ void WatchlistModel::setFormat(WatchNumberFormat format)
 		return;
 	format_ = format;
 	if (count_)
-		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole});
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
+		                   {ShownTextRole, EditorTextRole, EditorChoicesRole, ValueWordRole, ValueCodeRole});
 }
 
 bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> format)
@@ -488,7 +607,8 @@ bool WatchlistModel::setRowFormat(int row, std::optional<WatchNumberFormat> form
 	if (rows_[row].format == format)
 		return true;
 	rows_[row].format = format;
-	Q_EMIT dataChanged(index(row, 0), index(row, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole});
+	Q_EMIT dataChanged(index(row, 0), index(row, 0),
+	                   {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole, ValueWordRole, ValueCodeRole});
 	return true;
 }
 
@@ -517,7 +637,8 @@ bool WatchlistModel::setPathFormats(QHash<QString, WatchNumberFormat> formats)
 		rows_[row].format = remembered != pathFormats_.cend() ? std::optional(remembered.value()) : std::nullopt;
 	}
 	if (count_)
-		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0), {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole});
+		Q_EMIT dataChanged(index(0, 0), index(count_ - 1, 0),
+		                   {ShownTextRole, EditorTextRole, EditorChoicesRole, FormatRole, ValueWordRole, ValueCodeRole});
 	return true;
 }
 
@@ -615,10 +736,15 @@ bool WatchlistModel::rebindRow(int row, const QString& path, const QVector<Watch
 		endRemoveRows();
 		return true;
 	}
-	// The first value takes the row's place, keeping its last text until read.
+	// The first value takes the row's place, keeping its last text until read,
+	// and a text held in it (WL-9 C4; the provider drops one of another device).
 	auto first = makeRow(entries.first());
 	first.token = rows_[row].token;
 	first.text = rows_[row].text;
+	first.heldText = rows_[row].heldText;
+	first.heldReason = rows_[row].heldReason;
+	first.heldKind = rows_[row].heldKind;
+	first.heldDevice = rows_[row].heldDevice;
 	first.status = first.text.isEmpty() ? QStringLiteral("Not read") : QStringLiteral("Stale");
 	if (!first.format)
 		first.format = rows_[row].format;
@@ -736,7 +862,7 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 			return QStringLiteral("Stale");
 		if (role == StatusCodeRole)
 			return static_cast<int>(WatchStatus::Stale);
-		if (role == TextRole || role == ShownTextRole)
+		if (role == TextRole || role == ShownTextRole || role == ValueWordRole || role == ValueCodeRole)
 			return QString{};
 		if (role == SampleTextRole || role == SampleValueRole)
 			return role == SampleTextRole ? QVariant(QString{}) : QVariant();
@@ -841,6 +967,26 @@ QVariant WatchlistModel::data(const QModelIndex& index, int role) const
 		}
 		case FormatRole:
 			return row.format ? watch_format::name(*row.format) : QString{};
+		case ValueWordRole:
+			return partsOf(row).word;
+		case ValueCodeRole: {
+			const auto parts = partsOf(row);
+			return parts.word.isEmpty() ? QString{} : parts.code;
+		}
+		case HeldTextRole:
+			return row.heldText;
+		case HeldReasonRole:
+			return row.heldReason;
+		case HeldKindRole:
+			return row.heldKind;
+		case WriteStateRole:
+			return row.writeState;
+		case WrittenTextRole:
+			return row.writtenText;
+		case WrittenAtRole:
+			return double(row.writtenAt);
+		case ChangedAtRole:
+			return double(row.changedAt);
 		case EditorKindRole:
 			return kind;
 		case EditorChoicesRole:
@@ -887,7 +1033,16 @@ QHash<int, QByteArray> WatchlistModel::roleNames() const
 	        {AccessRole, "access"},
 	        {PathTypesRole, "pathTypes"},
 	        {ShownTextRole, "shownText"},
-	        {FormatRole, "format"}};
+	        {FormatRole, "format"},
+	        {ValueWordRole, "valueWord"},
+	        {ValueCodeRole, "valueCode"},
+	        {HeldTextRole, "heldText"},
+	        {HeldReasonRole, "heldReason"},
+	        {HeldKindRole, "heldKind"},
+	        {WriteStateRole, "writeState"},
+	        {WrittenTextRole, "writtenText"},
+	        {WrittenAtRole, "writtenAt"},
+	        {ChangedAtRole, "changedAt"}};
 }
 
 QString WatchlistModel::formatValue(const telemetry::runtime::DynamicValueView& value)
