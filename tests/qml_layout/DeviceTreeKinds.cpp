@@ -483,6 +483,16 @@ int main(int argc, char** argv)
 			t.expand(index);
 		t.collapse(signalGroup);
 
+		// The 420 px mock: Config selected and current in the focused tree.
+		CHECK(provider.selectEndpoint(config));
+		t.makeCurrent(config);
+		t.view->forceActiveFocus();
+		t.reveal(fields);
+		t.shot(output, QStringLiteral("device-tree-kinds-420.png"));
+		// The keyboard elsewhere: every glyph at rest, the selection quiet.
+		named(t.panel, QStringLiteral("endpointSearch"))->forceActiveFocus();
+		settle();
+
 		// 1. A glyph per kind, in the kind's own slot, quiet.
 		const QList<std::pair<QModelIndex, QString>> glyphs{
 		    {fields, QStringLiteral("group")},   {measure, QStringLiteral("group")},    {voltage, QStringLiteral("value")},
@@ -558,7 +568,6 @@ int main(int argc, char** argv)
 		t.makeCurrent(config);
 		t.view->forceActiveFocus();
 		t.reveal(fields);
-		t.shot(output, QStringLiteral("device-tree-kinds-420.png"));
 
 		// 8. Indent guides: one per ancestor, under its chevron; Config's
 		// members alone carry the current branch's brighter one.

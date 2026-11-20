@@ -832,6 +832,9 @@ Pane {
         // current row, which stays current and in view.
         const memory = foldMemory[descriptorKey]
         restoreFolds(memory ? memory.open : [], true)
+        // A descriptor that came during the find opens as a new one does.
+        if (!memory)
+            openInitialGroups()
         if (kept.length > 0)
             revealKey(kept, true)
         snapshotFolds()
