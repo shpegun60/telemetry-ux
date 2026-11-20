@@ -176,8 +176,13 @@ void metadataAndLocalChildren() {
 	CHECK(model.data(serial, ux::EndpointModel::TypeTextRole).toString() == "u64");
 	CHECK(model.data(serial, ux::EndpointModel::PreviewChildRole).toBool());
 	CHECK(model.endpoint(serial).isEmpty() && !model.data(serial, ux::EndpointModel::IsEndpointRole).toBool());
-	CHECK(!model.data(serial, ux::EndpointModel::ReadableRole).toBool() &&
-	      !model.data(serial, ux::EndpointModel::WritableRole).toBool());
+	// A value reads and writes as its Field (the owner, 20 November 2026):
+	// the Device tree marks rw on every row of a Field.
+	CHECK(model.data(serial, ux::EndpointModel::ReadableRole).toBool() &&
+	      model.data(serial, ux::EndpointModel::WritableRole).toBool());
+	CHECK(model.data(serial, ux::EndpointModel::KindRole).toString() == "value" &&
+	      model.data(samples, ux::EndpointModel::KindRole).toString() == "array" &&
+	      model.data(config, ux::EndpointModel::KindRole).toString() == "struct");
 	CHECK(model.previewDemandField(serial).isValid() && model.previewDemandField(serial).toUInt() == 0);
 	const auto firstRange = child(model, samples, QStringLiteral("[0 … 255]"));
 	const auto secondRange = child(model, samples, QStringLiteral("[256 … 299]"));

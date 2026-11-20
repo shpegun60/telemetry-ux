@@ -1,4 +1,5 @@
 /* Actual installed Qt-only view: provider strings must not become rich text. MIT. */
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/TrendHistory.hpp>
 #include <QAbstractItemModel>
 #include <QColor>
@@ -35,6 +36,8 @@ void collect(QQuickItem& item, QList<QQuickItem*>& items)
 int main(int argc, char** argv)
 {
 	QGuiApplication app(argc, argv);
+	// The Device tree (in Configurator) shows its rows through the module's C++ types.
+	telemetry::ux::registerQmlTypes();
 	if (argc != 3 && argc != 4)
 		return 1;
 	const bool unsafe = argc == 4 && std::strcmp(argv[3], "--unsafe-control") == 0;

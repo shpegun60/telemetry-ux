@@ -1,4 +1,10 @@
 // Reusable presentation: the caller owns the provider and all I/O. MIT.
+//
+// The Device tree (the designer's, 18 November 2026): every row says what it
+// is by a glyph and a weight, every Field its type in one column that never
+// hides, every group its count in words; indent guides, the current branch's
+// brighter. Find filters the tree in place and steps through the matches;
+// the keys fold and step as in Details; what is open survives a reconnect.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -12,8 +18,6 @@ Pane {
     // A host may defer explicit selection for a draft-discard decision. The
     // provider remains the selection owner while that decision is pending.
     property var selectionHandler: null
-    // Evaluate the provider's O(1) current-index projection once per panel,
-    // rather than querying it separately for every visible delegate.
     // What a row's drag carries (LP-1g3): an endpoint's path, or every
     // endpoint's under a group or a category, in the tree's order.
     function dragPaths(index) {
@@ -38,13 +42,10 @@ Pane {
         return out
     }
     readonly property var selectedEndpointIndex: provider.selectedEndpointIndex
+    // The device's model. The tree shows it through a filter (find), so a
+    // row's index is the filter's; everything the provider is asked takes
+    // the device's index (sourceOf, shownOf).
     readonly property var searchSource: provider.endpoints
-    property var searchResults: []
-    property var searchStack: []
-    property bool searchRunning: false
-    property bool searchLimited: false
-    property int searchGeneration: 0
-    readonly property int searchLimit: 500
     readonly property int searchDepthLimit: 64
     // These are source-model indexes, independent of the endpoint editor.
     // Never retain them across structural changes to the source model.
@@ -52,7 +53,6 @@ Pane {
     property int watchMarkGeneration: 0
     // What the status line says: its UndoNotice's message.
     readonly property alias watchMarkStatus: watchNotice.message
-    property bool enterPending: false
     readonly property int groupWalkLimit: 4096
     // Whether the tree offers watching at all: its boxes, the Add bar and the
     // menu's Watch. False for a second device's tree beside the first (a
@@ -109,18 +109,21 @@ Pane {
     readonly property bool previewsSupported: !!provider && typeof provider.previewsSupported === "boolean" && provider.previewsSupported &&
         typeof provider.setPreviewDemand === "function" && typeof provider.clearPreviewDemand === "function"
     readonly property bool previewDemandActive: previewsSupported && previewValues && visible && width > 0 && height > 0 &&
-        searchInput.text.trim().length === 0 && !!panel.Window.window && panel.Window.window.visible &&
+        !!panel.Window.window && panel.Window.window.visible &&
         panel.Window.window.visibility !== Window.Minimized
     property var previewDemandProvider: null
     readonly property var columnTitles: [qsTr("Name"), qsTr("Value"), qsTr("Type"), qsTr("rw")]
-    // The row family's columns (family_spec A3). Value is there only while
-    // previews are shown; it and Type are as wide as the widest text the rows
-    // have shown, growing only, so a refresh never moves them. When the names
-    // of a second-level row run short, Access gives way first, then Type
-    // narrows, then Type goes. Never a horizontal scroll.
+
+    // The row family's columns (family_spec A3, the Device tree design D1).
+    // Type is as wide as the device's widest Field type, measured once per
+    // descriptor, and never hides: a narrow tree gives way in this order -
+    // rw, then Value (while previews are on) down to its least, then the
+    // names down to their first characters, only then a type, row by row
+    // (EndpointTreeRow). Never a horizontal scroll.
     readonly property bool valueColumnShown: previewsSupported && previewValues
     readonly property real columnGap: Math.round(Type.bodyPixels * 0.9)
     property real valueSeen: 0
+    // A model with no widestFieldType: the widest type a Field's row has shown.
     property real typeSeen: 0
     // Rows report while the tree lays them out, possibly in the middle of
     // working out a column: their widths are gathered and applied on the
@@ -157,31 +160,47 @@ Pane {
         }
     }
     TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
+    TextMetrics { id: leastTypeMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "f32" }
+    // The device's widest Field type, as its model knows it.
+    readonly property string widestFieldType: searchSource && typeof searchSource.widestFieldType === "string"
+                                              ? searchSource.widestFieldType : ""
+    TextMetrics { id: widestMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: panel.widestFieldType }
     readonly property real scrollInset: endpointScroll.visible ? endpointScroll.width : 0
-    readonly property real valueColumn: valueColumnShown
+    // W: the widest Field type, 2 to 9.6 body heights.
+    readonly property real typeFull: Math.max(Math.round(Type.bodyPixels * 2),
+        Math.min(widestFieldType.length > 0 ? Math.ceil(widestMetrics.advanceWidth) : typeSeen, Math.round(Type.bodyPixels * 9.6)))
+    readonly property real accessFull: Math.ceil(accessMetrics.advanceWidth)
+    // Where a second-level row's name starts from a dock's edge: the panel's
+    // padding, two indents, the chevron, the box's slot, the glyph and its
+    // gap (96 px).
+    readonly property real nameStart: Type.padding + Type.indent * 3 + Type.rowHeight + Type.iconSize + Type.spacing
+    // What a second-level row has from its name to its right edge, which is
+    // the scroll bar's (the panel's padding is the margin on either side).
+    readonly property real rowRoom: endpointTree.width - scrollInset - (nameStart - Type.padding)
+    readonly property real valueWanted: valueColumnShown
         ? Math.max(Math.round(Type.bodyPixels * 4.2), Math.min(valueSeen, Math.round(Type.bodyPixels * 16.5), endpointTree.width * 0.4))
         : 0
-    readonly property real typeFull: Math.max(Math.round(Type.bodyPixels * 3), Math.min(typeSeen, Math.round(Type.bodyPixels * 9.6)))
-    readonly property real accessFull: Math.ceil(accessMetrics.advanceWidth)
-    // Where a second-level row's name starts: padding, two indents, the
-    // chevron, the box's slot and its gap.
-    readonly property real nameStart: Type.padding + Type.indent * 3 + Type.rowHeight + Type.tight
-    function nameRoom(access, type) {
-        return endpointTree.width - scrollInset - Type.padding - nameStart
-            - (valueColumn > 0 ? valueColumn + columnGap : 0)
-            - (type > 0 ? type + columnGap : 0) - (access > 0 ? access + columnGap : 0)
-    }
-    readonly property real accessColumn: nameRoom(accessFull, typeFull) >= Type.bodyPixels * 10.5 ? accessFull : 0
-    readonly property real typeColumn: nameRoom(accessColumn, typeFull) >= Type.bodyPixels * 9 ? typeFull
-        : nameRoom(accessColumn, Math.round(Type.bodyPixels * 3)) >= Type.bodyPixels * 7.2 ? Math.round(Type.bodyPixels * 3) : 0
+    // 1. rw gives way first: shown while the name keeps 7.2 body heights with it.
+    readonly property real accessColumn: rowRoom - (accessFull + columnGap) - (typeFull + columnGap)
+        - (valueWanted > 0 ? valueWanted + columnGap : 0) >= Type.bodyPixels * 7.2 ? accessFull : 0
+    readonly property real accessPart: accessColumn > 0 ? accessColumn + columnGap : 0
+    // 2. Value narrows to its least before a name drops below its floor.
+    readonly property real valueColumn: valueColumnShown
+        ? Math.max(Math.round(Type.bodyPixels * 4.2),
+                   Math.min(valueWanted, rowRoom - accessPart - (typeFull + columnGap) - columnGap - Type.nameFloor))
+        : 0
+    // Previews off: W, always. On: what the names leave, never under three characters.
+    readonly property real typeColumn: !valueColumnShown ? typeFull
+        : Math.max(Math.ceil(leastTypeMetrics.advanceWidth),
+                   Math.min(typeFull, rowRoom - accessPart - (valueColumn + columnGap) - Type.nameFloor - columnGap))
     // The columns' left edges in the tree's coordinates, right to left.
-    readonly property real accessLeft: endpointTree.width - scrollInset - Type.padding - accessColumn
+    readonly property real accessLeft: endpointTree.width - scrollInset - accessColumn
     readonly property real typeLeft: accessLeft - (accessColumn > 0 ? columnGap : 0) - typeColumn
     readonly property real valueLeft: typeLeft - (typeColumn > 0 ? columnGap : 0) - valueColumn
-    // A category's bare number, a group's endpoints in words.
-    function countText(count, category, depth) {
+    // A category's or a group's endpoints in words: "72 Fields", "2 Commands",
+    // "1 Service" (the owner, 18 November 2026).
+    function countText(count, category) {
         if (!(count > 0)) return ""
-        if (depth === 0) return qsTr("%L1").arg(count)
         if (category === 2) return count === 1 ? qsTr("1 Command") : qsTr("%L1 Commands").arg(count)
         if (category === 3) return count === 1 ? qsTr("1 Service") : qsTr("%L1 Services").arg(count)
         return fieldsText(count)
@@ -421,7 +440,7 @@ Pane {
         say(summary, "", 0)
     }
 
-    // The name of one source index, read through its named role like search.
+    // The name of one source index, read through its named role.
     function nameOf(index) {
         if (!index || !index.valid || !searchSource)
             return ""
@@ -439,8 +458,8 @@ Pane {
         return parts.join(".")
     }
     // Every Field under a group that the Watchlist accepts, in tree order.
-    // The walk is bounded like search: depth 64 and 4096 visited rows; a
-    // walk cut short says so.
+    // The walk is bounded: depth 64 and 4096 visited rows; a walk cut short
+    // says so.
     function groupCandidates(group) {
         if (!group || !group.valid)
             return { indexes: [], limited: false }
@@ -551,7 +570,7 @@ Pane {
         endpointTree.forceLayout()
         if (endpointTree.rows === 0)
             return
-        const first = endpointTree.modelIndex(Qt.point(0, 0))
+        const first = sourceOf(endpointTree.index(0, 0))
         if (!isGroup(first))
             return
         // Exactly the category and catalog levels. Field value children start
@@ -576,123 +595,466 @@ Pane {
         searchInput.forceActiveFocus()
         searchInput.selectAll()
     }
-    // Enter in the search watches the first result; a Command, a Service or a
-    // Field the Watchlist cannot hold opens its details instead. Returns
-    // whether there was a result to act on.
-    function activateFirstResult() {
-        if (searchRunning || searchResults.length === 0)
+
+    // The tree's rows and the device's: a shown row's index maps to the
+    // device's model and back; a row the find leaves out maps to none.
+    function sourceOf(shown) {
+        return shown && shown.valid ? treeFilter.mapToSource(shown) : treeFilter.mapToSource(treeFilter.index(-1, -1))
+    }
+    function shownOf(source) {
+        return treeFilter.mapFromSource(source && source.valid ? source : treeFilter.index(-1, -1))
+    }
+    // What a shown row is (the row's kinds); a model without a kind role is
+    // worked out as the row does.
+    function kindAt(row) {
+        const index = endpointTree.index(row, 0)
+        const kind = treeFilter.value(index, "kind")
+        if (typeof kind === "string" && kind.length > 0)
+            return kind
+        const endpoint = Boolean(treeFilter.value(index, "isEndpoint"))
+        const child = Boolean(treeFilter.value(index, "previewChild"))
+        const category = Number(treeFilter.value(index, "category"))
+        const type = String(treeFilter.value(index, "typeText") || "")
+        return endpointTree.depth(row) === 0 && !endpoint ? "category"
+            : !endpoint && !child ? "group"
+            : category === 2 ? "command" : category === 3 ? "service"
+            : type.endsWith("]") ? "array" : type.startsWith("struct") ? "struct" : "value"
+    }
+    function hasChildrenAt(row) {
+        return row >= 0 && endpointTree.model.hasChildren(endpointTree.index(row, 0))
+    }
+    function parentRowOf(row) {
+        const depth = endpointTree.depth(row)
+        for (let r = row - 1; r >= 0; --r)
+            if (endpointTree.depth(r) < depth)
+                return r
+        return -1
+    }
+    // Makes a shown row current and brings it into view.
+    function setCurrentRow(row) {
+        if (row < 0)
+            return
+        endpointTree.forceLayout()
+        if (row >= endpointTree.rows)
+            return
+        endpointTree.selectionModel.setCurrentIndex(endpointTree.index(row, 0), ItemSelectionModel.NoUpdate)
+        endpointTree.positionViewAtRow(row, TableView.Contain)
+    }
+    // Brings a device row into view: only the path to it opens, nothing
+    // closes (design G). current: it becomes the keyboard's row too.
+    function reveal(index, current) {
+        const shown = shownOf(index)
+        if (!shown.valid)
             return false
-        const first = searchResults[0]
-        if (first.generation !== searchGeneration || !first.index.valid)
+        endpointTree.expandToIndex(shown)
+        endpointTree.forceLayout()
+        const row = endpointTree.rowAtIndex(shown)
+        if (row < 0)
             return false
-        if (watchApi ? stateOf(first.index, watchRevision) >= 0 : canMarkWatch(first.index))
-            watchIndex(first.index)
-        else
-            panel.requestSelection(first.index)
+        if (current)
+            endpointTree.selectionModel.setCurrentIndex(shown, ItemSelectionModel.NoUpdate)
+        endpointTree.positionViewAtRow(row, TableView.Contain)
         return true
     }
-    // Enter before the search has finished is kept and acted on when it does;
-    // with nothing to act on, the key goes on to the host (a default button).
-    function searchEnter(event) {
-        if (searchRunning) {
-            enterPending = true
-            event.accepted = true
+    // Opens every container under a row (*): a category its groups, a group
+    // its subgroups; a struct or an array Field all its values, within the
+    // model's bound of 4,096 rows. A struct or array under a group stays
+    // folded, so * on Fields never buries the tree in its elements.
+    function expandUnder(row) {
+        if (row < 0 || row >= endpointTree.rows)
+            return
+        const kind = kindAt(row)
+        if (kind === "struct" || kind === "array") {
+            endpointTree.expandRecursively(row, -1)
             return
         }
-        event.accepted = activateFirstResult()
+        if (!hasChildrenAt(row))
+            return
+        const base = endpointTree.depth(row)
+        endpointTree.expand(row)
+        endpointTree.forceLayout()
+        for (let r = row + 1; ; ++r) {
+            if (r >= endpointTree.rows) {
+                endpointTree.forceLayout()
+                if (r >= endpointTree.rows)
+                    break
+            }
+            if (endpointTree.depth(r) <= base)
+                break
+            const inner = kindAt(r)
+            if ((inner === "category" || inner === "group") && !endpointTree.isExpanded(r) && hasChildrenAt(r))
+                endpointTree.expand(r)
+        }
+        endpointTree.forceLayout()
     }
-    // What Enter will do, worded from the first result; empty when nothing.
-    function enterHint() {
-        if (!bulkWatchAvailable || !searchInput.activeFocus || searchRunning || searchResults.length === 0)
-            return ""
-        const first = searchResults[0]
-        if (!first.index || !first.index.valid)
-            return ""
-        if (watchApi ? stateOf(first.index, watchRevision) < 0 : !canMarkWatch(first.index))
-            return "; Enter shows the first"
-        return watchLocked ? "" : "; Enter watches the first"
+    function collapseUnder(row) {
+        if (row >= 0 && row < endpointTree.rows)
+            endpointTree.collapseRecursively(row)
+    }
+    // Back to the three categories.
+    function collapseAll() {
+        endpointTree.collapseRecursively()
+    }
+    // The keys of the tree (design G): true when the key was taken.
+    function treeKey(event) {
+        const ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+        const alt = (event.modifiers & Qt.AltModifier) !== 0
+        const shift = (event.modifiers & Qt.ShiftModifier) !== 0
+        const plain = !ctrl && !alt
+        // Ctrl+F finds, as in the file views; a host's Ctrl+K too.
+        if (event.key === Qt.Key_F && ctrl) {
+            find()
+            return true
+        }
+        // F3 and Shift+F3 step through the matches from the tree.
+        if (event.key === Qt.Key_F3 && plain)
+            return stepFind(shift ? -1 : 1)
+        // Home and End: the first and the last row, in view.
+        if ((event.key === Qt.Key_Home || event.key === Qt.Key_End) && plain) {
+            endpointTree.forceLayout()
+            if (endpointTree.rows === 0)
+                return false
+            setCurrentRow(event.key === Qt.Key_Home ? 0 : endpointTree.rows - 1)
+            return true
+        }
+        const index = endpointTree.selectionModel.currentIndex
+        const row = index.valid ? endpointTree.rowAtIndex(index) : -1
+        const source = sourceOf(index)
+        // Ctrl+C and Alt+Shift+C copy the current row's path, as
+        // values.bin copies its rows; values are copied where shown.
+        if (event.key === Qt.Key_C && (event.modifiers === Qt.ControlModifier
+                                       || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier)))
+            return source.valid && copyPath(source)
+        // The Menu key or Shift+F10 opens the actions of the current row.
+        if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
+            if (row < 0)
+                return false
+            // A row scrolled out of view has no delegate until shown.
+            let cell = endpointTree.itemAtIndex(index)
+            if (!cell) {
+                endpointTree.positionViewAtIndex(index, TableView.Contain)
+                endpointTree.forceLayout()
+                cell = endpointTree.itemAtIndex(index)
+            }
+            return !!cell && openEndpointMenu(source, cell.isEndpoint, cell)
+        }
+        if (row < 0)
+            return false
+        const branch = hasChildrenAt(row)
+        const open = endpointTree.isExpanded(row)
+        // Right opens a folded branch, and on an open one steps to its first
+        // child; Left closes an open branch, else steps to the parent.
+        if (event.key === Qt.Key_Right && plain && !shift) {
+            if (branch && !open)
+                endpointTree.expand(row)
+            else if (branch && open)
+                setCurrentRow(row + 1)
+            return true
+        }
+        if (event.key === Qt.Key_Left && plain && !shift) {
+            if (branch && open)
+                endpointTree.collapse(row)
+            else
+                setCurrentRow(parentRowOf(row))
+            return true
+        }
+        if (event.key === Qt.Key_Asterisk || event.text === "*") {
+            expandUnder(row)
+            return true
+        }
+        if (event.key === Qt.Key_Minus || event.text === "-") {
+            collapseUnder(row)
+            return true
+        }
+        // Enter on a group or a category folds it; on a Field, a Command or a
+        // Service it opens Details.
+        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && plain) {
+            const kind = kindAt(row)
+            if ((kind === "category" || kind === "group") && branch)
+                endpointTree.toggleExpanded(row)
+            else
+                requestSelection(source)
+            return true
+        }
+        // Space watches the current row, as its box does.
+        if (event.key === Qt.Key_Space && plain) {
+            if (watchApi) {
+                if (stateOf(source, watchRevision) >= 0) {
+                    toggleWatch(source)
+                    return true
+                }
+                const refusal = refusalOf(source, watchRevision)
+                if (refusal.length > 0) {
+                    say(refusal, refusal, false)
+                    return true
+                }
+            } else if (canMarkWatch(source)) {
+                toggleWatchMark(source)
+                return true
+            }
+        }
+        return false
     }
 
-    // DelegateModel exposes named roles independently of their numeric IDs.
-    // It does not create visual delegates for this traversal. Results retain
-    // source indexes only until the next model change or search cancellation.
-    function cancelSearch() {
-        enterPending = false
-        ++searchGeneration
-        searchTimer.stop()
-        searchRunning = false
-        searchResults = []
-        searchStack = []
-    }
-    function scheduleSearch() {
-        cancelSearch()
-        searchLimited = false
-        if (searchInput.text.trim().length > 0 && searchSource) {
-            searchRunning = true
-            searchTimer.interval = 50
-            searchTimer.restart()
-        }
-    }
-    function scanSearch() {
-        if (!searchSource || searchInput.text.trim().length === 0) {
-            cancelSearch()
+    // Find (design G1): the tree filtered in place - the matches and their
+    // parents, the parents open, the matches folded - and Enter stepping
+    // through them. Groups, Fields, Commands and Services are found by name
+    // or path; the values inside a Field are not.
+    // What the tree is filtered by: the field's text, "/" read as ".".
+    property string findText: ""
+    readonly property bool finding: findText.length > 0
+    readonly property int findCount: treeFilter.count
+    // The match made current last by Enter or F3, from 0; -1 before any.
+    property int findStep: -1
+    readonly property string findStatus: !finding ? ""
+        : findCount === 0 ? qsTr("Nothing matches “%1”.").arg(searchInput.text.trim())
+        : findStep >= 0 && findStep < findCount ? qsTr("%L1 of %L2 matches").arg(findStep + 1).arg(findCount)
+        : findCount === 1 ? qsTr("1 match") : qsTr("%L1 matches").arg(findCount)
+    onFindCountChanged: if (findStep >= findCount) findStep = -1
+    function applyFind() {
+        findTimer.stop()
+        const needle = searchInput.text.trim().replace(/\s*\/\s*/g, ".")
+        if (needle === findText)
+            return
+        const was = finding
+        if (needle.length > 0 && !was)
+            snapshotFolds()
+        // The row the keyboard is on, kept through the end of a find.
+        const kept = was && needle.length === 0 ? treeFilter.namePath(endpointTree.selectionModel.currentIndex) : ""
+        findStep = -1
+        findText = needle
+        treeFilter.setText(needle)
+        if (needle.length > 0) {
+            showFound()
             return
         }
-        const needle = searchInput.text.trim().toLocaleLowerCase().replace(/\s*\/\s*/g, ".")
-        const generation = searchGeneration
-        if (searchStack.length === 0)
-            searchStack = [{ parent: searchSource.index(-1, -1), row: 0, path: "", depth: 0 }]
-        let visited = 0
-        let matches = searchResults.slice()
-        while (searchStack.length && visited < 128 && matches.length < searchLimit) {
-            const frame = searchStack[searchStack.length - 1]
-            searchModel.rootIndex = frame.parent
-            if (generation !== searchGeneration) return
-            if (frame.row >= searchModel.count) {
-                searchStack.pop()
-                continue
+        // Cleared: what was open before the find, then the path to the
+        // current row, which stays current and in view.
+        const memory = foldMemory[descriptorKey]
+        restoreFolds(memory ? memory.open : [], true)
+        // A descriptor that came during the find opens as a new one does.
+        if (!memory)
+            openInitialGroups()
+        if (kept.length > 0)
+            revealKey(kept, true)
+        snapshotFolds()
+    }
+    // The matches' parents open, the matches folded.
+    function showFound() {
+        let matchDepth = -1
+        for (let row = 0; ; ++row) {
+            if (row >= endpointTree.rows) {
+                endpointTree.forceLayout()
+                if (row >= endpointTree.rows)
+                    break
             }
-            const row = frame.row++
-            const index = searchModel.modelIndex(row)
-            const item = searchModel.items.get(row)
-            if (generation !== searchGeneration) return
-            ++visited
-            if (!item || !item.model || !index.valid)
+            const depth = endpointTree.depth(row)
+            if (matchDepth >= 0 && depth > matchDepth)
                 continue
-            const name = String(item.model.name === undefined ? "" : item.model.name)
-            const endpoint = item.model.isEndpoint !== undefined && Boolean(item.model.isEndpoint)
-            const children = searchSource.rowCount(index)
-            if (generation !== searchGeneration) return
-            const path = frame.path.length ? frame.path + " / " + name : name
-            if (endpoint && path.toLocaleLowerCase().replace(/\s*\/\s*/g, ".").indexOf(needle) !== -1)
-                matches.push({ path: path, index: index, generation: generation })
-            if (children > 0 && frame.depth + 1 < searchDepthLimit)
-                searchStack.push({ parent: index, row: 0, path: path, depth: frame.depth + 1 })
-            else if (children > 0)
-                searchLimited = true
+            matchDepth = -1
+            if (treeFilter.matches(endpointTree.index(row, 0))) {
+                matchDepth = depth
+                if (endpointTree.isExpanded(row))
+                    endpointTree.collapse(row)
+            } else if (!endpointTree.isExpanded(row) && hasChildrenAt(row)) {
+                endpointTree.expand(row)
+            }
         }
-        searchResults = matches
-        if (matches.length >= searchLimit) {
-            searchLimited = true
-            searchStack = []
+        endpointTree.forceLayout()
+    }
+    // The next (1) or the previous (-1) match becomes current and selected,
+    // in view, wrapping; Details shows it. False with nothing to step to.
+    function stepFind(delta) {
+        if (findTimer.running || searchInput.text.trim().replace(/\s*\/\s*/g, ".") !== findText)
+            applyFind()
+        if (!finding)
+            return false
+        const list = treeFilter.found()
+        if (list.length === 0)
+            return false
+        findStep = findStep < 0 ? (delta > 0 ? 0 : list.length - 1)
+                                : (findStep + delta + list.length) % list.length
+        const shown = list[findStep]
+        // A match under a branch folded since, or rows come after the find.
+        endpointTree.expandToIndex(shown)
+        endpointTree.forceLayout()
+        const row = endpointTree.rowAtIndex(shown)
+        if (row < 0)
+            return false
+        setCurrentRow(row)
+        const kind = kindAt(row)
+        if (kind !== "category" && kind !== "group")
+            requestSelection(sourceOf(shown))
+        return true
+    }
+
+    // What is open survives a reconnect (design G): the open branches of
+    // each descriptor seen in this session, by the names from the root
+    // ("Fields/device/Config"), and the keyboard's row. A descriptor is told
+    // by its categories' and groups' names. A descriptor never seen opens as
+    // openOnLoad says; one seen before opens as it was left. A find's own
+    // opening is never kept.
+    property var foldMemory: ({})
+    property string descriptorKey: ""
+    property bool foldBusy: false
+    function identityOf() {
+        const source = treeFilter.sourceModel
+        if (!source)
+            return ""
+        const parts = []
+        for (let r = 0; r < source.rowCount(); ++r) {
+            const top = source.index(r, 0)
+            const names = []
+            for (let c = 0; c < source.rowCount(top) && c < 1024; ++c)
+                names.push(treeFilter.nameOf(source.index(c, 0, top)))
+            parts.push(treeFilter.nameOf(top) + ":" + names.join(","))
         }
-        if (searchStack.length) {
-            searchTimer.interval = 0
-            searchTimer.restart()
+        return parts.join(";")
+    }
+    // The device's row at such a path: the device's model finds its own;
+    // any other through the filter, by names.
+    function sourceAtKey(key) {
+        const source = treeFilter.sourceModel
+        if (!source || key.length === 0)
+            return treeFilter.mapToSource(treeFilter.index(-1, -1))
+        return typeof source.indexOfPath === "function" && typeof source.widestFieldType === "string"
+            ? source.indexOfPath(key) : treeFilter.sourceAt(key)
+    }
+    function revealKey(key, current) {
+        const index = sourceAtKey(key)
+        return index && index.valid ? reveal(index, current) : false
+    }
+    // Records what is open now: every open branch shown, and those kept under
+    // a folded one (the tree opens them again with it).
+    function snapshotFolds() {
+        snapshotTimer.stop()
+        if (finding || foldBusy || descriptorKey.length === 0)
+            return
+        const memory = foldMemory[descriptorKey] || { open: [], current: "" }
+        endpointTree.forceLayout()
+        const open = []
+        const shown = {}
+        for (let row = 0; row < endpointTree.rows; ++row) {
+            const key = treeFilter.namePath(endpointTree.index(row, 0))
+            shown[key] = true
+            if (endpointTree.isExpanded(row))
+                open.push(key)
+        }
+        for (const key of memory.open)
+            if (!shown[key])
+                open.push(key)
+        memory.open = open
+        foldMemory[descriptorKey] = memory
+    }
+    // A recursive fold forgets everything under the row; folding all, all.
+    function forgetUnder(row) {
+        const memory = foldMemory[descriptorKey]
+        if (finding || foldBusy || !memory)
+            return
+        if (row < 0) {
+            memory.open = []
+            return
+        }
+        const key = treeFilter.namePath(endpointTree.index(row, 0))
+        memory.open = memory.open.filter(function(item) { return item !== key && !item.startsWith(key + "/") })
+    }
+    function noteCurrent() {
+        const memory = foldMemory[descriptorKey]
+        const key = treeFilter.namePath(endpointTree.selectionModel.currentIndex)
+        // A current row lost to a reset or a find is not the user's choice.
+        if (foldBusy || descriptorKey.length === 0 || key.length === 0)
+            return
+        if (memory)
+            memory.current = key
+        else
+            foldMemory[descriptorKey] = { open: [], current: key }
+    }
+    // Opens the branches at keys, shallowest first; collapse: fold all first.
+    function restoreFolds(keys, collapse) {
+        foldBusy = true
+        if (collapse)
+            endpointTree.collapseRecursively()
+        const sorted = keys.slice().sort(function(a, b) { return a.split("/").length - b.split("/").length })
+        for (const key of sorted) {
+            const shown = shownOf(sourceAtKey(key))
+            const row = shown.valid ? endpointTree.rowAtIndex(shown) : -1
+            if (row >= 0 && !endpointTree.isExpanded(row))
+                endpointTree.expand(row)
+        }
+        endpointTree.forceLayout()
+        foldBusy = false
+    }
+    // After the model is made anew (a connect, a reconnect) or at the start.
+    function afterReset() {
+        endpointTree.forceLayout()
+        descriptorKey = identityOf()
+        if (descriptorKey.length === 0)
+            return
+        if (finding) {
+            showFound()
+            return
+        }
+        const memory = foldMemory[descriptorKey]
+        if (memory) {
+            restoreFolds(memory.open, false)
+            if (memory.current.length > 0)
+                revealKey(memory.current, true)
         } else {
-            searchRunning = false
-            if (enterPending) {
-                enterPending = false
-                activateFirstResult()
+            openInitialGroups()
+        }
+        const selected = panel.selectedEndpointIndex
+        if (selected && selected.valid)
+            reveal(selected, !memory || memory.current.length === 0)
+        snapshotFolds()
+    }
+
+    // The current branch's guide (design E): the current row if it is an open
+    // branch, else its parent; the rows below it at that level.
+    property int guideLevel: -1
+    property int guideFrom: 0
+    property int guideTo: -1
+    function updateGuides() {
+        const index = endpointTree.selectionModel.currentIndex
+        const row = index.valid ? endpointTree.rowAtIndex(index) : -1
+        if (row < 0 || row >= endpointTree.rows) {
+            guideLevel = -1
+            return
+        }
+        let branch = row
+        if (!(hasChildrenAt(row) && endpointTree.isExpanded(row))) {
+            branch = endpointTree.depth(row) === 0 ? -1 : parentRowOf(row)
+            if (branch < 0) {
+                guideLevel = -1
+                return
             }
+        }
+        const level = endpointTree.depth(branch)
+        let last = branch
+        for (let r = branch + 1; r < endpointTree.rows && endpointTree.depth(r) > level; ++r)
+            last = r
+        guideFrom = branch + 1
+        guideTo = last
+        guideLevel = last > branch ? level : -1
+    }
+
+    onProviderChanged: { clearPreviews(); clearWatchMarks() }
+    onSearchSourceChanged: { clearPreviews(); clearWatchMarks(); afterResetTimer.restart() }
+    // A selection made elsewhere (the Watchlist, the Batch, a host's search)
+    // is brought into view, and the keyboard's row follows it.
+    onSelectedEndpointIndexChanged: revealSelection.restart()
+    Timer {
+        id: revealSelection
+        interval: 0
+        onTriggered: {
+            const index = panel.selectedEndpointIndex
+            if (index && index.valid)
+                panel.reveal(index, true)
         }
     }
-    onProviderChanged: { clearPreviews(); clearWatchMarks() }
-    onSearchSourceChanged: { clearPreviews(); clearWatchMarks(); scheduleSearch() }
-    DelegateModel {
-        id: searchModel
-        model: panel.searchSource
-        delegate: Item {}
+    TreeFilter {
+        id: treeFilter
+        objectName: "endpointTreeFilter"
+        sourceModel: panel.searchSource ? panel.searchSource : null
     }
     DelegateModel {
         id: nameModel
@@ -713,6 +1075,12 @@ Pane {
         // Qt 6.4 does not hand focus back when a Menu closes; the keyboard
         // returns to whatever had it when the menu opened.
         property Item returnFocus: null
+        // The menu's row in the tree, or -1.
+        function targetRow() {
+            const target = panel.menuTarget()
+            const shown = target ? panel.shownOf(target) : null
+            return shown && shown.valid ? endpointTree.rowAtIndex(shown) : -1
+        }
         onClosed: {
             const item = returnFocus
             returnFocus = null
@@ -769,8 +1137,30 @@ Pane {
             text: "Copy path\tCtrl+C"
             onTriggered: { const target = panel.menuTarget(); if (target) panel.copyPath(target) }
         }
+        // Folding, as Details' menu has it, with the keys beside.
+        MenuSeparator {}
+        MenuItem {
+            objectName: "treeMenuExpandAll"
+            text: qsTr("Expand all under\t*")
+            enabled: endpointMenu.targetRow() >= 0
+            onTriggered: panel.expandUnder(endpointMenu.targetRow())
+        }
+        MenuItem {
+            objectName: "treeMenuCollapseUnder"
+            text: qsTr("Collapse all under\t-")
+            enabled: endpointMenu.targetRow() >= 0
+            onTriggered: panel.collapseUnder(endpointMenu.targetRow())
+        }
+        MenuItem {
+            objectName: "treeMenuCollapseAll"
+            text: qsTr("Collapse all")
+            onTriggered: panel.collapseAll()
+        }
     }
-    Timer { id: searchTimer; repeat: false; onTriggered: panel.scanSearch() }
+    // Typing settles before the tree is filtered.
+    Timer { id: findTimer; interval: 50; onTriggered: panel.applyFind() }
+    Timer { id: snapshotTimer; interval: 0; onTriggered: panel.snapshotFolds() }
+    Timer { id: guideTimer; interval: 0; onTriggered: panel.updateGuides() }
     // Demand publication is cheap metadata work; the provider schedules I/O.
     Timer {
         id: previewDemandTimer
@@ -796,7 +1186,8 @@ Pane {
     // surface edge to edge.
     property bool framed: true
     // Whether a new tree opens its Fields as it arrives; a program that leaves
-    // every branch for the user to open sets it false.
+    // every branch for the user to open sets it false. A descriptor seen
+    // before in this session opens as it was left instead.
     property bool openOnLoad: true
     padding: framed ? 12 : Type.padding
     background: Rectangle { objectName: "endpointTreePanelBackground"; color: panel.palette.base; radius: panel.framed ? 10 : 0 }
@@ -838,25 +1229,41 @@ Pane {
                 maximumLength: 256
                 // Room for the clear button inside the field.
                 rightPadding: searchClear.visible ? searchClear.width + 4 : leftPadding
-                onTextChanged: panel.scheduleSearch()
+                onTextChanged: findTimer.restart()
+                // Esc clears the find: the tree as it was, the current row kept.
                 Keys.onEscapePressed: function(event) {
                     if (text.length === 0)
                         return
                     clear()
+                    panel.applyFind()
                     event.accepted = true
                 }
-                Keys.onReturnPressed: function(event) { panel.searchEnter(event) }
-                Keys.onEnterPressed: function(event) { panel.searchEnter(event) }
-                // Down moves into the results (or the tree) with the keyboard.
+                // Enter steps to the next match, Shift+Enter to the previous;
+                // with nothing to step to, the key goes on to the host (a
+                // default button). Space or a row's box watches.
+                Keys.onReturnPressed: function(event) {
+                    event.accepted = panel.stepFind((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                }
+                Keys.onEnterPressed: function(event) {
+                    event.accepted = panel.stepFind((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_F3)
+                        event.accepted = panel.stepFind((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                }
+                // Down moves into the tree, at the current match.
                 Keys.onDownPressed: function(event) {
-                    if (searchList.visible && searchList.count > 0) {
-                        searchList.currentIndex = 0
-                        searchList.positionViewAtBeginning()
-                        if (searchList.currentItem)
-                            searchList.currentItem.forceActiveFocus()
-                    } else if (endpointTree.visible) {
-                        endpointTree.forceActiveFocus()
+                    if (findTimer.running)
+                        panel.applyFind()
+                    if (panel.finding && panel.findCount > 0) {
+                        const list = treeFilter.found()
+                        const shown = list[Math.max(0, Math.min(panel.findStep, list.length - 1))]
+                        const row = shown ? endpointTree.rowAtIndex(shown) : -1
+                        if (row >= 0)
+                            panel.setCurrentRow(row)
                     }
+                    if (endpointTree.visible)
+                        endpointTree.forceActiveFocus()
                     event.accepted = true
                 }
                 ToolButton {
@@ -870,7 +1277,7 @@ Pane {
                     visible: searchInput.text.length > 0
                     focusPolicy: Qt.NoFocus
                     text: "✕"
-                    onClicked: { searchInput.clear(); searchInput.forceActiveFocus() }
+                    onClicked: { searchInput.clear(); panel.applyFind(); searchInput.forceActiveFocus() }
                     Accessible.name: qsTr("Clear the search")
                 }
             }
@@ -916,21 +1323,35 @@ Pane {
                 }
             }
         }
-        Label {
-            objectName: "endpointSearchStatus"
-            visible: searchInput.text.trim().length > 0
+        // What the find found: "4 matches", "2 of 4 matches"; nothing found
+        // says so and offers the way back (family A11).
+        RowLayout {
             Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            font.pointSize: Type.caption
-            color: panel.palette.text
-            text: panel.searchRunning ? "Searching…" :
-                  panel.searchLimited ? "Search limited; refine search" :
-                  panel.searchResults.length === 0 ? "No matching endpoints" :
-                  panel.searchResults.length + " matching endpoints" + panel.enterHint()
+            visible: panel.finding
+            spacing: Type.spacing
+            Label {
+                objectName: "endpointSearchStatus"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                font.pointSize: Type.caption
+                // Secondary text; a host's own palette text where it set one.
+                color: Qt.colorEqual(panel.palette.text, Theme.textPrimary) ? Theme.textSecondary : panel.palette.text
+                text: panel.findStatus
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
+            LinkButton {
+                objectName: "endpointSearchClearLink"
+                visible: panel.finding && panel.findCount === 0
+                text: qsTr("Clear the search")
+                font.pointSize: Type.caption
+                onClicked: { searchInput.clear(); panel.applyFind(); searchInput.forceActiveFocus() }
+            }
         }
         Item {
             objectName: "endpointColumnHeaders"
-            visible: searchInput.text.trim().length === 0 && endpointTree.rows > 0
+            visible: endpointTree.rows > 0
             Layout.fillWidth: true
             Layout.preferredHeight: Type.rowHeight
             component ColumnTitle: Label {
@@ -997,76 +1418,38 @@ Pane {
             acceptedButtons: Qt.NoButton
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: searchInput.text.trim().length === 0
             clip: true
-            model: panel.provider.endpoints
+            model: treeFilter
             onTopRowChanged: panel.suspendPreviews()
             onBottomRowChanged: panel.suspendPreviews()
-            onExpanded: panel.suspendPreviews()
-            onCollapsed: panel.suspendPreviews()
+            onExpanded: {
+                panel.suspendPreviews()
+                guideTimer.restart()
+                if (!panel.foldBusy && !panel.finding)
+                    snapshotTimer.restart()
+            }
+            onCollapsed: function(row, recursively) {
+                panel.suspendPreviews()
+                guideTimer.restart()
+                if (recursively)
+                    panel.forgetUnder(row)
+                if (!panel.foldBusy && !panel.finding)
+                    snapshotTimer.restart()
+            }
+            onRowsChanged: guideTimer.restart()
             // Current keyboard row is a navigation cursor, not operation
             // selection. Only an explicit click/Enter asks the provider.
             activeFocusOnTab: true
             selectionModel: ItemSelectionModel { model: endpointTree.model }
-            Keys.onReturnPressed: function(event) {
-                const index = endpointTree.selectionModel.currentIndex
-                if (index.valid)
-                    panel.requestSelection(index)
-            }
-            Keys.onEnterPressed: function(event) {
-                const index = endpointTree.selectionModel.currentIndex
-                if (index.valid)
-                    panel.requestSelection(index)
-            }
-            Keys.onSpacePressed: function(event) {
-                const index = endpointTree.selectionModel.currentIndex
-                if (panel.watchApi) {
-                    if (panel.stateOf(index, panel.watchRevision) >= 0) {
-                        panel.toggleWatch(index)
-                        event.accepted = true
-                    } else {
-                        const refusal = panel.refusalOf(index, panel.watchRevision)
-                        if (refusal.length > 0) {
-                            panel.say(refusal, refusal, false)
-                            event.accepted = true
-                        }
-                    }
-                } else if (panel.canMarkWatch(index)) {
-                    panel.toggleWatchMark(index)
-                    event.accepted = true
+            Connections {
+                target: endpointTree.selectionModel
+                function onCurrentChanged() {
+                    guideTimer.restart()
+                    panel.noteCurrent()
                 }
             }
-            // The Menu key or Shift+F10 opens the actions of the current row.
             Keys.onPressed: function(event) {
-                // Ctrl+F finds, as in the file views; a host's Ctrl+K too.
-                if (event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier)) {
-                    panel.find()
-                    event.accepted = true
-                    return
-                }
-                // Ctrl+C and Alt+Shift+C copy the current row's path, as
-                // values.bin copies its rows; values are copied where shown.
-                if (event.key === Qt.Key_C && (event.modifiers === Qt.ControlModifier
-                                               || event.modifiers === (Qt.AltModifier | Qt.ShiftModifier))) {
-                    const current = endpointTree.selectionModel.currentIndex
-                    if (current.valid && panel.copyPath(current))
-                        event.accepted = true
-                    return
-                }
-                if (event.key !== Qt.Key_Menu && !(event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier)))
-                    return
-                const index = endpointTree.selectionModel.currentIndex
-                const row = index.valid ? endpointTree.rowAtIndex(index) : -1
-                if (row < 0)
-                    return
-                // A row scrolled out of view has no delegate until shown.
-                let cell = endpointTree.itemAtIndex(index)
-                if (!cell) {
-                    endpointTree.positionViewAtIndex(index, TableView.Contain)
-                    endpointTree.forceLayout()
-                    cell = endpointTree.itemAtIndex(index)
-                }
-                if (cell && panel.openEndpointMenu(index, cell.isEndpoint, cell))
+                if (panel.treeKey(event))
                     event.accepted = true
             }
             // Striped by the rows themselves (family_spec A9): the eye
@@ -1103,12 +1486,29 @@ Pane {
                 accessColumnWidth: panel.accessColumn
                 columnGap: panel.columnGap
                 rightClearance: panel.scrollInset
-                countText: typeof model.count === "number" ? panel.countText(model.count, model.category, depth) : ""
+                kind: typeof model.kind === "string" ? model.kind : ""
+                category: typeof model.category === "number" ? model.category : 0
+                countText: typeof model.count === "number" ? panel.countText(model.count, model.category) : ""
+                pathText: typeof model.path === "string" && model.path.length > 0 ? model.path
+                        : treeFilter.namePath(sourceIndex, ".")
+                typeNames: typeof model.typeNames === "string" ? model.typeNames : ""
+                matchText: panel.findText
+                matched: {
+                    void name
+                    void depth
+                    void endpointTree.rows
+                    return panel.finding && treeFilter.matches(endpointTree.index(row, 0))
+                }
+                guideLevel: panel.guideLevel
+                guideFrom: panel.guideFrom
+                guideTo: panel.guideTo
                 watchRefusal: panel.refusalOf(sourceIndex, panel.watchRevision)
                 onMeasured: function(value, type) { panel.noteMeasured(value, type) }
                 typeText: typeof model.typeText === "string" ? model.typeText : ""
                 accessText: typeof model.accessText === "string" ? model.accessText : ""
-                accessMark: isEndpoint && !previewChild && model.category === 1 &&
+                // Every row of a Field shows its access, its values included
+                // (the owner, 20 November 2026).
+                accessMark: (isEndpoint || previewChild) && model.category === 1 &&
                     typeof model.readable === "boolean" && typeof model.writable === "boolean"
                     ? (model.readable ? "r" : "-") + (model.writable ? "w" : "-") : ""
                 unit: typeof model.unit === "string" ? model.unit : ""
@@ -1170,120 +1570,7 @@ Pane {
                 color: Theme.textMuted
                 text: panel.emptyText
             }
-            Component.onCompleted: Qt.callLater(function() {
-                if (!endpointTree) return
-                endpointTree.forceLayout()
-                panel.openInitialGroups()
-            })
-        }
-        ListView {
-            id: searchList
-            objectName: "endpointSearchResults"
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: searchInput.text.trim().length > 0
-            clip: true
-            model: panel.searchResults
-            delegate: ItemDelegate {
-                id: searchDelegate
-                required property var modelData
-                required property int index
-                objectName: "endpointSearchResult"
-                width: searchList.width
-                text: modelData.path
-                highlighted: panel.selectedEndpointIndex !== undefined &&
-                             modelData.index === panel.selectedEndpointIndex
-                function activateResult() {
-                    if (modelData.generation === panel.searchGeneration && modelData.index.valid)
-                        panel.requestSelection(modelData.index)
-                }
-                onClicked: activateResult()
-                Keys.onReturnPressed: function(event) { activateResult(); event.accepted = true }
-                Keys.onEnterPressed: function(event) { activateResult(); event.accepted = true }
-                Keys.onSpacePressed: function(event) {
-                    if (modelData.generation !== panel.searchGeneration)
-                        return
-                    if (panel.watchApi) {
-                        if (panel.stateOf(modelData.index, panel.watchRevision) >= 0) {
-                            panel.toggleWatch(modelData.index)
-                            event.accepted = true
-                        }
-                    } else if (panel.canMarkWatch(modelData.index)) {
-                        panel.toggleWatchMark(modelData.index)
-                        event.accepted = true
-                    }
-                }
-                Keys.onUpPressed: function(event) {
-                    if (searchDelegate.index === 0) {
-                        searchInput.forceActiveFocus()
-                    } else {
-                        searchList.currentIndex = searchDelegate.index - 1
-                        searchList.currentItem.forceActiveFocus()
-                    }
-                    event.accepted = true
-                }
-                Keys.onDownPressed: function(event) {
-                    if (searchDelegate.index + 1 < searchList.count) {
-                        searchList.currentIndex = searchDelegate.index + 1
-                        searchList.currentItem.forceActiveFocus()
-                    }
-                    event.accepted = true
-                }
-                Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
-                        if (modelData.generation === panel.searchGeneration)
-                            panel.openEndpointMenu(modelData.index, true, searchDelegate)
-                        event.accepted = true
-                    }
-                }
-                TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onTapped: function(point) {
-                        if (searchDelegate.modelData.generation === panel.searchGeneration)
-                            panel.openEndpointMenu(searchDelegate.modelData.index, true, searchDelegate,
-                                                   point.position.x, point.position.y)
-                    }
-                }
-                background: Rectangle {
-                    objectName: "endpointSearchResultBackground"
-                    radius: 3
-                    color: searchDelegate.highlighted ? searchDelegate.palette.highlight : "transparent"
-                    border.width: searchDelegate.activeFocus ? 2 : 0
-                    border.color: searchDelegate.highlighted ? searchDelegate.palette.highlightedText : searchDelegate.palette.text
-                }
-                contentItem: Label {
-                    textFormat: Text.PlainText
-                    text: searchDelegate.text
-                    elide: Text.ElideLeft
-                    leftPadding: searchWatchCheck.visible ? searchWatchCheck.implicitWidth + 4 : 0
-                    color: searchDelegate.highlighted ? searchDelegate.palette.highlightedText : searchDelegate.palette.buttonText
-                    CheckBox {
-                        id: searchWatchCheck
-                        objectName: "endpointSearchWatchCheck"
-                        focusPolicy: Qt.NoFocus
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        readonly property int boxState: panel.stateOf(searchDelegate.modelData.index,
-                                                                      panel.watchRevision)
-                        visible: searchDelegate.modelData.generation === panel.searchGeneration &&
-                                 (panel.watchApi ? boxState >= 0
-                                                 : panel.canMarkWatch(searchDelegate.modelData.index))
-                        enabled: !panel.watchApi || !panel.watchLocked
-                        checked: panel.watchApi ? boxState === Qt.Checked
-                                                : panel.isWatchMarked(searchDelegate.modelData.index)
-                        // The provider decides; the box shows what it decided.
-                        nextCheckState: function() { return checkState }
-                        onClicked: {
-                            if (panel.watchApi)
-                                panel.toggleWatch(searchDelegate.modelData.index)
-                            else
-                                panel.toggleWatchMark(searchDelegate.modelData.index)
-                        }
-                        Accessible.name: "Select " + searchDelegate.text + " for Watchlist"
-                    }
-                }
-            }
-            ScrollBar.vertical: ScrollBar {}
+            Component.onCompleted: afterResetTimer.restart()
         }
         // What the last watch action did, on one line kept at the bottom: always
         // reserved, so nothing moves when it speaks; blank when idle. The whole
@@ -1312,37 +1599,28 @@ Pane {
             }
         }
     }
-    // The groups opened after a reset, on the next turn of the event loop. A
-    // timer of the panel's own dies with it; a callLater closure outlived an
-    // unloaded panel and ran in its destroyed context.
+    // After a reset, on the next turn of the event loop: the open branches
+    // kept for this descriptor, else the defaults. A timer of the panel's own
+    // dies with it; a callLater closure outlived an unloaded panel and ran in
+    // its destroyed context.
     Timer {
-        id: initialGroups
+        id: afterResetTimer
         interval: 0
-        onTriggered: panel.openInitialGroups()
+        onTriggered: panel.afterReset()
     }
     Connections {
         target: panel.provider.endpoints
         ignoreUnknownSignals: true
-        function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
+        function onModelAboutToBeReset() { panel.clearPreviews(); panel.clearWatchMarks(); afterResetTimer.stop() }
         function onModelReset() {
             panel.forgetMeasured()
-            panel.scheduleSearch()
-            initialGroups.restart()
+            panel.findStep = -1
+            afterResetTimer.restart()
         }
-        function onRowsAboutToBeRemoved() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
-        function onRowsRemoved() { panel.scheduleSearch() }
-        function onRowsAboutToBeInserted() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
-        function onRowsInserted() { panel.scheduleSearch() }
-        function onRowsAboutToBeMoved() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
-        function onRowsMoved() { panel.scheduleSearch() }
-        function onLayoutAboutToBeChanged() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
-        function onLayoutChanged() { panel.scheduleSearch() }
-        function onDataChanged(topLeft, bottomRight, roles) {
-            if (panel.searchSource && typeof panel.searchSource.previewOnlyChange === "function" &&
-                panel.searchSource.previewOnlyChange(roles))
-                return
-            panel.scheduleSearch()
-        }
-        function onDestroyed() { panel.clearPreviews(); panel.clearWatchMarks(); panel.cancelSearch() }
+        function onRowsAboutToBeRemoved() { panel.clearPreviews(); panel.clearWatchMarks() }
+        function onRowsAboutToBeInserted() { panel.clearPreviews(); panel.clearWatchMarks() }
+        function onRowsAboutToBeMoved() { panel.clearPreviews(); panel.clearWatchMarks() }
+        function onLayoutAboutToBeChanged() { panel.clearPreviews(); panel.clearWatchMarks() }
+        function onDestroyed() { panel.clearPreviews(); panel.clearWatchMarks() }
     }
 }

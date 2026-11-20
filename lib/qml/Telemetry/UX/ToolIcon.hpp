@@ -29,7 +29,9 @@ class ToolIcon : public QQuickPaintedItem {
 	// "warning", "error", "info", "copy", "clear", "lock"; for a plot "zoomIn",
 	// "zoomOut", "fit" and "follow"; for Device files "folder", "file", "fileCodec",
 	// "fileText", "fileTable", "fileJson", "fileDescriptor", "fileValues",
-	// "fileIdentity", "fileSession" and "fileCapability".
+	// "fileIdentity", "fileSession" and "fileCapability"; for the Device tree's
+	// kinds "group" (the folder), "struct" (braces), "array" (brackets),
+	// "value" (a ring), "command" (one arrow) and "service" (two, there and back).
 	Q_PROPERTY(QString name READ name WRITE setName NOTIFY changed)
 	Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY changed)
 

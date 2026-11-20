@@ -1,4 +1,5 @@
 // Search against actual static/dynamic provider implementations. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include "../dynamic_qml_configurator/Fixture.hpp"
 #include <Telemetry/UX/StaticConfiguratorProvider.hpp>
 #include <QGuiApplication>
@@ -19,6 +20,26 @@ static QQuickItem* findItem(QQuickItem* root, const char* name)
     if (root->objectName() == QString::fromLatin1(name)) return root;
     for (auto* child : root->childItems())
         if (auto* found = findItem(child, name)) return found;
+    return nullptr;
+}
+
+// Whether a row delegate is the one its view shows at its row, not one the
+// view keeps in its pool for reuse (pooled delegates stay visible, culled).
+static bool live(QQuickItem* row)
+{
+    auto* view = row->parentItem() ? row->parentItem()->parentItem() : nullptr;
+    QQuickItem* shown = nullptr;
+    return view && QMetaObject::invokeMethod(view, "itemAtCell", Q_RETURN_ARG(QQuickItem*, shown),
+                                             Q_ARG(QPoint, QPoint(0, row->property("row").toInt()))) && shown == row;
+}
+
+// The tree's visible row of that name: find filters the tree in place.
+static QQuickItem* findRow(QQuickItem* root, const QString& name)
+{
+    if (!root->isVisible()) return nullptr;
+    if (root->objectName() == QStringLiteral("endpointRow") && root->property("name").toString() == name && live(root)) return root;
+    for (auto* child : root->childItems())
+        if (auto* found = findRow(child, name)) return found;
     return nullptr;
 }
 
@@ -43,6 +64,8 @@ int main(int argc, char** argv)
 {
     QGuiApplication app(argc, argv);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+    // The Device tree shows its rows through the module's C++ types.
+    telemetry::ux::registerQmlTypes();
     QQmlApplicationEngine engine;
     QObject::connect(&engine, &QQmlEngine::warnings, &app, [](const QList<QQmlError>& errors) {
         warnings += unsigned(errors.size());
@@ -56,18 +79,18 @@ int main(int argc, char** argv)
         CHECK(window);
         QTest::qWait(100);
         auto* query = findItem(window->contentItem(), "endpointSearch");
-        auto* list = findItem(window->contentItem(), "endpointSearchResults");
-        CHECK(query && list && query->setProperty("text", QStringLiteral("Config")));
+        auto* status = findItem(window->contentItem(), "endpointSearchStatus");
+        CHECK(query && status && query->setProperty("text", QStringLiteral("Config")));
         QTest::qWait(250);
-        CHECK(list->property("count").toInt() == 1);
+        CHECK(status->property("text").toString() == QStringLiteral("1 match"));
         CHECK(h.storage->owner.pending() == 0 && device.reads == 0);
-        auto* row = findItem(window->contentItem(), "endpointSearchResult");
+        auto* row = findRow(window->contentItem(), QStringLiteral("Config"));
         const auto expected = endpoint(p, "Config");
         CHECK(expected.isValid());
         activate(window, row);
         CHECK(p.selectedEndpointIndex() == expected && h.storage->owner.pending() == 0);
         QTest::qWait(150);
-        QPointer<QQuickItem> oldRow(findItem(window->contentItem(), "endpointSearchResult"));
+        QPointer<QQuickItem> oldRow(findRow(window->contentItem(), QStringLiteral("Config")));
         h.binding->retire();
         h.storage->owner.invalidate();
         CHECK(!p.connected());
@@ -77,7 +100,8 @@ int main(int argc, char** argv)
         h.storage->owner.process(h.storage->now);
         h.binding->poll();
         QTest::qWait(250);
-        CHECK(list->property("count").toInt() == 0 && !p.connected());
+        CHECK(!findRow(window->contentItem(), QStringLiteral("Config")) && !p.connected());
+        CHECK(status->property("text").toString() == QStringLiteral("Nothing matches “Config”."));
         delete window;
     }
     {
@@ -104,11 +128,12 @@ int main(int argc, char** argv)
         CHECK(window);
         QTest::qWait(100);
         auto* query = findItem(window->contentItem(), "endpointSearch");
-        auto* list = findItem(window->contentItem(), "endpointSearchResults");
-        CHECK(query && list && query->setProperty("text", QStringLiteral("measure.Voltage")));
+        auto* status = findItem(window->contentItem(), "endpointSearchStatus");
+        CHECK(query && status && query->setProperty("text", QStringLiteral("measure.Voltage")));
         QTest::qWait(250);
-        CHECK(list->property("count").toInt() == 1);
-        auto* row = findItem(window->contentItem(), "endpointSearchResult");
+        CHECK(status->property("text").toString() == QStringLiteral("1 match"));
+        CHECK(!findRow(window->contentItem(), QStringLiteral("Current")));
+        auto* row = findRow(window->contentItem(), QStringLiteral("Voltage"));
         CHECK(row);
         activate(window, row);
         CHECK(p.selectedEndpointIndex().isValid());
@@ -118,8 +143,8 @@ int main(int argc, char** argv)
         CHECK(!p.connected());
         CHECK(query->setProperty("text", QStringLiteral("measure.Current")));
         QTest::qWait(250);
-        auto* offlineRow = findItem(window->contentItem(), "endpointSearchResult");
-        CHECK(offlineRow && offlineRow->property("text").toString().contains(QStringLiteral("Current")));
+        auto* offlineRow = findRow(window->contentItem(), QStringLiteral("Current"));
+        CHECK(offlineRow && !findRow(window->contentItem(), QStringLiteral("Voltage")));
         activate(window, offlineRow);
         CHECK(p.selectedEndpointIndex().isValid() && p.selectedEndpointIndex() != selected);
         const auto offlineSelected = p.selectedEndpointIndex();

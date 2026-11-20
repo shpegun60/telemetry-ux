@@ -7,6 +7,7 @@
 #include <QtCore/QRegularExpression>
 #include "DynamicModels.hpp"
 #include "EndpointPreviews.hpp"
+#include "QmlTypes.hpp"
 #include "SchemaText.hpp"
 #include "ScalarEditorMetadata.hpp"
 #include "ValueWords.hpp"
@@ -126,6 +127,8 @@ struct Row {
 	// A structure-only row's type in words ("struct (3)", "u16[300]"), made
 	// from the schema when the rows were; empty on other rows.
 	QString label;
+	// The Device tree's kind of row (KindRole) and an enum's names (TypeNamesRole).
+	QString kind, typeNames;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
@@ -148,6 +151,16 @@ void previewShape(Row& row, const telemetry::runtime::RuntimeSchema& schema)
 	                    : type->kind == Kind::Struct ? type->memberCount
 	                    : type->elementCount <= previewRangeSize ? type->elementCount
 	                    : (type->elementCount - 1) / previewRangeSize + 1;
+}
+
+// A Field's or a value's kind by its type: "struct", "array" or "value".
+QString valueKind(const telemetry::runtime::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	return !type                        ? QStringLiteral("value")
+	       : type->kind == Kind::Struct ? QStringLiteral("struct")
+	       : type->kind == Kind::Array  ? QStringLiteral("array")
+	                                    : QStringLiteral("value");
 }
 
 bool previewEligible(const Row& row)
@@ -501,6 +514,7 @@ struct EndpointModel::Impl {
 	QHash<TypeId, TypeMetadata> types;
 	WatchLeaves leaves;
 	std::size_t previewNodes = 0;
+	QString widestFieldType;
 	// A host's schema where no previews give one (setSchemaSource).
 	std::function<telemetry::runtime::RuntimeSchema()> schemaSource;
 
@@ -557,7 +571,11 @@ struct EndpointModel::Impl {
 
 EndpointModel::EndpointModel(QObject* parent)
     : QAbstractItemModel(parent), impl_(std::make_unique<Impl>())
-{}
+{
+	// The Device tree shows this model through the module's C++ types (its
+	// filter, its glyphs): a host that makes one has them registered.
+	registerQmlTypes();
+}
 
 EndpointModel::~EndpointModel() = default;
 
@@ -576,8 +594,23 @@ void EndpointModel::clear()
 	impl_->previewNodes = 0;
 	impl_->inspector = {};
 	endResetModel();
-	if (alive)
-		impl_->tree.changing = false;
+	if (!alive)
+		return;
+	impl_->tree.changing = false;
+	setWidestFieldType({});
+}
+
+QString EndpointModel::widestFieldType() const
+{
+	return impl_->widestFieldType;
+}
+
+void EndpointModel::setWidestFieldType(const QString& type)
+{
+	if (impl_->widestFieldType == type)
+		return;
+	impl_->widestFieldType = type;
+	Q_EMIT widestFieldTypeChanged();
 }
 
 bool EndpointModel::changing() const noexcept
@@ -609,11 +642,19 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 		return;
 	impl_->leaves.reset(schema);
 	QVector<QModelIndex> indices;
+	QString widest;
 	for (auto* row : std::as_const(impl_->tree.rows)) {
 		if (!row->endpoint)
 			continue;
 		const auto value = impl_->metadata(schema, row->typeId);
 		row->type = value.label;
+		if (row->category == static_cast<int>(Category::Field)) {
+			row->kind = valueKind(schema, row->typeId);
+			row->typeNames = schema_text::enumNames(schema, row->typeId);
+			// A fixed face: the most characters is the widest.
+			if (row->type.size() > widest.size())
+				widest = row->type;
+		}
 		row->wireBytes = value.wireBytes;
 		if (row->category == static_cast<int>(Category::Service)) {
 			const auto response = impl_->metadata(schema, row->responseTypeId);
@@ -645,8 +686,10 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 		Q_EMIT dataChanged(index, index, {DetailRole, TypeTextRole, WireBytesRole,
 		                                 ResponseTypeTextRole, PreviewEligibleRole,
 		                                 PreviewFieldIdRole, PreviewAggregateRole,
-		                                 WatchLeafCountRole});
+		                                 WatchLeafCountRole, KindRole, TypeNamesRole});
 	}
+	if (alive && impl_->current() && impl_->admission == admission)
+		setWidestFieldType(widest);
 }
 
 void EndpointModel::setPreviews(EndpointPreviews* previews)
@@ -745,6 +788,7 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 		for (const auto category : {Category::Field, Category::Command, Category::Service}) {
 			auto categoryRow = std::make_unique<Row>();
 			categoryRow->category = static_cast<int>(category);
+			categoryRow->kind = QStringLiteral("category");
 			categoryRow->name = category == Category::Field     ? QStringLiteral("Fields")
 			                    : category == Category::Command ? QStringLiteral("Commands")
 			                                                    : QStringLiteral("Services");
@@ -756,6 +800,7 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 			for (const auto& catalog : impl_->inspector.catalogs(category)) {
 				auto catalogRow = std::make_unique<Row>();
 				catalogRow->category = static_cast<int>(category);
+				catalogRow->kind = QStringLiteral("group");
 				catalogRow->name = text(catalog.name);
 				catalogRow->count = catalog.endpointCount;
 				const bool one = catalog.endpointCount == 1;
@@ -779,6 +824,10 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 					auto row = std::make_unique<Row>();
 					row->category = static_cast<int>(category);
 					row->endpoint = true;
+					// A Field's kind follows its type once the schema gives it.
+					row->kind = category == Category::Command   ? QStringLiteral("command")
+					            : category == Category::Service ? QStringLiteral("service")
+					                                            : QStringLiteral("value");
 					row->endpointId = endpoint.id;
 					row->typeId = endpoint.typeId;
 					row->responseTypeId = endpoint.responseTypeId;
@@ -810,6 +859,9 @@ void EndpointModel::rebuildSource(const Inspector* inspector, const Workbench* w
 	if (!alive)
 		return;
 	impl_->tree.changing = false;
+	setWidestFieldType({});
+	if (!alive)
+		return;
 	// The registry can publish its source before the provider rebuilds rows;
 	// a host's own schema stands in for it.
 	if (impl_->previews || impl_->schemaSource)
@@ -1063,6 +1115,10 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			       : previewInfo().value(QStringLiteral("state")).toString();
 		case PreviewAgeMsRole:
 			return previewInfo().value(QStringLiteral("ageMs"), qint64{-1});
+		case KindRole:
+			return row->kind;
+		case TypeNamesRole:
+			return row->typeNames;
 		case PreviewReasonRole:
 			return impl_->expansionLimited(*row)
 			           ? tr("Tree preview expansion is limited to 4096 rows. Open Details to inspect this value.")
@@ -1088,12 +1144,42 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {PreviewAgeMsRole, "previewAgeMs"}, {PreviewReasonRole, "previewReason"},
 	        {CountRole, "count"},           {PathRole, "path"},
 	        {WatchLeafFirstRole, "watchLeafFirst"}, {WatchLeafCountRole, "watchLeafCount"},
-	        {WatchLeafKindRole, "watchLeafKind"}};
+	        {WatchLeafKindRole, "watchLeafKind"}, {KindRole, "kind"},
+	        {TypeNamesRole, "typeNames"}};
 }
 
 QString EndpointModel::pathOf(const QModelIndex& index) const
 {
 	return data(index, PathRole).toString();
+}
+
+QModelIndex EndpointModel::indexOfPath(const QString& path)
+{
+	if (path.isEmpty() || changing() || !impl_->current())
+		return {};
+	QModelIndex at;
+	for (const auto& name : path.split(QLatin1Char('/'))) {
+		QModelIndex next;
+		for (int row = 0;; ++row) {
+			// A Field's values come in batches: fetch while the name is not among them.
+			if (row >= rowCount(at)) {
+				if (!canFetchMore(at))
+					break;
+				fetchMore(at);
+				if (row >= rowCount(at))
+					break;
+			}
+			const auto child = index(row, 0, at);
+			if (data(child, NameRole).toString() == name) {
+				next = child;
+				break;
+			}
+		}
+		if (!next.isValid())
+			return {};
+		at = next;
+	}
+	return at;
 }
 
 bool EndpointModel::canFetchMore(const QModelIndex& parent) const
@@ -1134,6 +1220,10 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 		child->category = static_cast<int>(Category::Field);
 		child->previewOwner = true;
 		child->previewReadable = row->previewReadable;
+		// A value inside a Field reads and writes as its Field: the tree marks its
+		// access on every row of the Field (the owner, 20 November 2026).
+		child->readable = row->readable;
+		child->writable = row->writable;
 		child->previewChild = true;
 		child->previewFieldId = row->previewFieldId;
 		child->previewFieldBytes = row->previewFieldBytes;
@@ -1192,8 +1282,13 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 		child->path = child->previewRange ? row->path
 		              : row->path + (type->kind == Kind::Struct ? QStringLiteral(".") : QString{}) +
 		                    child->name;
-		child->detail = child->type + QStringLiteral(" (#") + integerText(child->typeId) +
-		                QStringLiteral(", ") + integerText(child->wireBytes) + QStringLiteral(" B)");
+		child->kind = child->previewRange ? QStringLiteral("array") : valueKind(schema, child->typeId);
+		child->typeNames = child->previewRange ? QString{} : schema_text::enumNames(schema, child->typeId);
+		// In words, as a Field's: its type, then its bytes; never an internal type id.
+		child->detail = child->type + QStringLiteral(" \u00b7 ") +
+		                (child->wireBytes == 1 ? QCoreApplication::translate("EndpointModel", "1 byte")
+		                                       : QCoreApplication::translate("EndpointModel", "%1 bytes")
+		                                             .arg(child->wireBytes));
 		previewShape(*child, schema);
 		pending.push_back(std::move(child));
 	}

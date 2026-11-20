@@ -918,7 +918,7 @@ Pane {
         // The row's path under the table's first level, and the words before it.
         property string cellPath: ""
         property string pathPrefix: ""
-        // The Field's root row, in the heading weight.
+        // The Field's root row; Regular as every row (the Device tree design, 18 Nov 2026).
         property bool container: false
         // A value not yet sent: the accent line at the row's left.
         property bool unsent: false
@@ -1054,7 +1054,7 @@ Pane {
                 height: Type.rowHeight
                 verticalAlignment: Text.AlignVCenter
                 textFormat: Text.PlainText; text: cellRow.cellName; elide: Text.ElideMiddle
-                font.weight: cellRow.container ? Type.headingWeight : Type.bodyWeight
+                font.weight: Type.bodyWeight
                 color: cellRow.highlighted ? Theme.selectedForeground : Theme.textPrimary
             }
             Loader {

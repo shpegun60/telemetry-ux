@@ -56,6 +56,10 @@ using WorkbenchView = telemetry::integration::workbench::WorkbenchView<8, workbe
 // clears/resetSnapshot() before changing the displayed admission or snapshot.
 class EndpointModel final : public QAbstractItemModel {
 	Q_OBJECT
+	// The longest type of a Field of the device ("struct (3)", "f32[256]"):
+	// the Device tree's Type column is as wide as it, once per descriptor, so
+	// opening a branch never moves the column. Empty until the types are known.
+	Q_PROPERTY(QString widestFieldType READ widestFieldType NOTIFY widestFieldTypeChanged)
 public:
 	enum Role {
 		NameRole = Qt::UserRole + 1,
@@ -93,7 +97,14 @@ public:
 		// What a struct or array row holds, for a box's words: "members" (a
 		// struct of scalars), "elements" (an array of scalars) or "values"
 		// (anything deeper); empty on other rows.
-		WatchLeafKindRole
+		WatchLeafKindRole,
+		// What the row is, for its glyph: "category", "group", "struct",
+		// "array", "value" (a scalar or an enum), "command" or "service"; a
+		// value inside a Field by its own type, a range of an array "array".
+		KindRole,
+		// An enum's names for the row's tooltip, "Off, Low, High"; empty on
+		// any other row.
+		TypeNamesRole
 	};
 	Q_ENUM(Role)
 
@@ -122,6 +133,14 @@ public:
 	Q_INVOKABLE bool isGroup(const QModelIndex& index) const;
 	// What PathRole holds; empty for an invalid or stale index.
 	Q_INVOKABLE QString pathOf(const QModelIndex& index) const;
+	// The row at a path of names (NameRole) from the root, joined by "/":
+	// "Fields/device/Config", "Commands/control"; the values of a Field are
+	// fetched on the way. Invalid when no such row. Unlike PathRole the path
+	// names the category, so a group of Commands and one of Services with
+	// the same name are told apart: what the Device tree keeps of its open
+	// branches across a reconnect.
+	Q_INVOKABLE QModelIndex indexOfPath(const QString& path);
+	[[nodiscard]] QString widestFieldType() const;
 	// Resolve the current model index without retaining one across a reset.
 	bool matchesEndpoint(const QModelIndex& index, int category, std::uint32_t id) const;
 	// Whether the current device's Field with this id accepts writes.
@@ -143,9 +162,13 @@ public:
 	void fetchMore(const QModelIndex& parent) override;
 	bool hasChildren(const QModelIndex& parent = {}) const override;
 
+Q_SIGNALS:
+	void widestFieldTypeChanged();
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
+	void setWidestFieldType(const QString& type);
 	void rebuildSource(const Inspector* inspector, const Workbench* workbench,
 	                   const WorkbenchView* view = nullptr);
 	void previewSourceChanged();

@@ -2,6 +2,7 @@
 // fold memory, edit marks) in a real QQuickWindow over a fake provider whose
 // models are QStandardItemModels with the roles of the real ValueModel. MIT.
 #include <QtCore/QDir>
+#include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStandardItemModel>
 #include <QtQml/QQmlApplicationEngine>

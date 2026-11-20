@@ -84,3 +84,12 @@ qt_add_resources(telemetry_qml_details_layout "details-layout-entry" PREFIX "/" 
 target_compile_features(telemetry_qml_details_layout PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qml_details_layout PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(telemetry_qml_details_layout PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench Qt6::Test)
+# The Device tree design's checks (kinds, types, keys, find, memory) over a
+# real EndpointModel made from a real descriptor.
+qt_add_executable(telemetry_qml_device_tree_kinds DeviceTreeKinds.cpp)
+set_target_properties(telemetry_qml_device_tree_kinds PROPERTIES AUTOMOC ON)
+qt_add_resources(telemetry_qml_device_tree_kinds "device-tree-kinds-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DeviceTreeKinds.qml)
+target_compile_features(telemetry_qml_device_tree_kinds PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_qml_device_tree_kinds PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(telemetry_qml_device_tree_kinds PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench
+    Telemetry::encoded_backend Qt6::Test)

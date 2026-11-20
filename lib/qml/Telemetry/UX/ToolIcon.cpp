@@ -416,6 +416,45 @@ QPainterPath toNewest()
 	path.lineTo(19.5, 19);
 	return path;
 }
+// The Device tree's kinds (the designer's, 18 November 2026): a folder for a
+// category or a group, braces for a struct, brackets for an array, a ring for
+// a scalar, an arrow for a Command, two for a Service. Each ink at most 10 px
+// tall at 16 px, about the cap height, so a glyph never outweighs its name.
+
+// An array: square brackets with no nib, so they never read as braces.
+QPainterPath brackets()
+{
+	QPainterPath path;
+	path.moveTo(9.5, 5);
+	path.lineTo(5.5, 5);
+	path.lineTo(5.5, 19);
+	path.lineTo(9.5, 19);
+	path.moveTo(14.5, 5);
+	path.lineTo(18.5, 5);
+	path.lineTo(18.5, 19);
+	path.lineTo(14.5, 19);
+	return path;
+}
+// A scalar: a ring of 4 px at 16 px, the quietest mark.
+QPainterPath ring()
+{
+	QPainterPath path;
+	path.arcMoveTo(9, 9, 6, 6, 0);
+	path.arcTo(9, 9, 6, 6, 0, 360);
+	return path;
+}
+// A Command: one arrow, the way the device takes it; never a triangle,
+// which reads as Run.
+QPainterPath oneWay()
+{
+	QPainterPath path;
+	path.moveTo(4.5, 12);
+	path.lineTo(19, 12);
+	path.moveTo(14.5, 7.5);
+	path.lineTo(19, 12);
+	path.lineTo(14.5, 16.5);
+	return path;
+}
 QPainterPath shape(const QString& name)
 {
 	if (name == QLatin1String("zoomIn"))
@@ -434,6 +473,18 @@ QPainterPath shape(const QString& name)
 		return sheets();
 	if (name == QLatin1String("clear"))
 		return clearLines();
+	// The Device tree's six; group, struct and service are the Device files' drawings.
+	static const std::array<std::pair<QLatin1String, QPainterPath (*)()>, 6> kinds{{
+	    {QLatin1String("group"), folder},
+	    {QLatin1String("struct"), braces},
+	    {QLatin1String("array"), brackets},
+	    {QLatin1String("value"), ring},
+	    {QLatin1String("command"), oneWay},
+	    {QLatin1String("service"), exchange},
+	}};
+	for (const auto& [known, draw] : kinds)
+		if (name == known)
+			return draw();
 	static const std::array<std::pair<QLatin1String, QPainterPath (*)()>, 11> files{{
 	    {QLatin1String("folder"), folder},
 	    {QLatin1String("file"), page},

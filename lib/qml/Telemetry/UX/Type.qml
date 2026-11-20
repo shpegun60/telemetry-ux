@@ -76,4 +76,7 @@ QtObject {
     // Between two columns of a table (12 px): groupSpacing is too tight
     // between a right-aligned number and a left-aligned type, "230 f32".
     property int columnGap: Math.round(bodyPixels * 0.9)
+    // The least a tree's name keeps before anything right of it gives way
+    // (53 px): its first characters, seven or eight letters.
+    property int nameFloor: Math.round(bodyPixels * 4)
 }

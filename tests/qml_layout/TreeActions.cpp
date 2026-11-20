@@ -2,6 +2,7 @@
 // (Watch, Watch this group, Show details, Copy path) by mouse and keyboard,
 // Enter and the arrows in the search, and the find() entry for a host's Ctrl+K.
 // No network or device I/O. MIT.
+#include <Telemetry/UX/QmlTypes.hpp>
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QItemSelectionModel>
@@ -97,10 +98,19 @@ static QVariant evaluate(QObject* object, const QString& expression) {
 static QStringList watched(QObject* provider) {
     return provider->property("watched").toStringList();
 }
+// The tree shows the model through its find filter: the tree's index of a row.
+static QModelIndex shown(QObject* panel, const QModelIndex& source) {
+    QVariant result;
+    if (!QMetaObject::invokeMethod(panel, "shownOf", Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, QVariant::fromValue(source))))
+        throw std::runtime_error("shownOf");
+    return result.value<QModelIndex>();
+}
 
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+    // The Device tree shows its rows through the module's C++ types.
+    telemetry::ux::registerQmlTypes();
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& message) {
         if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ++warnings;
         std::fprintf(stderr, "%s\n", qPrintable(message));
@@ -194,7 +204,7 @@ int main(int argc, char** argv) {
         {
             auto* keys = qobject_cast<QItemSelectionModel*>(tree->property("selectionModel").value<QObject*>());
             CHECK(keys);
-            keys->setCurrentIndex(voltage, QItemSelectionModel::NoUpdate);
+            keys->setCurrentIndex(shown(panel, voltage), QItemSelectionModel::NoUpdate);
             tree->forceActiveFocus();
             settle();
             QGuiApplication::clipboard()->clear();
@@ -210,7 +220,7 @@ int main(int argc, char** argv) {
         // The Menu key and Shift+F10 open the menu on the keyboard's current row.
         auto* selection = qobject_cast<QItemSelectionModel*>(tree->property("selectionModel").value<QObject*>());
         CHECK(selection);
-        selection->setCurrentIndex(voltage, QItemSelectionModel::NoUpdate);
+        selection->setCurrentIndex(shown(panel, voltage), QItemSelectionModel::NoUpdate);
         tree->forceActiveFocus();
         settle();
         QTest::keyClick(window, Qt::Key_Menu);
@@ -235,7 +245,7 @@ int main(int argc, char** argv) {
         const auto start = model.index(0, 0, model.index(2, 0));
         // Fully expanded, "Start" is row 10: below the short tree's last row.
         CHECK(tree->property("bottomRow").toInt() < 10);
-        selection->setCurrentIndex(start, QItemSelectionModel::NoUpdate);
+        selection->setCurrentIndex(shown(panel, start), QItemSelectionModel::NoUpdate);
         tree->forceActiveFocus();
         QTest::keyClick(window, Qt::Key_Menu);
         settle();
@@ -258,42 +268,62 @@ int main(int argc, char** argv) {
         CHECK(status->property("text").toString() == QStringLiteral("Stop polling to change the Watchlist."));
         CHECK(provider->setProperty("watchActive", false));
 
-        // find(): the host's Ctrl+K focuses the search with a query; Enter
-        // watches the first result, and the status says Enter does that.
+        // find(): the host's Ctrl+K focuses the search with a query, and the
+        // tree is filtered in place (the Device tree design, G1): Enter makes
+        // the next match current and selected, Details showing it; Space in
+        // the tree watches it, as its box does.
         auto* search = named(panel, "endpointSearch");
         auto* searchStatus = named(panel, "endpointSearchStatus");
         CHECK(search && searchStatus);
+        const auto current = [&] { return selection->currentIndex(); };
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Current"))));
         QTest::qWait(250);
         CHECK(search->hasActiveFocus() && search->property("text").toString() == QStringLiteral("Current"));
-        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 matching endpoints; Enter watches the first"));
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 match"));
+        CHECK(tree->property("rows").toInt() == 2);
+        const int findSelections = provider->property("selections").toInt();
         QTest::keyClick(window, Qt::Key_Return);
         settle();
-        CHECK(watched(provider).contains(QStringLiteral("measure.Current")));
-        CHECK(status->property("text").toString() == QStringLiteral("Watching measure.Current."));
-        // A Command's first result opens its details instead, and the status
-        // says so before Enter.
+        const auto currentField = model.index(1, 0, model.index(0, 0));
+        CHECK(provider->property("selections").toInt() == findSelections + 1);
+        CHECK(provider->property("selectedEndpointIndex").value<QModelIndex>() == currentField);
+        CHECK(current() == shown(panel, currentField));
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 of 1 matches"));
+        CHECK(!watched(provider).contains(QStringLiteral("measure.Current")));
+        // Down enters the tree at the match; Space watches it there.
+        QTest::keyClick(window, Qt::Key_Down);
+        settle();
+        CHECK(tree->hasActiveFocus() && current() == shown(panel, currentField));
+        // This provider marks Fields for "Add N": Space marks the match, as its box.
+        QTest::keyClick(window, Qt::Key_Space);
+        settle();
+        CHECK(evaluate(panel, QStringLiteral("watchMarks.length")).toInt() == 1);
+        QTest::keyClick(window, Qt::Key_Space);
+        settle();
+        CHECK(evaluate(panel, QStringLiteral("watchMarks.length")).toInt() == 0);
+        // A Command is found and opened the same way.
         const int selections = provider->property("selections").toInt();
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Start"))));
         QTest::qWait(250);
-        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 matching endpoints; Enter shows the first"));
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 match"));
         QTest::keyClick(window, Qt::Key_Enter);
         settle();
         CHECK(provider->property("selections").toInt() == selections + 1);
         CHECK(provider->property("selectedEndpointIndex").value<QModelIndex>() == model.index(0, 0, model.index(2, 0)));
-        // An Enter pressed before the search has finished acts when it does.
+        // An Enter pressed before the filter has settled acts on the text typed.
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("Offset"))));
         QTest::keyClick(window, Qt::Key_Return);
-        CHECK(panel->property("enterPending").toBool());
-        QTest::qWait(250);
-        CHECK(!panel->property("enterPending").toBool());
-        CHECK(status->property("text").toString() == QStringLiteral("device.config.Offset is already watched."));
-        // With nothing to act on, Enter goes on to the host; with a result the
-        // panel keeps it.
+        settle();
+        CHECK(provider->property("selectedEndpointIndex").value<QModelIndex>() == offset);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 of 1 matches"));
+        // With nothing to step to, Enter goes on to the host; with a match
+        // the panel keeps it.
         auto* host = named(window->contentItem(), "treeActionsHost");
         CHECK(host);
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("no-such-endpoint"))));
         QTest::qWait(250);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("Nothing matches “no-such-endpoint”."));
+        CHECK(tree->property("rows").toInt() == 0);
         const int returns = host->property("returns").toInt();
         QTest::keyClick(window, Qt::Key_Return);
         settle();
@@ -303,44 +333,58 @@ int main(int argc, char** argv) {
         QTest::keyClick(window, Qt::Key_Return);
         settle();
         CHECK(host->property("returns").toInt() == returns + 1);
-        // While polling, Enter on a watchable result offers nothing in the hint.
-        CHECK(provider->setProperty("watchActive", true));
-        settle();
-        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 matching endpoints"));
-        CHECK(provider->setProperty("watchActive", false));
-        settle();
-        // Down and Up walk from the field into the results and back.
-        CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("measure"))));
+        // A group is found by its name and stays folded, everything under it
+        // kept; a match below it is not counted again. Enter makes it current
+        // and asks the provider nothing.
+        CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QStringLiteral("config"))));
         QTest::qWait(250);
-        auto* results = named(panel, "endpointSearchResults");
-        CHECK(results && results->property("count").toInt() == 3);
-        QTest::keyClick(window, Qt::Key_Down);
+        CHECK(searchStatus->property("text").toString() == QStringLiteral("1 match"));
+        const int groupSelections = provider->property("selections").toInt();
+        QTest::keyClick(window, Qt::Key_Return);
         settle();
-        auto* focused = window->activeFocusItem();
-        CHECK(focused && focused->objectName() == QStringLiteral("endpointSearchResult") &&
-              focused->property("index").toInt() == 0);
-        QTest::keyClick(window, Qt::Key_Down);
+        CHECK(provider->property("selections").toInt() == groupSelections);
+        const auto configGroup = model.index(0, 0, model.index(1, 0));
+        CHECK(current() == shown(panel, configGroup));
+        // The menu opens on the current match, as on any row.
+        tree->forceActiveFocus();
         settle();
-        focused = window->activeFocusItem();
-        CHECK(focused && focused->property("index").toInt() == 1);
-        // The menu opens on a result as on a tree row.
         QTest::keyClick(window, Qt::Key_Menu);
         settle();
         CHECK(menu->property("visible").toBool());
-        CHECK(evaluate(menu, QStringLiteral("target === treeActionsModel.index(1, 0, treeActionsModel.index(0, 0))")).toBool());
-        CHECK(menuItem("endpointMenuDetails")->isEnabled());
+        CHECK(evaluate(menu, QStringLiteral("target === treeActionsModel.index(0, 0, treeActionsModel.index(1, 0))")).toBool());
         QTest::keyClick(window, Qt::Key_Escape);
         settle();
-        QTest::keyClick(window, Qt::Key_Up);
+        // Enter on the group in the tree folds and unfolds it.
+        tree->forceActiveFocus();
         settle();
-        QTest::keyClick(window, Qt::Key_Up);
+        CHECK(tree->property("rows").toInt() == 2);
+        QTest::keyClick(window, Qt::Key_Return);
+        settle();
+        CHECK(tree->property("rows").toInt() == 4);
+        QTest::keyClick(window, Qt::Key_Return);
+        settle();
+        CHECK(tree->property("rows").toInt() == 2);
+        // Ctrl+F from the tree goes back to the field.
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
         settle();
         CHECK(search->hasActiveFocus());
         // Without a query, find() only focuses the field and keeps its text.
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QVariant())));
-        CHECK(search->property("text").toString() == QStringLiteral("measure"));
+        CHECK(search->property("text").toString() == QStringLiteral("config"));
         CHECK(QMetaObject::invokeMethod(panel, "find", Q_ARG(QVariant, QString())));
+        QTest::qWait(250);
         settle();
+        // A model without a kind role: its rows are worked out - a root that
+        // is not an endpoint a category, a branch a group, an endpoint a value.
+        const auto glyph = [&](const QString& name) {
+            auto* row = rowNamed(window->contentItem(), name);
+            auto* icon = row ? named(row, "kindIcon") : nullptr;
+            return icon ? icon->property("name").toString() : QString();
+        };
+        CHECK(glyph(QStringLiteral("measure")) == QStringLiteral("group"));
+        CHECK(rowNamed(window->contentItem(), QStringLiteral("measure"))->property("shownKind").toString() == QStringLiteral("category"));
+        CHECK(rowNamed(window->contentItem(), QStringLiteral("config"))->property("shownKind").toString() == QStringLiteral("group"));
+        CHECK(glyph(QStringLiteral("Voltage")) == QStringLiteral("value"));
         // A structural change closes an open menu and drops its index: no
         // action can reach the provider with an index from before the change.
         openOn(QStringLiteral("Name"));
