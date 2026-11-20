@@ -1,5 +1,6 @@
 // One pending read, bounded wire chunks, Qt-owned scalar rows. MIT.
 #include "DynamicWatchlist.hpp"
+#include "PathGrammar.hpp"
 #include "ReadPortions.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
@@ -1560,7 +1561,7 @@ DynamicWatchlist::resolve(const QString& group, const QString& name, const QStri
 	if (matches > 1)
 		return {Resolution::Ambiguous, {}};
 	const auto& shape = p->fields[found];
-	const auto path = group.isEmpty() ? name : group + QLatin1Char('.') + name;
+	const auto path = group.isEmpty() ? path_grammar::escaped(name) : path_grammar::compose(group, name, {});
 	if (member.isEmpty()) {
 		const auto bytes = p->source.fieldBytes(found);
 		if (!bytes || !*bytes || *bytes > 8)
@@ -1583,44 +1584,23 @@ QString words(const char* text)
 {
 	return QCoreApplication::translate("DynamicWatchlist", text);
 }
-// "device.Config.Gain" as group, Field and member text; nullopt for text
-// that is not a path.
+// "device/Config.Gain" as group, Field and member text (the member without
+// its leading dot: "Gain", "[3]"); nullopt for text that is not a path.
 struct PathParts {
 	QString group, name, member;
 };
-// The size of the longest of groups text starts with, followed by a dot; -1
-// for none. A group may hold dots ("power.meter"), so the first dot is not
-// always where the group ends (WL-8).
-qsizetype groupEnd(const QString& text, const QSet<QString>& groups)
-{
-	qsizetype end = -1;
-	for (const auto& group : groups)
-		if (group.size() > end && text.size() > group.size() && text.startsWith(group) &&
-		    text.at(group.size()) == QLatin1Char('.'))
-			end = group.size();
-	return end;
-}
-
-// A path's group, Field and member: the group the longest of groups it starts
-// with, else the text up to the first dot.
+// A path's group, Field and member, in the one grammar ("device/Config.Gain")
+// or an older project's dotted key ("device.Config.Gain"), read against the
+// device's groups (PathGrammar.hpp).
 std::optional<PathParts> splitPath(const QString& text, const QSet<QString>& groups = {})
 {
-	auto dot = groupEnd(text, groups);
-	if (dot < 0)
-		dot = text.indexOf(QLatin1Char('.'));
-	if (dot <= 0 || dot + 1 >= text.size())
+	const auto parsed = path_grammar::parseAny(text, groups);
+	if (!parsed)
 		return std::nullopt;
 	PathParts parts;
-	parts.group = text.left(dot);
-	auto end = dot + 1;
-	while (end < text.size() && text.at(end) != QLatin1Char('.') && text.at(end) != QLatin1Char('['))
-		++end;
-	parts.name = text.mid(dot + 1, end - dot - 1);
-	if (parts.name.isEmpty())
-		return std::nullopt;
-	parts.member = end < text.size() && text.at(end) == QLatin1Char('.') ? text.mid(end + 1) : text.mid(end);
-	if (end < text.size() && text.at(end) == QLatin1Char('.') && parts.member.isEmpty())
-		return std::nullopt;
+	parts.group = parsed->group;
+	parts.name = parsed->name;
+	parts.member = parsed->member.startsWith(QLatin1Char('.')) ? parsed->member.mid(1) : parsed->member;
 	return parts;
 }
 } // namespace
@@ -1632,7 +1612,7 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 	const auto typed = text.trimmed();
 	const auto parts = splitPath(typed, p->groupNames());
 	if (!parts) {
-		out.error = words("Write a path such as device.Config.Gain or data.Samples[3].");
+		out.error = words("Write a path such as device/Config.Gain or data/Samples[3].");
 		return out;
 	}
 	if (!canTellHoldable()) {
@@ -1648,9 +1628,9 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 			++matches;
 		}
 	if (matches == 0) {
-		const auto head = parts->group + QLatin1Char('.') + parts->name;
-		const auto other = p->others.constFind(head);
+		const auto other = p->others.constFind(parts->group + QLatin1Char('.') + parts->name);
 		if (other != p->others.cend()) {
+			const auto head = path_grammar::compose(parts->group, parts->name, {});
 			out.error = other.value() == descriptor::Category::Command
 			                ? words("%1 is a Command. Only Fields can be watched.").arg(head)
 			                : words("%1 is a Service. Only Fields can be watched.").arg(head);
@@ -1660,12 +1640,12 @@ DynamicWatchlist::PathResolution DynamicWatchlist::resolvePath(const QString& te
 		out.error = words("%1 is not on this device.").arg(typed);
 		return out;
 	}
+	const auto fieldPath = path_grammar::compose(parts->group, parts->name, {});
 	if (matches > 1) {
-		out.error = words("This device has two Fields named %1.%2.").arg(parts->group, parts->name);
+		out.error = words("This device has two Fields named %1.").arg(fieldPath);
 		return out;
 	}
 	const auto& shape = p->fields[found];
-	const auto fieldPath = parts->group + QLatin1Char('.') + parts->name;
 	const auto whole = watch_key::whole(found);
 	if (!shape.readable) {
 		out.error = words("%1 is write only, so it can't be watched.").arg(fieldPath);
@@ -1729,7 +1709,9 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 	QVector<PathCandidate> out;
 	if (!canTellHoldable() || limit <= 0)
 		return out;
-	const auto typed = text.trimmed();
+	// A dotted start of an older key ("device.Con") reads as the "/" path it
+	// begins ("device/Con"); the candidates are always in the one grammar.
+	const auto typed = path_grammar::canonicalPrefix(text.trimmed(), p->groupNames());
 	const auto starts = [](const QString& name, QStringView word) {
 		return name.startsWith(word, Qt::CaseInsensitive);
 	};
@@ -1752,28 +1734,29 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		const auto& shape = p->fields[id];
 		PathCandidate c;
 		c.next = shape.aggregate ? nextOf(shape.type) : QString{};
-		c.path = shape.group + QLatin1Char('.') + shape.name;
+		c.path = path_grammar::compose(shape.group, shape.name, {});
 		c.typeText = p->leaves.typeText(shape.type);
 		c.container = shape.aggregate;
 		c.values = shape.aggregate ? p->leaves.count(shape.type) : 1;
 		c.watched = shape.aggregate ? heldAll(id, 0, c.values) : p->model.rowOf(watch_key::whole(id)) >= 0;
 		return c;
 	};
-	// The longest group typed in full, then its Fields (WL-8): a group may
-	// hold dots ("power.meter"). Before them the groups that go on from what
-	// is typed: "power." offers "power.meter." as "pow" offers "power.".
-	const auto dot = groupEnd(typed, p->groupNames());
+	// One segment per Tab (the review's 14.3): the groups that go on from
+	// what is typed ("pow" offers "power/", a group may hold dots,
+	// "power\.meter/"), then, once a group is typed in full with its "/",
+	// its Fields, then inside a Field its members.
+	const auto slash = path_grammar::lastSeparator(typed, QLatin1Char('/'));
 	{
-		// The groups, then the Fields whose name holds the word.
 		QStringList groups;
 		for (const auto id : std::as_const(ids)) {
 			const auto& group = p->fields[id].group;
-			if (p->fields[id].readable && !groups.contains(group) && group.size() >= typed.size() && starts(group, typed))
+			const auto written = path_grammar::escaped(group);
+			if (p->fields[id].readable && !groups.contains(group) && written.size() >= typed.size() && starts(written, typed))
 				groups.append(group);
 		}
 		for (const auto& group : std::as_const(groups)) {
 			PathCandidate c;
-			c.path = group + QLatin1Char('.');
+			c.path = path_grammar::escaped(group) + QLatin1Char('/');
 			c.container = true;
 			for (const auto id : std::as_const(ids))
 				if (p->fields[id].group == group && p->fields[id].readable)
@@ -1783,9 +1766,9 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 				return out;
 		}
 	}
-	if (dot >= 0) {
-		const auto group = typed.left(dot);
-		const auto rest = typed.mid(dot + 1);
+	if (slash > 0) {
+		const auto group = path_grammar::unescaped(QStringView(typed).left(slash));
+		const auto rest = typed.mid(slash + 1);
 		auto end = 0;
 		while (end < rest.size() && rest.at(end) != QLatin1Char('.') && rest.at(end) != QLatin1Char('['))
 			++end;
@@ -1819,8 +1802,8 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 				const bool index = complete.endsWith(QLatin1Char('['));
 				if (complete.endsWith(QLatin1Char('.')) || index)
 					complete.chop(1);
-				// The path of what is typed in full: "device.Config", "device.Calib.Phase[2]".
-				auto base = group + QLatin1Char('.') + name;
+				// The path of what is typed in full: "device/Config", "device/Calib.Phase[2]".
+				auto base = path_grammar::compose(group, name, {});
 				if (!complete.isEmpty())
 					base += (complete.startsWith(QLatin1Char('[')) ? QString{} : QStringLiteral(".")) + complete;
 				for (const auto& child : p->leaves.children(shape->type, complete)) {
@@ -1842,7 +1825,8 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 	}
 	// Then the paths whose last step holds the word: Fields and the members
 	// of struct Fields, arrays not opened, at most 4096 steps walked.
-	const auto last = typed.mid(std::max(typed.lastIndexOf(QLatin1Char('.')), typed.lastIndexOf(QLatin1Char('['))) + 1);
+	const auto last = typed.mid(std::max({typed.lastIndexOf(QLatin1Char('.')), typed.lastIndexOf(QLatin1Char('[')),
+	                                      typed.lastIndexOf(QLatin1Char('/'))}) + 1);
 	if (last.size() < 2)
 		return out;
 	int walked = 0;
@@ -1863,7 +1847,7 @@ QVector<DynamicWatchlist::PathCandidate> DynamicWatchlist::pathCandidates(const 
 		if (!shape.aggregate)
 			continue;
 		// Members, breadth first, struct inside struct only.
-		QVector<std::pair<TypeId, QString>> queue{{shape.type, shape.group + QLatin1Char('.') + shape.name}};
+		QVector<std::pair<TypeId, QString>> queue{{shape.type, path_grammar::compose(shape.group, shape.name, {})}};
 		while (!queue.isEmpty() && walked < 4096 && out.size() < limit) {
 			const auto [type, path] = queue.takeFirst();
 			for (const auto& child : p->leaves.children(type)) {

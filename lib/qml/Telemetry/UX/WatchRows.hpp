@@ -200,12 +200,16 @@ public:
 	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 	QHash<int, QByteArray> roleNames() const override;
 
-	// A path's steps as the tree shows them: "device.Calib.Phase[2].Offset"
-	// is device, Calib, Phase, [2], Offset; the Static provider's
-	// "Catalog / Name" is Catalog, Name. Each step is its [start, end).
+	// A path's steps as the tree shows them (PathGrammar.hpp):
+	// "metrology/harmonics/Calib.Phase[2].Offset" is metrology, harmonics,
+	// Calib, Phase, [2], Offset, the first two groups (a "/" follows them); a
+	// backslash keeps the character after it in its step. An older dotted
+	// path ("device.Calib.Gain") and the Static provider's "Catalog / Name"
+	// have no "/": their first step is the group. Each step is its [start, end).
 	struct Step {
 		int start = 0;
 		int end = 0;
+		bool group = false;
 	};
 	static QVector<Step> steps(const QString& path);
 	// Path order for people: case-insensitive, numbers by value.
@@ -228,6 +232,10 @@ private:
 		int source = -1;     // the source row of a value; -1 above values
 		int leaves = 0;      // values at and under the node
 		quint64 order = 0;   // the smallest order at and under the node
+		// A group, not a Field or a value inside one; and the node's place
+		// among its path's steps below the groups (the Field 0), for its type.
+		bool group = false;
+		int typeLevel = 0;
 		QVector<int> children;
 		QString identity;
 	};
@@ -237,6 +245,10 @@ private:
 		QVector<int> nodeOfSource;
 	};
 	Shape build() const;
+	// A group whose only child is a group shares one row with it, as a file
+	// browser's compact folders do (the review's 14.3); split again when a
+	// second child comes.
+	static void joinChains(Shape& shape);
 	void walk(const Shape& shape, int node, QVector<int>& rows) const;
 	// Brings the shown rows to the source's present shape, row by row. A
 	// change asked for while it is under way is made right after it.

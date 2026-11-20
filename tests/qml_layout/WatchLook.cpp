@@ -1316,6 +1316,100 @@ void run(const QString& output, double points, int& screens)
 		settle(120);
 	}
 
+	// ---- 22. Paths (the designer's review of 20 November 2026, 14.3) ----
+	// The List's name is the one path label: whole segments drop under one
+	// "…", the nearest parent lasts longest and the leaf elides last; the
+	// Name column's cap has a ceiling of 40 body heights (amending WL-9's
+	// "the cap never elides a name"); the tree joins a chain of single-child
+	// groups into one row and splits it when a second child comes.
+	{
+		const QString longPath = QStringLiteral(
+		    "plant/area/drive/line/converter/inverter/metrology/harmonics/phaseA/band_from_2000_Hz_to_4000_Hz_above_the_carrier/H37");
+		const QString h3 = QStringLiteral("metrology/harmonics/phaseA/H3");
+		const QString window = QStringLiteral("metrology/harmonics/phaseA/Spectrum.Window");
+		showTree(v, false);
+		resize(v, 1200);
+		look.addRow(h3, 61, typeOf(WatchScalar::F32, 4), floatBits(0.031f), QStringLiteral("f32"));
+		look.addRow(window, 62, typeOf(WatchScalar::U8, 1), 1, QStringLiteral("u8"));
+		look.addRow(longPath, 63, typeOf(WatchScalar::F32, 4), floatBits(0.004f), QStringLiteral("f32"));
+		QMetaObject::invokeMethod(v.panel, "forgetMeasured");
+		settle(150);
+		// The rows measure their names as they are laid out: bring the long one in.
+		rowOf(v.list, longPath);
+		settle(120);
+		// The long path is past the ceiling: the cap stops there, Value one gap after it.
+		const double ceiling = 40 * body;
+		CHECK(prop(v.panel, "nameSeen") + gap > ceiling);
+		CHECK(near(prop(v.panel, "nameCap"), ceiling, 0.5));
+		CHECK(near(prop(v.panel, "valueX"), ceiling + gap, 0.5));
+		auto* longRow = rowOf(v.list, longPath);
+		auto* longLabel = shown(longRow, "watchRowPath");
+		CHECK(longLabel->property("implicitWidth").toDouble() > longLabel->width());
+		CHECK(longLabel->property("elided").toBool());
+		// The branch stays while middle groups go.
+		CHECK(text(shown(longRow, "watchRowPrefix")).startsWith(QStringLiteral("plant/…/")));
+		const auto prefix = text(shown(longRow, "watchRowPrefix"));
+		// One "…", whole segments around it, the nearest parent kept, the leaf whole.
+		CHECK(prefix.count(QStringLiteral("…")) == 1 && prefix.endsWith(QLatin1Char('/')));
+		CHECK(prefix.endsWith(QStringLiteral("band_from_2000_Hz_to_4000_Hz_above_the_carrier/")));
+		const auto segments = longPath.split(QLatin1Char('/'));
+		for (const auto& part : prefix.split(QLatin1Char('/'), Qt::SkipEmptyParts))
+			CHECK(part == QStringLiteral("…") || segments.contains(part));
+		auto* longLeaf = shown(longRow, "watchRowLeaf");
+		CHECK(text(longLeaf) == QStringLiteral("H37") && !longLeaf->property("truncated").toBool());
+		// Prefix muted, leaf bright; heard leaf first.
+		CHECK(color(shown(longRow, "watchRowPrefix")) == theme("textMuted"));
+		CHECK(color(longLeaf) == theme("textPrimary"));
+		CHECK(longLabel->property("spokenName").toString().startsWith(QStringLiteral("H37, in plant, area, drive, line")));
+		CHECK(eval(longRow, QStringLiteral("Accessible.name")).toString().startsWith(QStringLiteral("H37, in plant")));
+		// A short path stays whole, its prefix muted.
+		auto* h3Row = rowOf(v.list, h3);
+		CHECK(!shown(h3Row, "watchRowPath")->property("elided").toBool());
+		CHECK(text(shown(h3Row, "watchRowPrefix")) == QStringLiteral("metrology/harmonics/phaseA/"));
+		shot(v, output, QStringLiteral("watch-list-long-path-1200%1.png").arg(suffix));
+		// The drop order on the label alone: the middle groups nearest the
+		// branch first, then the branch; the nearest parent last.
+		auto* h3Label = shown(h3Row, "watchRowPath");
+		CHECK(eval(h3Label, QStringLiteral("shape(1).prefix")).toString() == QStringLiteral("metrology/…/phaseA/"));
+		CHECK(eval(h3Label, QStringLiteral("shape(2).prefix")).toString() == QStringLiteral("…/phaseA/"));
+		CHECK(eval(h3Label, QStringLiteral("shape(3).prefix")).toString() == QStringLiteral("…/"));
+		CHECK(eval(shown(rowOf(v.list, window), "watchRowPath"), QStringLiteral("shape(2).prefix")).toString() ==
+		      QStringLiteral("metrology/…/Spectrum."));
+		// Narrow: what is cut is whole segments under one "…", the leaf whole.
+		resize(v, 420);
+		for (const auto& path : {h3, window, longPath}) {
+			auto* row = rowOf(v.list, path);
+			auto* label = shown(row, "watchRowPath");
+			const auto cut = text(shown(row, "watchRowPrefix"));
+			CHECK(!label->property("elided").toBool() || cut.count(QStringLiteral("…")) == 1 ||
+			      shown(row, "watchRowLeaf")->property("truncated").toBool());
+			CHECK(label->property("usedWidth").toDouble() <= label->width() + 0.5);
+		}
+		shot(v, output, QStringLiteral("watch-list-long-path-420%1.png").arg(suffix));
+		// The tree: metrology/harmonics/phaseA is one row (its box and count
+		// the last group's); the long chain is one row too.
+		showTree(v, true);
+		resize(v, 560);
+		auto* chain = rowOf(v.list, QStringLiteral("metrology/harmonics/phaseA"));
+		CHECK(chain->property("isGroup").toBool() && chain->property("depth").toInt() == 0);
+		CHECK(text(shown(chain, "watchRowLeaf")) == QStringLiteral("metrology/harmonics/phaseA"));
+		CHECK(shown(chain, "watchGroupCount")->property("count").toString() == QStringLiteral("2 watched"));
+		CHECK(rowIndex(v.list, QStringLiteral("metrology")) < 0 && rowIndex(v.list, QStringLiteral("metrology/harmonics")) < 0);
+		CHECK(rowOf(v.list, h3)->property("depth").toInt() == 1);
+		CHECK(rowOf(v.list, QStringLiteral("plant/area/drive/line/converter/inverter/metrology/harmonics/phaseA/band_from_2000_Hz_to_4000_Hz_above_the_carrier"))
+		          ->property("isGroup").toBool());
+		shot(v, output, QStringLiteral("watch-tree-chains-560%1.png").arg(suffix));
+		// A second child splits the chain where it branches.
+		look.addRow(QStringLiteral("metrology/levels/L1"), 64, typeOf(WatchScalar::F32, 4), floatBits(1), QStringLiteral("f32"));
+		settle(120);
+		CHECK(rowIndex(v.list, QStringLiteral("metrology")) >= 0);
+		auto* split = rowOf(v.list, QStringLiteral("metrology/harmonics/phaseA"));
+		CHECK(split->property("depth").toInt() == 1 && text(shown(split, "watchRowLeaf")) == QStringLiteral("harmonics/phaseA"));
+		look.removeFrom(11);
+		QMetaObject::invokeMethod(v.panel, "forgetMeasured");
+		settle(120);
+	}
+
 	// ---- 15. The change mark ----
 	{
 		resize(v, 560);

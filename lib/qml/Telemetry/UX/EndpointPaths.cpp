@@ -1,14 +1,32 @@
 // Finding a device's endpoints by a typed name or path (BA-1). MIT.
 #include "EndpointPaths.hpp"
+#include "PathGrammar.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
 
 namespace telemetry::ux::endpoint_paths {
 namespace {
 QString tr(const char* text)
 {
 	return QCoreApplication::translate("EndpointPaths", text);
+}
+
+// A typed line names a path, not a name: it has a separator of the grammar.
+bool pathLike(const QString& text)
+{
+	return text.contains(QLatin1Char('.')) || text.contains(QLatin1Char('[')) || text.contains(QLatin1Char('/'));
+}
+
+// The device's group names, as its entries name them.
+QSet<QString> groupsOf(const QVector<EndpointEntry>& list)
+{
+	QSet<QString> groups;
+	for (const auto& entry : list)
+		if (!entry.group.isEmpty())
+			groups.insert(entry.group);
+	return groups;
 }
 
 bool isWordStart(QChar previous, QChar at)
@@ -29,8 +47,8 @@ QStringList words(const QString& path)
 	};
 	QChar previous;
 	for (const QChar at : path) {
-		if (at == QLatin1Char('.') || at == QLatin1Char('[') || at == QLatin1Char(']') ||
-		    at == QLatin1Char('_') || at.isSpace()) {
+		if (at == QLatin1Char('.') || at == QLatin1Char('[') || at == QLatin1Char(']') || at == QLatin1Char('/') ||
+		    at == QLatin1Char('\\') || at == QLatin1Char('_') || at.isSpace()) {
 			flush();
 			previous = QChar{};
 			continue;
@@ -46,7 +64,7 @@ QStringList words(const QString& path)
 
 int nameRank(const QString& path, const QStringList& terms)
 {
-	const auto segments = path.split(QLatin1Char('.'), Qt::SkipEmptyParts);
+	const auto segments = path.split(QRegularExpression(QStringLiteral("[./]")), Qt::SkipEmptyParts);
 	if (segments.isEmpty() || terms.isEmpty())
 		return -1;
 	const auto last = segments.last().toCaseFolded();
@@ -112,9 +130,9 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	// names it when it names a Command or a Service and nothing else; the
 	// rest are values, which are set on the item, not here (BA-4b).
 	if (const auto gap = text.indexOf(QRegularExpression(QStringLiteral("\\s"))); gap > 0) {
-		const auto target = text.left(gap);
+		const auto target = path_grammar::canonical(text.left(gap), groupsOf(list));
 		bool callable = false, other = false;
-		const bool targetIsPath = target.contains(QLatin1Char('.')) || target.contains(QLatin1Char('['));
+		const bool targetIsPath = pathLike(target);
 		for (const auto& entry : list) {
 			if (category != 0 && entry.category != category)
 				continue;
@@ -138,7 +156,13 @@ Pick resolve(const QString& line, const QVector<EndpointEntry>& list)
 	const auto wanted = [category](const EndpointEntry& entry) {
 		return category == 0 || entry.category == category;
 	};
-	const bool isPath = text.contains(QLatin1Char('.')) || text.contains(QLatin1Char('['));
+	const bool isPath = pathLike(text);
+	// A key of an older project ("device.Config.Gain") read as the path it
+	// names ("device/Config.Gain").
+	if (isPath) {
+		text = path_grammar::canonical(text, groupsOf(list));
+		pick.path = text;
+	}
 	if (isPath) {
 		for (const auto& entry : list)
 			if (wanted(entry) && entry.path == text)

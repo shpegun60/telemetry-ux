@@ -99,3 +99,13 @@ target_compile_features(telemetry_qml_device_tree_kinds PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qml_device_tree_kinds PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(telemetry_qml_device_tree_kinds PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench
     Telemetry::encoded_backend Qt6::Test)
+# The designer's review of 20 November 2026 (section 14, part A): the path
+# grammar, and the tree's groups inside groups over a model shaped as a
+# group tree will be (counts, the indent step, the context line, find by
+# path and type, the kinds filter, the path label).
+qt_add_executable(telemetry_qml_device_tree_groups DeviceTreeGroups.cpp)
+set_target_properties(telemetry_qml_device_tree_groups PROPERTIES AUTOMOC ON)
+qt_add_resources(telemetry_qml_device_tree_groups "device-tree-groups-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DeviceTreeGroups.qml)
+target_compile_features(telemetry_qml_device_tree_groups PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_qml_device_tree_groups PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(telemetry_qml_device_tree_groups PRIVATE TelemetryUX::qt_connection Qt6::Test)

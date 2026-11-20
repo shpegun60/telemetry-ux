@@ -899,8 +899,12 @@ Pane {
                                          ? accessFull : 0
     readonly property bool statusGlyph: statusFull > 0 && deepestRoom(accessColumn, statusFull) < Type.bodyPixels * 7.2
     readonly property real statusColumn: statusFull <= 0 ? 0 : statusGlyph ? glyphWidth : statusFull
-    // The Name column's cap: never below the widest name, so it never elides one.
-    readonly property real nameCap: Math.max(nameSeen + columnGap, Type.bodyPixels * 24)
+    // The Name column's cap: the widest name and a gap, at least 24 body
+    // heights, and a ceiling of 40 (about 75 characters, §1.2's line length):
+    // only a path past the ceiling elides, by whole segments, so one long
+    // path never puts every value far from its name (the review's 14.3,
+    // which amends WL-9's "the cap never elides a name").
+    readonly property real nameCap: Math.max(Type.bodyPixels * 24, Math.min(nameSeen + columnGap, Type.bodyPixels * 40))
     readonly property real valueX: Math.max(nameXAt(0), Math.min(fillValueX(accessColumn, statusColumn), nameCap + columnGap))
     readonly property real typeX: valueX + valueColumn + columnGap
     readonly property real accessX: typeX + (typeColumn > 0 ? typeColumn + columnGap : 0)
@@ -2294,7 +2298,8 @@ Pane {
                 Accessible.expanded: watchRow.branch && watchRow.expanded
                 // What a nested row belongs to: "Config", "Phase[2]" (WL-2c).
                 readonly property string parentLabel: typeof model.parentLabel === "string" ? model.parentLabel : ""
-                Accessible.name: [panel.treeView ? watchRow.name.substring(nameCell.leafStart) : watchRow.name,
+                // The List's path is heard leaf first: "Gain, in device, Config".
+                Accessible.name: [panel.treeView ? watchRow.name.substring(nameCell.leafStart) : pathLabel.spokenName,
                                   watchRow.parentLabel.length === 0 ? ""
                                   : watchRow.name.charAt(nameCell.leafStart) === "["
                                     ? qsTr("element of %1").arg(watchRow.parentLabel)
@@ -2420,7 +2425,7 @@ Pane {
                     id: summaryText
                     objectName: "watchRowSummary"
                     visible: !watchRow.isValue && !watchRow.isGroup && watchRow.text.length > 0 && width > 0
-                    readonly property real start: nameCell.x + leafText.x + leafText.width + panel.columnGap
+                    readonly property real start: nameCell.x + nameCell.leafEnd + panel.columnGap
                                                   + (summaryGlyph.held.length > 0 ? summaryGlyph.width + Type.spacing : 0)
                     x: start
                     y: 0
@@ -2477,14 +2482,17 @@ Pane {
                     kind: watchRow.node
                     color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
                 }
-                // The path: its prefix muted, its last segment whole while it
-                // fits, the prefix eliding in its middle (dev…Config.Gain); in
-                // the tree the last segment, eliding in its middle.
+                // The List's name is the one path label (the review's 14.3):
+                // prefix muted, leaf bright, whole segments dropping under one
+                // "…" and the leaf eliding last (metrology/…/phaseA/H3). The
+                // tree's is the row's own step, eliding in its middle.
                 Item {
                     id: nameCell
                     objectName: "watchRowName"
                     readonly property real nameLeft: panel.nameXAt(watchRow.depth)
-                    readonly property real naturalWidth: Math.ceil((panel.treeView ? 0 : prefixMetrics.advanceWidth) + leafMetrics.advanceWidth)
+                    readonly property real naturalWidth: panel.treeView ? Math.ceil(leafMetrics.advanceWidth) : pathLabel.implicitWidth
+                    // Where the name's text ends in the cell.
+                    readonly property real leafEnd: panel.treeView ? leafText.x + leafText.width : pathLabel.usedWidth
                     x: nameLeft
                     y: 0
                     width: Math.max(1, (watchRow.isGroup ? groupCount.x - panel.columnGap : watchRow.valueLeft - panel.columnGap) - nameLeft)
@@ -2493,7 +2501,6 @@ Pane {
                                                      ? Math.max(0, Math.min(watchRow.name.length, watchRow.model.leafStart)) : 0
                     onNaturalWidthChanged: watchRow.reportName()
                     Component.onCompleted: watchRow.reportName()
-                    TextMetrics { id: prefixMetrics; font: panel.font; text: prefixText.text }
                     TextMetrics {
                         id: leafMetrics
                         font.family: panel.font.family
@@ -2501,48 +2508,52 @@ Pane {
                         font.weight: leafText.font.weight
                         text: leafText.text
                     }
-                    Text {
-                        id: prefixText
-                        objectName: "watchRowPrefix"
+                    PathLabel {
+                        id: pathLabel
+                        objectName: "watchRowPath"
+                        visible: !panel.treeView
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.max(0, Math.min(implicitWidth, parent.width - leafText.implicitWidth))
-                        visible: text.length > 0 && width > 0
-                        textFormat: Text.PlainText
-                        text: panel.treeView ? "" : watchRow.name.substring(0, nameCell.leafStart)
+                        width: parent.width
+                        height: parent.height
+                        path: panel.treeView ? "" : watchRow.name
                         font: panel.font
-                        color: watchRow.active ? Theme.selectedForeground : watchRow.muted
-                        elide: Text.ElideMiddle
+                        prefixColor: watchRow.active ? Theme.selectedForeground : watchRow.muted
+                        leafColor: watchRow.foreground
+                        prefixObjectName: "watchRowPrefix"
+                        leafObjectName: "watchRowLeaf"
+                        toolTipEnabled: false
                     }
                     Text {
                         id: leafText
                         objectName: "watchRowLeaf"
-                        anchors.left: prefixText.visible ? prefixText.right : parent.left
+                        visible: panel.treeView
+                        anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, parent.width - (prefixText.visible ? prefixText.width : 0))
+                        width: Math.min(implicitWidth, parent.width)
                         textFormat: Text.PlainText
-                        text: watchRow.name.substring(nameCell.leafStart)
+                        // A step escapes a "/" or "." of its name; the tree shows the name.
+                        text: watchRow.name.substring(nameCell.leafStart).replace(/\\(.)/g, "$1")
                         font.family: panel.font.family
                         font.pointSize: panel.font.pointSize
                         // DemiBold only on groups (the kinds design).
                         font.weight: watchRow.isGroup ? Type.headingWeight : Font.Normal
                         color: watchRow.foreground
-                        elide: panel.treeView ? Text.ElideMiddle : Text.ElideRight
+                        elide: Text.ElideMiddle
                     }
                     // Edited while polling (WL-5): the live reading beside the
                     // name, "Now 1.48"; a failing read says its status.
                     Text {
                         id: nowText
                         objectName: "watchRowNow"
-                        anchors.left: leafText.right
-                        anchors.leftMargin: Type.padding
+                        x: nameCell.leafEnd + Type.padding
                         anchors.verticalCenter: parent.verticalCenter
                         // Only the room the editor leaves; none, and its words go
                         // into the editor's description.
                         readonly property real room: cellLoader.item
-                            ? cellLoader.x + cellLoader.width - cellLoader.item.editorWidth - nameCell.x - leafText.x - leafText.width - 2 * Type.padding
+                            ? cellLoader.x + cellLoader.width - cellLoader.item.editorWidth - nameCell.x - nameCell.leafEnd - 2 * Type.padding
                             : 0
-                        width: Math.max(0, Math.min(parent.width - leafText.x - leafText.width - Type.padding, room))
+                        width: Math.max(0, Math.min(parent.width - nameCell.leafEnd - Type.padding, room))
                         visible: watchRow.editing && watchRow.isValue && panel.provider.watchActive === true && width > Type.bodyPixels * 3
                         textFormat: Text.PlainText
                         text: watchRow.ok ? qsTr("Now %1").arg(watchRow.shownText) : watchRow.status
@@ -2555,8 +2566,9 @@ Pane {
                     HoverHandler { id: nameHover }
                     PlainToolTip {
                         objectName: "watchRowNameTip"
-                        visible: nameHover.hovered && (!watchRow.isValue || prefixText.truncated || leafText.truncated)
-                        text: watchRow.isValue ? watchRow.name
+                        visible: nameHover.hovered && (!watchRow.isValue || (panel.treeView ? leafText.truncated : pathLabel.elided))
+                        // The whole path, broken after each "/".
+                        text: watchRow.isValue ? watchRow.name.replace(/\//g, "/​")
                             : [watchRow.name, watchRow.typeText,
                                watchRow.leaves === 1 ? qsTr("1 value watched") : qsTr("%Ln values watched", "", watchRow.leaves)]
                               .filter(part => part.length > 0).join(" · ")
@@ -2728,7 +2740,8 @@ Pane {
                         openOnClick: false
                         listOpensOnBegin: false
                         editorRoom: Math.max(0, watchRow.valueLeft - nameCell.nameLeft
-                                                - Math.min(leafText.implicitWidth, Type.bodyPixels * 3) - Type.tight)
+                                                - Math.min(panel.treeView ? leafText.implicitWidth : pathLabel.leafImplicitWidth,
+                                                           Type.bodyPixels * 3) - Type.tight)
                         captionRoom: Math.max(0, watchRow.valueLeft - nameCell.nameLeft)
                         captionRightRoom: Math.max(0, panel.groupRight - watchRow.valueLeft - panel.valueColumn)
                         note: watchRow.scopeNote
