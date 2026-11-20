@@ -2351,9 +2351,14 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		                : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
 		if (input) {
 			const auto schema = p->batch.schema();
-			const auto utf8 = entry.path.toUtf8();
-			const std::string_view where{utf8.constData(), std::size_t(utf8.size())};
-			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(where) : schema.findService(where)) {
+			// The schema names an endpoint by its catalog and its own name,
+			// not by the path the GUI writes.
+			const auto group = entry.group.toUtf8();
+			const auto name = entry.name.toUtf8();
+			const std::string_view inGroup{group.constData(), std::size_t(group.size())};
+			const std::string_view named{name.constData(), std::size_t(name.size())};
+			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(inGroup, named)
+			                                               : schema.findService(inGroup, named)) {
 				typeText = request_arguments::signatureText(schema, endpoint->typeId);
 				if (entry.category == 3 && endpoint->responseTypeId)
 					typeText += QStringLiteral(" -> ") + schema_text::typeText(schema, endpoint->responseTypeId);

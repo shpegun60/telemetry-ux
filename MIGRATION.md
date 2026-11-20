@@ -2135,6 +2135,11 @@ a row of the cleared model.
 once against the rows' new paths and kept under the "/" names, and
 `foldedChanged` carries them back to the saver.
 
+`TracePlot`: a drop from the Device tree finds the Watchlist's values under
+what was dropped by their "/" paths (a group's included). The Batch's
+suggestions find a Command's or Service's signature by its catalog and name
+(`findCommand(group, name)`), not by the path the GUI writes.
+
 Checks: `tests/qml_layout/DeviceTreeGroups.cpp` (new: the path grammar, groups
 inside groups over a model shaped as a group tree, counts with their groups,
 the indent step, the context line, find by path and type, the kinds filter,

@@ -191,12 +191,17 @@ FocusScope {
                 return false
             }
             provider.addWatchPaths(dropped)
-            // The Watchlist's values under what was dropped, as it names them.
+            // The Watchlist's values under what was dropped, as it names them:
+            // group/endpoint.member[i], a name's own "/ . [ ] \" escaped.
+            const escaped = name => String(name).replace(/[\/.\[\]\\]/g, "\\$&")
             values = []
             for (const binding of provider.watchBindings()) {
                 const member = typeof binding.member === "string" ? binding.member : ""
-                const path = binding.group + "." + binding.name + (member.length === 0 ? "" : member.startsWith("[") ? member : "." + member)
-                if (dropped.some(at => path === at || path.startsWith(at + ".") || path.startsWith(at + "[")))
+                const group = typeof binding.group === "string" ? binding.group : ""
+                const path = (group.length === 0 ? "" : escaped(group) + "/") + escaped(binding.name)
+                           + (member.length === 0 ? "" : member.startsWith("[") ? member : "." + member)
+                if (dropped.some(at => path === at || path.startsWith(at + "/") || path.startsWith(at + ".")
+                                       || path.startsWith(at + "[")))
                     values.push(path)
             }
         }
