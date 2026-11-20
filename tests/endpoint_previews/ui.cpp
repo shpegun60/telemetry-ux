@@ -392,7 +392,8 @@ void previewVisibility(Window& ui, ux::DynamicConfiguratorProvider& provider,
         auto* configRow = control(tree, "endpointRow", "name", QStringLiteral("Config"));
         auto* counterRow = control(tree, "endpointRow", "name", QStringLiteral("Counter"));
         CHECK(configRow->property("accessMark").toString() == QStringLiteral("rw"));
-        CHECK(counterRow->property("accessMark").toString().isEmpty());
+        // A value inside a Field shows the Field's access (the owner, 20 November 2026).
+        CHECK(counterRow->property("accessMark").toString() == QStringLiteral("rw"));
         CHECK(!counterRow->property("twoLines").toBool());
         CHECK(std::abs(counterRow->height() - configRow->height()) < 0.5);
         // Each shown column: the Field's cell, its member's cell and the
