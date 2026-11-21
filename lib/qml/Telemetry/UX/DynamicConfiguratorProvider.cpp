@@ -2392,8 +2392,8 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		    {QStringLiteral("container"), false}};
 	};
 	// What the text names, kind by kind, best first: a path by its start, a
-	// name word by word. No group rows: a group's name lists its members.
-	// A dotted start of an older key reads as the path it begins.
+	// name word by word. A dotted start of an older key reads as the path it
+	// begins.
 	const bool isPath = typed.contains(QLatin1Char('.')) || typed.contains(QLatin1Char('[')) ||
 	                    typed.contains(QLatin1Char('/'));
 	if (isPath)
@@ -2401,6 +2401,97 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 	const auto terms = typed.split(QLatin1Char(' '), Qt::SkipEmptyParts);
 	// Empty, eight of each kind to look through; typed, what fits a list.
 	const int limit = typed.isEmpty() ? 8 : 40;
+	// The one grammar of the Watchlist's "+" (WL-10a), first: the groups that
+	// go on from the text, one level at a time ("dem" offers "demo/", "demo/"
+	// offers "demo/adc/"), each holding something of the kind asked; picking
+	// one writes its path with its "/" and lists what it holds. Then, inside
+	// a Field, its members and elements, as the Watchlist lists them: one of
+	// them adds a read of the whole Field.
+	if (terms.size() <= 1) {
+		const auto starts = [](const QString& name, const QString& word) {
+			return name.startsWith(word, Qt::CaseInsensitive);
+		};
+		// The next unescaped "/" of a written group path at or after from.
+		const auto nextSlash = [](const QString& written, qsizetype from) -> qsizetype {
+			for (qsizetype i = 0; i < written.size(); ++i) {
+				if (written.at(i) == QLatin1Char('\\')) {
+					++i;
+					continue;
+				}
+				if (written.at(i) == QLatin1Char('/') && i >= from)
+					return i;
+			}
+			return -1;
+		};
+		QStringList steps;
+		QHash<QString, std::array<int, 4>> held;  // by kind, under each step
+		for (const auto& entry : list) {
+			if (category != 0 && entry.category != category)
+				continue;
+			const auto slash = path_grammar::lastSeparator(entry.path, QLatin1Char('/'));
+			if (slash <= 0)
+				continue;
+			const auto written = entry.path.left(slash);
+			if (written.size() < typed.size() || !starts(written, typed))
+				continue;
+			const auto cut = nextSlash(written, typed.size());
+			const auto step = cut < 0 ? written : written.left(cut);
+			if (!steps.contains(step))
+				steps.append(step);
+			if (entry.category >= 1 && entry.category <= 3)
+				++held[step][std::size_t(entry.category)];
+		}
+		for (const auto& step : std::as_const(steps)) {
+			const auto& count = held[step];
+			QStringList holds;
+			if (count[1])
+				holds << (count[1] == 1 ? batchWords("1 Field") : batchWords("%L1 Fields").arg(count[1]));
+			if (count[2])
+				holds << (count[2] == 1 ? batchWords("1 Command") : batchWords("%L1 Commands").arg(count[2]));
+			if (count[3])
+				holds << (count[3] == 1 ? batchWords("1 Service") : batchWords("%L1 Services").arg(count[3]));
+			const auto path = step + QLatin1Char('/');
+			out.append(QVariantMap{{QStringLiteral("path"), path},
+			                       {QStringLiteral("completion"), keyword + path},
+			                       {QStringLiteral("kind"), batchWords("group")},
+			                       {QStringLiteral("kindCode"), QStringLiteral("group")},
+			                       {QStringLiteral("typeText"), holds.join(QStringLiteral(", "))},
+			                       {QStringLiteral("values"), count[1]},
+			                       {QStringLiteral("container"), true}});
+			if (out.size() >= limit)
+				break;
+		}
+		// Inside a Field: "device/Config." lists its members, "signals/Samples["
+		// its elements.
+		const auto slash = path_grammar::lastSeparator(typed, QLatin1Char('/'));
+		qsizetype step = -1;
+		for (qsizetype i = slash + 1; slash >= 0 && i < typed.size() && step < 0; ++i) {
+			if (typed.at(i) == QLatin1Char('\\'))
+				++i;
+			else if (typed.at(i) == QLatin1Char('.') || typed.at(i) == QLatin1Char('['))
+				step = i;
+		}
+		if (step > slash + 1 && (category == 0 || category == 1)) {
+			const auto fieldPath = typed.left(step);
+			const auto field = std::find_if(list.cbegin(), list.cend(), [&](const EndpointEntry& entry) {
+				return entry.category == 1 && entry.aggregate && entry.path == fieldPath;
+			});
+			if (field != list.cend())
+				for (const auto& c : p->watch.pathCandidates(typed, limit)) {
+					if (c.path.size() <= fieldPath.size() || !c.path.startsWith(fieldPath) ||
+					    (c.path.at(fieldPath.size()) != QLatin1Char('.') && c.path.at(fieldPath.size()) != QLatin1Char('[')))
+						continue;
+					out.append(QVariantMap{{QStringLiteral("path"), c.path},
+					                       {QStringLiteral("completion"), keyword + c.path},
+					                       {QStringLiteral("kindCode"), QStringLiteral("member")},
+					                       {QStringLiteral("typeText"), c.typeText},
+					                       {QStringLiteral("operation"), operationWord(*field)},
+					                       {QStringLiteral("values"), int(c.values)},
+					                       {QStringLiteral("container"), c.container},
+					                       {QStringLiteral("next"), c.next}});
+				}
+		}
+	}
 	for (int kind = 1; kind <= 3; ++kind) {
 		if (category != 0 && category != kind)
 			continue;

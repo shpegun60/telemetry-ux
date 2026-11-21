@@ -261,6 +261,12 @@ public:
 	// kind's word, "Commands"), completion ("command "), category, count
 	// (found), shown}; a candidate is {path, completion (what to put in the
 	// field), kind, kindCode, typeText, operation, input, note, section}.
+	// Before them, in the Watchlist's grammar (WL-10a): the groups the text
+	// goes on to, one level at a time, {path "demo/adc/", completion,
+	// kindCode "group", typeText (what it holds, "2 Fields, 1 Command"),
+	// values (its Fields), container true}; and inside a Field its members
+	// and elements, {path, completion, kindCode "member", typeText, container,
+	// next ("." or "[" into a container)}, each adding a read of the Field.
 	// Empty text lists up to eight of each kind. A leading kind word ("field",
 	// "command", "service", singular or plural; "read") lists that kind only.
 	Q_INVOKABLE QVariantList batchPathCandidates(const QString& text) const;

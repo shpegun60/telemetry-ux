@@ -927,8 +927,9 @@ void batchPaths()
 	CHECK(check("device/Nope").value("message") == "device/Nope is not on this device.");
 	CHECK(check("device/Setpoint = 3").value("status") == "error");
 	// Suggestions under the headings Fields, Commands and Services, in that
-	// order, each with its count (BA-4b); no group rows: a group's name lists
-	// its members, word by word.
+	// order, each with its count (BA-4b), a name matched word by word; before
+	// them the groups the text goes on to, as the Watchlist's "+" lists them
+	// (WL-10a): "dev" offers "device/", which steps no further than its "/".
 	const auto picks = [](const QVariantList& candidates) {
 		QVariantList out;
 		for (const auto& candidate : candidates)
@@ -945,11 +946,22 @@ void batchPaths()
 		return out;
 	};
 	const auto groups = provider->batchPathCandidates(QStringLiteral("dev"));
-	CHECK(!groups.isEmpty() && groups.first().toMap().value("heading").toBool() &&
-	      groups.first().toMap().value("path") == "Fields" && groups.first().toMap().value("completion") == "field dev");
-	for (const auto& candidate : groups)
+	CHECK(groups.size() > 2);
+	const auto device = groups.first().toMap();
+	CHECK(device.value("path") == "device/" && device.value("completion") == "device/" && device.value("kindCode") == "group" &&
+	      device.value("container").toBool() && device.value("next").toString().isEmpty() &&
+	      device.value("typeText").toString().contains("Field"));
+	CHECK(groups.at(1).toMap().value("heading").toBool() && groups.at(1).toMap().value("path") == "Fields" &&
+	      groups.at(1).toMap().value("completion") == "field dev");
+	for (const auto& candidate : groups.mid(1))
 		CHECK(!candidate.toMap().value("container").toBool() && candidate.toMap().value("kindCode") != "group");
-	CHECK(picks(groups).first().toMap().value("path").toString().startsWith("device/"));
+	CHECK(picks(groups).at(1).toMap().value("path").toString().startsWith("device/"));
+	// Inside a struct Field: its members, each a read of the Field.
+	const auto members = picks(provider->batchPathCandidates(QStringLiteral("device/Config.")));
+	CHECK(!members.isEmpty());
+	for (const auto& candidate : members)
+		CHECK(candidate.toMap().value("path").toString().startsWith("device/Config.") &&
+		      candidate.toMap().value("kindCode") == "member" && candidate.toMap().value("operation") == "read");
 	QStringList pings;
 	for (const auto& candidate : picks(provider->batchPathCandidates(QStringLiteral("Pi"))))
 		pings << candidate.toMap().value("completion").toString() + QLatin1Char('/') + candidate.toMap().value("section").toString();

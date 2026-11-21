@@ -1,6 +1,8 @@
 // The Batch's "+" row (BA-1, BA-4b): a finder. A Field, a Command or a
 // Service found by its name or path, listed under the headings Fields,
-// Commands and Services, completed from the device's descriptor and added on
+// Commands and Services after the groups the text goes on to (one level a
+// pick: "demo/" lists "demo/adc/"; WL-10a) and, inside a Field, its members
+// and elements, completed from the device's descriptor and added on
 // Enter as the next item: a Field is read (a write-only one written), a
 // Command runs and a Service is called with its request at its initial values
 // - zero, false, an enum's first name - set on the item afterwards. A kind
@@ -20,7 +22,7 @@ PathAddRow {
     property bool lastRefused: false
     readonly property bool usable: provider.batchSupported === true
     restText: usable ? qsTr("Add a Field, Command or Service") : qsTr("This device has no Batch")
-    placeholderText: qsTr("Name or path, such as Counter or control.Scale")
+    placeholderText: qsTr("Name or path, such as Counter or control/Scale")
     accessibleName: qsTr("Add to the Batch")
     accessibleDescription: qsTr("Type a name or a path. Fields, Commands and Services are listed under their own headings; type command and a space to see one kind. Enter adds the highlighted one; set its values on the item.")
     quietStatuses: ["adds", "partial", "choose", "busy"]
