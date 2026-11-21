@@ -30,6 +30,7 @@
 #include <QtQuick/QQuickItemGrabResult>
 #include <QtQuick/QQuickWindow>
 #include <QtTest/QTest>
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -388,8 +389,12 @@ ApplicationWindow {
 		DCHECK(grab && waitFor([&] { return !grab->image().isNull(); }));
 		image = grab->image();
 		DCHECK(!image.isNull() && image.width() <= 240 * window->devicePixelRatio() + 1);
+		// Drawn with the cursor just above the frame's words, so the
+		// screenshot shows both the badge and what the target says.
+		const qreal ratio = window->devicePixelRatio();
+		const QPointF wordsAt = words->mapToScene(QPointF(0, 0)) * ratio;
 		QPainter painter(&shot);
-		painter.drawImage(QPointF(watchAt) * window->devicePixelRatio() + QPointF(12, 12), image);
+		painter.drawImage(QPointF(wordsAt.x() + 48 * ratio, std::max(0.0, wordsAt.y() - image.height() - 8 * ratio)), image);
 		painter.end();
 		DCHECK(shot.save(QStringLiteral("drag-badge-over-watchlist.png")));
 	}
