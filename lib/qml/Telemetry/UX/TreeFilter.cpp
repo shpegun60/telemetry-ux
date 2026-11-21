@@ -43,6 +43,29 @@ QStringList segmentsOf(const QString& text)
 	flush();
 	return out;
 }
+
+// Whether a run of a type text lies in a named type: the word around it (a
+// run of characters other than ( ) , [ ] and spaces) is not a builtin word.
+// "f32" in "(adc::Reference) -> f32" is no name; "Config", "adc::" are.
+bool inNamedType(const QString& type, qsizetype at, qsizetype length)
+{
+	const auto stop = [](QChar c) {
+		return c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char(',') || c == QLatin1Char('[') ||
+		       c == QLatin1Char(']') || c == QLatin1Char(' ') || c == QLatin1Char('>');
+	};
+	auto begin = at, end = at + length;
+	while (begin > 0 && !stop(type.at(begin - 1)))
+		--begin;
+	while (end < type.size() && !stop(type.at(end)))
+		++end;
+	const auto word = type.mid(begin, end - begin);
+	static const QStringList builtin{QStringLiteral("bool"), QStringLiteral("u8"),  QStringLiteral("i8"),
+	                                 QStringLiteral("u16"),  QStringLiteral("i16"), QStringLiteral("u32"),
+	                                 QStringLiteral("i32"),  QStringLiteral("u64"), QStringLiteral("i64"),
+	                                 QStringLiteral("f32"),  QStringLiteral("f64"), QStringLiteral("enum"),
+	                                 QStringLiteral("struct"), QStringLiteral("-")};
+	return !word.isEmpty() && !builtin.contains(word) && !word.front().isDigit();
+}
 } // namespace
 
 TreeFilter::TreeFilter(QObject* parent) : QSortFilterProxyModel(parent), byName_(true)
@@ -155,9 +178,12 @@ std::optional<TreeFilter::Run> TreeFilter::textHit(const QModelIndex& source) co
 		if (const auto at = name.indexOf(needle, 0, Qt::CaseInsensitive); at >= 0)
 			return Run{false, at, needle.size()};
 		if (typeNameRole_ >= 0) {
+			// Only a named type counts: a signature's "f32" is no name.
 			const auto type = source.data(typeNameRole_).toString();
-			if (const auto at = type.isEmpty() ? -1 : type.indexOf(text_, 0, Qt::CaseInsensitive); at >= 0)
-				return Run{true, at, text_.size()};
+			for (auto at = type.isEmpty() ? -1 : type.indexOf(text_, 0, Qt::CaseInsensitive); at >= 0;
+			     at = type.indexOf(text_, at + 1, Qt::CaseInsensitive))
+				if (inNamedType(type, at, text_.size()))
+					return Run{true, at, text_.size()};
 		}
 		return std::nullopt;
 	}

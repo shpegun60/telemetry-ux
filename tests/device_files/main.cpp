@@ -2628,6 +2628,17 @@ void descriptorWords(const QString& folder)
 	auto header = good;
 	header[8] = 32;
 	CHECK(words(header) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 8)"));
+	// Descriptor v3.1: a device that names its types (Mode, Pair, Rich) says
+	// minor 1 and reads; this one has none and stays v3.0. A minor past 1, and
+	// a header flag other than the group tree's, are not read.
+	const auto named = bytesOf(richPacked);
+	CHECK(good[6] == 0 && named[6] == 1 && named[7] == 0 && DescriptorContent::check(named).kind == Kind::None);
+	auto minor = named;
+	minor[6] = 2;
+	CHECK(words(minor) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 6)"));
+	auto flags = named;
+	flags[10] = 2;
+	CHECK(words(flags) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 10)"));
 	CHECK(words(good + QByteArray(1, '\0')) ==
 	      QStringLiteral("its bytes are not laid out as a descriptor (at byte %1)").arg(good.size()));
 	// A record past the header that does not read, the fingerprint made to match.
@@ -3270,7 +3281,8 @@ void lazyDescriptor()
 	const auto lines = decoded.textOf(second, QStringLiteral("text"));
 	const auto copyOneMs = clock.elapsed();
 	CHECK(lines.count(QLatin1Char('\n')) == 1 + 54612 && model->rowCount(second) == 0 && decoded.copyNote().isEmpty());
-	CHECK(decoded.textOf(second, QStringLiteral("tsv")).contains(QStringLiteral("deep.d001.a.a.a.a.a.a.a.x\tmember\tf32\t\n")));
+	// The last column is the named type (v3.1); an f32 has none.
+	CHECK(decoded.textOf(second, QStringLiteral("tsv")).contains(QStringLiteral("deep.d001.a.a.a.a.a.a.a.x\tmember\tf32\t\t\n")));
 	CHECK(decoded.textOf(second, QStringLiteral("json")).contains(QStringLiteral("\"members\"")));
 
 	// Find by path into members not made: the way there made, one match. The

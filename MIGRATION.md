@@ -2152,6 +2152,120 @@ segments; `device-tree-context-*.png`, `device-tree-kinds-funnel-*.png`),
 `DetailsLayout.cpp` (the breadcrumb; `details-breadcrumb-*.png`),
 `TreeActions.cpp`, and the provider suites' paths.
 
+## The SDK's descriptor v3.1 read as it is (November 2026)
+
+The SDK pinned by CI moves to `telemetry-sdk` main `3cd9ce8` (descriptor v3.1:
+type names on by default, the compact attribute area, the group tree). A
+device built from it names its enums and structs, so its descriptor's header
+says minor 1; a group tree also sets header flag bit 0.
+
+`DescriptorContent::check()`, the Descriptor view's own reading of the
+header before the SDK parses the rest, refused every minor other than 0 and
+every header flag, so a v3.1 device's `descriptor.bin` read "its bytes are not
+laid out as a descriptor (at byte 6)". It now takes minor 0 or 1 and, with
+minor 1, the group tree's flag; a minor past 1 and any other flag are still
+refused at bytes 6 and 10. Everything after the header is the SDK's, as before.
+
+The generated-QML checks need the generator of the same SDK: a generator older
+than v3.1 refuses a v3.1 header ("telemetry_codegen: header version/flags").
+Build the core wheel from the SDK checkout the suites build against, as CI's
+generated-QML job does; nothing in this repository pins it.
+
+Checks: `tests/device_files` (the descriptor of its device reads with minor 1;
+minor 2 and flag 2 are refused at their bytes).
+
+## Device tree: nested groups, named types, drag and drop at any depth (November 2026)
+
+Part B of the designer's review of 20 November 2026 (section 14, reconciled in
+15) and its section 16, on the SDK's descriptor v3.1 (`3cd9ce8`).
+
+**Nested groups.** `outlineOf()` reads a group tree's group records: every
+family lists the same groups in pre-order, each naming its parent, and the tree
+shows them at any depth, subgroups first. A flat descriptor reads as before.
+`EndpointEntry::group` is the group's key: a flat catalog's name, a tree's
+groups joined by "/" (`power/metrology/harmonics/phaseA`).
+
+**Named types.** `schema_text::typeText` writes a named enum or struct by its
+name, `adc::Config`, `adc::Config[4]`; an unnamed one as before, `struct (3)`.
+A signature names its named structs, `(adc::Reference) -> adc::Offset`; an
+unnamed one keeps its members, `(f32, f32) -> (f32)`. New:
+`schema_text::typeName`, `typeWords` ("struct adc::Config · 3 members"),
+`typeSpoken` ("struct Config in adc, 3 members"), `shortScopes`
+("…::Config") and `groupPath`. `EndpointModel` fills `TypeNameRole` (a Field's
+named type, its array element's, or a signature that names one), gains
+`TypeSpokenRole` and `widestShortFieldType`, and a Field's detail says
+"Field · struct adc::Config · 3 members · …". Find by type counts named types
+only: a signature's `f32` is no name.
+
+QML, `TypeLabel` (new): one two-tone type label, the scope and "::" muted, the
+own name brighter; `shortScopes` cuts every scope to "…::"; a find's run is
+underlined and shows the scope. The Device tree's Type cell, the Watchlist's
+and Details' tables use it. Its `text` is styled text: read `typeText` (the
+model's) or `shown` (what it shows). Each of the three columns gives its scopes
+way as a whole: the Device tree after rw and before the indent step
+(`typeScopesCut`, measured on a depth-3 row), the Watchlist after rw and Status
+(`typeScopesCut`; `fillValueX` and `deepestRoom` take the type column's width
+as a third argument), Details before its Type column hides
+(`typeScopesCut(width)`; `typeWidth(width)` takes the width). Each header's
+tooltip says "Scopes are hidden for room; hover a type for its full name.", and
+a type's tooltip holds the whole name.
+
+**The Watchlist on a group tree.** Saved bindings keep `{group, name, member}`;
+`group` is the group's key, so a tree's `{group: "power/metrology", ...}` and an
+older project's flat `{group: "device", ...}` both reopen, and a group a device
+lacks is kept as a row whose path is written as that device writes paths.
+`DynamicWatchlist::pathOf(group, name, member)` writes it; `valuePaths(path)`
+lists every value a path names. Completion offers one group segment per Tab at
+any depth (`demo/` offers `demo/adc/`).
+
+**The ceilings.** A host reads groups 255 levels deep and names and paths of
+4,096 bytes (`ParseLimits`), more than the SDK builds by default (8 levels, 64
+and 256 bytes). Past the SDK's default depth the Device tree's indent step may
+go down to a quarter of the full one (`producerDepth`). The Descriptor view
+says a descriptor past a host ceiling in words (`Problem::Limit`).
+
+**The Descriptor view.** A tree's groups nest under each family (a family shows
+only the groups that hold something of it); the JSON copy adds `typeName`, the
+TSV copy a `typeName` column.
+
+**The web Configurator.** `Provider.js` copies a type's `name`, writes a named
+enum or struct by it (`type`, and `typeName` on a row) and shows a tree's group
+by its path.
+
+**Drag and drop (section 16).** A Device tree drag carries what was picked,
+`{from: "device", items: [{kind, path}], paths}`, never its expansion; kind is
+"group", "field", "member", "element", "command" or "service". The tree picks
+rows with Ctrl+click, Shift+click, Shift+Up/Down and Ctrl+Space (`pickClick`,
+`pickedCount`, `dropItems`). A plain click picks nothing: it lets every pick go
+and remembers the row, which shows as the provider's selection (a provider may
+still refuse it); Ctrl+click then picks that row with the clicked one, and
+Shift+click the rows between. A drag acts on the picked rows when the pressed row
+is one of them, in tree order. A badge (`DragBadge`, new) made at the press
+rides on the cursor. `DynamicConfiguratorProvider::dropPlan(items, target)` and
+`dropOn(items, target)` expand a drop at any depth for "watchlist", "plot" or
+"batch": a group is recursive; Commands and Services enter the Batch only when
+picked by themselves; all or nothing; one Undo per drop (a Plot drop's
+Watchlist rows and curves merge into one step through
+`WatchTraces::plotMany(paths, mergeKey)`). The Watchlist, the Plot and the
+Batch say the plan's words on their frame while dragged over, and a refusal in
+the error colour with the error glyph; the Batch draws its insertion line.
+Space, Ctrl+P and Ctrl+B in the Device tree, and its row menu's counted drops,
+do what the drops do; the Watchlist's row menu and Ctrl+B add its rows to the
+Batch. `dragPaths(index)` stays for hosts and walks any depth.
+
+Checks: `tests/qml_layout/DeviceTreeNamed.cpp` (new: nested groups, named
+types, the scopes' give-way, find by either form, the ceilings, `attrs.hex`
+against `named.hex`, the Descriptor view's tree and export, picking, keys, the
+row menu, the badge; `device-tree-nested-280/420.png`,
+`device-tree-scoped-types-420.png`), `tests/qt_connection/Drops.cpp` (new: the
+real provider on a group tree: saved bindings, completion, every drop and its
+Undo, the frames under a real drag's events; `drag-badge-over-watchlist.png`,
+`plot-refusal.png`), `tests/web_type_names` (new: the web Configurator in
+headless Chromium), `WatchLook.cpp` (the Watchlist's scopes;
+`watch-scoped-types-320.png`); the provider suites' type texts.
+`DeviceTreeKinds.cpp` builds its device without names, so the unnamed words
+stay covered.
+
 ## The Watchlist: a refused value can be edited again (WL-9b, November 2026)
 
 After a refused write the row took no new value by a double-click. The value's

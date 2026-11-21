@@ -109,3 +109,14 @@ qt_add_resources(telemetry_qml_device_tree_groups "device-tree-groups-entry" PRE
 target_compile_features(telemetry_qml_device_tree_groups PRIVATE cxx_std_20)
 target_compile_definitions(telemetry_qml_device_tree_groups PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(telemetry_qml_device_tree_groups PRIVATE TelemetryUX::qt_connection Qt6::Test)
+# Part B of that review and the tree's side of drag and drop (section 16),
+# over real EndpointModels made from real descriptors v3.1: nested groups,
+# scoped type names, the ceilings, attributes skipped, picking and drops.
+qt_add_executable(telemetry_qml_device_tree_named DeviceTreeNamed.cpp)
+set_target_properties(telemetry_qml_device_tree_named PROPERTIES AUTOMOC ON)
+qt_add_resources(telemetry_qml_device_tree_named "device-tree-named-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DeviceTreeNamed.qml)
+target_compile_features(telemetry_qml_device_tree_named PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_qml_device_tree_named PRIVATE QT_NO_KEYWORDS
+    UX_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_link_libraries(telemetry_qml_device_tree_named PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench
+    Telemetry::encoded_backend Qt6::Test)

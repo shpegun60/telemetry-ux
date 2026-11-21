@@ -745,7 +745,8 @@ static void serviceResponseJourney()
 	CHECK(status() == QStringLiteral("Not called yet"));
 	CHECK(!visibleItem(panel, QStringLiteral("emptyResponseLabel")));
 	CHECK(control(panel, "endpointSelectionInfo")->property("text").toString() ==
-	      QStringLiteral("Service \u00b7 (f32, f32) -> (f32) \u00b7 8-byte request"));
+	      QStringLiteral("Service \u00b7 (dynamic_qml_fixture::ScaleRequest) -> dynamic_qml_fixture::ScaleResult "
+	                     "\u00b7 8-byte request"));
 	CHECK(edit(config, "value", "0"));
 	CHECK(edit(config, "factor", "0"));
 	auto* call = control(panel, "callServiceButton");

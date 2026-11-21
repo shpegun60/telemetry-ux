@@ -127,7 +127,10 @@ inline constexpr telemetry::FieldCatalogTable fields{telemetry::group("measure",
 inline constexpr telemetry::CommandCatalogTable commands{telemetry::group("control", controlCommands)};
 inline constexpr telemetry::ServiceCatalogTable services{telemetry::group("control", controlServices)};
 inline constexpr telemetry::Model model{fields, commands, services};
-inline constexpr telemetry::descriptor::Descriptor descriptor{model};
+// Built without type names (a v3.0 descriptor, as a device built with
+// TELEMETRY_TYPE_NAMES 0 sends): the kinds' own words, "struct (3)" and
+// "enum (3)", stay covered here; DeviceTreeNamed.cpp has the names.
+inline constexpr auto descriptor = telemetry::descriptor::withoutTypeNames(model);
 inline constexpr auto descriptorBytes = telemetry::descriptor::packDescriptor<descriptor>();
 } // namespace demo
 
@@ -572,7 +575,8 @@ int main(int argc, char** argv)
 		// 3. Types and counts never look alike; a group counts in words,
 		// Fields first, the families it has none of left out.
 		auto* configType = t.part(config, "endpointRowType");
-		CHECK(configType->property("text").toString() == QStringLiteral("struct (3)"));
+		CHECK(configType->property("typeText").toString() == QStringLiteral("struct (3)") &&
+		      configType->property("shown").toString() == QStringLiteral("struct (3)"));
 		CHECK(configType->property("font").value<QFont>().family() == type("fixedFamily").toString());
 		CHECK(near(configType->property("font").value<QFont>().pointSizeF(), type("caption").toDouble(), 0.01));
 		auto* measureCount = t.part(measure, "endpointRowCount");
@@ -721,7 +725,7 @@ int main(int argc, char** argv)
 		// whole beside the whole name "Scale": it starts left of the column
 		// no further than the name allows and runs over the blank rw cell.
 		auto* scaleType = t.part(scale, "endpointRowType");
-		CHECK(scaleType->property("text").toString() == QStringLiteral("(f32, f32) -> (f32)"));
+		CHECK(scaleType->property("typeText").toString() == QStringLiteral("(f32, f32) -> (f32)"));
 		CHECK(!scaleType->property("truncated").toBool());
 		auto* scaleName = t.part(scale, "endpointRowName");
 		CHECK(scaleName->width() >= scaleName->implicitWidth() - 1 && !scaleName->property("truncated").toBool());

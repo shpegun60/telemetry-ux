@@ -39,6 +39,10 @@ namespace ux = telemetry::ux;
 namespace host = telemetry::integration::qt;
 namespace cl = telemetry::client;
 
+// Drops.cpp: drag and drop with nested groups and the Watchlist on a group
+// tree, through this real provider (the designer's sections 14 and 16).
+unsigned dropsAtAnyDepth();
+
 namespace {
 unsigned checks = 0, warnings = 0;
 #define CHECK(value)                                                                               \
@@ -2872,6 +2876,7 @@ int main(int argc, char** argv)
 	watchRowSignedZero();
 	watchRowsToPlot();
 	dragOntoPlot();
+	checks += dropsAtAnyDepth();
 	presentationPanels();
 	disconnectedPanels();
 	outcomeAttention();

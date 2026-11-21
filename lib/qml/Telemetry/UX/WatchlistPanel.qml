@@ -668,14 +668,92 @@ Pane {
         return text.length > 0 ? text.split("\n") : []
     }
     // A drop of paths from the Device tree adds them, as the "+" row would.
+    // A drop of rows picked in the Device tree (section 16): every value
+    // under them, at any depth, as one step; Commands and Services left out
+    // and said. The added rows become the selection in the List; a dropped
+    // group becomes current in the Tree, open one level, in view. When
+    // everything is watched already, the drop selects those rows.
+    function dropItems(items) {
+        if (!Array.isArray(items) || items.length === 0 || typeof provider.dropOn !== "function")
+            return false
+        const from = count
+        const result = provider.dropOn(items, "watchlist")
+        const added = typeof result.added === "number" ? result.added : 0
+        say(result.message || result.refusal || "", added > 0 && typeof result.serial === "number" ? result.serial : 0)
+        if (!rows)
+            return added > 0
+        if (result.status === "held" && Array.isArray(result.rows) && result.rows.length > 0) {
+            const shown = result.rows.map(source => rows.reveal(source)).filter(row => row >= 0)
+            if (shown.length > 0)
+                selectShown(shown)
+            return false
+        }
+        if (added <= 0)
+            return false
+        if (treeView && items.length === 1 && items[0].kind === "group") {
+            const row = rows.revealPath(items[0].path)
+            if (row >= 0) {
+                rows.setExpanded(row, true)
+                watchList.currentIndex = row
+                if (selectable)
+                    rows.select(row)
+                watchList.positionViewAtIndex(row, ListView.Contain)
+            }
+            return true
+        }
+        const shown = []
+        for (let source = from; source < count; ++source) {
+            const row = rows.reveal(source)
+            if (row >= 0)
+                shown.push(row)
+        }
+        selectShown(shown)
+        return true
+    }
+    // The rows given become the selection, the first current and in view.
+    function selectShown(shown) {
+        if (shown.length === 0)
+            return
+        shown.sort((a, b) => a - b)
+        watchList.currentIndex = shown[0]
+        if (selectable) {
+            rows.select(shown[0])
+            for (let i = 1; i < shown.length; ++i)
+                rows.select(shown[i], true)
+        }
+        watchList.positionViewAtIndex(shown[0], ListView.Contain)
+    }
     function dropPaths(payload) {
-        if (!payload || payload.from === "watchlist" || typeof provider.addWatchPaths !== "function")
+        if (!payload || payload.from === "watchlist")
+            return false
+        if (Array.isArray(payload.items) && typeof provider.dropOn === "function")
+            return dropItems(payload.items)
+        if (typeof provider.addWatchPaths !== "function")
             return false
         const result = provider.addWatchPaths(payload.paths || [])
         const added = result && typeof result.added === "number" ? result.added : 0
         say(added === 1 ? qsTr("Added 1 value to the Watchlist") : qsTr("Added %L1 values to the Watchlist").arg(added),
             added > 0 && typeof result.serial === "number" ? result.serial : 0)
         return added > 0
+    }
+    // Row's values - the selection's, when row is in it - into the Batch
+    // (section 16.4, Ctrl+B): one item per value, writing it, as a drop of
+    // them does; all or none, one step, said on the line.
+    readonly property bool batchAvailable: !!provider && typeof provider.dropOn === "function"
+    function batchRows(row) {
+        if (!batchAvailable || !rows || row < 0)
+            return false
+        const text = onSelection(row) ? rows.selectedLines(true) : rows.lines(row, true)
+        const items = text.split("\n").filter(path => path.length > 0).map(path => {
+            const leaf = path.substring(path.lastIndexOf("/") + 1)
+            return { kind: /[.\[]/.test(leaf) ? "member" : "field", path: path }
+        })
+        if (items.length === 0)
+            return false
+        const result = provider.dropOn(items, "batch")
+        const added = result.status === "ok" && result.added > 0
+        say(result.message || result.refusal || "", added && typeof result.serial === "number" ? result.serial : 0)
+        return added
     }
     // The live Plot (LP-1), when the provider has one.
     readonly property var plotTraces: provider && provider.watchTraces ? provider.watchTraces : null
@@ -796,6 +874,9 @@ Pane {
     readonly property real listWidth: Math.max(0, watchList.width - scrollReserve)
     property real valueSeen: 0
     property real typeSeen: 0
+    // The widest type with its scopes cut to "…::" (the review's 14.2).
+    property real typeShortSeen: 0
+    property real typeShortPending: 0
     property real statusSeen: 0
     property bool accessSeen: false
     property real nameSeen: 0
@@ -809,6 +890,12 @@ Pane {
     function noteNumber(width) {
         if (width > numberSeen)
             numberSeen = width
+    }
+    function noteShortType(width) {
+        if (width > typeShortPending) {
+            typeShortPending = width
+            applyMeasured.restart()
+        }
     }
     function noteMeasured(value, type, status, access) {
         if (value > valuePending || type > typePending || status > statusPending || (access && !accessPending)) {
@@ -833,10 +920,10 @@ Pane {
     // not report it a second time by itself.
     property int measureEpoch: 0
     function forgetMeasured() {
-        valuePending = typePending = statusPending = namePending = 0
+        valuePending = typePending = statusPending = namePending = typeShortPending = 0
         deepestPending = 0
         accessPending = false
-        valueSeen = typeSeen = statusSeen = numberSeen = nameSeen = 0
+        valueSeen = typeSeen = statusSeen = numberSeen = nameSeen = typeShortSeen = 0
         deepestSeen = 0
         accessSeen = false
         ++measureEpoch
@@ -848,6 +935,7 @@ Pane {
         onTriggered: {
             panel.valueSeen = Math.max(panel.valueSeen, panel.valuePending)
             panel.typeSeen = Math.max(panel.typeSeen, panel.typePending)
+            panel.typeShortSeen = Math.max(panel.typeShortSeen, panel.typeShortPending)
             panel.statusSeen = Math.max(panel.statusSeen, panel.statusPending)
             panel.accessSeen = panel.accessSeen || panel.accessPending
             panel.nameSeen = Math.max(panel.nameSeen, panel.namePending)
@@ -873,7 +961,15 @@ Pane {
     // Type never hides (WL-9 A2): as wide as the widest type, 3 to 9.6 body
     // heights; a row whose name would drop below its floor takes its room
     // from its own type, which elides at its right, the whole in its tooltip.
-    readonly property real typeColumn: typeSeen > 0 ? Math.max(Type.bodyPixels * 3, Math.min(Math.ceil(typeSeen), Type.bodyPixels * 9.6)) : 0
+    readonly property real typeWideColumn: typeSeen > 0 ? Math.max(Type.bodyPixels * 3, Math.min(Math.ceil(typeSeen), Type.bodyPixels * 9.6)) : 0
+    readonly property real typeNarrowColumn: typeShortSeen > 0
+        ? Math.max(Type.bodyPixels * 3, Math.min(Math.ceil(typeShortSeen), typeWideColumn)) : typeWideColumn
+    // The type scopes give way third (the review's 14.2, after rw and
+    // Status, before any name elides): the whole column shows "…::Config"
+    // while the deepest name would keep less than 7.2 body heights.
+    readonly property bool typeScopesCut: typeNarrowColumn < typeWideColumn
+        && deepestRoom(accessColumn, statusColumn, typeWideColumn) < Type.bodyPixels * 7.2
+    readonly property real typeColumn: typeScopesCut ? typeNarrowColumn : typeWideColumn
     readonly property real typeLeast: Math.round(Type.bodyPixels * 1.5)
     readonly property real accessFull: accessSeen ? Math.round(Type.bodyPixels * 1.05) : 0
     TextMetrics { id: statusTitleMetrics; font.family: panel.font.family; font.pointSize: Type.caption; text: qsTr("Status") }
@@ -886,18 +982,18 @@ Pane {
     }
     // Where Value starts when the Name column fills: everything after it is
     // as wide as it is, × ending on R.
-    function fillValueX(access, status) {
+    function fillValueX(access, status, type) {
         return listWidth - removeColumnWidth - columnGap
             - (status > 0 ? status + columnGap : 0) - (access > 0 ? access + columnGap : 0)
-            - (typeColumn > 0 ? typeColumn + columnGap : 0) - valueColumn
+            - (type > 0 ? type + columnGap : 0) - valueColumn
     }
     // The room for names on the deepest row shown, with these columns.
-    function deepestRoom(access, status) {
-        return fillValueX(access, status) - columnGap - nameXAt(treeView ? deepestSeen : 0)
+    function deepestRoom(access, status, type) {
+        return fillValueX(access, status, type) - columnGap - nameXAt(treeView ? deepestSeen : 0)
     }
-    readonly property real accessColumn: accessFull > 0 && deepestRoom(accessFull, statusFull) >= Type.bodyPixels * 7.2
+    readonly property real accessColumn: accessFull > 0 && deepestRoom(accessFull, statusFull, typeWideColumn) >= Type.bodyPixels * 7.2
                                          ? accessFull : 0
-    readonly property bool statusGlyph: statusFull > 0 && deepestRoom(accessColumn, statusFull) < Type.bodyPixels * 7.2
+    readonly property bool statusGlyph: statusFull > 0 && deepestRoom(accessColumn, statusFull, typeWideColumn) < Type.bodyPixels * 7.2
     readonly property real statusColumn: statusFull <= 0 ? 0 : statusGlyph ? glyphWidth : statusFull
     // The Name column's cap: the widest name and a gap, at least 24 body
     // heights, and a ceiling of 40 (about 75 characters, §1.2's line length):
@@ -905,7 +1001,7 @@ Pane {
     // path never puts every value far from its name (the review's 14.3,
     // which amends WL-9's "the cap never elides a name").
     readonly property real nameCap: Math.max(Type.bodyPixels * 24, Math.min(nameSeen + columnGap, Type.bodyPixels * 40))
-    readonly property real valueX: Math.max(nameXAt(0), Math.min(fillValueX(accessColumn, statusColumn), nameCap + columnGap))
+    readonly property real valueX: Math.max(nameXAt(0), Math.min(fillValueX(accessColumn, statusColumn, typeColumn), nameCap + columnGap))
     readonly property real typeX: valueX + valueColumn + columnGap
     readonly property real accessX: typeX + (typeColumn > 0 ? typeColumn + columnGap : 0)
     readonly property real statusX: accessX + (accessColumn > 0 ? accessColumn + columnGap : 0)
@@ -1792,6 +1888,15 @@ Pane {
                 x: panel.typeX
                 width: panel.typeColumn
                 text: qsTr("Type")
+                Accessible.description: panel.typeScopesCut ? watchTypeTitleTip.text : ""
+                HoverHandler { id: watchTypeTitleHover }
+                PlainToolTip {
+                    id: watchTypeTitleTip
+                    objectName: "watchTypeHeaderToolTip"
+                    visible: watchTypeTitleHover.hovered && panel.typeScopesCut
+                    text: qsTr("Scopes are hidden for room; hover a type for its full name.")
+                    delay: 700
+                }
             }
             ColumnTitle {
                 objectName: "watchColumnAccess"
@@ -1892,6 +1997,8 @@ Pane {
                     event.accepted = true
                 if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier && currentIndex >= 0 && panel.plotTraces)
                     event.accepted = true
+                if (event.key === Qt.Key_B && event.modifiers === Qt.ControlModifier && currentIndex >= 0 && panel.batchAvailable)
+                    event.accepted = true
             }
             Keys.onPressed: event => {
                 // Insert from anywhere in the list, or Down past the last row: the "+" row.
@@ -1972,6 +2079,12 @@ Pane {
                 // On the live Plot, or off it: the selection, a node's values.
                 if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier) {
                     event.accepted = panel.togglePlot(currentIndex)
+                    return
+                }
+                // Into the Batch: the selection, a node's values (16.4).
+                if (event.key === Qt.Key_B && event.modifiers === Qt.ControlModifier && panel.batchAvailable) {
+                    panel.batchRows(currentIndex)
+                    event.accepted = true
                     return
                 }
                 if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers === Qt.ShiftModifier)) {
@@ -2249,6 +2362,7 @@ Pane {
                                        typeMetrics.text.length > 0 ? typeMetrics.advanceWidth + Type.tight : 0,
                                        statusMetrics.text.length > 0 ? statusMetrics.advanceWidth + Type.tight : 0,
                                        accessText.length > 0)
+                    panel.noteShortType(typeShortMetrics.text.length > 0 ? typeShortMetrics.advanceWidth + Type.tight : 0)
                 }
                 readonly property bool ok: status === "Ok"
                 // Waiting is not a problem; Stale and failures are.
@@ -2779,7 +2893,9 @@ Pane {
                         onFinished: function(byKey) { if (byKey) watchList.forceActiveFocus() }
                     }
                 }
-                Label {
+                // A named type in two tones, its scope muted; "…::" while
+                // the column gives its scopes way (the review's 14.2).
+                TypeLabel {
                     id: typeLabel
                     objectName: "watchRowType"
                     visible: !watchRow.isGroup && panel.typeColumn > 0
@@ -2788,14 +2904,18 @@ Pane {
                     width: panel.typeColumn - watchRow.deficit
                     height: Type.rowHeight
                     verticalAlignment: Text.AlignVCenter
-                    textFormat: Text.PlainText
-                    text: watchRow.typeText
-                    font.family: Type.fixedFamily
-                    font.pointSize: Type.caption
-                    color: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
-                    elide: Text.ElideRight
+                    typeText: watchRow.typeText
+                    shortScopes: panel.typeScopesCut
+                    nameColor: watchRow.active ? Theme.selectedForeground : Theme.textSecondary
+                    scopeColor: watchRow.active ? Theme.selectedForeground
+                        : watchRow.marked ? Theme.textSecondary : Theme.textMuted
                     HoverHandler { id: typeHover }
-                    PlainToolTip { visible: typeHover.hovered && typeLabel.truncated; text: watchRow.typeText; delay: 700 }
+                    PlainToolTip {
+                        objectName: "watchRowTypeToolTip"
+                        visible: typeHover.hovered && (typeLabel.truncated || typeLabel.cutShown)
+                        text: watchRow.typeText
+                        delay: 700
+                    }
                 }
                 // rw: each letter, a missing right as "-" in the placeholder colour.
                 Row {
@@ -2892,6 +3012,14 @@ Pane {
                                                               watchRow.accessText.length > 0)
                     Component.onCompleted: panel.noteMeasured(0, text.length > 0 ? advanceWidth + Type.tight : 0, 0,
                                                               watchRow.accessText.length > 0)
+                }
+                TextMetrics {
+                    id: typeShortMetrics
+                    font.family: Type.fixedFamily
+                    font.pointSize: Type.caption
+                    text: typeLabel.cut(watchRow.typeText)
+                    onAdvanceWidthChanged: panel.noteShortType(text.length > 0 ? advanceWidth + Type.tight : 0)
+                    Component.onCompleted: panel.noteShortType(text.length > 0 ? advanceWidth + Type.tight : 0)
                 }
                 TextMetrics {
                     id: statusMetrics
@@ -3111,6 +3239,13 @@ Pane {
                 checked = Qt.binding(() => plotItem.shown)
             }
         }
+        MenuItem {
+            objectName: "watchRowBatch"
+            visible: panel.batchAvailable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Add to Batch") + "\t" + qsTr("Ctrl+B")
+            onTriggered: panel.batchRows(panel.menuRow)
+        }
         MenuSeparator {}
         MenuItem {
             objectName: "watchRowCopy"
@@ -3158,37 +3293,65 @@ Pane {
         anchors.fill: parent
         keys: ["application/x-telemetry-paths"]
         property int count: 0
+        // What a drop from the Device tree would do (section 16): the
+        // provider's plan, its words on the frame before the release.
+        property var plan: null
+        readonly property bool refused: !!plan && (plan.status === "refused" || plan.status === "empty")
+        readonly property string words: plan ? (refused ? plan.refusal : plan.words)
+            : count === 1 ? qsTr("Drop to add to the Watchlist") : qsTr("Drop to add %L1 to the Watchlist").arg(count)
         onEntered: (drag) => {
             let payload = null
             try { payload = JSON.parse(drag.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
-            if (!payload || payload.from === "watchlist" || typeof panel.provider.addWatchPaths !== "function") {
+            if (!payload || payload.from === "watchlist") {
+                drag.accepted = false
+                return
+            }
+            // A refusal is explained over the frame, then the drop refused.
+            if (Array.isArray(payload.items) && typeof panel.provider.dropPlan === "function") {
+                plan = panel.provider.dropPlan(payload.items, "watchlist")
+                return
+            }
+            if (typeof panel.provider.addWatchPaths !== "function") {
                 drag.accepted = false
                 return
             }
             count = (payload.paths || []).length
         }
-        onExited: count = 0
+        onExited: { count = 0; plan = null }
         onDropped: (drop) => {
             let payload = null
             try { payload = JSON.parse(drop.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            const refused = watchDrop.refused
             count = 0
-            if (panel.dropPaths(payload))
+            plan = null
+            if (!refused && panel.dropPaths(payload))
                 drop.acceptProposedAction()
         }
         Rectangle {
+            objectName: "watchlistDropFrame"
             anchors.fill: parent
             visible: watchDrop.containsDrag
             color: "transparent"
             border.width: 2
-            border.color: Theme.focusRing
-            Label {
+            border.color: watchDrop.refused ? Theme.error : Theme.focusRing
+            Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: Type.padding
-                text: watchDrop.count === 1 ? qsTr("Drop to add to the Watchlist") : qsTr("Drop to add %L1 to the Watchlist").arg(watchDrop.count)
-                color: Theme.textPrimary
-                padding: Type.tight
-                background: Rectangle { color: Theme.surface; radius: Type.radius }
+                spacing: Type.tight
+                ErrorGlyph {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: watchDrop.refused
+                }
+                Label {
+                    objectName: "watchlistDropText"
+                    width: Math.min(implicitWidth, watchDrop.width - Type.padding * 4)
+                    text: watchDrop.words
+                    wrapMode: Text.Wrap
+                    color: watchDrop.refused ? Theme.error : Theme.textPrimary
+                    padding: Type.tight
+                    background: Rectangle { color: Theme.surface; radius: Type.radius }
+                }
             }
         }
     }

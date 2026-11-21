@@ -159,7 +159,7 @@ Window {
             name: name.text, nameX: name.x, nameW: name.width, weight: name.font.weight,
             heading: name.font.weight === Type.headingWeight,
             chevronVisible: it.indicator ? it.indicator.visible : false, chevronX: it.indicator ? it.indicator.x : -1,
-            type: type.text, typeSceneX: scene(type).x,
+            type: type.typeText, typeSceneX: scene(type).x,
             expanded: it.expanded, hasChildren: it.hasChildren,
             valueText: text && text.visible ? text.text : "",
             summary: summary && summary.visible ? summary.text : "",

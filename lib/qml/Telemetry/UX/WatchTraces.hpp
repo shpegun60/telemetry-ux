@@ -107,8 +107,9 @@ public:
 	Q_INVOKABLE void unplot(const QString& path);
 	// Several on the Plot as one step, in order, up to the first one refused:
 	// {added, refusal (why that one could not be, or empty), last (the last
-	// one plotted)}. Paths on it already are passed over.
-	Q_INVOKABLE QVariantMap plotMany(const QStringList& paths);
+	// one plotted)}. Paths on it already are passed over. A mergeKey joins
+	// the step to the step before of the same key (a drop's Watchlist rows).
+	Q_INVOKABLE QVariantMap plotMany(const QStringList& paths, const QString& mergeKey = {});
 	// Several off it as one step; all of them is "Remove all curves from the
 	// Plot".
 	Q_INVOKABLE void unplotMany(const QStringList& paths);

@@ -156,13 +156,18 @@ void metadataAndLocalChildren() {
 	ux::EndpointModel foreign;
 	foreign.rebuild(storage->owner);
 	CHECK(!model.isGroup(foreign.index(0, 0)));
-	CHECK(model.data(config, ux::EndpointModel::TypeTextRole).toString() == "struct (7)");
+	// Named types by their names (descriptor v3.1), scope first.
+	CHECK(model.data(config, ux::EndpointModel::TypeTextRole).toString() == "dynamic_qml_fixture::Config");
+	CHECK(model.data(config, ux::EndpointModel::TypeNameRole).toString() == "dynamic_qml_fixture::Config");
+	CHECK(model.data(config, ux::EndpointModel::TypeSpokenRole).toString() == "struct Config in dynamic_qml_fixture, 7 members");
+	CHECK(model.data(config, ux::EndpointModel::DetailRole).toString().startsWith(
+	    QStringLiteral("Field \u00b7 struct dynamic_qml_fixture::Config \u00b7 7 members \u00b7 ")));
 	CHECK(model.data(config, ux::EndpointModel::WireBytesRole).toUInt() == telemetry::wireSize<f::Config>);
 	CHECK(model.data(config, ux::EndpointModel::AccessTextRole).toString() == "Read / Write");
 	// A Command reads as its arguments: none here.
 	CHECK(model.data(command, ux::EndpointModel::TypeTextRole).toString() == "()");
 	CHECK(model.data(command, ux::EndpointModel::AccessTextRole).toString() == "Execute");
-	CHECK(model.data(service, ux::EndpointModel::ResponseTypeTextRole).toString() == "struct (7)");
+	CHECK(model.data(service, ux::EndpointModel::ResponseTypeTextRole).toString() == "dynamic_qml_fixture::Config");
 	// The row in words, its signature included, never an internal id.
 	CHECK(model.data(service, ux::EndpointModel::DetailRole).toString().startsWith("Service") &&
 	      model.data(service, ux::EndpointModel::DetailRole).toString().contains(" -> ") &&
@@ -301,7 +306,7 @@ void definitionsBeforeRead() {
 	tester.setUseFetchMore(false);
 	f::select(provider, "Config");
 	const auto info = provider.selectionInfo();
-	CHECK(info.value("id").toUInt() == 0 && info.value("typeText") == "struct (7)");
+	CHECK(info.value("id").toUInt() == 0 && info.value("typeText") == "dynamic_qml_fixture::Config");
 	CHECK(info.value("wireBytes").toUInt() == telemetry::wireSize<f::Config>);
 	const auto root = provider.definitionRootIndex();
 	CHECK(root.isValid() && definitions->rowCount(root) == 1);
@@ -327,7 +332,7 @@ void definitionsBeforeRead() {
 	f::select(provider, "Reset");
 	CHECK(provider.selectionInfo().value("typeText") == "()");
 	f::select(provider, "Inspect");
-	CHECK(provider.selectionInfo().value("responseTypeText") == "struct (7)");
+	CHECK(provider.selectionInfo().value("responseTypeText") == "dynamic_qml_fixture::Config");
 	CHECK(h.storage->packets == 0 && h.storage->owner.pending() == 0 && source.calls.isEmpty());
 	CHECK(f::device.reads == 0 && f::device.writes == 0 && f::device.commands == 0 && f::device.services == 0);
 }

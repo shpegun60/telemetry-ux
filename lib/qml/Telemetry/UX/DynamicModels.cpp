@@ -133,7 +133,9 @@ struct Row {
 	// The Device tree's kind of row (KindRole) and an enum's names (TypeNamesRole).
 	QString kind, typeNames;
 	// A named type ("adc::Config"); empty until a descriptor names its types.
-	QString typeName;
+	// The type with its kind and size ("struct adc::Config · 3 members") and
+	// as a screen reader says it ("struct Config in adc, 3 members").
+	QString typeName, typeWords, typeSpoken;
 	ins::NodeHandle handle{};
 	std::vector<std::unique_ptr<Row>> children;
 };
@@ -141,7 +143,25 @@ struct Row {
 struct TypeMetadata {
 	QString label;
 	std::uint32_t wireBytes = 0;
+	// The type's own name, or its array's element's ("adc::Config" for
+	// "adc::Config[4]"); its words and how a screen reader says it.
+	QString name, words, spoken;
 };
+
+// The named type a type text shows: its own, or the innermost element's of
+// an array; empty when unnamed.
+QString shownTypeName(const telemetry::runtime::RuntimeSchema& schema, TypeId id)
+{
+	for (int guard = 0; guard < 64; ++guard) {
+		const auto* type = schema.type(id);
+		if (!type)
+			return {};
+		if (type->kind != Kind::Array)
+			return schema_text::typeName(schema, id);
+		id = type->relatedTypeId;
+	}
+	return {};
+}
 
 constexpr std::uint32_t previewRangeSize = 256;
 constexpr std::size_t previewNodeLimit = 4096;
@@ -186,8 +206,9 @@ QString endpointDetail(const Row& row)
 	QStringList parts;
 	if (row.category == static_cast<int>(Category::Field)) {
 		parts << QCoreApplication::translate("EndpointModel", "Field");
+		// A named type with its kind and size: "struct adc::Config · 3 members".
 		if (!row.type.isEmpty())
-			parts << row.type << bytes(row.wireBytes, "1 byte", "%1 bytes");
+			parts << (row.typeWords.isEmpty() ? row.type : row.typeWords) << bytes(row.wireBytes, "1 byte", "%1 bytes");
 		parts << (row.readable && row.writable ? QCoreApplication::translate("EndpointModel", "read and write")
 		          : row.readable               ? QCoreApplication::translate("EndpointModel", "read only")
 		          : row.writable               ? QCoreApplication::translate("EndpointModel", "write only")
@@ -483,15 +504,40 @@ struct Reader {
 	}
 };
 
-// A flat (v3.0) descriptor's catalogs as one tree of groups (14.1): the
-// same-named catalogs of the three families one group, the groups in the
-// order the families first name them (the Fields', then the Commands', then
-// the Services'). Part B: a descriptor with group records gives them here.
+// A descriptor's groups as one tree (14.1). A group tree (v3.1, its group
+// records) gives them as they are: every family lists the same groups in
+// pre-order, each naming its parent, with that family's endpoints of the
+// group. A flat (v3.0) descriptor's catalogs are one level: the same-named
+// catalogs of the three families one group, the groups in the order the
+// families first name them (the Fields', then the Commands', then the
+// Services'). A tree of top-level groups only reads the same either way.
 GroupOutline outlineOf(const Reader& source)
 {
 	GroupOutline outline;
-	QHash<QString, std::size_t> byName;
 	constexpr std::array<Category, 3> families{Category::Field, Category::Command, Category::Service};
+	const auto groups = source.catalogs(Category::Field);
+	const bool tree = std::any_of(groups.begin(), groups.end(), [](const auto& group) {
+		return group.parent != telemetry::runtime::noParentGroup;
+	});
+	if (tree) {
+		outline.groups.reserve(groups.size());
+		for (std::size_t g = 0; g < groups.size(); ++g)
+			outline.groups.push_back({text(groups[g].name),
+			                          groups[g].parent < g ? static_cast<int>(groups[g].parent) : -1, {}});
+		for (std::size_t family = 0; family < families.size(); ++family) {
+			const auto count = source.endpoints(families[family]).size();
+			const auto catalogs = source.catalogs(families[family]);
+			for (std::size_t g = 0; g < catalogs.size() && g < outline.groups.size(); ++g)
+				for (std::uint32_t i = 0; i < catalogs[g].endpointCount; ++i) {
+					const auto at = std::uint64_t{catalogs[g].firstEndpoint} + i;
+					if (at >= count)
+						break;
+					outline.groups[g].endpoints[family].push_back(static_cast<std::size_t>(at));
+				}
+		}
+		return outline;
+	}
+	QHash<QString, std::size_t> byName;
 	for (std::size_t family = 0; family < families.size(); ++family) {
 		const auto count = source.endpoints(families[family]).size();
 		for (const auto& catalog : source.catalogs(families[family])) {
@@ -572,7 +618,7 @@ struct EndpointModel::Impl {
 	QHash<TypeId, TypeMetadata> types;
 	WatchLeaves leaves;
 	std::size_t previewNodes = 0;
-	QString widestFieldType;
+	QString widestFieldType, widestShortFieldType;
 	// The descriptor's endpoints of each family, and its deepest group.
 	int fieldTotal = 0, commandTotal = 0, serviceTotal = 0, deepestGroup = -1;
 	// A host's schema where no previews give one (setSchemaSource).
@@ -617,7 +663,9 @@ struct EndpointModel::Impl {
 		if (found != types.cend())
 			return found.value();
 		const auto* type = schema.type(id);
-		const TypeMetadata value{schema_text::typeText(schema, id), type ? type->wireBytes : 0};
+		const TypeMetadata value{schema_text::typeText(schema, id), type ? type->wireBytes : 0,
+		                         shownTypeName(schema, id), schema_text::typeWords(schema, id),
+		                         schema_text::typeSpoken(schema, id)};
 		types.insert(id, value);
 		return value;
 	}
@@ -672,6 +720,11 @@ QString EndpointModel::widestFieldType() const
 	return impl_->widestFieldType;
 }
 
+QString EndpointModel::widestShortFieldType() const
+{
+	return impl_->widestShortFieldType;
+}
+
 int EndpointModel::fieldTotal() const noexcept
 {
 	return impl_->fieldTotal;
@@ -720,11 +773,12 @@ QSet<QString> EndpointModel::groupNames() const
 	return names;
 }
 
-void EndpointModel::setWidestFieldType(const QString& type)
+void EndpointModel::setWidestFieldType(const QString& type, const QString& shortType)
 {
-	if (impl_->widestFieldType == type)
+	if (impl_->widestFieldType == type && impl_->widestShortFieldType == shortType)
 		return;
 	impl_->widestFieldType = type;
+	impl_->widestShortFieldType = shortType;
 	Q_EMIT widestFieldTypeChanged();
 }
 
@@ -757,7 +811,7 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 		return;
 	impl_->leaves.reset(schema);
 	QVector<QModelIndex> indices;
-	QString widest;
+	QString widest, widestShort;
 	for (auto* row : std::as_const(impl_->tree.rows)) {
 		if (!row->endpoint)
 			continue;
@@ -766,9 +820,16 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 		if (row->category == static_cast<int>(Category::Field)) {
 			row->kind = valueKind(schema, row->typeId);
 			row->typeNames = schema_text::enumNames(schema, row->typeId);
-			// A fixed face: the most characters is the widest.
+			row->typeName = value.name;
+			row->typeWords = value.words;
+			row->typeSpoken = value.spoken;
+			// A fixed face: the most characters is the widest, in either
+			// form (the column switches to "…::" as a whole, 14.2).
 			if (row->type.size() > widest.size())
 				widest = row->type;
+			const auto cut = schema_text::shortScopes(row->type);
+			if (cut.size() > widestShort.size())
+				widestShort = cut;
 		}
 		row->wireBytes = value.wireBytes;
 		if (row->category == static_cast<int>(Category::Service)) {
@@ -776,9 +837,15 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 			row->responseTypeText = response.label;
 			row->responseWireBytes = response.wireBytes;
 		}
-		if (row->category != static_cast<int>(Category::Field))
+		if (row->category != static_cast<int>(Category::Field)) {
 			row->signature = schema_text::signatureText(schema, row->typeId, row->responseTypeId,
 			                                            row->category == static_cast<int>(Category::Service));
+			// A signature that names a type is found by it: "(adc::Reference) -> adc::Offset".
+			const bool named = !value.name.isEmpty() ||
+			                   (row->category == static_cast<int>(Category::Service) &&
+			                    !impl_->metadata(schema, row->responseTypeId).name.isEmpty());
+			row->typeName = named ? row->signature : QString{};
+		}
 		if (row->category == static_cast<int>(Category::Field)) {
 			row->previewOwner = true;
 			row->previewFieldId = row->endpointId;
@@ -801,10 +868,11 @@ void EndpointModel::setSchemaMetadata(const telemetry::runtime::RuntimeSchema& s
 		Q_EMIT dataChanged(index, index, {DetailRole, TypeTextRole, WireBytesRole,
 		                                 ResponseTypeTextRole, PreviewEligibleRole,
 		                                 PreviewFieldIdRole, PreviewAggregateRole,
-		                                 WatchLeafCountRole, KindRole, TypeNamesRole});
+		                                 WatchLeafCountRole, KindRole, TypeNamesRole,
+		                                 TypeNameRole, TypeSpokenRole});
 	}
 	if (alive && impl_->current() && impl_->admission == admission)
-		setWidestFieldType(widest);
+		setWidestFieldType(widest, widestShort);
 }
 
 void EndpointModel::setPreviews(EndpointPreviews* previews)
@@ -1110,7 +1178,8 @@ QVector<EndpointEntry> EndpointModel::endpointList() const
 		EndpointEntry entry;
 		entry.category = row->category;
 		entry.id = row->endpointId;
-		entry.group = row->parent ? row->parent->name : QString{};
+		// The group's key: a flat catalog's name, a tree's groups by "/".
+		entry.group = row->parent ? path_grammar::unescaped(row->parent->path) : QString{};
 		entry.name = row->name;
 		entry.path = row->path;
 		entry.typeText = row->category == static_cast<int>(Category::Field) || row->signature.isEmpty()
@@ -1281,6 +1350,8 @@ QVariant EndpointModel::data(const QModelIndex& index, int role) const
 			return row->groups;
 		case TypeNameRole:
 			return row->typeName;
+		case TypeSpokenRole:
+			return row->typeSpoken;
 		case PreviewReasonRole:
 			return impl_->expansionLimited(*row)
 			           ? tr("Tree preview expansion is limited to 4096 rows. Open Details to inspect this value.")
@@ -1309,7 +1380,8 @@ QHash<int, QByteArray> EndpointModel::roleNames() const
 	        {WatchLeafKindRole, "watchLeafKind"}, {KindRole, "kind"},
 	        {TypeNamesRole, "typeNames"},   {FieldCountRole, "fieldCount"},
 	        {CommandCountRole, "commandCount"}, {ServiceCountRole, "serviceCount"},
-	        {GroupCountRole, "groupCount"}, {TypeNameRole, "typeName"}};
+	        {GroupCountRole, "groupCount"}, {TypeNameRole, "typeName"},
+	        {TypeSpokenRole, "typeSpoken"}};
 }
 
 QString EndpointModel::pathOf(const QModelIndex& index) const
@@ -1464,6 +1536,7 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 		const auto metadata = impl_->metadata(schema, child->typeId);
 		child->type = metadata.label;
 		child->wireBytes = metadata.wireBytes;
+		child->typeSpoken = child->previewRange ? QString{} : metadata.spoken;
 		// A range row only folds its elements: it has its array's path, and
 		// an element under it reads data.Samples[300].
 		child->path = child->previewRange ? row->path
@@ -1472,7 +1545,8 @@ void EndpointModel::fetchMore(const QModelIndex& parent)
 		child->kind = child->previewRange ? QStringLiteral("array") : valueKind(schema, child->typeId);
 		child->typeNames = child->previewRange ? QString{} : schema_text::enumNames(schema, child->typeId);
 		// In words, as a Field's: its type, then its bytes; never an internal type id.
-		child->detail = child->type + QStringLiteral(" \u00b7 ") +
+		child->detail = (child->previewRange || metadata.words.isEmpty() ? child->type : metadata.words) +
+		                QStringLiteral(" \u00b7 ") +
 		                (child->wireBytes == 1 ? QCoreApplication::translate("EndpointModel", "1 byte")
 		                                       : QCoreApplication::translate("EndpointModel", "%1 bytes")
 		                                             .arg(child->wireBytes));

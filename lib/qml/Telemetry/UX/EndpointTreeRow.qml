@@ -23,6 +23,12 @@ TreeViewDelegate {
 
     // Optional schema/cache roles keep third-party providers compatible.
     property string typeText: ""
+    // The type as a screen reader says it ("struct Config in adc, 3
+    // members"); empty: worked out from typeText.
+    property string typeSpoken: ""
+    // The Type column shows every scope as "…::" (the panel's give-way
+    // step 3); a row matched by its type still shows its own.
+    property bool typeScopesCut: false
     property string accessText: ""
     property string accessMark: ""
     property string unit: ""
@@ -73,6 +79,9 @@ TreeViewDelegate {
     property int guideTo: -1
     // Why the box is off when the Watchlist cannot hold this row (yet).
     property string watchRefusal: ""
+    // In the extended selection a drag and the drop keys act on (the
+    // designer's section 16.2); drawn as the selection is.
+    property bool picked: false
     // Measured texts, so the panel can size its columns to them: each label's
     // own width, reported again when the row is reused or the panel asks. A
     // type counts only on a Field's row: a signature runs over its own row.
@@ -193,6 +202,8 @@ TreeViewDelegate {
         : previewChild ? (name.startsWith("[") ? qsTr("element") : qsTr("member"))
         : qsTr("Field")
     readonly property string typeWords: {
+        if (typeSpoken.length > 0)
+            return typeSpoken
         let found = /^struct \((\d+)\)$/.exec(typeText)
         if (found)
             return Number(found[1]) === 1 ? qsTr("struct with 1 member") : qsTr("struct with %L1 members").arg(Number(found[1]))
@@ -204,6 +215,7 @@ TreeViewDelegate {
             return qsTr("array of %L1 %2").arg(Number(found[2])).arg(found[1])
         return typeText
     }
+    readonly property string pickedWords: picked ? qsTr("selected") : ""
     readonly property string accessWords: accessMark === "rw" ? qsTr("read and write")
         : accessMark === "r-" ? qsTr("read only")
         : accessMark === "-w" ? qsTr("write only")
@@ -260,8 +272,9 @@ TreeViewDelegate {
     indicator: TreeChevron { row: treeRow }
     text: name
     Accessible.role: Accessible.TreeItem
-    Accessible.name: tableMode ? [name, kindWords, container ? countFull : typeWords, accessWords]
+    Accessible.name: tableMode ? [name, kindWords, container ? countFull : typeWords, accessWords, pickedWords]
         .filter(function(part) { return part.length > 0 }).join(", ") : name
+    Accessible.selected: picked
     Accessible.description: [boxWords, fullDescription].filter(function(part) { return part.length > 0 }).join("\n")
     Accessible.expandable: hasChildren
     Accessible.expanded: expanded
@@ -443,25 +456,34 @@ TreeViewDelegate {
                 }
                 // Left at the column's x in the fixed face; never hidden: a
                 // long one moves left into its own row's room, then elides.
-                Label {
+                // A named type in two tones, its scope muted; "…::" while
+                // the column gives its scopes way (14.2).
+                TypeLabel {
                     id: tableType
                     objectName: "endpointRowType"
                     visible: treeRow.typeColumnWidth > 0 && !treeRow.container
                     x: cells.typeLeft
                     width: Math.max(0, cells.typeRight - cells.typeLeft)
                     anchors.verticalCenter: parent.verticalCenter
-                    // A row found by its named type marks the run here.
-                    readonly property string marked: cells.marked(treeRow.typeText, "type")
-                    textFormat: marked.length > 0 ? Text.StyledText : Text.PlainText
-                    elide: Text.ElideRight
-                    font.family: Type.fixedFamily
-                    font.pointSize: Type.caption
-                    text: marked.length > 0 ? marked : treeRow.typeText
-                    color: treeRow.markColor
+                    typeText: treeRow.typeText
+                    shortScopes: treeRow.typeScopesCut
+                    // A row found by its named type marks the run here, and
+                    // shows its scope.
+                    run: treeRow.matched && treeRow.matchRun.in === "type" ? treeRow.matchRun : ({})
+                    nameColor: treeRow.markColor
+                    scopeColor: treeRow.selectedActive ? treeRow.palette.highlightedText
+                        : treeRow.highlighted ? Theme.textSecondary : Theme.textMuted
+                    runColor: treeRow.selectedActive ? treeRow.palette.highlightedText : Theme.info
                     Component.onCompleted: treeRow.remeasure()
                     onImplicitWidthChanged: treeRow.remeasure()
                     HoverHandler { id: tableTypeHover }
-                    PlainToolTip { visible: tableTypeHover.hovered && tableType.truncated; text: treeRow.typeText; delay: 700 }
+                    // The full name whenever something was cut.
+                    PlainToolTip {
+                        objectName: "endpointRowTypeToolTip"
+                        visible: tableTypeHover.hovered && (tableType.truncated || tableType.cutShown)
+                        text: treeRow.typeText
+                        delay: 700
+                    }
                 }
                 // The Field's access, letter by letter, a dash for what it lacks.
                 Item {

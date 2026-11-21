@@ -150,7 +150,10 @@ def main():
                 # The designer's review of 20 November 2026 (section 14, part
                 # A): the path grammar, groups inside groups, the indent step,
                 # the context line, find by path and type, the path label.
-                ('device-tree-groups', 'telemetry_qml_device_tree_groups', r'Device tree groups checks=(\d+) warnings=0', 150)):
+                ('device-tree-groups', 'telemetry_qml_device_tree_groups', r'Device tree groups checks=(\d+) warnings=0', 150),
+                # Part B (nested groups, scoped type names, the ceilings,
+                # attributes skipped) and the tree's side of section 16.
+                ('device-tree-named', 'telemetry_qml_device_tree_named', r'Device tree named checks=(\d+) warnings=0', 150)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))
             if not found or int(found[1]) < least:

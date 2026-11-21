@@ -82,6 +82,9 @@ class EndpointModel final : public QAbstractItemModel {
 	// the Device tree's Type column is as wide as it, once per descriptor, so
 	// opening a branch never moves the column. Empty until the types are known.
 	Q_PROPERTY(QString widestFieldType READ widestFieldType NOTIFY widestFieldTypeChanged)
+	// The same with every scope cut to "…::" ("…::Config[4]"): the widest
+	// type once the column gives its scopes way (the designer's review, 14.2).
+	Q_PROPERTY(QString widestShortFieldType READ widestShortFieldType NOTIFY widestFieldTypeChanged)
 	// The device's Fields, Commands and Services (the descriptor's counts):
 	// what the kinds filter's menu says beside each kind.
 	Q_PROPERTY(int fieldTotal READ fieldTotal NOTIFY totalsChanged)
@@ -143,9 +146,15 @@ public:
 		CommandCountRole,
 		ServiceCountRole,
 		GroupCountRole,
-		// The row's named type, "adc::Config", what find matches as a type;
-		// empty while the descriptor names no types (v3.0, part B's seam).
-		TypeNameRole
+		// The row's named type, "adc::Config" (an array's element's for
+		// "adc::Config[4]"), what find matches as a type; a Command's or a
+		// Service's signature when it names one; empty while the descriptor
+		// names no types (v3.0).
+		TypeNameRole,
+		// The row's type as a screen reader says it, own name first:
+		// "struct Config in adc, 3 members"; empty on groups, Commands and
+		// Services.
+		TypeSpokenRole
 	};
 	Q_ENUM(Role)
 
@@ -183,6 +192,7 @@ public:
 	// "power\.meter"), or invalid: what a breadcrumb's segment reveals.
 	Q_INVOKABLE QModelIndex indexOfGroupPath(const QString& path) const;
 	[[nodiscard]] QString widestFieldType() const;
+	[[nodiscard]] QString widestShortFieldType() const;
 	[[nodiscard]] int fieldTotal() const noexcept;
 	[[nodiscard]] int commandTotal() const noexcept;
 	[[nodiscard]] int serviceTotal() const noexcept;
@@ -218,7 +228,7 @@ Q_SIGNALS:
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
-	void setWidestFieldType(const QString& type);
+	void setWidestFieldType(const QString& type, const QString& shortType = {});
 	void setTotals(int fields, int commands, int services, int deepest);
 	void rebuildSource(const Inspector* inspector, const Workbench* workbench,
 	                   const WorkbenchView* view = nullptr);
