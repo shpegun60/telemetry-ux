@@ -2695,6 +2695,20 @@ Pane {
                             : qsTr("%1 · shown in %2 (the Watchlist shows %3)").arg(watchRow.shownText)
                                   .arg(panel.formatWord(watchRow.ownFormat)).arg(panel.formatWord(panel.format))
                     }
+                }
+                // A double-click on the value opens its editor (WL-9 C1), also
+                // while the cell lies over the value - a held text, a write, a
+                // flash - when the value box hides (WL-9b): the area reaches as
+                // far left as the cell shows, its held text included.
+                Item {
+                    objectName: "watchValueTapArea"
+                    readonly property real reach: cellLoader.visible && cellLoader.item
+                        ? Math.max(panel.valueColumn, cellLoader.item.editorWidth) : panel.valueColumn
+                    visible: watchRow.isValue
+                    x: watchRow.valueLeft + panel.valueColumn - reach
+                    y: 0
+                    width: reach
+                    height: Type.rowHeight
                     TapHandler {
                         id: valueTap
                         enabled: watchRow.writable || watchRow.writeRefusal.length > 0
@@ -2735,6 +2749,7 @@ Pane {
                         changed: watchRow.changeMarked
                         heldText: watchRow.isHeld ? watchRow.heldText : ""
                         heldReason: watchRow.isHeld ? watchRow.heldLine : ""
+                        heldHint: qsTr("F2 to change it · Esc drops it")
                         pendingText: watchRow.pendingWrite ? watchRow.writtenText : ""
                         reducedMotion: panel.reducedMotion
                         openOnClick: false

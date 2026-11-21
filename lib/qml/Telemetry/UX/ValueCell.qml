@@ -20,9 +20,11 @@
 // a choice) calls `commitText(text)` once when the text is a value and differs
 // from what the cell was opened with; Escape calls nothing. Closed, the cell
 // shows a text the owner holds (heldText, struck through with the error glyph,
-// its reason under it), a write under way (pendingText, with a progress line
-// after 400 ms), or its value - a bool's or an enum's word with its code in
-// the secondary colour (valueWord, valueCode).
+// its reason under it, the way back in its tooltip: heldHint), a write under
+// way (pendingText, with a progress line after 400 ms), or its value - a
+// bool's or an enum's word with its code in the secondary colour (valueWord,
+// valueCode). Opened again, a held text is edited as it was typed, and any
+// value left in it is written, the device's own too: only a write lets go.
 import QtQuick
 import QtQuick.Controls
 // The editor is drawn here (22 px, a 1 px outline): Basic takes that in every
@@ -76,6 +78,9 @@ Item {
     // one that is no value left by Tab or a click; and why, under it.
     property string heldText: ""
     property string heldReason: ""
+    // The way back, at the end of the held text's tooltip: "F2 to change it
+    // · Esc drops it" (the owner's keys).
+    property string heldHint: ""
     // A write under way (WL-9 C5): the text written, shown in the secondary
     // colour until the outcome, with a progress line after 400 ms.
     property string pendingText: ""
@@ -101,8 +106,9 @@ Item {
     property string summaryKind: ""
     // Elements or members under a branch (an array shown as ranges holds more than childCount); -1: childCount.
     property int itemCount: -1
-    // The width of what the cell shows now: its editor grows leftwards over the owner's room.
-    readonly property real editorWidth: !open ? width : (choices && !manualCode ? choice.width : input.width)
+    // The width of what the cell shows now: its editor and a held text grow leftwards over the owner's room.
+    readonly property real editorWidth: !open ? (held ? Math.max(width, heldRow.width) : width)
+                                              : (choices && !manualCode ? choice.width : input.width)
     // The words a folded branch shows now, for the row's accessible description.
     readonly property string summaryShown: summary.visible ? summary.text : ''
     // Draft mode (see above): null keeps the live setText.
@@ -173,6 +179,9 @@ Item {
     // An enum's code typed rather than chosen.
     property bool manualCode: false
     property string startText: ""
+    // Opened on a held text (draft mode): any value left in it is written,
+    // the device's own too, since only a write lets go of a held text.
+    property bool openedHeld: false
     property bool closing: false
     // Why the last text left was not kept (Details): "Not changed: “300” ·
     // u8 takes 0 to 255.", under the closed cell until it is opened again.
@@ -210,6 +219,7 @@ Item {
         manualCode = false
         open = true
         const fromHeld = draftMode && heldText.length > 0 && !choices
+        openedHeld = fromHeld
         input.text = fromHeld ? heldText : editorText
         if (choices) {
             choice.forceActiveFocus()
@@ -244,9 +254,10 @@ Item {
         return draftMode && checkError.length > 0 ? checkError : takesText
     }
     // Draft mode: the text goes to the owner once, when it is a value that
-    // differs from what the cell was opened with.
+    // differs from the value the cell was opened on, or any value when it
+    // was opened on a held text.
     function commitDraft(text) {
-        if (draftMode && text !== startText)
+        if (draftMode && (text !== startText || openedHeld))
             commitText(text)
     }
     // Draft mode: what is left by Tab or a click with text that is no value.
@@ -520,6 +531,16 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Type.spacing
+                // The whole text when it is cut, then the way back.
+                HoverHandler { id: heldHover }
+                PlainToolTip {
+                    objectName: "valueHeldToolTip"
+                    delay: 700
+                    readonly property string tip: [heldLabel.truncated ? cell.heldText : "", cell.heldHint]
+                        .filter(function(part) { return part.length > 0 }).join(" · ")
+                    visible: heldHover.hovered && tip.length > 0
+                    text: tip
+                }
                 ErrorGlyph {
                     id: heldGlyph
                     objectName: "valueHeldGlyph"
@@ -537,8 +558,6 @@ Item {
                     font.strikeout: true
                     // The error colour stays on a selection (4.53:1).
                     color: Theme.error
-                    HoverHandler { id: heldHover }
-                    PlainToolTip { visible: heldHover.hovered && heldLabel.truncated; text: cell.heldText }
                 }
             }
             // A write under way: what was typed, quiet, until the outcome.

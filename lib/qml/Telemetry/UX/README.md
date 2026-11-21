@@ -438,7 +438,9 @@ Field, its members included. A good reading is its value alone (no dot); a
 reading not made yet is "–". A row is one line, or two to four while its line
 2 says something. A refused text stays held in its row, struck, with what the
 device holds under it (`holdWatchText`, `dropWatchHeld`, the roles
-`heldText`, `heldReason`, `heldKind`); a write shows as it runs and how it
+`heldText`, `heldReason`, `heldKind`); a double-click, F2 or Enter opens it
+again as it was typed, any value left in it is written, and Esc on the row
+drops it; a write shows as it runs and how it
 ended (`writeState`, `writtenText`, `writtenAt`); a value that changed is
 marked for a second (`changedAt`). The panel uses `KindIcon` and
 `ToolIcon`: a host calls `registerQmlTypes()` before loading it.
