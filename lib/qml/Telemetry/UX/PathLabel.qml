@@ -12,7 +12,14 @@
 //
 // interactive: the prefix's groups are links, one Tab stop for the whole
 // label; Left and Right move between them, Enter or a click activates one
-// (segmentActivated with that group's path). MIT.
+// (segmentActivated with that group's path).
+//
+// One measure decides and lays out (PL-1): every piece is placed at the
+// advance width its font gives it, the same number that decides the drops,
+// and a piece within 1 px of its room counts as fitting. A Text's own width
+// is not used: it counts a glyph's overhang past its advance ("/" in Segoe
+// UI), so a label sized to its implicit width once cut its leaf by a
+// fraction of a pixel ("measure/P…r"). MIT.
 import QtQuick
 import QtQuick.Controls
 
@@ -40,6 +47,17 @@ Item {
     // Where the text ends, and the leaf's own width uncut.
     readonly property real usedWidth: leafText.x + leafText.width
     readonly property real leafImplicitWidth: leafText.implicitWidth
+    // The narrowest the label gets with its leaf whole: every segment that
+    // can drop gone ("…/SetEnabled"), by the measure that decides (it fits a
+    // room within the tolerance). A host gives way to the label below it.
+    readonly property real shortestWidth: {
+        void label.font
+        void label.leafFont
+        return measure(shape(dropOrder.length))
+    }
+    // A piece within this of its room fits: two measures of one text differ
+    // by a fraction of a pixel, and that must never cut a name.
+    readonly property real tolerance: 1
     signal segmentActivated(string groupPath)
 
     LayoutMirroring.enabled: false
@@ -48,7 +66,7 @@ Item {
     implicitWidth: {
         void label.font
         void label.leafFont
-        return Math.ceil(prefixMetrics.advanceWidth(full.prefix) + leafMetrics.advanceWidth(full.leaf))
+        return Math.ceil(measure(full))
     }
     // The label's font with another weight or an underline.
     function variant(weight, underline) {
@@ -148,21 +166,42 @@ Item {
         return { parts: parts, prefix: prefix, leaf: leafStep.text }
     }
     readonly property var full: shape(0)
+    // Where a shape's leaf starts: its prefix's advance, piece by piece as
+    // the links lay it out, else in one piece as the prefix's Text.
+    function prefixAdvance(s) {
+        if (!interactive)
+            return prefixMetrics.advanceWidth(s.prefix)
+        let x = 0
+        for (const part of s.parts)
+            x += prefixMetrics.advanceWidth(part.sep + part.text)
+        return steps.length > 0 ? x + prefixMetrics.advanceWidth(steps[steps.length - 1].sep) : x
+    }
+    // A shape's whole width, as the label lays it out.
+    function measure(s) {
+        return prefixAdvance(s) + leafMetrics.advanceWidth(s.leaf)
+    }
     // The fewest drops that fit the width; all of them when nothing fits,
     // and then the leaf elides.
     readonly property int drops: {
         void label.font
         void label.leafFont
         const room = width
-        for (let k = 0; k <= dropOrder.length; ++k) {
-            const s = shape(k)
-            if (Math.ceil(prefixMetrics.advanceWidth(s.prefix) + leafMetrics.advanceWidth(s.leaf)) <= room + 0.5)
+        for (let k = 0; k <= dropOrder.length; ++k)
+            if (measure(shape(k)) <= room + tolerance)
                 return k
-        }
         return dropOrder.length
     }
     readonly property var shown: shape(drops)
-    readonly property bool elided: drops > 0 || leafText.truncated
+    // The shown leaf's place and whether it is whole, by the same measure.
+    readonly property real leafX: {
+        void label.font
+        return prefixAdvance(shown)
+    }
+    readonly property bool leafFits: {
+        void label.leafFont
+        return leafX + leafMetrics.advanceWidth(shown.leaf) <= width + tolerance
+    }
+    readonly property bool elided: drops > 0 || !leafFits
     // The groups above the leaf, for the leaf-first spoken name.
     readonly property var parentNames: steps.slice(0, Math.max(0, steps.length - 1)).map(function(step) {
         return step.text.replace(/\\(.)/g, "$1")
@@ -178,7 +217,9 @@ Item {
         if (index >= 0 && index < links.length)
             label.segmentActivated(links[index].groupPath)
     }
-    activeFocusOnTab: tabStop && interactive && links.length > 0
+    // Kept while it has the keys: narrowed until its last link drops, the
+    // label still holds them (a Tab stop is not taken from under the focus).
+    activeFocusOnTab: tabStop && interactive && (links.length > 0 || activeFocus)
     onActiveFocusChanged: if (activeFocus && currentLink < 0 && links.length > 0) currentLink = links.length - 1
     onLinksChanged: if (currentLink >= links.length) currentLink = links.length - 1
     Keys.enabled: interactive
@@ -192,11 +233,13 @@ Item {
         ? qsTr("Left and Right move between the groups; Enter shows one in the Device tree.") : ""
     Accessible.focusable: interactive
 
+    // Each piece is as wide as its advance; a glyph's overhang is drawn past it.
     Text {
         id: prefixText
         objectName: label.prefixObjectName
         visible: !label.interactive && text.length > 0
         anchors.verticalCenter: parent.verticalCenter
+        width: label.leafX
         textFormat: Text.PlainText
         text: label.shown.prefix
         font: label.font
@@ -217,6 +260,7 @@ Item {
                 // Its place among the links: the groups before it in the parts.
                 readonly property int linkIndex: !link ? -1 : label.shown.parts.slice(0, index).filter(function(p) { return p.kind === "group" }).length
                 objectName: link ? "pathLabelLink" : "pathLabelPart"
+                width: prefixMetrics.advanceWidth(text)
                 textFormat: Text.PlainText
                 text: modelData.sep + modelData.text
                 font: link && (partHover.hovered || (label.activeFocus && linkIndex === label.currentLink))
@@ -240,23 +284,26 @@ Item {
         }
         Text {
             visible: label.interactive && text.length > 0
+            width: prefixMetrics.advanceWidth(text)
             textFormat: Text.PlainText
             text: label.steps.length > 0 ? label.steps[label.steps.length - 1].sep : ""
             font: label.font
             color: label.prefixColor
         }
     }
+    // Whole while it fits by the measure; only when nothing more can drop
+    // does it elide in its middle, in the room left.
     Text {
         id: leafText
         objectName: label.leafObjectName
-        anchors.left: label.interactive ? linkRow.right : (prefixText.visible ? prefixText.right : parent.left)
+        x: label.leafX
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(0, Math.min(implicitWidth, label.width - x))
+        width: label.leafFits ? implicitWidth : Math.max(0, label.width - x)
         textFormat: Text.PlainText
         text: label.shown.leaf
         font: label.interactive && label.leafLink && leafHover.hovered ? label.variant(label.leafWeight, true) : label.leafFont
         color: label.leafColor
-        elide: Text.ElideMiddle
+        elide: label.leafFits ? Text.ElideNone : Text.ElideMiddle
         HoverHandler { id: leafHover; enabled: label.interactive && label.leafLink; cursorShape: Qt.PointingHandCursor }
         TapHandler { enabled: label.interactive && label.leafLink; onTapped: label.segmentActivated(label.path) }
     }

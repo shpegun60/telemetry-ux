@@ -6,6 +6,7 @@
 // with the real watch_format, refuses Gain above 10, answers when told and
 // counts reads. At 100 % and 125 %; exact pixels at 100 %. No network or device
 // I/O. MIT.
+#include "PathLabelChecks.hpp"
 #include "ScriptSteps.hpp"
 #include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/WatchFormat.hpp>
@@ -1523,6 +1524,35 @@ void run(const QString& output, double points, int& screens)
 			CHECK(label->property("usedWidth").toDouble() <= label->width() + 0.5);
 		}
 		shot(v, output, QStringLiteral("watch-list-long-path-420%1.png").arg(suffix));
+		// PL-1: every name in the List takes the room it has - whole whenever
+		// it fits, else only whole segments drop, the leaf whole until nothing
+		// more can - at every width, after a resize both ways, the pointer on
+		// the row and off.
+		for (const int width : {420, 1200, 560, 320, 900, 420, 1200, 560}) {
+			resize(v, width);
+			for (const auto& path : {h3, window, longPath, QStringLiteral("device/Config.Gain")}) {
+				if (rowIndex(v.list, path) < 0)
+					continue;
+				auto* row = rowOf(v.list, path);
+				auto* label = shown(row, "watchRowPath");
+				QTest::mouseMove(v.window, QPoint(1, v.window->height() - 1));
+				settle(30);
+				auto fault = path_label_checks::fault(label);
+				if (!fault.isEmpty())
+					throw std::runtime_error("PL-1 Watchlist: " + fault.toStdString());
+				CHECK(fault.isEmpty());
+				const auto cell = shown(row, "watchRowName")->width();
+				QTest::mouseMove(v.window, row->mapToScene(QPointF(row->width() / 2, row->height() / 2)).toPoint());
+				settle(30);
+				fault = path_label_checks::fault(label);
+				if (!fault.isEmpty())
+					throw std::runtime_error("PL-1 Watchlist, hovered: " + fault.toStdString());
+				CHECK(fault.isEmpty());
+				CHECK(near(shown(row, "watchRowName")->width(), cell, 0.01));
+			}
+		}
+		QTest::mouseMove(v.window, QPoint(1, v.window->height() - 1));
+		resize(v, 420);
 		// The tree: metrology/harmonics/phaseA is one row (its box and count
 		// the last group's); the long chain is one row too.
 		showTree(v, true);
