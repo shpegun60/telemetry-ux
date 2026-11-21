@@ -216,8 +216,9 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 			value |= static_cast<quint32>(static_cast<quint8>(bytes[at + i])) << (8 * i);
 		return value;
 	};
-	// The header as the SDK's parser lays it out: "TDS3", version 3, 0, a
-	// header of 64 bytes, 0, then the whole file's size.
+	// The header as the SDK's parser lays it out: "TDS3", version 3, minor 0
+	// or 1 (v3.1: type names, attributes, a group tree), a header of 64 bytes,
+	// flags (bit 0 the v3.1 group tree), then the whole file's size.
 	constexpr quint16 version = 3;
 	constexpr qsizetype headerBytes = 64;
 	if (size == 0)
@@ -233,9 +234,12 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 		return {Kind::Version, -1, u16(4)};
 	if (size < headerBytes)
 		return {Kind::EndsEarly, size};
-	for (const qsizetype at : {6, 8, 10})
-		if (u16(at) != (at == 8 ? headerBytes : 0))
-			return {Kind::Layout, at};
+	if (u16(6) > 1)
+		return {Kind::Layout, 6};
+	if (u16(8) != headerBytes)
+		return {Kind::Layout, 8};
+	if (u16(10) > (u16(6) == 1 ? 1 : 0))
+		return {Kind::Layout, 10};
 	const qint64 declared = u32(12);
 	if (declared > size)
 		return {Kind::EndsEarly, size};

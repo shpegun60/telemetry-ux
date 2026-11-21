@@ -2151,3 +2151,25 @@ segments; `device-tree-context-*.png`, `device-tree-kinds-funnel-*.png`),
 `watch-list-long-path-*.png`, `watch-tree-chains-560.png`),
 `DetailsLayout.cpp` (the breadcrumb; `details-breadcrumb-*.png`),
 `TreeActions.cpp`, and the provider suites' paths.
+
+## The SDK's descriptor v3.1 read as it is (November 2026)
+
+The SDK pinned by CI moves to `telemetry-sdk` main `3cd9ce8` (descriptor v3.1:
+type names on by default, the compact attribute area, the group tree). A
+device built from it names its enums and structs, so its descriptor's header
+says minor 1; a group tree also sets header flag bit 0.
+
+`DescriptorContent::check()`, the Descriptor view's own reading of the
+header before the SDK parses the rest, refused every minor other than 0 and
+every header flag, so a v3.1 device's `descriptor.bin` read "its bytes are not
+laid out as a descriptor (at byte 6)". It now takes minor 0 or 1 and, with
+minor 1, the group tree's flag; a minor past 1 and any other flag are still
+refused at bytes 6 and 10. Everything after the header is the SDK's, as before.
+
+The generated-QML checks need the generator of the same SDK: a generator older
+than v3.1 refuses a v3.1 header ("telemetry_codegen: header version/flags").
+Build the core wheel from the SDK checkout the suites build against, as CI's
+generated-QML job does; nothing in this repository pins it.
+
+Checks: `tests/device_files` (the descriptor of its device reads with minor 1;
+minor 2 and flag 2 are refused at their bytes).

@@ -2628,6 +2628,17 @@ void descriptorWords(const QString& folder)
 	auto header = good;
 	header[8] = 32;
 	CHECK(words(header) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 8)"));
+	// Descriptor v3.1: a device that names its types (Mode, Pair, Rich) says
+	// minor 1 and reads; this one has none and stays v3.0. A minor past 1, and
+	// a header flag other than the group tree's, are not read.
+	const auto named = bytesOf(richPacked);
+	CHECK(good[6] == 0 && named[6] == 1 && named[7] == 0 && DescriptorContent::check(named).kind == Kind::None);
+	auto minor = named;
+	minor[6] = 2;
+	CHECK(words(minor) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 6)"));
+	auto flags = named;
+	flags[10] = 2;
+	CHECK(words(flags) == QStringLiteral("its bytes are not laid out as a descriptor (at byte 10)"));
 	CHECK(words(good + QByteArray(1, '\0')) ==
 	      QStringLiteral("its bytes are not laid out as a descriptor (at byte %1)").arg(good.size()));
 	// A record past the header that does not read, the fingerprint made to match.
