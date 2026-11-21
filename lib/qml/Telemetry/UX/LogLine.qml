@@ -112,10 +112,13 @@ RowLayout {
         // the path gives way beside them.
         readonly property real tailWidth: valuesWidth + (valuesWidth > 0 && wordsWidth > 0 ? gap : 0) + wordsWidth
         readonly property real tailFloor: Math.min(tailWidth, Type.nameFloor)
+        // The values belong to the path ("device/Config.Gain = 2"): a space,
+        // not the gap that sets the words apart.
+        readonly property real pathGap: valuesWidth > 0 ? Type.spacing : gap
         readonly property real pathRoom: line.path.length === 0 ? 0
             : line.expanded || tailWidth === 0 ? Math.max(0, width - kindRoom)
-            : Math.max(0, width - kindRoom - gap - tailFloor)
-        readonly property real valuesX: kindRoom + (line.path.length > 0 ? pathLabel.usedWidth + gap : 0)
+            : Math.max(0, width - kindRoom - pathGap - tailFloor)
+        readonly property real valuesX: kindRoom + (line.path.length > 0 ? pathLabel.usedWidth + pathGap : 0)
         readonly property real wordsX: valuesWidth > 0 ? valuesLabel.x + valuesLabel.width + gap : valuesX
         // Expanded words too long for the path's line go under it, whole.
         readonly property bool wordsBelow: line.expanded && line.words.length > 0

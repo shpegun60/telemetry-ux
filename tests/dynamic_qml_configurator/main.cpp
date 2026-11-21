@@ -1,6 +1,7 @@
 // Three independent installed QML panels over one actual native client/FIFO. MIT.
 #include "Fixture.hpp"
 #include "../helpers/UndoKinds.hpp"
+#include <Telemetry/UX/EventLog.hpp>
 #include <Telemetry/UX/WatchKey.hpp>
 #include <Telemetry/UX/WatchTraces.hpp>
 #include <Telemetry/UX/WatchLeaves.hpp>
