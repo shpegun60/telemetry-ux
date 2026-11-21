@@ -1251,7 +1251,7 @@ void run(const QString& output, double points, int& screens)
 		// nearer of the two, and × ends on R only while Name fills.
 		for (const int width : {560, 420}) {
 			resize(v, width);
-			const double fill = eval(v.panel, QStringLiteral("fillValueX(accessColumn, statusColumn)")).toDouble();
+			const double fill = eval(v.panel, QStringLiteral("fillValueX(accessColumn, statusColumn, typeColumn)")).toDouble();
 			const double cap = prop(v.panel, "nameCap") + gap;
 			CHECK(near(prop(v.panel, "valueX"), std::min(fill, cap), 0.5));
 			const double right = prop(v.panel, "removeX") + prop(v.panel, "removeColumnWidth");
@@ -1465,6 +1465,46 @@ void run(const QString& output, double points, int& screens)
 		key(v.window, Qt::Key_Escape);
 		look.stopWatch();
 		QTest::qWait(1100);
+	}
+	// ---- Part B (the review's 14.2): a named type in two tones, the scope
+	// muted; the scopes give way third, after rw and Status, for the whole
+	// column, the header saying so and a type's tooltip holding the whole ----
+	{
+		const int base = int(look.values.size());
+		const auto path = QStringLiteral("metrology/harmonics/phaseA/Spectrum.window");
+		look.addRow(path, 40, typeOf(WatchScalar::U8, 1, true), 1, QStringLiteral("metrology::Window"));
+		showTree(v, false);
+		resize(v, 1200);
+		// The columns measured afresh from these rows (earlier checks left a
+		// long unscoped type, which no cut of scopes would narrow).
+		QMetaObject::invokeMethod(v.panel, "forgetMeasured");
+		settle(120);
+		auto* row = rowOf(v.list, path);
+		CHECK(row);
+		auto* type = shown(row, "watchRowType");
+		CHECK(type->property("typeText").toString() == QStringLiteral("metrology::Window") &&
+		      type->property("shown").toString() == QStringLiteral("metrology::Window"));
+		CHECK(!v.panel->property("typeScopesCut").toBool());
+		const auto toned = [&](const char* token, const char* text) {
+			return QStringLiteral("color=\"%1\">%2</font>").arg(theme(token).name(QColor::HexRgb), QString::fromUtf8(text));
+		};
+		CHECK(type->property("rich").toString().contains(toned("textMuted", "metrology::")) &&
+		      type->property("rich").toString().contains(toned("textSecondary", "Window")));
+		resize(v, 320);
+		row = rowOf(v.list, path);
+		type = shown(row, "watchRowType");
+		CHECK(prop(v.panel, "typeNarrowColumn") < prop(v.panel, "typeWideColumn"));
+		CHECK(v.panel->property("typeScopesCut").toBool() && prop(v.panel, "accessColumn") == 0);
+		CHECK(type->property("shown").toString() == QStringLiteral("…::Window") && type->property("cutShown").toBool());
+		auto* tip = type->findChild<QObject*>(QStringLiteral("watchRowTypeToolTip"));
+		CHECK(tip && tip->property("text").toString() == QStringLiteral("metrology::Window"));
+		auto* header = v.panel->findChild<QObject*>(QStringLiteral("watchTypeHeaderToolTip"));
+		CHECK(header && header->property("text").toString() ==
+		                    QStringLiteral("Scopes are hidden for room; hover a type for its full name."));
+		shot(v, output, QStringLiteral("watch-scoped-types-320%1.png").arg(suffix));
+		look.removeFrom(base);
+		resize(v, 560);
+		showTree(v, true);
 	}
 	screens += 1;
 	v.window->close();

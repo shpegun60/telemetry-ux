@@ -87,7 +87,10 @@ export interface PresentationRow {
 	readonly path: ValuePath;
 	readonly name: string;
 	readonly kind: 'void'|'scalar'|'enum'|'struct'|'array';
+	/** A named enum or struct by its name ("adc::Config"), else its scalar or kind word. */
 	readonly type: string;
+	/** The v3.1 name of an enum or struct; empty when unnamed. */
+	readonly typeName: string;
 	readonly children: number;
 	readonly text: string;
 	readonly error: string;
@@ -205,6 +208,8 @@ export interface StructuralTypeInput {
 	readonly id: number;
 	readonly kind: number;
 	readonly wireBytes: number;
+	/** A v3.1 enum's or struct's name. */
+	readonly name?: string;
 }
 export interface StructuralEndpointInput {
 	readonly category: 1|2|3;

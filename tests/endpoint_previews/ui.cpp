@@ -288,7 +288,8 @@ void metadataBeforeRead(Window& ui, ux::DynamicConfiguratorProvider& provider,
 	click(*ui.window, control(ui.treePanel, "endpointRow", "name", QStringLiteral("Config")));
 	CHECK(provider.selection().endsWith(QStringLiteral("Config")));
 	CHECK(peer.fieldReads() == 0 && provider.values()->rowCount() == 0);
-	CHECK(provider.selectionInfo().value(QStringLiteral("typeText")).toString().contains(QStringLiteral("struct")));
+	// The struct by its name (descriptor v3.1): inspector_qml::demo::Config.
+	CHECK(provider.selectionInfo().value(QStringLiteral("typeText")).toString() == QStringLiteral("demo::Config"));
 	CHECK(provider.selectionInfo().value(QStringLiteral("wireBytes")).toUInt() > 8);
 	CHECK(provider.selectionInfo().value(QStringLiteral("readable")).toBool());
 	ui.page("details", 320, 820);

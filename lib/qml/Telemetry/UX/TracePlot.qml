@@ -179,7 +179,50 @@ FocusScope {
     // Puts dropped values on the Plot: a Watchlist drag's paths are its
     // values; a Device tree drag's are Fields, Commands, Services or values
     // inside a Field, added to the Watchlist and plotted value by value.
+    // What a drop would do (section 16), for the frame before the release:
+    // {refused, words}. From the Device tree the provider expands what was
+    // picked at any depth; from the Watchlist the values are its rows. All
+    // or nothing: more values than free curves refuse the drop and leave
+    // the Watchlist untouched.
+    function dropPlan(payload) {
+        if (payload && payload.from === "device" && Array.isArray(payload.items) && provider
+            && typeof provider.dropPlan === "function") {
+            const plan = provider.dropPlan(payload.items, "plot")
+            const refused = plan.status !== "ok"
+            return { refused: refused, words: refused ? plan.refusal : plan.words }
+        }
+        const paths = payload && payload.paths ? Array.from(payload.paths) : []
+        if (!traces || paths.length === 0)
+            return { refused: true, words: "" }
+        if (payload.from === "device")
+            return { refused: false, words: dropWords(payload) }
+        const fresh = paths.filter(path => !traces.isPlotted(path))
+        const room = traceLimit - plotted.length
+        if (fresh.length === 0)
+            return { refused: true, words: paths.length === 1 ? qsTr("%1 is on the Plot already.").arg(paths[0])
+                                                              : qsTr("These %L1 values are on the Plot already.").arg(paths.length) }
+        if (fresh.length > room)
+            return { refused: true, words: qsTr("Can't plot %L1 values: this Plot has %L2 free curves of its %L3.")
+                                               .arg(fresh.length).arg(room).arg(traceLimit) }
+        return { refused: false, words: dropWords(payload) }
+    }
+    readonly property int traceLimit: 16
     function dropPaths(payload) {
+        // Rows picked in the Device tree: the provider plots them, with
+        // their values joining the Watchlist, as one step.
+        if (payload && payload.from === "device" && Array.isArray(payload.items) && provider
+            && typeof provider.dropOn === "function") {
+            const result = provider.dropOn(payload.items, "plot")
+            const words = result.message || result.refusal || ""
+            if (result.status !== "ok" || !(result.added > 0)) {
+                tell(words, "refusal")
+                return false
+            }
+            notice = ""
+            if (words.length > 0)
+                tell(words, "plotted")
+            return true
+        }
         // Any list of paths: an array from a drop's JSON, or a host's list.
         const dropped = payload && payload.paths ? Array.from(payload.paths) : []
         if (!traces || dropped.length === 0)
@@ -206,8 +249,13 @@ FocusScope {
             }
         }
         // Text is passed over and counted; the rest go on as one step of the
-        // history, and only the Plot's sixteen curves end them.
+        // history - all of them or none, never cut at the sixteenth curve.
         const fresh = values.filter(path => !traces.isPlotted(path))
+        if (fresh.length > traceLimit - plotted.length) {
+            tell(qsTr("Can't plot %L1 values: this Plot has %L2 free curves of its %L3.")
+                     .arg(fresh.length).arg(traceLimit - plotted.length).arg(traceLimit), "refusal")
+            return false
+        }
         const texts = fresh.filter(path => traces.refusal(path).length > 0).length
         const result = traces.plotMany(fresh.filter(path => traces.refusal(path).length === 0))
         const added = result.added, refusal = result.refusal
@@ -2236,6 +2284,8 @@ FocusScope {
         anchors.fill: parent
         keys: ["application/x-telemetry-paths"]
         property string words: ""
+        // A drop the Plot cannot take is explained on the frame, then refused.
+        property bool refused: false
         onEntered: (drag) => {
             let payload = null
             try { payload = JSON.parse(drag.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
@@ -2244,28 +2294,43 @@ FocusScope {
                 drag.accepted = false
                 return
             }
-            words = plot.dropWords(payload)
+            const plan = plot.dropPlan(payload)
+            refused = plan.refused
+            words = plan.words
         }
-        onExited: words = ""
+        onExited: { words = ""; refused = false }
         onDropped: (drop) => {
             let payload = null
             try { payload = JSON.parse(drop.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
+            const wasRefused = refused
             words = ""
-            if (plot.dropPaths(payload))
+            refused = false
+            if (!wasRefused && plot.dropPaths(payload))
                 drop.acceptProposedAction()
         }
         Rectangle {
+            objectName: "plotDropFrame"
             anchors.fill: parent
             visible: plotDrop.containsDrag
             color: "transparent"
             border.width: 2
-            border.color: Theme.focusRing
-            Label {
+            border.color: plotDrop.refused ? Theme.error : Theme.focusRing
+            Row {
                 anchors.centerIn: parent
-                text: plotDrop.words
-                color: Theme.textPrimary
-                padding: Type.padding
-                background: Rectangle { color: Theme.surface; radius: Type.radius; border.color: Theme.outline }
+                spacing: Type.tight
+                ErrorGlyph {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: plotDrop.refused
+                }
+                Label {
+                    objectName: "plotDropText"
+                    width: Math.min(implicitWidth, plotDrop.width - Type.padding * 4)
+                    wrapMode: Text.Wrap
+                    text: plotDrop.words
+                    color: plotDrop.refused ? Theme.error : Theme.textPrimary
+                    padding: Type.padding
+                    background: Rectangle { color: Theme.surface; radius: Type.radius; border.color: Theme.outline }
+                }
             }
         }
     }

@@ -340,6 +340,27 @@ public:
 	// or refused, added, already, missing: [paths], refused: [{path, reason}],
 	// serial}.
 	Q_INVOKABLE QVariantMap addWatchPaths(const QStringList& lines);
+	// Drag and drop with nested groups (the designer's section 16). items are
+	// the rows picked in the Device tree, [{kind, path}], kind "group",
+	// "field", "member", "element", "command" or "service"; target is
+	// "watchlist", "plot" or "batch". A group gives everything under it at any
+	// depth; a row under a picked group or Field counts once; tree order.
+	// The Watchlist and the Plot take values and leave Commands and Services
+	// out; the Batch takes one item per Field, and a Command or a Service only
+	// when it was picked by itself. All or nothing: no part of a drop that
+	// does not fit is added.
+	// dropPlan says what a drop would do, for the target's frame while it is
+	// dragged over: {status: ok, held (everything watched already), refused
+	// or empty; count (values, or Batch items); already; joins (values new
+	// to the Watchlist, for the Plot); words ("Drop to add 312 values from
+	// power · 6 already watched"); refusal (why not, in words); leftOut
+	// ("3 Commands and 1 Service"); from; lines; values (the Plot's)}.
+	Q_INVOKABLE QVariantMap dropPlan(const QVariantList& items, const QString& target) const;
+	// Does it as one step - a drop on the Plot adds its values to the
+	// Watchlist and plots them in one Undo: the plan with {added, serial,
+	// message ("Added 312 values from power · 3 Commands and 1 Service are
+	// not values"), rows (held: the Watchlist rows already holding it)}.
+	Q_INVOKABLE QVariantMap dropOn(const QVariantList& items, const QString& target);
 	// A saved Watchlist back in its order (WL-4c): every row this device has,
 	// and the rest as rows that say they are not on it, found again on a
 	// device that has them. A restore, never a step. {status, added, missing:

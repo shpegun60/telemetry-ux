@@ -19,6 +19,8 @@
 #include <QtCore/QTime>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QLocale>
+#include <QtCore/QScopedValueRollback>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
 #include <QtCore/QSortFilterProxyModel>
@@ -714,12 +716,18 @@ struct DynamicConfiguratorProvider::Impl {
 		return fragment;
 	}
 
+	// A drop's key (section 16): set while a drop on the Plot adds its values
+	// to the Watchlist, so that step and the Plot's merge into one Undo.
+	QString dropKey;
+	quint64 drops = 0;
+
 	int recordWatch(const QString& text, const QString& kind, QVariantMap before, QVariantMap after,
 	                const QString& mergeKey = {})
 	{
 		if (!undoHistory)
 			return 0;
-		return undoHistory->record(text, {UndoPart{watchTarget.get(), kind, std::move(before), std::move(after)}}, mergeKey);
+		return undoHistory->record(text, {UndoPart{watchTarget.get(), kind, std::move(before), std::move(after)}},
+		                           mergeKey.isEmpty() ? dropKey : mergeKey);
 	}
 
 	// The rows [from, count) just added, as one step.
@@ -2351,14 +2359,19 @@ QVariantList DynamicConfiguratorProvider::batchPathCandidates(const QString& tex
 		                : entry.category == 2 && !input ? batchWords("no input") : entry.typeText;
 		if (input) {
 			const auto schema = p->batch.schema();
-			// The schema names an endpoint by its catalog and its own name,
-			// not by the path the GUI writes.
+			// A flat schema names an endpoint by its catalog and its own
+			// name; a group tree by its path, which is unique there.
 			const auto group = entry.group.toUtf8();
 			const auto name = entry.name.toUtf8();
+			const auto path = entry.path.toUtf8();
 			const std::string_view inGroup{group.constData(), std::size_t(group.size())};
 			const std::string_view named{name.constData(), std::size_t(name.size())};
-			if (const auto* endpoint = entry.category == 2 ? schema.findCommand(inGroup, named)
-			                                               : schema.findService(inGroup, named)) {
+			const auto* endpoint = !schema.groupTree() ? (entry.category == 2 ? schema.findCommand(inGroup, named)
+			                                                                  : schema.findService(inGroup, named))
+			                       : schema.findEndpoint(std::string_view{path.constData(), std::size_t(path.size())});
+			if (endpoint && static_cast<int>(endpoint->category) != entry.category)
+				endpoint = nullptr;
+			if (endpoint) {
 				typeText = request_arguments::signatureText(schema, endpoint->typeId);
 				if (entry.category == 3 && endpoint->responseTypeId)
 					typeText += QStringLiteral(" -> ") + schema_text::typeText(schema, endpoint->responseTypeId);
@@ -2925,6 +2938,365 @@ QVariantMap DynamicConfiguratorProvider::checkWatchPath(const QString& text) con
 	                                                         : words("%1; %L2 more are watched already.").arg(adds).arg(resolved.already));
 }
 
+namespace {
+// What the rows picked in the Device tree hold for a target (the designer's
+// section 16): every Field under a group at any depth, a Field, a value
+// inside one; Commands and Services under a group left out, and taken by
+// the Batch only when picked by themselves. Each once, in tree order.
+struct DropSet {
+	QStringList lines;           // paths to add: Fields and values, and the Batch's calls
+	int commands = 0, services = 0;  // left out
+	int fields = 0;
+	bool calls = false;          // a Command or Service picked by itself
+	QString from;                // the one picked row's name ("power"), else empty
+	QString firstPath;
+};
+
+int categoryOfKind(const QString& kind)
+{
+	return kind == QLatin1String("command") ? 2 : kind == QLatin1String("service") ? 3
+	       : kind == QLatin1String("group") ? 0 : 1;
+}
+
+DropSet expandDrop(const QVariantList& items, const QVector<EndpointEntry>& list, bool batch)
+{
+	DropSet out;
+	// The tree's order of every endpoint, and of the paths below one.
+	QHash<QString, int> order;
+	for (int at = 0; at < list.size(); ++at)
+		order.insert(list[at].path, at);
+	// An endpoint's place; a value's, its endpoint's; a group's, its first
+	// endpoint's.
+	const auto placeOf = [&](const QString& path) {
+		if (const auto found = order.constFind(path); found != order.cend())
+			return found.value();
+		for (int at = 0; at < list.size(); ++at)
+			if (path.startsWith(list[at].path + QLatin1Char('.')) || path.startsWith(list[at].path + QLatin1Char('[')) ||
+			    list[at].path.startsWith(path + QLatin1Char('/')))
+				return at;
+		return int(list.size());
+	};
+	struct Picked {
+		QString kind, path;
+		int place;
+	};
+	QVector<Picked> picked;
+	for (const auto& item : items) {
+		const auto map = item.toMap();
+		const auto path = map.value(QStringLiteral("path")).toString();
+		if (path.isEmpty())
+			continue;
+		picked.push_back({map.value(QStringLiteral("kind")).toString(), path, placeOf(path)});
+	}
+	std::stable_sort(picked.begin(), picked.end(), [](const Picked& a, const Picked& b) { return a.place < b.place; });
+	if (picked.size() == 1)
+		out.from = path_grammar::unescaped(picked.front().path.mid(path_grammar::leafStart(picked.front().path)));
+	QSet<QString> held;
+	QStringList groups;
+	const auto under = [](const QString& path, const QString& above) {
+		return path.startsWith(above + QLatin1Char('/')) || path.startsWith(above + QLatin1Char('.')) ||
+		       path.startsWith(above + QLatin1Char('['));
+	};
+	const auto covered = [&](const QString& path) {
+		for (const auto& group : std::as_const(groups))
+			if (under(path, group))
+				return true;
+		for (const auto& line : std::as_const(out.lines))
+			if (path == line || under(path, line))
+				return true;
+		return false;
+	};
+	for (const auto& pick : std::as_const(picked)) {
+		if (covered(pick.path))
+			continue;
+		const int category = categoryOfKind(pick.kind);
+		if (category == 0) {
+			groups << pick.path;
+			for (const auto& entry : list) {
+				if (!under(entry.path, pick.path))
+					continue;
+				if (entry.category == 1 && !held.contains(entry.path)) {
+					held.insert(entry.path);
+					out.lines << entry.path;
+					++out.fields;
+				} else if (entry.category == 2) {
+					++out.commands;
+				} else if (entry.category == 3) {
+					++out.services;
+				}
+			}
+			continue;
+		}
+		if (category == 1) {
+			if (!held.contains(pick.path)) {
+				held.insert(pick.path);
+				out.lines << pick.path;
+				++out.fields;
+			}
+			continue;
+		}
+		// A Command or a Service picked by itself: the Batch takes it.
+		if (batch) {
+			out.lines << pick.path;
+			out.calls = true;
+		} else {
+			category == 2 ? ++out.commands : ++out.services;
+		}
+	}
+	if (!out.lines.isEmpty())
+		out.firstPath = out.lines.first();
+	return out;
+}
+
+// "3 Commands and 1 Service", "1 Command": what a drop left out.
+QString callsWords(int commands, int services)
+{
+	const auto count = [](int n, const char* one, const char* many) {
+		return n == 1 ? QCoreApplication::translate("DynamicConfiguratorProvider", one)
+		              : QCoreApplication::translate("DynamicConfiguratorProvider", many).arg(QLocale().toString(n));
+	};
+	QStringList parts;
+	if (commands > 0)
+		parts << count(commands, "1 Command", "%1 Commands");
+	if (services > 0)
+		parts << count(services, "1 Service", "%1 Services");
+	return parts.join(QCoreApplication::translate("DynamicConfiguratorProvider", " and "));
+}
+} // namespace
+
+QVariantMap DynamicConfiguratorProvider::dropPlan(const QVariantList& items, const QString& target) const
+{
+	auto p = d;
+	QVariantMap out{{QStringLiteral("status"), QStringLiteral("empty")}, {QStringLiteral("count"), 0},
+	                {QStringLiteral("already"), 0}, {QStringLiteral("words"), QString{}},
+	                {QStringLiteral("refusal"), QString{}}, {QStringLiteral("lines"), QStringList{}},
+	                {QStringLiteral("values"), QStringList{}}, {QStringLiteral("joins"), 0},
+	                {QStringLiteral("leftOut"), QString{}}, {QStringLiteral("from"), QString{}}};
+	if (!p->current() || p->updating || p->endpoints.changing())
+		return out;
+	const bool batch = target == QLatin1String("batch");
+	const bool plot = target == QLatin1String("plot");
+	const auto set = expandDrop(items, p->endpoints.endpointList(), batch);
+	const auto leftOut = callsWords(set.commands, set.services);
+	out[QStringLiteral("from")] = set.from;
+	out[QStringLiteral("lines")] = set.lines;
+	out[QStringLiteral("leftOut")] = leftOut;
+	out[QStringLiteral("leftOutCount")] = set.commands + set.services;
+	const auto refuse = [&](const QString& words) {
+		out[QStringLiteral("status")] = QStringLiteral("refused");
+		out[QStringLiteral("refusal")] = words;
+		return out;
+	};
+	const auto fromWords = [&](const QString& text) {
+		return set.from.isEmpty() ? text : words("%1 from %2").arg(text, set.from);
+	};
+	if (batch) {
+		if (set.lines.isEmpty())
+			return refuse(set.commands + set.services > 0
+			                  ? words("A group never adds its Commands or Services to the Batch; pick them by themselves.")
+			                  : QString{});
+		const int count = batchItemCount(set.lines);
+		const int limit = p->batch.itemLimit();
+		const int room = limit - p->batch.count();
+		out[QStringLiteral("count")] = count;
+		if (limit <= 0)
+			return refuse(words("This device has no Batch."));
+		if (count > room)
+			return refuse(words("Can't add %L1 items: the Batch has room for %L2 more of its %L3.")
+			                  .arg(count)
+			                  .arg(room)
+			                  .arg(limit));
+		// An item may repeat an earlier one (a recipe may); the first is named.
+		QString again;
+		if (const auto* model = p->batch.model())
+			for (const auto& line : set.lines) {
+				for (const auto& row : model->rows())
+					if (row.name == line || line.startsWith(row.name + QLatin1Char('.')) ||
+					    line.startsWith(row.name + QLatin1Char('['))) {
+						again = row.name.mid(path_grammar::leafStart(row.name));
+						break;
+					}
+				if (!again.isEmpty())
+					break;
+			}
+		auto text = count == 1 ? words("Drop to add 1 item to the Batch")
+		                       : words("Drop to add %L1 items to the Batch").arg(count);
+		if (!leftOut.isEmpty())
+			text += words(" · %1 left out").arg(leftOut);
+		if (!again.isEmpty())
+			text += words(" · %1 is in the Batch already").arg(again);
+		out[QStringLiteral("status")] = QStringLiteral("ok");
+		out[QStringLiteral("words")] = text;
+		out[QStringLiteral("again")] = again;
+		return out;
+	}
+	// The Watchlist and the Plot take values only.
+	if (set.lines.isEmpty())
+		return refuse(set.commands + set.services > 0
+		                  ? (plot ? words("Commands and Services are not values; the Plot draws Fields.")
+		                          : words("Commands and Services are not values; the Watchlist takes Fields."))
+		                  : QString{});
+	int adds = 0, already = 0;
+	QStringList values;
+	for (const auto& line : set.lines) {
+		const auto resolved = p->watch.resolvePath(line, false);
+		if (resolved.missing || !resolved.error.isEmpty())
+			continue;
+		adds += static_cast<int>(resolved.adds);
+		already += static_cast<int>(resolved.already);
+		if (plot)
+			values << p->watch.valuePaths(line);
+	}
+	out[QStringLiteral("joins")] = adds;
+	out[QStringLiteral("already")] = already;
+	if (plot) {
+		QStringList fresh;
+		for (const auto& value : std::as_const(values))
+			if (!p->traces.isPlotted(value))
+				fresh << value;
+		out[QStringLiteral("values")] = fresh;
+		out[QStringLiteral("count")] = int(fresh.size());
+		const int room = WatchTraces::limit - int(p->traces.plotted().size());
+		if (values.isEmpty())
+			return refuse(words("Nothing here can be plotted: the Plot draws values the Watchlist reads."));
+		if (fresh.isEmpty())
+			return refuse(values.size() == 1 ? words("%1 is on the Plot already.").arg(values.first())
+			                                 : words("These %L1 values are on the Plot already.").arg(values.size()));
+		if (fresh.size() > room)
+			return refuse(words("Can't plot %L1 values: this Plot has %L2 free curves of its %L3.")
+			                  .arg(fresh.size())
+			                  .arg(room)
+			                  .arg(WatchTraces::limit));
+		if (adds > watchLimit() - watchCount())
+			return refuse(words("Can't plot %L1 values: the Watchlist has room for %L2 more of its %L3.")
+			                  .arg(fresh.size())
+			                  .arg(watchLimit() - watchCount())
+			                  .arg(watchLimit()));
+		auto text = fresh.size() == 1 ? words("Drop to plot %1").arg(fresh.first())
+		                              : words("Drop to plot %L1 values").arg(fresh.size());
+		if (adds > 0)
+			text += adds == 1 ? words(" · 1 joins the Watchlist") : words(" · %L1 join the Watchlist").arg(adds);
+		out[QStringLiteral("status")] = QStringLiteral("ok");
+		out[QStringLiteral("words")] = text;
+		return out;
+	}
+	out[QStringLiteral("count")] = adds + already;
+	const int room = watchLimit() - watchCount();
+	if (adds + already == 0)
+		return refuse(words("Nothing here can be watched on this device."));
+	if (adds == 0) {
+		out[QStringLiteral("status")] = QStringLiteral("held");
+		out[QStringLiteral("words")] = set.from.isEmpty() ? words("Everything here is already watched")
+		                                                  : words("Everything in %1 is already watched").arg(set.from);
+		return out;
+	}
+	if (adds > room)
+		return refuse(words("Can't add %L1 values: the Watchlist has room for %L2 more of its %L3.")
+		                  .arg(adds)
+		                  .arg(room)
+		                  .arg(watchLimit()));
+	auto text = fromWords(adds == 1 && set.lines.size() == 1 && already == 0
+	                          ? words("Drop to add %1").arg(set.firstPath)
+	                          : words("Drop to add %L1 values").arg(adds));
+	if (already > 0)
+		text += words(" · %L1 already watched").arg(already);
+	// A large drop says what polling it costs: the last cycle's time per
+	// value, for every value then watched (the pace line's figure).
+	if (adds > 1024) {
+		const auto pace = p->watch.pace();
+		if (pace.cycles > 0 && pace.values > 0 && pace.lastCycleMs > 0) {
+			const double seconds = pace.lastCycleMs / pace.values * (pace.values + adds) / 1000.0;
+			text += words(" · polling them takes about %1 s a cycle").arg(QLocale().toString(seconds, 'f', 1));
+		}
+	}
+	out[QStringLiteral("status")] = QStringLiteral("ok");
+	out[QStringLiteral("words")] = text;
+	return out;
+}
+
+QVariantMap DynamicConfiguratorProvider::dropOn(const QVariantList& items, const QString& target)
+{
+	auto p = d;
+	auto plan = dropPlan(items, target);
+	const auto status = plan.value(QStringLiteral("status")).toString();
+	plan[QStringLiteral("added")] = 0;
+	plan[QStringLiteral("serial")] = 0;
+	if (status != QLatin1String("ok") && status != QLatin1String("held")) {
+		plan[QStringLiteral("message")] = plan.value(QStringLiteral("refusal"));
+		return plan;
+	}
+	const auto lines = plan.value(QStringLiteral("lines")).toStringList();
+	const auto leftOut = plan.value(QStringLiteral("leftOut")).toString();
+	const auto from = plan.value(QStringLiteral("from")).toString();
+	const int leftOutCount = plan.value(QStringLiteral("leftOutCount")).toInt();
+	const auto tail = [&](QString text, const char* what) {
+		if (!leftOut.isEmpty())
+			text += QCoreApplication::translate("DynamicConfiguratorProvider", what).arg(leftOut);
+		return text;
+	};
+	// "· 1 Command is not a value", "· 3 Commands and 1 Service are not values".
+	const char* notValues = leftOutCount == 1 ? " · %1 is not a value" : " · %1 are not values";
+	if (target == QLatin1String("batch")) {
+		const auto added = addBatchPaths(lines);
+		plan[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+		plan[QStringLiteral("added")] = added.value(QStringLiteral("added"));
+		plan[QStringLiteral("serial")] = added.value(QStringLiteral("serial"));
+		plan[QStringLiteral("first")] = added.value(QStringLiteral("first"));
+		const int count = added.value(QStringLiteral("added")).toInt();
+		plan[QStringLiteral("message")] =
+		    added.value(QStringLiteral("status")).toString() != QLatin1String("ok")
+		        ? added.value(QStringLiteral("message")).toString()
+		        : tail(count == 1 ? words("Added 1 item to the Batch") : words("Added %L1 items to the Batch").arg(count),
+		               " · %1 left out");
+		return plan;
+	}
+	if (status == QLatin1String("held")) {
+		// Everything is watched: the drop points at those rows.
+		QSet<QString> values;
+		for (const auto& line : lines)
+			for (const auto& value : p->watch.valuePaths(line))
+				values.insert(value);
+		QVariantList rows;
+		if (const auto* model = qobject_cast<const WatchlistModel*>(p->watch.model()))
+			for (int row = 0; row < model->count(); ++row)
+				if (values.contains(model->index(row, 0).data(WatchlistModel::NameRole).toString()))
+					rows.append(row);
+		plan[QStringLiteral("rows")] = rows;
+		plan[QStringLiteral("message")] = plan.value(QStringLiteral("words"));
+		return plan;
+	}
+	// The Plot: its values join the Watchlist and the Plot in one step.
+	const bool plot = target == QLatin1String("plot");
+	const QScopedValueRollback<QString> key(p->dropKey, plot ? QStringLiteral("drop.%1").arg(++p->drops) : QString{});
+	const auto added = addWatchPaths(lines);
+	plan[QStringLiteral("serial")] = added.value(QStringLiteral("serial"));
+	if (added.value(QStringLiteral("status")).toString() != QLatin1String("ok")) {
+		plan[QStringLiteral("status")] = added.value(QStringLiteral("status"));
+		plan[QStringLiteral("message")] = added.value(QStringLiteral("message"));
+		return plan;
+	}
+	const int count = added.value(QStringLiteral("added")).toInt();
+	if (!plot) {
+		plan[QStringLiteral("added")] = count;
+		auto text = count == 1 && lines.size() == 1 ? words("Added %1").arg(lines.first())
+		                                             : words("Added %L1 values").arg(count);
+		if (!from.isEmpty() && !(count == 1 && lines.size() == 1))
+			text = words("%1 from %2").arg(text, from);
+		plan[QStringLiteral("message")] = tail(text, notValues);
+		return plan;
+	}
+	const auto values = plan.value(QStringLiteral("values")).toStringList();
+	const auto plotted = p->traces.plotMany(values, p->dropKey);
+	const int curves = plotted.value(QStringLiteral("added")).toInt();
+	plan[QStringLiteral("added")] = curves;
+	if (const auto serial = p->undoHistory ? p->undoHistory->undoSerial() : 0)
+		plan[QStringLiteral("serial")] = serial;
+	plan[QStringLiteral("message")] = tail(curves == 1 ? words("Plotted %1").arg(plotted.value(QStringLiteral("last")).toString())
+	                                                   : words("Plotted %L1 values").arg(curves),
+	                                       notValues);
+	return plan;
+}
+
 QVariantList DynamicConfiguratorProvider::watchPathCandidates(const QString& text) const
 {
 	QVariantList out;
@@ -3049,7 +3421,7 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 			}
 			auto named = entry;
 			if (named.name.isEmpty())
-				named.name = path_grammar::compose(group, name, {});
+				named.name = p->watch.pathOf(group, name);
 			seen.insert(named.key);
 			entries.push_back(named);
 			continue;
@@ -3059,8 +3431,8 @@ QVariantMap DynamicConfiguratorProvider::putWatchBindings(const QVariantList& bi
 		// back the same way: a group and a name.
 		if (group.isEmpty() || name.isEmpty())
 			continue;
-		const auto path = path_grammar::compose(group, name, member.isEmpty() || member.startsWith(QLatin1Char('['))
-		                                                     ? member : QLatin1Char('.') + member);
+		const auto path = p->watch.pathOf(group, name, member.isEmpty() || member.startsWith(QLatin1Char('['))
+		                                                   ? member : QLatin1Char('.') + member);
 		if (seenPaths.contains(path) || (!replace && p->watch.unboundRow(path) >= 0)) {
 			++duplicate;
 			continue;

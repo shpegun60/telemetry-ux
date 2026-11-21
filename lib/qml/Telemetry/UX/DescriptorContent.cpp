@@ -175,6 +175,26 @@ QString accessMark(descriptor::Category category, const rt::RuntimeEndpoint& end
 	return QString(read ? QLatin1Char('r') : QLatin1Char('-')) + (write ? QLatin1Char('w') : QLatin1Char('-'));
 }
 
+// The named type a row shows, for copies and exports: a Field's own or its
+// array's element's ("adc::Config"); a Command's or a Service's request's,
+// and a Service's response after " -> " when it is named; empty otherwise.
+QString typeNameOf(descriptor::Category category, const rt::RuntimeSchema& schema, const rt::RuntimeEndpoint& endpoint)
+{
+	const auto named = [&](TypeId id) {
+		for (int guard = 0; guard < 64; ++guard) {
+			const auto* type = schema.type(id);
+			if (!type || type->kind != TypeKind::Array)
+				return schema_text::typeName(schema, id);
+			id = type->relatedTypeId;
+		}
+		return QString{};
+	};
+	if (category != descriptor::Category::Service)
+		return named(endpoint.typeId);
+	const auto request = named(endpoint.typeId), response = named(endpoint.responseTypeId);
+	return response.isEmpty() ? request : request + QStringLiteral(" -> ") + response;
+}
+
 // A Field's type; a Command's arguments, a Service's whole signature, as the
 // Device tree writes them: "(bool)", "(f32, f32) -> f32".
 QString typeOf(descriptor::Category category, const rt::RuntimeSchema& schema, const rt::RuntimeEndpoint& endpoint)
@@ -216,8 +236,9 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 			value |= static_cast<quint32>(static_cast<quint8>(bytes[at + i])) << (8 * i);
 		return value;
 	};
-	// The header as the SDK's parser lays it out: "TDS3", version 3, 0, a
-	// header of 64 bytes, 0, then the whole file's size.
+	// The header as the SDK's parser lays it out: "TDS3", version 3, minor 0
+	// or 1 (v3.1: type names, attributes, a group tree), a header of 64 bytes,
+	// flags (bit 0 the v3.1 group tree), then the whole file's size.
 	constexpr quint16 version = 3;
 	constexpr qsizetype headerBytes = 64;
 	if (size == 0)
@@ -233,9 +254,12 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 		return {Kind::Version, -1, u16(4)};
 	if (size < headerBytes)
 		return {Kind::EndsEarly, size};
-	for (const qsizetype at : {6, 8, 10})
-		if (u16(at) != (at == 8 ? headerBytes : 0))
-			return {Kind::Layout, at};
+	if (u16(6) > 1)
+		return {Kind::Layout, 6};
+	if (u16(8) != headerBytes)
+		return {Kind::Layout, 8};
+	if (u16(10) > (u16(6) == 1 ? 1 : 0))
+		return {Kind::Layout, 10};
 	const qint64 declared = u32(12);
 	if (declared > size)
 		return {Kind::EndsEarly, size};
@@ -247,7 +271,9 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 	rt::RuntimeSchemaWorkspace sizing{{}, {}, {}, {}, {}};
 	const auto required = rt::RuntimeSchema::parse(input, sizing);
 	if (!required && required.status != rt::Status::Capacity)
-		return {required.error == rt::ParseError::Fingerprint ? Kind::Fingerprint : Kind::Layout};
+		return {required.error == rt::ParseError::Fingerprint ? Kind::Fingerprint
+		        : required.error == rt::ParseError::Limit     ? Kind::Limit
+		                                                      : Kind::Layout};
 	std::vector<rt::RuntimeType> types(required.requirements.types);
 	std::vector<rt::RuntimeMember> members(required.requirements.members);
 	std::vector<rt::RuntimeEnumEntry> enums(required.requirements.enumEntries);
@@ -256,7 +282,9 @@ DescriptorContent::Problem DescriptorContent::check(const QByteArray& bytes)
 	rt::RuntimeSchemaWorkspace workspace(types, members, enums, catalogs, endpoints);
 	const auto parsed = rt::RuntimeSchema::parse(input, workspace);
 	if (!parsed)
-		return {parsed.error == rt::ParseError::Fingerprint ? Kind::Fingerprint : Kind::Layout};
+		return {parsed.error == rt::ParseError::Fingerprint ? Kind::Fingerprint
+		        : parsed.error == rt::ParseError::Limit     ? Kind::Limit
+		                                                    : Kind::Layout};
 	return {};
 }
 
@@ -275,6 +303,15 @@ QString DescriptorContent::phrase(const Problem& problem)
 			return tr("it ends early, at byte %L1").arg(problem.at);
 		case Problem::Fingerprint:
 			return tr("its fingerprint does not match its content");
+		case Problem::Limit: {
+			// The host's ceilings (13.4): lenient, so every device reads;
+			// past them only a descriptor built for it on purpose.
+			const rt::ParseLimits limits;
+			return tr("it goes past what this program reads: groups nested at most %L1 levels deep, names and "
+			          "paths of at most %L2 bytes, and the format's own counts")
+			    .arg(limits.groupDepth)
+			    .arg(limits.pathBytes);
+		}
 		case Problem::Layout:
 			return problem.at >= 0 ? tr("its bytes are not laid out as a descriptor (at byte %L1)").arg(problem.at)
 			                       : tr("its bytes are not laid out as a descriptor");
@@ -324,6 +361,12 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 	fingerprint_ = QStringLiteral("0x") +
 	               QStringLiteral("%1").arg(schema.fingerprint(), 16, 16, QLatin1Char('0')).toUpper();
 	types_ = static_cast<int>(required.requirements.types);
+	// A group tree (v3.1) lists its groups in every family, each naming its
+	// parent: they nest here as they do on the device, and a family shows
+	// only the groups that hold something of it. Counted once.
+	const bool tree = schema.groupTree();
+	if (tree)
+		groups_ = static_cast<int>(schema.groups().size());
 	// Categories, groups and endpoints now; members when a row is opened.
 	auto root = std::make_unique<Node>();
 	const struct {
@@ -346,22 +389,29 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 		categoryNode->count = counts_[c];
 		categoryNode->parent = root.get();
 		categoryNode->row = static_cast<int>(root->children.size());
-		for (const auto& catalog : schema.catalogs(category)) {
-			++groups_;
+		const auto catalogs = schema.catalogs(category);
+		// Each catalog's node, made in pre-order; a tree's are placed under
+		// their parents once every group holds what it has.
+		std::vector<std::unique_ptr<Node>> made(catalogs.size());
+		for (std::size_t g = 0; g < catalogs.size(); ++g) {
+			const auto& catalog = catalogs[g];
+			if (!tree)
+				++groups_;
 			auto group = std::make_unique<Node>();
 			group->name = text(catalog.name);
-			group->path = group->name;
+			// A nested group's path is its groups' "/" path ("demo/adc").
+			const auto* above = tree && catalog.parent < g ? made[catalog.parent].get() : nullptr;
+			group->path = above ? above->path + QLatin1Char('/') + group->name : group->name;
 			group->category = static_cast<int>(c);
 			group->kind = QStringLiteral("group");
 			group->count = static_cast<int>(catalog.endpointCount);
-			group->parent = categoryNode.get();
-			group->row = static_cast<int>(categoryNode->children.size());
 			for (const auto& endpoint : all.subspan(catalog.firstEndpoint, catalog.endpointCount)) {
 				auto item = std::make_unique<Node>();
 				item->name = text(endpoint.name);
 				item->path = group->path + QLatin1Char('.') + item->name;
 				item->kind = QStringLiteral("endpoint");
 				item->type = typeOf(category, schema, endpoint);
+				item->typeName = typeNameOf(category, schema, endpoint);
 				item->access = accessText(category, endpoint);
 				item->mark = accessMark(category, endpoint);
 				item->parent = group.get();
@@ -371,7 +421,30 @@ DescriptorContent::DescriptorContent(const QByteArray& bytes, QObject* parent)
 				item->expandable = hasMembers(schema, endpoint.typeId);
 				group->children.push_back(std::move(item));
 			}
-			categoryNode->children.push_back(std::move(group));
+			made[g] = std::move(group);
+		}
+		// Everything a group holds counted, deepest first; a group with none
+		// of this family under it is left out.
+		for (auto g = made.size(); tree && g-- > 0;)
+			if (catalogs[g].parent < g && made[catalogs[g].parent])
+				made[catalogs[g].parent]->count += made[g]->count;
+		std::vector<Node*> placed(made.size(), nullptr);
+		for (std::size_t g = 0; g < made.size(); ++g) {
+			if (tree && made[g]->count == 0)
+				continue;
+			Node* under = tree && catalogs[g].parent < g && placed[catalogs[g].parent] ? placed[catalogs[g].parent]
+			                                                                           : categoryNode.get();
+			auto& group = made[g];
+			// Subgroups first, as the Device tree shows them: before the
+			// endpoints the group already holds.
+			auto at = under->children.begin();
+			while (at != under->children.end() && (*at)->kind == QStringLiteral("group"))
+				++at;
+			group->parent = under;
+			placed[g] = group.get();
+			under->children.insert(at, std::move(group));
+			for (int row = 0; row < static_cast<int>(under->children.size()); ++row)
+				under->children[static_cast<std::size_t>(row)]->row = row;
 		}
 		root->children.push_back(std::move(categoryNode));
 	}
@@ -393,6 +466,7 @@ void DescriptorContent::populate(Node& node)
 		child->path = node.path + QLatin1Char('.') + child->name;
 		child->kind = QStringLiteral("member");
 		child->type = typeText(schema, member.typeId);
+		child->typeName = schema_text::typeName(schema, member.typeId);
 		child->category = node.category;
 		child->typeId = member.typeId;
 		child->expandable = hasMembers(schema, member.typeId);
@@ -561,6 +635,9 @@ struct Walk {
 		if (at->type.isEmpty())
 			return children;
 		QJsonObject object{{QStringLiteral("type"), at->type}};
+		// A named type also by its name alone (v3.1): "adc::Config".
+		if (!at->typeName.isEmpty())
+			object.insert(QStringLiteral("typeName"), at->typeName);
 		if (!at->access.isEmpty())
 			object.insert(QStringLiteral("access"), at->access);
 		if (!children.isEmpty())
@@ -575,6 +652,8 @@ struct Walk {
 			if (!take())
 				break;
 			QJsonObject object{{QStringLiteral("type"), typeText(schema, member.typeId)}};
+			if (const auto name = schema_text::typeName(schema, member.typeId); !name.isEmpty())
+				object.insert(QStringLiteral("typeName"), name);
 			if (const auto members = memberJson(member.typeId); !members.isEmpty())
 				object.insert(QStringLiteral("members"), members);
 			out.insert(text(member.name), object);
@@ -590,7 +669,8 @@ struct Walk {
 			if (!take())
 				return out;
 			out += cell(at->path) + QLatin1Char('\t') + at->kind + QLatin1Char('\t') + cell(at->type) +
-			       QLatin1Char('\t') + cell(at->access) + QLatin1Char('\n');
+			       QLatin1Char('\t') + cell(at->access) + QLatin1Char('\t') + cell(at->typeName) +
+			       QLatin1Char('\n');
 		}
 		if (unmade(at))
 			return out + memberTsv(at->typeId, at->path);
@@ -607,7 +687,7 @@ struct Walk {
 				break;
 			const auto childPath = path + QLatin1Char('.') + text(member.name);
 			out += cell(childPath) + QStringLiteral("\tmember\t") + cell(typeText(schema, member.typeId)) +
-			       QStringLiteral("\t\n");
+			       QStringLiteral("\t\t") + cell(schema_text::typeName(schema, member.typeId)) + QLatin1Char('\n');
 			out += memberTsv(member.typeId, childPath);
 		}
 		return out;
@@ -731,7 +811,7 @@ QString DescriptorContent::textOf(const QModelIndex& index, const QString& forma
 		return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
 	}
 	// The note is added after the walk: the walk is what tells whether the bound was reached.
-	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tkind\ttype\taccess\n") + walk.tsv(index, true)
+	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tkind\ttype\taccess\ttypeName\n") + walk.tsv(index, true)
 	                                           : walk.lines(index, 0, true);
 	if ((copyCut_ = budget.cut))
 		out += cutShort() + QLatin1Char('\n');
@@ -754,7 +834,7 @@ QString DescriptorContent::textOfAll(const QString& format) const
 			object.insert(QStringLiteral("…"), cutShort());
 		return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
 	}
-	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tkind\ttype\taccess\n") + walk.tsv({}, false)
+	auto out = format == QStringLiteral("tsv") ? QStringLiteral("path\tkind\ttype\taccess\ttypeName\n") + walk.tsv({}, false)
 	                                           : walk.lines({}, 0, false);
 	if ((copyCut_ = budget.cut))
 		out += cutShort() + QLatin1Char('\n');

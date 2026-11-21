@@ -1449,7 +1449,8 @@ void pathResolution()
 	CHECK(c.size() == 1 && c[0].path == "device/" && c[0].container && c[0].values == 2);
 	c = watch.pathCandidates("device/C");
 	CHECK(c.size() == 2 && c[0].path == "device/Counter" && !c[0].container && c[0].values == 1);
-	CHECK(c[1].path == "device/Config" && c[1].container && c[1].typeText == "struct (3)" &&
+	// The struct by its name (descriptor v3.1): members::Config.
+	CHECK(c[1].path == "device/Config" && c[1].container && c[1].typeText == "members::Config" &&
 	      c[1].values == members::leaves && !c[1].watched);
 	CHECK(paths("device/Config.") ==
 	      QStringList({"device/Config.gain", "device/Config.enabled", "device/Config.samples"}));
@@ -1543,9 +1544,9 @@ void memberPlan()
 	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::MemberRole).toString().isEmpty());
 	// Each step's type for the tree's nodes: the Field's, then down to the value's.
 	CHECK(model->data(memberRow, ux::WatchlistModel::PathTypesRole).toStringList() ==
-	      QStringList({"struct (3)", "u16[300]", "u16"}));
+	      QStringList({"members::Config", "u16[300]", "u16"}));
 	CHECK(model->data(model->index(3, 0), ux::WatchlistModel::PathTypesRole).toStringList() ==
-	      QStringList({"struct (3)", "f32"}));
+	      QStringList({"members::Config", "f32"}));
 	CHECK(model->data(model->index(0, 0), ux::WatchlistModel::PathTypesRole).toStringList().size() <= 1);  // the Peer's whole Fields are not in its schema
 
 	std::vector<ux::WatchFrame> frames;

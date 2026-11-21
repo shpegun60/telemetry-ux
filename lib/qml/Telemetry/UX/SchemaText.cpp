@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "SchemaText.hpp"
+#include "PathGrammar.hpp"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QStringList>
 #include <algorithm>
@@ -130,14 +131,125 @@ QString typeText(const rt::RuntimeSchema& schema, TypeId id)
 		case TypeKind::Scalar:
 			return scalarName(type->scalarCode);
 		case TypeKind::Enum:
-			// Counted, as a struct is: the names are enumNames' (family A7).
+			// A name says what it is; without one it is counted, as a struct
+			// is: the names are enumNames' (family A7).
+			if (!type->name.empty())
+				return text(type->name);
 			return QStringLiteral("enum (%1)").arg(schema.enumEntries(id).size());
 		case TypeKind::Struct:
+			if (!type->name.empty())
+				return text(type->name);
 			return QStringLiteral("struct (%1)").arg(type->memberCount);
 		case TypeKind::Array:
 			return QStringLiteral("%1[%2]").arg(typeText(schema, type->relatedTypeId)).arg(type->elementCount);
 	}
 	return QStringLiteral("?");
+}
+
+QString typeName(const rt::RuntimeSchema& schema, TypeId id)
+{
+	return text(schema.typeName(id));
+}
+
+namespace {
+QString counted(qsizetype count, const char* one, const char* many)
+{
+	return count == 1 ? tr(one) : tr(many).arg(count);
+}
+
+// A struct's or an enum's size in words: "3 members", "1 value".
+QString sizeWords(const rt::RuntimeSchema& schema, const rt::RuntimeType& type)
+{
+	return type.kind == TypeKind::Struct
+	           ? counted(type.memberCount, "1 member", "%1 members")
+	           : counted(static_cast<qsizetype>(schema.enumEntries(type.id).size()), "1 value", "%1 values");
+}
+
+// "adc::Config" read own name first: "Config in adc"; a global "Config" as it is.
+QString spokenName(const QString& name)
+{
+	const auto cut = name.lastIndexOf(QStringLiteral("::"));
+	return cut < 0 ? name : tr("%1 in %2").arg(name.mid(cut + 2), name.left(cut));
+}
+} // namespace
+
+QString typeWords(const rt::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	if (!type || (type->kind != TypeKind::Struct && type->kind != TypeKind::Enum) || type->name.empty())
+		return typeText(schema, id);
+	const auto word = type->kind == TypeKind::Struct ? QStringLiteral("struct") : QStringLiteral("enum");
+	return word + QLatin1Char(' ') + text(type->name) + QStringLiteral(" · ") + sizeWords(schema, *type);
+}
+
+QString typeSpoken(const rt::RuntimeSchema& schema, TypeId id)
+{
+	const auto* type = schema.type(id);
+	if (!type)
+		return typeText(schema, id);
+	if (type->kind == TypeKind::Array) {
+		const auto* element = schema.type(type->relatedTypeId);
+		const auto inner = element && !element->name.empty() ? spokenName(text(element->name))
+		                                                     : typeText(schema, type->relatedTypeId);
+		return tr("array of %1 %2").arg(type->elementCount).arg(inner);
+	}
+	if (type->kind != TypeKind::Struct && type->kind != TypeKind::Enum)
+		return typeText(schema, id);
+	const auto word = type->kind == TypeKind::Struct ? tr("struct") : tr("enum");
+	const auto name = text(type->name);
+	// Without a name, as the tree said it before names: "struct with 3 members".
+	if (name.isEmpty())
+		return tr("%1 with %2").arg(word, sizeWords(schema, *type));
+	return word + QLatin1Char(' ') + spokenName(name) + QStringLiteral(", ") + sizeWords(schema, *type);
+}
+
+QString shortScopes(const QString& text)
+{
+	// A scope is a run of name characters ended by "::"; names hold no ":"
+	// and none of ( ) , [ ] or a space (15.3), so the run starts after one.
+	QString out;
+	out.reserve(text.size());
+	qsizetype at = 0;
+	while (at < text.size()) {
+		const auto colons = text.indexOf(QStringLiteral("::"), at);
+		if (colons < 0) {
+			out += QStringView(text).mid(at);
+			break;
+		}
+		auto start = colons;
+		while (start > at) {
+			const auto c = text.at(start - 1);
+			if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char(',') || c == QLatin1Char(' ') ||
+			    c == QLatin1Char('[') || c == QLatin1Char(']') || c == QLatin1Char('>'))
+				break;
+			--start;
+		}
+		out += QStringView(text).mid(at, start - at);
+		out += start < colons ? QStringLiteral("…::") : QStringLiteral("::");
+		at = colons + 2;
+	}
+	return out;
+}
+
+GroupPath groupPath(const rt::RuntimeSchema& schema, descriptor::Category category, std::uint32_t catalogIndex)
+{
+	const auto catalogs = schema.catalogs(category);
+	if (catalogIndex >= catalogs.size())
+		return {};
+	if (!schema.groupTree()) {
+		const auto name = text(catalogs[catalogIndex].name);
+		return {name, path_grammar::escaped(name)};
+	}
+	// Up the parents of a tree's group: every family lists the same groups.
+	const auto groups = schema.groups();
+	QStringList names;
+	for (auto at = catalogIndex; at < groups.size() && names.size() <= static_cast<qsizetype>(groups.size());
+	     at = groups[at].parent)
+		names.prepend(text(groups[at].name));
+	QStringList written;
+	for (const auto& name : std::as_const(names))
+		written << path_grammar::escaped(name);
+	return {names.join(QLatin1Char('/')), written.join(QLatin1Char('/'))};
 }
 
 QString enumNames(const rt::RuntimeSchema& schema, TypeId id)
@@ -155,11 +267,12 @@ QString enumNames(const rt::RuntimeSchema& schema, TypeId id)
 }
 
 namespace {
-// A member's type inside a signature: an enum is "enum", the rest as typeText.
+// A member's type inside a signature: an unnamed enum is "enum", the rest
+// (a named enum by its name) as typeText.
 QString memberText(const rt::RuntimeSchema& schema, TypeId id)
 {
 	const auto* type = schema.type(id);
-	if (type && type->kind == TypeKind::Enum)
+	if (type && type->kind == TypeKind::Enum && type->name.empty())
 		return QStringLiteral("enum");
 	return typeText(schema, id);
 }
@@ -172,7 +285,8 @@ QString argumentsText(const rt::RuntimeSchema& schema, TypeId id)
 		return QStringLiteral("?");
 	if (type->kind == TypeKind::Void)
 		return QStringLiteral("()");
-	if (type->kind != TypeKind::Struct)
+	// A named request says what it is: "(adc::Reference)".
+	if (type->kind != TypeKind::Struct || !type->name.empty())
 		return QStringLiteral("(%1)").arg(memberText(schema, id));
 	QStringList parts;
 	const auto members = schema.members(id);
@@ -188,9 +302,10 @@ QString signatureText(const rt::RuntimeSchema& schema, TypeId request, TypeId re
 	if (!returns)
 		return argumentsText(schema, request);
 	const auto* result = schema.type(response);
-	const auto out = !result || result->kind == TypeKind::Void ? QStringLiteral("()")
-	                 : result->kind == TypeKind::Struct        ? argumentsText(schema, response)
-	                                                           : memberText(schema, response);
+	// A named response by its name, "-> adc::Offset"; an unnamed one by its members.
+	const auto out = !result || result->kind == TypeKind::Void                 ? QStringLiteral("()")
+	                 : result->kind == TypeKind::Struct && result->name.empty() ? argumentsText(schema, response)
+	                                                                            : memberText(schema, response);
 	// ASCII: a fallback font's arrow would make the row taller.
 	return argumentsText(schema, request) + QStringLiteral(" -> ") + out;
 }
