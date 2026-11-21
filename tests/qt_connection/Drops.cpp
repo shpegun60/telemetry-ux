@@ -311,8 +311,6 @@ unsigned dropsAtAnyDepth()
 	plan = provider->dropPlan({item("command", "power/metrology/Clear")}, QStringLiteral("batch"));
 	DCHECK(plan.value("lines").toStringList() == QStringList{QStringLiteral("power/metrology/Clear")});
 	plan = provider->dropPlan({item("group", "adc"), item("field", "adc/Config")}, QStringLiteral("batch"));
-	if (plan.value("lines").toStringList() != (QStringList{QStringLiteral("adc/channel1/Gain"), QStringLiteral("adc/Config")}))
-		std::fprintf(stderr, "lines: %s\n", qPrintable(plan.value("lines").toStringList().join(QStringLiteral(", "))));
 	DCHECK(plan.value("lines").toStringList() == (QStringList{QStringLiteral("adc/channel1/Gain"), QStringLiteral("adc/Config")}));
 	plan = provider->dropPlan({item("group", "adc")}, QStringLiteral("batch"));
 	DCHECK(plan.value("leftOut") == QStringLiteral("1 Command and 1 Service"));

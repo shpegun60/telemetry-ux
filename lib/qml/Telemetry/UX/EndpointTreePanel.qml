@@ -72,14 +72,22 @@ Pane {
             pickModel.select(sourceOf(endpointTree.index(row, 0)), ItemSelectionModel.Select)
         pickAnchor = anchor
     }
-    // A click on a row with the keys held at its press.
+    // A click on a row with the keys held at its press. A plain click lets
+    // every pick go and only remembers the row: it shows as the provider's
+    // selection, which a provider may refuse, so a pick must not show it
+    // too. Ctrl+click then picks that row and the clicked one, Shift+click
+    // the shown rows between them.
     function pickClick(index, modifiers) {
-        if ((modifiers & Qt.ControlModifier) !== 0)
+        if ((modifiers & Qt.ControlModifier) !== 0) {
+            if (pickedCount === 0 && pickAnchor && pickAnchor.valid)
+                pickModel.select(pickAnchor, ItemSelectionModel.Select)
             pickToggle(index)
-        else if ((modifiers & Qt.ShiftModifier) !== 0)
+        } else if ((modifiers & Qt.ShiftModifier) !== 0) {
             pickRange(index)
-        else
-            pickOnly(index)
+        } else {
+            pickModel.clearSelection()
+            pickAnchor = index && index.valid ? index : null
+        }
     }
     // A row's place in the tree, as rows from the root: what sorts the
     // picked rows into tree order, not click order.

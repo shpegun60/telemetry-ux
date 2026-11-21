@@ -2236,7 +2236,10 @@ by its path.
 `{from: "device", items: [{kind, path}], paths}`, never its expansion; kind is
 "group", "field", "member", "element", "command" or "service". The tree picks
 rows with Ctrl+click, Shift+click, Shift+Up/Down and Ctrl+Space (`pickClick`,
-`pickedCount`, `dropItems`); a drag acts on the picked rows when the pressed row
+`pickedCount`, `dropItems`). A plain click picks nothing: it lets every pick go
+and remembers the row, which shows as the provider's selection (a provider may
+still refuse it); Ctrl+click then picks that row with the clicked one, and
+Shift+click the rows between. A drag acts on the picked rows when the pressed row
 is one of them, in tree order. A badge (`DragBadge`, new) made at the press
 rides on the cursor. `DynamicConfiguratorProvider::dropPlan(items, target)` and
 `dropOn(items, target)` expand a drop at any depth for "watchlist", "plot" or
