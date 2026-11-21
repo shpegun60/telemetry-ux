@@ -1256,10 +1256,15 @@ void run(const QString& output, double points, int& screens)
 			auto* gain = rowOf(v.list, path);
 			{
 				auto* held = shown(gain, "valueHeldText");
+				QTest::mouseMove(v.window, shown(v.content, "refreshWatchButton")->mapToScene(QPointF(2, 2)).toPoint());
+				settle();
 				QTest::mouseMove(v.window, held->mapToScene(QPointF(held->width() / 2, held->height() / 2)).toPoint());
-				QTest::qWait(800);
 				auto* tip = gain->findChild<QObject*>(QStringLiteral("valueHeldToolTip"));
-				CHECK(tip && tip->property("visible").toBool());
+				CHECK(tip);
+				// After its 700 ms delay; a loaded machine may take longer.
+				for (int waited = 0; waited < 3000 && !tip->property("visible").toBool(); waited += 50)
+					QTest::qWait(50);
+				CHECK(tip->property("visible").toBool());
 				CHECK(tip->property("text").toString() == QStringLiteral("F2 to change it · Esc drops it"));
 			}
 			// Esc on the row drops it, the tooltip shown or not: what the
