@@ -2379,6 +2379,35 @@ QString ValueModel::baselineLine() const
 	return parts.join(QLatin1Char(' '));
 }
 
+QString ValueModel::callLine(const QHash<QString, QString>& texts, bool bare)
+{
+	// The root's own rows, loaded as a table shows them at once.
+	if (impl_->tree.roots.size() == 1 && !changing()) {
+		const auto root = createIndex(0, 0, impl_->tree.roots.front()->token);
+		if (canFetchMore(root))
+			fetchMore(root);
+	}
+	const auto* roots = impl_->tree.children(this, {});
+	const std::vector<std::unique_ptr<Row>>* top = roots;
+	// A struct's members, not its root row.
+	if (roots && roots->size() == 1 && (*roots)[0]->aggregate && (*roots)[0]->type == QStringLiteral("struct"))
+		top = &(*roots)[0]->children;
+	if (!top || top->empty())
+		return {};
+	QStringList parts;
+	for (const auto& row : *top) {
+		if (row->aggregate) {
+			parts << (row->type == QStringLiteral("struct") ? QStringLiteral("{…}") : QStringLiteral("[…]"));
+			continue;
+		}
+		const auto found = texts.constFind(Impl::pathKey(row->valuePath));
+		parts << (found == texts.cend() || found->isEmpty() ? QStringLiteral("–") : *found);
+	}
+	if (bare && parts.size() == 1)
+		return parts.front();
+	return QLatin1Char('(') + parts.join(QStringLiteral(", ")) + QLatin1Char(')');
+}
+
 int ValueModel::unsentCount() const
 {
 	if (!impl_->current())

@@ -1165,6 +1165,87 @@ static void submittedOncePerAcceptedRequest()
 	CHECK(!provider.executeCommand() && signalled == 4 && h.storage->owner.pending() == 0);
 }
 
+// LG-1: every operation tells the Log its target and its outcome - one key
+// from its start to its end, the kind of the outcome beside its words - and
+// a LogModel given them keeps one line per operation.
+static void operationOutcomes()
+{
+	using telemetry::ux::LogModel;
+	Harness h;
+	Provider provider{h.binding.get()};
+	provider.setAllowMutations(true);
+	QList<QVariantMap> told;
+	LogModel log;
+	QObject::connect(&provider, &Provider::operationOutcome, &log, [&](const QVariantMap& outcome) {
+		told.push_back(outcome);
+		log.record(outcome);
+	});
+	const auto value = [&](int at, const char* key) { return told.value(at).value(QLatin1String(key)).toString(); };
+	// A Command: "pending" at once, then its outcome under the same key.
+	select(provider, "Reset");
+	CHECK(provider.executeCommand());
+	CHECK(told.size() == 1 && value(0, "result") == QStringLiteral("pending") &&
+	      value(0, "text") == QStringLiteral("executing…") && value(0, "path") == QStringLiteral("device/Reset") &&
+	      value(0, "kind") == QStringLiteral("command") && value(0, "source") == QStringLiteral("Command") &&
+	      value(0, "values").isEmpty() && !value(0, "key").isEmpty());
+	h.pump();
+	CHECK(told.size() == 2 && value(1, "key") == value(0, "key") && value(1, "result") == QStringLiteral("ok") &&
+	      value(1, "text") == QStringLiteral("executed") && value(1, "path") == QStringLiteral("device/Reset"));
+	// Accepted is not confirmed finished: a doubt.
+	select(provider, "Accept");
+	CHECK(provider.executeCommand());
+	h.pump();
+	CHECK(told.size() == 4 && value(3, "result") == QStringLiteral("doubt") &&
+	      value(3, "text") == QStringLiteral("accepted · not confirmed finished") && value(3, "key") != value(1, "key"));
+	// One value written: its place in the Field and the value, then what the
+	// device reads back - the truth, clamped or not.
+	select(provider, "Config");
+	CHECK(provider.refresh());
+	h.pump();
+	CHECK(told.size() == 4); // a read is not logged
+	CHECK(provider.beginEdit() && edit(provider, "limit", "7"));
+	CHECK(provider.apply());
+	h.pump();
+	CHECK(told.size() == 6 && value(4, "result") == QStringLiteral("pending") && value(4, "text") == QStringLiteral("writing…") &&
+	      value(5, "path") == QStringLiteral("device/Config.limit") && value(5, "values") == QStringLiteral("= 7") &&
+	      value(5, "kind") == QStringLiteral("value") && value(5, "source") == QStringLiteral("Field") &&
+	      value(5, "result") == QStringLiteral("ok") && value(5, "text") == QStringLiteral("written · read back 7"));
+	CHECK(provider.beginEdit() && edit(provider, "limit", "101"));
+	CHECK(provider.apply());
+	h.pump();
+	CHECK(told.size() == 8 && value(7, "values") == QStringLiteral("= 101") &&
+	      value(7, "text") == QStringLiteral("written · read back 100"));
+	// Several values: the Field, counted.
+	CHECK(provider.beginEdit() && edit(provider, "limit", "9") && edit(provider, "offset", "-5"));
+	CHECK(provider.apply());
+	h.pump();
+	CHECK(told.size() == 10 && value(9, "path") == QStringLiteral("device/Config") && value(9, "values").isEmpty() &&
+	      value(9, "kind") == QStringLiteral("struct") && value(9, "text") == QStringLiteral("written · 2 values · read back"));
+	// A Service: its request as sent, then what came back, and the time.
+	select(provider, "Scale");
+	CHECK(edit(provider, "value", "2") && edit(provider, "factor", "3"));
+	CHECK(provider.callService());
+	CHECK(told.size() == 11 && value(10, "values") == QStringLiteral("(2, 3)") &&
+	      value(10, "text") == QStringLiteral("calling…"));
+	h.pump();
+	CHECK(told.size() == 12 && value(11, "path") == QStringLiteral("device/Scale") &&
+	      value(11, "values") == QStringLiteral("(2, 3) → 6") && value(11, "kind") == QStringLiteral("service") &&
+	      value(11, "result") == QStringLiteral("ok") && value(11, "text").startsWith(QStringLiteral("called · ")) &&
+	      value(11, "text").endsWith(QStringLiteral(" ms")));
+	// Refused by the device: its reason, an error by kind.
+	select(provider, "Inspect");
+	CHECK(edit(provider, "multiplier", "0"));
+	CHECK(provider.callService());
+	h.pump();
+	CHECK(told.size() == 14 && value(13, "result") == QStringLiteral("refused") &&
+	      value(13, "values") == QStringLiteral("(0)") &&
+	      value(13, "text") == QStringLiteral("refused · the device does not take these request values"));
+	// One line per operation, the pending never shown: they were quick.
+	CHECK(log.count() == 7 && log.errorCount() == 1);
+	CHECK(log.newest() == QStringLiteral("device/Inspect (0)  refused · the device does not take these request values"));
+	CHECK(log.index(6).data(LogModel::LineRole).toString() == QStringLiteral("device/Reset  executed"));
+}
+
 // Without a Watchlist source nothing can be watched yet: no box, no reason,
 // nothing saved and nothing restored. The S3-A headers stand on their own.
 void watchWithoutSource()
@@ -1579,6 +1660,8 @@ int main(int argc, char** argv)
 		watchWithoutSource();
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("submitted"))
 		submittedOncePerAcceptedRequest();
+	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("outcomes"))
+		operationOutcomes();
 	// Before "history", which declares a kind of the check's own that no
 	// UndoKinds case proves.
 	if (selectedCase.isEmpty() || selectedCase == QStringLiteral("plot"))

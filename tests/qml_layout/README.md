@@ -142,3 +142,17 @@ its whole path, "." and "[" only after a struct's or an array's Field or
 member, and a member and an element complete and are added
 (`path-completion-*.png`). The demo peer has no Batch: the Batch's row is given
 the real provider's candidates and words with "unsupported" read as "adds".
+
+`LogLines.cpp` draws the Log's lines (LG-1) as a host's list does, a
+`LogLine` in an `ItemDelegate` over a real `LogModel` and `ProblemsModel`: a
+Command run is one line with its kind word, the arrow, `control/Reset` and
+"executed", no glyph and quieter words; a refused write one line with the
+error glyph in the error colour, `device/Config.Gain`, "= 345" and the reason
+in the primary colour; a Service its request and answer, "(2, 3) → 6"; the
+grouped warning one line whose current row opens its list (20 paths, then
+"and 12 more") and its resolution a line saying what changed. At 900 px
+nothing is cut and nothing overlaps; at 320 px the source column goes (the
+accessible name keeps it), the leaf stays whole while the words elide, and
+the current row's long words go under the path, whole. A line changed in
+place (a pending become its outcome) shows the new words in the same row
+(`log-lines-900.png`, `log-lines-320.png`, `log-lines-320-current.png`).

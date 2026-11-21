@@ -298,6 +298,117 @@ void sessionPublicationLifetime()
 		}
 	}
 }
+// LG-1: a line names its target and its outcome, its severity from the
+// outcome's kind and never from its words; one line per operation, its
+// pending shown only past the threshold; a grouped event is one line with
+// its list, and its resolution says what changed.
+QVariantMap operation(const QString& key, const QString& result, const QString& text,
+                      const QString& path = QStringLiteral("control/Reset"))
+{
+	return {{QStringLiteral("key"), key},       {QStringLiteral("source"), QStringLiteral("Command")},
+	        {QStringLiteral("kind"), QStringLiteral("command")}, {QStringLiteral("path"), path},
+	        {QStringLiteral("result"), result}, {QStringLiteral("text"), text}};
+}
+
+QStringList paths(int count)
+{
+	QStringList out;
+	for (int i = 1; i <= count; ++i)
+		out << QStringLiteral("signals/Signal%1").arg(i, 2, 10, QLatin1Char('0'));
+	return out;
+}
+
+void operationLines()
+{
+	LogModel log;
+	QAbstractItemModelTester tester(&log, QAbstractItemModelTester::FailureReportingMode::Fatal);
+	// An operation answered under the threshold: one line, its outcome only.
+	log.record(operation(QStringLiteral("op:1"), QStringLiteral("pending"), QStringLiteral("executing…")));
+	CHECK(log.count() == 0);
+	log.record(operation(QStringLiteral("op:1"), QStringLiteral("ok"), QStringLiteral("executed")));
+	CHECK(log.count() == 1 && log.index(0).data(LogModel::TextRole) == QStringLiteral("executed") &&
+	      log.index(0).data(LogModel::PathRole) == QStringLiteral("control/Reset") &&
+	      log.index(0).data(LogModel::KindRole) == QStringLiteral("command") &&
+	      log.index(0).data(LogModel::SourceRole) == QStringLiteral("Command") &&
+	      log.index(0).data(LogModel::SeverityRole).toInt() == Severity::Info);
+	CHECK(log.newest() == QStringLiteral("control/Reset  executed"));
+	QElapsedTimer waited;
+	waited.start();
+	await([&] { return waited.elapsed() > LogModel::progressThresholdMs + 200; });
+	CHECK(log.count() == 1);
+	// One that outlasts it: a pending line, which its outcome then replaces in
+	// place, keeping its time; an error counted once it is one.
+	log.record(operation(QStringLiteral("op:2"), QStringLiteral("pending"), QStringLiteral("executing…")));
+	CHECK(log.count() == 1);
+	CHECK(await([&] { return log.count() == 2; }));
+	CHECK(log.index(0).data(LogModel::TextRole) == QStringLiteral("executing…") && log.errorCount() == 0);
+	const auto shownAt = log.index(0).data(LogModel::TimeRole);
+	log.record(operation(QStringLiteral("op:2"), QStringLiteral("failed"), QStringLiteral("failed · no reply in time")));
+	CHECK(log.count() == 2 && log.index(0).data(LogModel::TextRole) == QStringLiteral("failed · no reply in time") &&
+	      log.index(0).data(LogModel::TimeRole) == shownAt && log.errorCount() == 1 &&
+	      log.index(0).data(LogModel::SeverityRole).toInt() == Severity::Error);
+	// A later word on the same operation (what a refused Field holds) too.
+	log.record(operation(QStringLiteral("op:2"), QStringLiteral("refused"), QStringLiteral("refused · it holds 3")));
+	CHECK(log.count() == 2 && log.errorCount() == 1);
+	// Severity from the outcome's kind, never from its words.
+	log.clear();
+	log.record(operation(QStringLiteral("op:3"), QStringLiteral("ok"), QStringLiteral("failed refused error timeout")));
+	log.record(operation(QStringLiteral("op:4"), QStringLiteral("doubt"), QStringLiteral("written")));
+	log.record(operation(QStringLiteral("op:5"), QStringLiteral("refused"), QStringLiteral("executed")));
+	CHECK(log.index(2).data(LogModel::SeverityRole).toInt() == Severity::Info &&
+	      log.index(1).data(LogModel::SeverityRole).toInt() == Severity::Warning &&
+	      log.index(0).data(LogModel::SeverityRole).toInt() == Severity::Error && log.errorCount() == 1);
+	// A Service's target: its request and its answer after the path.
+	auto called = operation(QStringLiteral("op:6"), QStringLiteral("ok"), QStringLiteral("called · 19 ms"),
+	                        QStringLiteral("control/Scale"));
+	called[QStringLiteral("values")] = QStringLiteral("(2, 3) → 6");
+	log.record(called);
+	CHECK(log.index(0).data(LogModel::LineRole) == QStringLiteral("control/Scale (2, 3) → 6  called · 19 ms"));
+	CHECK(log.text({0}).contains(QStringLiteral("  Info  Command  control/Scale (2, 3) → 6  called · 19 ms\n")));
+	// A plain event stays its words.
+	log.append(Severity::Info, QStringLiteral("Connection"), QStringLiteral("Connected."));
+	CHECK(log.index(0).data(LogModel::LineRole) == QStringLiteral("Connected.") &&
+	      log.index(0).data(LogModel::PathRole).toString().isEmpty());
+
+	// A grouped warning: one line, its list held in it.
+	LogFilterModel shown(&log);
+	ProblemsModel problems(&log);
+	const int before = log.count();
+	problems.raise(QStringLiteral("project.watch"), Severity::Warning, QStringLiteral("Watch"),
+	               QStringLiteral("8 watched values wait for a device"), {}, paths(8));
+	CHECK(log.count() == before + 1 && log.newest() == QStringLiteral("8 watched values wait for a device"));
+	CHECK(log.index(0).data(LogModel::DetailRole).toString().split(QLatin1Char('\n')) == paths(8) &&
+	      problems.index(0).data(ProblemsModel::DetailRole).toString().split(QLatin1Char('\n')) == paths(8));
+	CHECK(log.text({0}).count(QLatin1Char('\n')) == 9 && log.text({0}).contains(QStringLiteral("\n    signals/Signal08\n")));
+	shown.setText(QStringLiteral("Signal07"));
+	CHECK(shown.rowCount() == 1);
+	shown.setText({});
+	// Raised again with another list: in place, the Log hears nothing.
+	problems.raise(QStringLiteral("project.watch"), Severity::Warning, QStringLiteral("Watch"),
+	               QStringLiteral("32 watched values wait for a device"), {}, paths(32));
+	const auto opened = problems.index(0).data(ProblemsModel::DetailRole).toString().split(QLatin1Char('\n'));
+	CHECK(log.count() == before + 1 && opened.size() == LogModel::detailLines + 1 &&
+	      opened.back() == QStringLiteral("and 12 more") && opened.front() == QStringLiteral("signals/Signal01"));
+	// Its resolution says what changed, never the old words.
+	problems.resolveWith(QStringLiteral("project.watch"), QStringLiteral("All 32 watched values found on Emulated device"));
+	CHECK(problems.count() == 0 && log.count() == before + 2 &&
+	      log.newest() == QStringLiteral("All 32 watched values found on Emulated device") &&
+	      log.index(0).data(LogModel::SeverityRole).toInt() == Severity::Info &&
+	      log.index(0).data(LogModel::SourceRole) == QStringLiteral("Watch"));
+	// A resolution that leaves something behind: a warning with what is left.
+	problems.raise(QStringLiteral("project.watch"), Severity::Warning, QStringLiteral("Watch"),
+	               QStringLiteral("8 watched values wait for a device"), {}, paths(8));
+	problems.resolveWith(QStringLiteral("project.watch"), QStringLiteral("5 of 8 found on Emulated device · 3 are not on it"),
+	                     Severity::Warning, paths(3));
+	CHECK(log.index(0).data(LogModel::SeverityRole).toInt() == Severity::Warning &&
+	      log.index(0).data(LogModel::DetailRole).toString().split(QLatin1Char('\n')) == paths(3));
+	// Resolved without words: "Resolved: " and the summary, never a line of a
+	// list read as if it still held.
+	problems.raise(QStringLiteral("old"), Severity::Warning, QStringLiteral("Project"),
+	               QStringLiteral("measure/Voltage: waiting for a device\nmeasure/Current: waiting for a device"));
+	problems.resolve(QStringLiteral("old"));
+	CHECK(log.newest() == QStringLiteral("Resolved: measure/Voltage: waiting for a device"));
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -306,6 +417,7 @@ int main(int argc, char** argv)
 	exportSnapshot();
 	problemLifecycle();
 	publicationLifetime();
+	operationLines();
 	filesOnlyLoss();
 	sessionPublicationLifetime();
 	std::printf("Event log: %u checks, 0 failures\n", checks);

@@ -362,6 +362,11 @@ public:
 	[[nodiscard]] bool hasBaseline() const noexcept;
 	// "value=2 factor=3": the baseline's top-level values, for a stale note.
 	[[nodiscard]] QString baselineLine() const;
+	// The top-level values in order, as the Log shows a call (LG-1): "(2,
+	// 3)", "(true)", "{…}" and "[…]" for a struct or an array among them;
+	// one value bare ("6") when bare; empty when there are none. texts gives
+	// them by path (texts() or shownTexts()); one it lacks is "–".
+	[[nodiscard]] QString callLine(const QHash<QString, QString>& texts, bool bare = false);
 	// The rows whose value is not yet sent.
 	[[nodiscard]] int unsentCount() const;
 	// The values not yet sent, by path, as typed (editorText): a draft's

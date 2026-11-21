@@ -132,3 +132,9 @@ target_compile_definitions(telemetry_qml_path_completion PRIVATE QT_NO_KEYWORDS 
 target_include_directories(telemetry_qml_path_completion PRIVATE ../../examples/inspector)
 target_link_libraries(telemetry_qml_path_completion PRIVATE TelemetryUX::qt_connection Telemetry::tcp_server
     Qt6::Network Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+# The Log's lines (LG-1): a Command, a refused write, a Service, a grouped
+# warning and its resolution, over a real LogModel and ProblemsModel.
+qt_add_executable(telemetry_qml_log_lines LogLines.cpp)
+qt_add_resources(telemetry_qml_log_lines "log-lines-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES LogLines.qml)
+target_compile_features(telemetry_qml_log_lines PRIVATE cxx_std_20)
+target_link_libraries(telemetry_qml_log_lines PRIVATE TelemetryUX::configurator Qt6::Test)
