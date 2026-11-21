@@ -116,3 +116,29 @@ in declaration order, the funnel with the device's totals and "Commands only ·
 path label, the Name cap's ceiling of 40 body heights and the tree's joined
 chains (`watch-list-long-path-*.png`, `watch-tree-chains-560.png`), and
 `DetailsLayout.cpp` Details' breadcrumb (`details-breadcrumb-*.png`).
+
+PL-1 (the owner's screenshots of 21 November 2026: "measure/P…r" cut with the
+Item column hundreds of pixels wide, and a path that lost its group while its
+arguments stayed whole) is one rule, `PathLabelChecks.hpp`, held by every path
+label's program: a path is whole whenever it fits its room as the label's own
+fonts measure it (QFontMetricsF, 1 px tolerance), and otherwise only whole
+segments drop, the fewest that fit, the leaf whole until nothing more can drop.
+`DetailsLayout.cpp` runs it on the Batch's rows from 300 to 1,200 px and back,
+side by side with Details and stacked, the pointer on each row and off, with
+the cell's give-way order (the arguments down to `Type.nameFloor`, then whole
+segments, then the arguments hide) and the row's … and × keeping their place
+(`batch-paths-760-hover.png`, `batch-paths-1200-hover.png`), and on Details'
+title; `WatchLook.cpp` on the Watchlist's List; `DeviceTreeGroups.cpp` on the
+context line, and on labels exactly as wide as their implicit width, the
+Batch's old sizing that showed the fault. The Log shows no path label yet
+(LG-1 brings one).
+
+`PathCompletion.cpp` holds WL-10a (the owner's screenshot: picking a group in
+the Watchlist's "+" wrote "measure/.") through the real provider of a TCP
+connection to the demo peer serving a group tree: in the Watchlist's and the
+Batch's "+", by the mouse and the keys, a group gives "measure/" and lists what
+it holds, a subgroup the same one level down (`demo/adc/channel1`), an endpoint
+its whole path, "." and "[" only after a struct's or an array's Field or
+member, and a member and an element complete and are added
+(`path-completion-*.png`). The demo peer has no Batch: the Batch's row is given
+the real provider's candidates and words with "unsupported" read as "adds".

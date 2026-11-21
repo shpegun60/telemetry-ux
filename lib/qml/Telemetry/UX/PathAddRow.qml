@@ -8,7 +8,9 @@
 //
 // The adapter: check(text) -> {status, message, ...}; candidates(text) ->
 // [{path, completion?, kind?, typeText, note?, watched?, container, next?,
-// values?, section?}], with headings among them where an adapter groups its
+// values?, section?}] - next: the step a container's path takes when picked,
+// "." or "[", none for a group, whose path ends in "/" - with headings among
+// them where an adapter groups its
 // candidates - {heading: true, path (the heading's words), completion (what
 // a click writes), count, shown} - which the keys skip (the Batch's Fields,
 // Commands and Services); add(lines) -> {notice, undoable, serial, clear} (serial: the
@@ -164,11 +166,13 @@ FocusScope {
         highlighted = firstPick()
         return true
     }
-    // A container's path with the step into it: "." or "[" after it, unless
-    // the path already ends there, as a top-level group's "device." does.
+    // A container's path with the step into it, only the one it declares
+    // (WL-10a): a struct's ".", an array's "["; a group's path already ends
+    // in its "/" and declares none ("measure/", never "measure/.").
     function into(c) {
         const path = completionOf(c)
-        return path.endsWith(".") || path.endsWith("[") ? path : path + (c.next || ".")
+        const next = typeof c.next === "string" ? c.next : ""
+        return next.length === 0 || path.endsWith(next) ? path : path + next
     }
     // A candidate chosen: a container gets "." or "[" and the next step's
     // candidates; a heading writes its kind word before the text and lists
@@ -479,8 +483,11 @@ FocusScope {
                         // A word after the path: "watched", "in Batch".
                         readonly property string note: typeof modelData.note === "string" && modelData.note.length > 0
                                                        ? modelData.note : modelData.watched === true ? qsTr("watched") : ""
+                        // A group by what it holds: the adapter's words (the
+                        // Batch counts every kind), else its Fields.
                         readonly property string detail: candidate.group
-                            ? (modelData.values === undefined ? qsTr("group")
+                            ? (typeof modelData.typeText === "string" && modelData.typeText.length > 0 ? modelData.typeText
+                               : modelData.values === undefined ? qsTr("group")
                                : modelData.values === 1 ? qsTr("1 Field") : qsTr("%L1 Fields").arg(modelData.values))
                             // Under a heading the kind goes without saying.
                             : [modelData.section !== undefined ? "" : modelData.kind || "", modelData.typeText || ""]

@@ -7,6 +7,7 @@
 // groups, find by path segments and by named type, the opening rule, * and
 // "Collapse all", the kinds filter, Copy path, and the path label a
 // breadcrumb or the context line shows. No network or device I/O. MIT.
+#include "PathLabelChecks.hpp"
 #include <Telemetry/UX/PathGrammar.hpp>
 #include <Telemetry/UX/QmlTypes.hpp>
 #include <QtCore/QDir>
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -560,6 +562,29 @@ int main(int argc, char** argv)
 		t.view->setProperty("contentY", t.row(h3) * rh);
 		settle(120);
 		CHECK(t.panel->property("contextPath").toString() == QStringLiteral("power/metrology/harmonics/phaseA"));
+		// PL-1: the line's path takes the room it has - whole whenever it
+		// fits, else only whole segments drop - at every width, after a
+		// resize both ways, the pointer on it and off.
+		for (const int width : {420, 240, 280, 320, 560, 260, 420}) {
+			t.width(width);
+			t.view->setProperty("contentY", t.row(h3) * rh);
+			QTest::mouseMove(t.window, QPoint(t.window->width() - 2, t.window->height() - 2));
+			settle(120);
+			CHECK(context->isVisible());
+			auto fault = path_label_checks::fault(contextLabel);
+			if (!fault.isEmpty())
+				throw std::runtime_error("PL-1 context line: " + fault.toStdString());
+			CHECK(fault.isEmpty());
+			QTest::mouseMove(t.window, contextLabel->mapToScene(QPointF(contextLabel->width() / 2, contextLabel->height() / 2)).toPoint());
+			settle(60);
+			fault = path_label_checks::fault(contextLabel);
+			if (!fault.isEmpty())
+				throw std::runtime_error("PL-1 context line, hovered: " + fault.toStdString());
+			CHECK(fault.isEmpty());
+		}
+		QTest::mouseMove(t.window, QPoint(t.window->width() - 2, t.window->height() - 2));
+		t.view->setProperty("contentY", t.row(h3) * rh);
+		settle(120);
 		// A click on a segment makes that group current and shows it.
 		{
 			QQuickItem* link = nullptr;
@@ -645,6 +670,31 @@ int main(int argc, char** argv)
 		settle();
 		CHECK(t.view->property("rows").toInt() == 2);
 
+		// PL-1's cause: a label exactly as wide as it says it needs shows its
+		// whole path. The leaf's room was the label's width less the prefix
+		// Text's own width, which counts the "/" glyph's overhang past its
+		// advance, so the Batch's label, sized to its implicit width, cut
+		// "measure/P…r" by a fraction of a pixel.
+		for (const bool interactive : {false, true}) {
+			for (const char* path : {"measure/Power", "measure/Current", "control/SetEnabled", "power/metrology/harmonics/phaseA/H3"}) {
+				QQmlComponent fitted(&engine);
+				fitted.setData(QByteArray("import QtQuick\nimport Telemetry.UX\nPathLabel { interactive: ") +
+				                   (interactive ? "true" : "false") + "; path: \"" + path + "\" }",
+				               QUrl());
+				std::unique_ptr<QObject> made(fitted.create(qmlContext(t.panel)));
+				auto* label = qobject_cast<QQuickItem*>(made.get());
+				CHECK(label);
+				label->setParentItem(t.window->contentItem());
+				label->setProperty("width", label->property("implicitWidth").toDouble());
+				settle();
+				const auto fault = path_label_checks::fault(label);
+				if (!fault.isEmpty())
+					throw std::runtime_error("PL-1 label at its implicit width: " + fault.toStdString());
+				CHECK(fault.isEmpty() && !label->property("elided").toBool());
+				CHECK(!named(label, QStringLiteral("pathLabelLeaf"))->property("truncated").toBool());
+			}
+		}
+
 		// The path label alone: segments drop under one "…" in the design's
 		// order, the leaf elides last; a breadcrumb is one Tab stop whose
 		// arrows move between its groups and whose Enter shows one.
@@ -662,7 +712,12 @@ int main(int argc, char** argv)
 			CHECK(eval(label, QStringLiteral("shape(3).prefix")).toString() == QStringLiteral("…/phaseA/"));
 			CHECK(eval(label, QStringLiteral("shape(4).prefix")).toString() == QStringLiteral("…/"));
 			CHECK(label->property("spokenName").toString() == QStringLiteral("Spectrum, in power, metrology, harmonics, phaseA"));
+			// Within the measure's 1 px tolerance it stays whole (PL-1); past
+			// it, one segment drops.
 			label->setProperty("width", label->property("implicitWidth").toDouble() - 1);
+			settle();
+			CHECK(!label->property("elided").toBool());
+			label->setProperty("width", label->property("implicitWidth").toDouble() - 2);
 			settle();
 			CHECK(label->property("elided").toBool() && label->property("drops").toInt() == 1);
 			label->setProperty("width", 40);

@@ -7,6 +7,7 @@
 // it. MIT.
 #include <Telemetry/UX/QmlTypes.hpp>
 #include <Telemetry/UX/DynamicModels.hpp>
+#include "PathLabelChecks.hpp"
 #include <integration/inspector/SnapshotStore.hpp>
 #include <integration/workbench/RequestEditor.hpp>
 #include <telemetry/Telemetry.hpp>
@@ -1176,7 +1177,125 @@ int main(int argc, char** argv)
 			batch.status = QStringLiteral("Not executed yet");
 			batch.changed();
 		};
+		// PL-1 (the owner's screenshots of 21 November 2026): in the Batch,
+		// "measure/P…r" was cut with the Item column hundreds of pixels wide,
+		// and with Details beside it "…/SetEnabled enabled=false" lost its
+		// group while "control/Scale" cut its values. Every row's path takes
+		// the room it has and is whole whenever it fits; the cell gives way
+		// in the design's order (§5): the values elide down to Type.nameFloor,
+		// then the path drops whole segments, then the values hide and the
+		// path takes the cell back; the row's … and × keep their place, so a
+		// row reads the same with the pointer on it and off. At every width,
+		// after a resize both ways, the side by side split and the stacked.
+		const auto pathChecks = [&](bool shots) {
+			batch.items.clear();
+			batch.add(QStringLiteral("measure/Current"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
+			batch.add(QStringLiteral("control/SetEnabled"), QStringLiteral("command"), QStringLiteral("enabled=false"), QStringLiteral("–"));
+			batch.add(QStringLiteral("control/Scale"), QStringLiteral("service"), QStringLiteral("value=0 factor=0"), QStringLiteral("–"));
+			batch.add(QStringLiteral("measure/Power"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
+			batch.add(QStringLiteral("power/metrology/harmonics/phaseA/H3"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
+			batch.changed();
+			window->setHeight(600);
+			auto* list = need(batchPanel, "batchList");
+			list->setProperty("currentIndex", 0);
+			const auto away = QPoint(2, 2);
+			// One row as it stands: the label's own rule, then the cell's order.
+			const auto rowFault = [&](QQuickItem* row) {
+				auto* label = need(row, "batchRowPath");
+				const auto fault = path_label_checks::fault(label);
+				if (!fault.isEmpty())
+					return fault;
+				auto* cell = need(row, "batchRowName");
+				auto* values = find(row, QStringLiteral("batchRowValues"), false);
+				const qreal room = cell->width(), gap = size("groupSpacing");
+				const qreal whole = label->implicitWidth(), shortest = label->property("shortestWidth").toReal();
+				const qreal wanted = values ? std::ceil(values->implicitWidth()) : 0;
+				const qreal floor = std::min(wanted, size("nameFloor"));
+				const bool shown = values && values->isVisible();
+				const int drops = label->property("drops").toInt();
+				const auto path = label->property("path").toString();
+				const auto say = [&](const char* what) {
+					return QStringLiteral("%1 in a %2 px cell: %3").arg(path).arg(room).arg(QString::fromLatin1(what));
+				};
+				if (!values || values->property("text").toString().isEmpty())
+					return near(label->width(), room) ? QString{} : say("the path does not take the cell");
+				if (whole + gap + wanted <= room + 1)
+					return shown && drops == 0 && !values->property("truncated").toBool() ? QString{} : say("both fit, yet one is cut");
+				if (whole + gap + floor <= room + 1)
+					return shown && drops == 0 ? QString{} : say("a segment dropped before the values gave way");
+				if (shortest + gap + floor <= room + 1)
+					return shown && drops > 0 && values->width() >= floor - 1 ? QString{} : say("the values went under their floor");
+				return !shown && near(label->width(), room) ? QString{} : say("the values stay where even the leaf does not fit");
+			};
+			const auto sweep = [&](int width, const char* shotName) {
+				window->setWidth(width);
+				QTest::mouseMove(window, away);
+				settle();
+				const auto rows = all(batchPanel, QStringLiteral("batchRow"));
+				CHECK(rows.size() == 5);
+				QList<qreal> cells;
+				for (auto* row : rows) {
+					const auto fault = rowFault(row);
+					if (!fault.isEmpty())
+						throw std::runtime_error(QStringLiteral("PL-1 Batch at %1 px: %2").arg(width).arg(fault).toStdString());
+					CHECK(fault.isEmpty());
+					cells << need(row, "batchRowName")->width();
+				}
+				// The pointer on each row: its … and × show, nothing moves.
+				for (int at = 0; at < rows.size(); ++at) {
+					QTest::mouseMove(window, rows[at]->mapToScene(QPointF(rows[at]->width() / 3, rows[at]->height() / 2)).toPoint());
+					settle(3);
+					CHECK(find(rows[at], QStringLiteral("removeBatchButton")));
+					CHECK(near(need(rows[at], "batchRowName")->width(), cells[at], 0.01));
+					const auto fault = rowFault(rows[at]);
+					if (!fault.isEmpty())
+						throw std::runtime_error(QStringLiteral("PL-1 Batch at %1 px, hovered: %2").arg(width).arg(fault).toStdString());
+					CHECK(fault.isEmpty());
+				}
+				if (shotName && shots) {
+					// Item 2 hovered, as in the owner's screenshot.
+					QTest::mouseMove(window, rows[1]->mapToScene(QPointF(rows[1]->width() / 3, rows[1]->height() / 2)).toPoint());
+					settle(3);
+					shot(window, output, QString::fromLatin1(shotName));
+				}
+				QTest::mouseMove(window, away);
+				settle(2);
+			};
+			sweep(760, "batch-paths-760-hover");
+			// Whole at 760 px beside Details: the row the owner saw cut.
+			QQuickItem* power = nullptr;
+			for (auto* row : all(batchPanel, QStringLiteral("batchRow")))
+				if (need(row, "batchRowPath")->property("path").toString() == QStringLiteral("measure/Power"))
+					power = need(row, "batchRowPath");
+			CHECK(power);
+			if (shots)
+				CHECK(!power->property("elided").toBool() && !need(power, "pathLabelLeaf")->property("truncated").toBool());
+			sweep(1200, "batch-paths-1200-hover");
+			// At 1,200 px the list is 520 px and every row is whole (the
+			// design's 100 %; at 125 % the rules above hold).
+			for (auto* row : shots ? all(batchPanel, QStringLiteral("batchRow")) : QList<QQuickItem*>{}) {
+				CHECK(!need(row, "batchRowPath")->property("elided").toBool());
+				auto* values = find(row, QStringLiteral("batchRowValues"));
+				CHECK(!values || !values->property("truncated").toBool());
+			}
+			// Narrower and back: stacked under 720 px the list is the window's
+			// width, down to 300 px, the narrowest the list gets beside Details
+			// and below.
+			for (const int width : {900, 760, 720, 719, 560, 420, 360, 320, 300, 340, 560, 719, 720, 1200, 760})
+				sweep(width, nullptr);
+			// Back to the three items the other checks use.
+			batch.items.clear();
+			batch.add(QStringLiteral("control/Scale"), QStringLiteral("service"), QStringLiteral("value=0 factor=0"), QStringLiteral("–"));
+			batch.add(QStringLiteral("control/Reset"), QStringLiteral("command"), QString{}, QStringLiteral("–"));
+			batch.add(QStringLiteral("device/Config"), QStringLiteral("read"), QString{}, QStringLiteral("–"));
+			batch.changed();
+			window->setWidth(1200);
+			settle();
+			window->setWidth(760);
+			settle();
+		};
 		batchChecks(true);
+		pathChecks(true);
 
 		// 14. Narrow and long words.
 		window->setProperty("mode", QStringLiteral("details"));
@@ -1297,6 +1416,32 @@ int main(int argc, char** argv)
 			CHECK(cut);
 			CHECK(title->property("usedWidth").toReal() <= title->width() + 0.75);
 			shot(window, output, QStringLiteral("details-breadcrumb-280"));
+			// PL-1: the title takes the room it has at every width, after a
+			// resize both ways, the pointer on it and off; "measure/Power" is
+			// the path the Batch once cut by a fraction of a pixel.
+			for (const auto* path : {"power/metrology/harmonics/phaseA/Spectrum", "measure/Power", "control/SetEnabled"}) {
+				details.selection = QString::fromLatin1(path);
+				details.changed();
+				for (const int width : {420, 280, 360, 240, 560, 300, 420}) {
+					window->setWidth(width);
+					QTest::mouseMove(window, QPoint(2, window->height() - 2));
+					settle();
+					title = need(panel, "endpointSelectionTitle");
+					auto fault = path_label_checks::fault(title);
+					if (!fault.isEmpty())
+						throw std::runtime_error("PL-1 Details title: " + fault.toStdString());
+					CHECK(fault.isEmpty());
+					QTest::mouseMove(window, title->mapToScene(QPointF(title->width() / 2, title->height() / 2)).toPoint());
+					settle(3);
+					fault = path_label_checks::fault(title);
+					if (!fault.isEmpty())
+						throw std::runtime_error("PL-1 Details title, hovered: " + fault.toStdString());
+					CHECK(fault.isEmpty());
+				}
+			}
+			QTest::mouseMove(window, QPoint(2, window->height() - 2));
+			details.selection = path;
+			details.changed();
 			window->setWidth(560);
 			showKind(kinds[0]);
 		}
@@ -1310,6 +1455,7 @@ int main(int argc, char** argv)
 		shots(QStringLiteral("-125"));
 		window->setProperty("mode", QStringLiteral("batch"));
 		batchChecks(false);
+		pathChecks(false);
 		type->setProperty("body", baseBody);
 		settle();
 

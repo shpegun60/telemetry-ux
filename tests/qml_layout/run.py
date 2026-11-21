@@ -153,7 +153,11 @@ def main():
                 ('device-tree-groups', 'telemetry_qml_device_tree_groups', r'Device tree groups checks=(\d+) warnings=0', 150),
                 # Part B (nested groups, scoped type names, the ceilings,
                 # attributes skipped) and the tree's side of section 16.
-                ('device-tree-named', 'telemetry_qml_device_tree_named', r'Device tree named checks=(\d+) warnings=0', 150)):
+                ('device-tree-named', 'telemetry_qml_device_tree_named', r'Device tree named checks=(\d+) warnings=0', 150),
+                # WL-10a: the Watchlist's and the Batch's "+" complete a
+                # group, a subgroup, an endpoint, a member and an element in
+                # the one grammar, through a real provider and connection.
+                ('path-completion', 'telemetry_qml_path_completion', r'Path completion checks=(\d+) warnings=0', 90)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))
             if not found or int(found[1]) < least:

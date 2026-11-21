@@ -2298,3 +2298,61 @@ it selected and Esc keeps it, the tooltip, Esc on the row, a valid value and
 the device's own value written and the held text gone, a double-click on a
 long held text left of the Value column), `DetailsTree.cpp` (a refused
 Apply's draft cell opens on its draft and Esc keeps it).
+
+## Paths take the room they have; completion writes the new grammar (PL-1, WL-10a, November 2026)
+
+**PathLabel measures once.** Every piece is placed at the advance width its
+font gives it, the same number that decides which segments drop, and a piece
+within 1 px of its room fits (`tolerance`). The leaf's room used to be the
+label's width less the prefix Text's own width, which counts a glyph's overhang
+past its advance ("/" in Segoe UI: 0.09 px at 100 %); a label sized to its
+implicit width, the ceiling of the advances, then cut its leaf whenever their
+fractions summed below one pixel: the owner's "measure/P…r" beside a whole
+"measure/Current". New, read-only: `shortestWidth` (the label with every
+segment that can drop gone, its leaf whole), `leafX`, `leafFits`, and the
+functions `measure(shape)` and `prefixAdvance(shape)`. A host gives the label
+the room it has, not `Math.min(implicitWidth, room)`. An interactive label
+narrowed until its last link drops stays a Tab stop while it holds the keys.
+
+**The Batch's Item cell gives way in the design's order (§5).** The path label
+takes the cell; the arguments elide first, down to `Type.nameFloor`; then the
+path drops whole segments beside them; when even "…/leaf" would not fit beside
+that floor the arguments hide (whole in the row's tooltip and in the pane) and
+the path takes the cell back; last, the leaf elides in its middle. The row's …
+and × already kept their place (2 × `rowHeight`) and still do; measured, the
+cell is as wide with the pointer on the row as off it. Arguments used to take
+up to half the cell before any segment dropped, which is how "…/SetEnabled
+enabled=false" lost its group beside "control/Scale value=0 facto…".
+
+**PathAddRow steps into a container only as the candidate says.** `into()`
+appends a candidate's `next` ("." for a struct, "[" for an array) and nothing
+else: there is no "." by default any more. A group's path ends in its "/" and
+declares none, so picking one writes "measure/" and lists what it holds, where
+it wrote "measure/.". An adapter whose container candidates relied on the
+default sets `next: "."`. A group row shows its `typeText` when it has one
+(the Batch's "1 Command, 1 Service"), else its Fields.
+
+**The Batch's "+" in the Watchlist's grammar.**
+`DynamicConfiguratorProvider::batchPathCandidates` lists, before its headings,
+the groups the text goes on to, one level at a time, `{path: "demo/adc/",
+completion, kindCode: "group", typeText, values, container: true}`, each
+holding something of the kind asked, and inside a Field its members and
+elements, `{path, completion, kindCode: "member", typeText, operation,
+container, next}`, each adding a read of the whole Field. A typed group name
+("dev") now highlights its group: Enter goes into "device/" (`checkBatchPath`
+says "Enter goes into device/.") where it added the first Field. Picking a
+struct's or an array's Field in the Batch still gives its path, the Batch's
+item; "." or "[" typed after it lists the members or elements. The rows'
+examples are written in the new grammar: "device/Config.Gain,
+data/Samples[3]" and "control/Scale".
+
+Checks: `tests/qml_layout/PathLabelChecks.hpp` (new: the one rule for every
+path label) in `DetailsLayout.cpp` (the Batch's rows from 300 to 1,200 px and
+back, side by side and stacked, hovered and not, with the cell's order;
+Details' title; `batch-paths-760-hover.png`, `batch-paths-1200-hover.png`),
+`WatchLook.cpp` (the Watchlist's List) and `DeviceTreeGroups.cpp` (the context
+line, and labels at exactly their implicit width, which failed before);
+`tests/qml_layout/PathCompletion.cpp` (new: both "+" rows over the real
+provider and a TCP connection, a group, a subgroup, an endpoint, a member and
+an element; `path-completion-*.png`); `tests/qt_connection/main.cpp` (the
+Batch's group and member rows).

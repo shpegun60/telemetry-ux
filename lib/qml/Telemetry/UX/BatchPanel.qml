@@ -529,18 +529,30 @@ Pane {
                                 // The path in the one path label (the review's
                                 // 14.3): its groups muted and its leaf bright,
                                 // whole segments dropping under "…"; then its
-                                // values, fixed and quieter. The values elide
-                                // first (at most half the cell), the path after.
+                                // values, fixed and quieter. The cell gives way
+                                // (PL-1, design §5): the values elide first, down
+                                // to Type.nameFloor; then the path drops whole
+                                // segments beside them; when even "…/leaf" would
+                                // not fit beside that floor the values hide
+                                // (whole in the tooltip and the pane) and the path
+                                // takes the cell back; last, the leaf elides. The
+                                // row's … and × keep their place hovered or not,
+                                // so nothing here depends on them.
                                 Item {
                                     id: lineBox
                                     objectName: "batchRowName"
                                     readonly property string text: item.name + (item.values.length > 0 ? " " + item.values : "")
                                     readonly property bool truncated: pathLabel.elided || valuesLabel.truncated
-                                    readonly property real valuesRoom: valuesLabel.text.length === 0 ? 0
-                                        : Math.min(valuesLabel.implicitWidth, lineBox.width / 2)
+                                                                      || (item.values.length > 0 && !valuesShown)
+                                    // The values' least room, and the path's beside it.
+                                    readonly property real valuesFloor: item.values.length === 0 ? 0
+                                        : Math.min(Math.ceil(valuesLabel.implicitWidth), Type.nameFloor)
+                                    readonly property real pathRoom: item.values.length === 0 ? width
+                                        : width - Type.groupSpacing - valuesFloor
+                                    readonly property bool valuesShown: item.values.length > 0
+                                        && pathRoom + pathLabel.tolerance >= pathLabel.shortestWidth
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    clip: true
                                     PathLabel {
                                         id: pathLabel
                                         objectName: "batchRowPath"
@@ -552,21 +564,24 @@ Pane {
                                         leafColor: item.current ? Theme.selectedForeground
                                                  : item.historical ? Theme.textMuted : Theme.textPrimary
                                         toolTipEnabled: false
-                                        width: Math.min(implicitWidth, Math.max(0, lineBox.width
-                                            - (lineBox.valuesRoom > 0 ? lineBox.valuesRoom + Type.groupSpacing : 0)))
+                                        // The room it has: all of it, less the values' floor while they show.
+                                        width: Math.max(0, lineBox.valuesShown ? lineBox.pathRoom : lineBox.width)
                                     }
                                     Label {
                                         id: valuesLabel
                                         objectName: "batchRowValues"
+                                        visible: lineBox.valuesShown
                                         anchors.verticalCenter: parent.verticalCenter
-                                        x: pathLabel.width + Type.groupSpacing
+                                        // After the path as it is shown: a dropped segment's room is theirs.
+                                        x: pathLabel.usedWidth + Type.groupSpacing
                                         width: Math.max(0, lineBox.width - x)
                                         textFormat: Text.PlainText
                                         text: item.values
                                         font.family: Type.fixedFamily
                                         color: item.current ? Theme.selectedForeground
                                              : item.historical ? Theme.textMuted : Theme.textSecondary
-                                        elide: Text.ElideRight
+                                        // Cut only past the path's tolerance, by the same rule.
+                                        elide: implicitWidth > width + pathLabel.tolerance ? Text.ElideRight : Text.ElideNone
                                     }
                                     HoverHandler { id: lineHover }
                                     PlainToolTip {

@@ -15,7 +15,7 @@ PathAddRow {
     // Enter on a value already watched: show its row (a source row).
     signal reveal(int row, string notice)
     restText: qsTr("Add a path")
-    placeholderText: qsTr("device.Config.Gain, data.Samples[3]")
+    placeholderText: qsTr("device/Config.Gain, data/Samples[3]")
     accessibleName: qsTr("Add a path to the Watchlist")
     accessibleDescription: qsTr("Type or paste paths, one per line. Down opens suggestions; Enter adds.")
     quietStatuses: ["adds", "watched", "missing"]

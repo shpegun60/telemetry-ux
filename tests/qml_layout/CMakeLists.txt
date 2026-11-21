@@ -37,7 +37,7 @@ qt_add_resources(telemetry_qml_watch_tree "watch-tree-entry" PREFIX "/" BASE "${
 target_compile_features(telemetry_qml_watch_tree PRIVATE cxx_std_20)
 target_link_libraries(telemetry_qml_watch_tree PRIVATE TelemetryUX::qt_connection Qt6::Test)
 # The Watchlist design of 20 November 2026 (WL-9, section H).
-qt_add_executable(telemetry_qml_watch_look WatchLook.cpp ScriptSteps.hpp)
+qt_add_executable(telemetry_qml_watch_look WatchLook.cpp ScriptSteps.hpp PathLabelChecks.hpp)
 set_target_properties(telemetry_qml_watch_look PROPERTIES AUTOMOC ON)
 qt_add_resources(telemetry_qml_watch_look "watch-look-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES WatchLook.qml)
 target_compile_features(telemetry_qml_watch_look PRIVATE cxx_std_20)
@@ -84,7 +84,7 @@ target_link_libraries(telemetry_qml_metadata_tree PRIVATE TelemetryUX::qt_connec
 # The Details layout spec's checks (one stack from the top, every structure
 # shown, the Batch's split and list, the action's result seen) over real
 # ValueModels made from a real descriptor.
-qt_add_executable(telemetry_qml_details_layout DetailsLayout.cpp)
+qt_add_executable(telemetry_qml_details_layout DetailsLayout.cpp PathLabelChecks.hpp)
 set_target_properties(telemetry_qml_details_layout PROPERTIES AUTOMOC ON)
 qt_add_resources(telemetry_qml_details_layout "details-layout-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DetailsLayout.qml)
 target_compile_features(telemetry_qml_details_layout PRIVATE cxx_std_20)
@@ -103,7 +103,7 @@ target_link_libraries(telemetry_qml_device_tree_kinds PRIVATE TelemetryUX::qt_co
 # grammar, and the tree's groups inside groups over a model shaped as a
 # group tree will be (counts, the indent step, the context line, find by
 # path and type, the kinds filter, the path label).
-qt_add_executable(telemetry_qml_device_tree_groups DeviceTreeGroups.cpp)
+qt_add_executable(telemetry_qml_device_tree_groups DeviceTreeGroups.cpp PathLabelChecks.hpp)
 set_target_properties(telemetry_qml_device_tree_groups PROPERTIES AUTOMOC ON)
 qt_add_resources(telemetry_qml_device_tree_groups "device-tree-groups-entry" PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}" FILES DeviceTreeGroups.qml)
 target_compile_features(telemetry_qml_device_tree_groups PRIVATE cxx_std_20)
@@ -120,3 +120,15 @@ target_compile_definitions(telemetry_qml_device_tree_named PRIVATE QT_NO_KEYWORD
     UX_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_link_libraries(telemetry_qml_device_tree_named PRIVATE TelemetryUX::qt_connection Telemetry::core Telemetry::workbench
     Telemetry::encoded_backend Qt6::Test)
+# The Watchlist's and the Batch's "+" completing in the one grammar (WL-10a),
+# through the real provider of a TCP connection to the demo peer serving a
+# group tree.
+find_package(Qt6 6.12 REQUIRED COMPONENTS Network)
+find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS tcp_server)
+qt_add_executable(telemetry_qml_path_completion PathCompletion.cpp
+    ../../examples/inspector/DemoPeer.cpp ../../examples/inspector/TcpDemoServer.cpp)
+target_compile_features(telemetry_qml_path_completion PRIVATE cxx_std_20)
+target_compile_definitions(telemetry_qml_path_completion PRIVATE QT_NO_KEYWORDS QT_NO_FOREACH)
+target_include_directories(telemetry_qml_path_completion PRIVATE ../../examples/inspector)
+target_link_libraries(telemetry_qml_path_completion PRIVATE TelemetryUX::qt_connection Telemetry::tcp_server
+    Qt6::Network Qt6::Quick Qt6::QuickControls2 Qt6::Test)
