@@ -23,8 +23,198 @@ Pane {
     // A host may defer explicit selection for a draft-discard decision. The
     // provider remains the selection owner while that decision is pending.
     property var selectionHandler: null
-    // What a row's drag carries (LP-1g3): an endpoint's path, or every
-    // endpoint's under a group or a category, in the tree's order.
+    // Drag and drop with nested groups (the designer's section 16). A drag
+    // carries what was picked, {from: "device", items: [{kind, path}],
+    // paths}, never its expansion: each target expands it in its provider,
+    // at any depth. The picked rows are the extended selection (Ctrl+click,
+    // Shift+click, Shift+arrows, Ctrl+Space) when the pressed row is in it,
+    // else the pressed row; tree order, a row under a picked one once.
+    ItemSelectionModel { id: pickModel; model: panel.searchSource }
+    property int pickRevision: 0
+    property var pickAnchor: null
+    Connections {
+        target: pickModel
+        function onSelectionChanged() { ++panel.pickRevision }
+        function onModelChanged() { ++panel.pickRevision }
+    }
+    Connections {
+        target: panel.searchSource
+        ignoreUnknownSignals: true
+        function onModelReset() { pickModel.clearSelection(); panel.pickAnchor = null; ++panel.pickRevision }
+    }
+    readonly property int pickedCount: { void pickRevision; return pickModel.selectedIndexes.length }
+    function isPicked(index, revision) {
+        return !!index && index.valid && pickModel.model === searchSource && pickModel.isSelected(index)
+    }
+    function pickOnly(index) {
+        pickModel.clearSelection()
+        if (index && index.valid)
+            pickModel.select(index, ItemSelectionModel.Select)
+        pickAnchor = index && index.valid ? index : null
+    }
+    function pickToggle(index) {
+        if (!index || !index.valid)
+            return
+        pickModel.select(index, ItemSelectionModel.Toggle)
+        pickAnchor = index
+    }
+    // The shown rows from the anchor to index, picked; the rest let go.
+    function pickRange(index) {
+        const from = pickAnchor && pickAnchor.valid ? endpointTree.rowAtIndex(shownOf(pickAnchor)) : -1
+        const to = index && index.valid ? endpointTree.rowAtIndex(shownOf(index)) : -1
+        if (from < 0 || to < 0) {
+            pickOnly(index)
+            return
+        }
+        const anchor = pickAnchor
+        pickModel.clearSelection()
+        for (let row = Math.min(from, to); row <= Math.max(from, to); ++row)
+            pickModel.select(sourceOf(endpointTree.index(row, 0)), ItemSelectionModel.Select)
+        pickAnchor = anchor
+    }
+    // A click on a row with the keys held at its press.
+    function pickClick(index, modifiers) {
+        if ((modifiers & Qt.ControlModifier) !== 0)
+            pickToggle(index)
+        else if ((modifiers & Qt.ShiftModifier) !== 0)
+            pickRange(index)
+        else
+            pickOnly(index)
+    }
+    // A row's place in the tree, as rows from the root: what sorts the
+    // picked rows into tree order, not click order.
+    function treeOrder(index) {
+        const out = []
+        for (let at = index; at && at.valid; at = at.parent)
+            out.unshift(at.row)
+        return out
+    }
+    function before(a, b) {
+        const x = treeOrder(a), y = treeOrder(b)
+        for (let i = 0; i < Math.min(x.length, y.length); ++i)
+            if (x[i] !== y[i])
+                return x[i] - y[i]
+        return x.length - y.length
+    }
+    // A row as a drop names it: {kind, path}; kind "group", "field",
+    // "member", "element", "command" or "service".
+    function dropItem(index) {
+        if (!index || !index.valid)
+            return null
+        const kind = String(treeFilter.value(index, "kind") || "")
+        const endpoint = treeFilter.value(index, "isEndpoint") === true
+        const child = treeFilter.value(index, "previewChild") === true
+        const category = Number(treeFilter.value(index, "category") || 0)
+        const path = rowPath(index)
+        if (path.length === 0)
+            return null
+        const name = String(treeFilter.value(index, "name") || "")
+        const what = child ? (name.startsWith("[") ? "element" : "member")
+                   : !endpoint ? "group"
+                   : category === 2 || kind === "command" ? "command"
+                   : category === 3 || kind === "service" ? "service" : "field"
+        return { kind: what, path: path }
+    }
+    // What a press on index picks up: the selection when index is in it,
+    // else index alone; in tree order.
+    function pickedFor(index) {
+        let list = []
+        if (index && index.valid && isPicked(index, pickRevision))
+            list = Array.from(pickModel.selectedIndexes)
+        else if (index && index.valid)
+            list = [index]
+        list.sort(before)
+        return list
+    }
+    function dropItems(index) {
+        return pickedFor(index).map(dropItem).filter(item => item !== null)
+    }
+    // The badge's words under the first row: a group's counts, a Field's
+    // type, "and 3 more" for a selection.
+    function badgeDetail(index, picked) {
+        if (picked.length > 1)
+            return picked.length === 2 ? qsTr("and 1 more") : qsTr("and %L1 more").arg(picked.length - 1)
+        if (!index || !index.valid)
+            return ""
+        const endpoint = treeFilter.value(index, "isEndpoint") === true
+        const child = treeFilter.value(index, "previewChild") === true
+        if (!endpoint && !child) {
+            const words = []
+            const count = function(role, one, many) {
+                const n = Number(treeFilter.value(index, role) || 0)
+                if (n > 0) words.push(n === 1 ? one : many.arg(n))
+            }
+            count("fieldCount", qsTr("1 Field"), qsTr("%L1 Fields"))
+            count("commandCount", qsTr("1 Command"), qsTr("%L1 Commands"))
+            count("serviceCount", qsTr("1 Service"), qsTr("%L1 Services"))
+            return words.join(" · ")
+        }
+        return String(treeFilter.value(index, "typeText") || "")
+    }
+    // The section-16 actions from the keyboard and the row menu, on the
+    // picked rows: what each would do, counted, and doing it.
+    function dropPlanFor(index, target) {
+        const items = dropItems(index)
+        return items.length > 0 && provider && typeof provider.dropPlan === "function"
+            ? provider.dropPlan(items, target) : null
+    }
+    // Space: every value under the picked rows into the Watchlist, or out
+    // of it when every one is in it already.
+    function watchPicked(index) {
+        const items = dropItems(index)
+        if (items.length === 0 || !provider || typeof provider.dropOn !== "function")
+            return false
+        if (watchLocked) {
+            say(pollingShort, pollingFull, false)
+            return true
+        }
+        const plan = provider.dropPlan(items, "watchlist")
+        if (plan.status === "held") {
+            // Everything is watched: Space takes it out, as the box does.
+            const indexes = pickedFor(index)
+            return applyWatch(indexes, false, plan.from.length > 0 ? plan.from : qsTr("the picked rows"), true)
+        }
+        return dropOnTarget(items, "watchlist")
+    }
+    function dropOnTarget(items, target) {
+        const result = provider.dropOn(items, target)
+        const words = result.message || result.refusal || ""
+        if (result.status === "refused" || result.status === "empty" || !(result.added > 0)) {
+            if (words.length > 0)
+                say(words, words, false)
+            return true
+        }
+        say(words, words, typeof result.serial === "number" ? result.serial : 0)
+        return true
+    }
+    function plotPicked(index) {
+        const items = dropItems(index)
+        if (items.length === 0 || !provider || typeof provider.dropOn !== "function")
+            return false
+        return dropOnTarget(items, "plot")
+    }
+    function batchPicked(index) {
+        const items = dropItems(index)
+        if (items.length === 0 || !provider || typeof provider.dropOn !== "function")
+            return false
+        return dropOnTarget(items, "batch")
+    }
+    // The menu's words for an action, its count first known (16.4).
+    function actionText(plan, target) {
+        if (!plan)
+            return target === "watchlist" ? qsTr("Add to the Watchlist") : target === "plot" ? qsTr("Plot") : qsTr("Add to the Batch")
+        const count = plan.count || 0
+        if (target === "watchlist")
+            return plan.status === "held" ? (count === 1 ? qsTr("Remove 1 value from the Watchlist")
+                                                         : qsTr("Remove %L1 values from the Watchlist").arg(count))
+                 : count === 1 ? qsTr("Add 1 value to the Watchlist") : qsTr("Add %L1 values to the Watchlist").arg(count)
+        if (target === "plot")
+            return count === 1 ? qsTr("Plot 1 value") : qsTr("Plot %L1 values").arg(count)
+        return count === 1 ? qsTr("Add 1 item to the Batch") : qsTr("Add %L1 items to the Batch").arg(count)
+    }
+    // What a row's drag carried before section 16 (LP-1g3): an endpoint's
+    // path, or every endpoint's under a group, in the tree's order, at any
+    // depth. Kept for hosts that call it.
     function dragPaths(index) {
         const model = provider.endpoints
         if (!model || typeof model.pathOf !== "function" || !index || !index.valid)
@@ -38,7 +228,7 @@ Pane {
                 out.push(path)
                 return
             }
-            if (depth > 6)
+            if (depth > searchDepthLimit)
                 return
             for (let r = 0; r < model.rowCount(at); ++r)
                 walk(model.index(r, 0, at), depth + 1)
@@ -72,6 +262,10 @@ Pane {
     readonly property bool watchApi: watchBoxes && provider &&
         typeof provider.watchState === "function" &&
         typeof provider.setWatchMany === "function"
+    // A provider that expands a drop itself (section 16): the row menu's
+    // drops and their keys.
+    readonly property bool dropActions: watchBoxes && !!provider && typeof provider.dropPlan === "function"
+                                        && typeof provider.dropOn === "function"
     // Moves whenever a box may show something else; the rows ask again then.
     readonly property int watchRevision: watchApi ? provider.watchRevision : 0
     // Locked while polling only for a provider that cannot take changes then;
@@ -166,14 +360,28 @@ Pane {
     }
     TextMetrics { id: accessMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "rw" }
     TextMetrics { id: leastTypeMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: "f32" }
-    // The device's widest Field type, as its model knows it.
+    // The device's widest Field type, as its model knows it, and the widest
+    // with its scopes cut to "…::" (the designer's review, 14.2).
     readonly property string widestFieldType: searchSource && typeof searchSource.widestFieldType === "string"
                                               ? searchSource.widestFieldType : ""
+    readonly property string widestShortFieldType: searchSource && typeof searchSource.widestShortFieldType === "string"
+                                                   ? searchSource.widestShortFieldType : widestFieldType
     TextMetrics { id: widestMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: panel.widestFieldType }
+    TextMetrics { id: widestShortMetrics; font.family: Type.fixedFamily; font.pointSize: Type.caption; text: panel.widestShortFieldType }
     readonly property real scrollInset: endpointScroll.visible ? endpointScroll.width : 0
-    // W: the widest Field type, 2 to 9.6 body heights.
-    readonly property real typeFull: Math.max(Math.round(Type.bodyPixels * 2),
+    // W: the widest Field type, 2 to 9.6 body heights; in either form.
+    readonly property real typeWide: Math.max(Math.round(Type.bodyPixels * 2),
         Math.min(widestFieldType.length > 0 ? Math.ceil(widestMetrics.advanceWidth) : typeSeen, Math.round(Type.bodyPixels * 9.6)))
+    readonly property real typeNarrow: Math.max(Math.round(Type.bodyPixels * 2),
+        Math.min(widestShortFieldType.length > 0 ? Math.ceil(widestShortMetrics.advanceWidth) : typeWide, typeWide))
+    // 3. The type scopes give way, for the whole column, once rw has gone
+    // and Value is at its least: while a depth-3 name would keep less than
+    // 7.2 body heights beside the full names. The column switches as a
+    // whole, so only rows past step 5 mix forms.
+    readonly property bool typeScopesCut: typeNarrow < typeWide && accessColumn === 0 &&
+        roomAt(3) - (typeWide + columnGap) - (valueColumnShown ? Math.round(Type.bodyPixels * 4.2) + columnGap : 0)
+            < Type.bodyPixels * 7.2
+    readonly property real typeFull: typeScopesCut ? typeNarrow : typeWide
     readonly property real accessFull: Math.ceil(accessMetrics.advanceWidth)
     // A row's name x in the tree at a depth and a step: the indents, the
     // chevron, the box's slot, the glyph and its gap (90 px at depth 2, 16 px).
@@ -193,7 +401,7 @@ Pane {
         ? Math.max(Math.round(Type.bodyPixels * 4.2), Math.min(valueSeen, Math.round(Type.bodyPixels * 16.5), endpointTree.width * 0.4))
         : 0
     // 1. rw gives way first: shown while a depth-3 name keeps 7.2 body heights with it.
-    readonly property real accessColumn: roomAt(3) - (accessFull + columnGap) - (typeFull + columnGap)
+    readonly property real accessColumn: roomAt(3) - (accessFull + columnGap) - (typeWide + columnGap)
         - (valueWanted > 0 ? valueWanted + columnGap : 0) >= Type.bodyPixels * 7.2 ? accessFull : 0
     readonly property real accessPart: accessColumn > 0 ? accessColumn + columnGap : 0
     // 2. Value narrows to its least before a name drops below its floor.
@@ -220,10 +428,15 @@ Pane {
     // found once per reset.
     property int walkedDeepest: 0
     readonly property int indentDepth: Math.max(1, deepestGroup + 2)
+    // A device deeper than the SDK builds by default (8 levels, D = 10) is
+    // one a host still reads (up to 255): its step may go down to a quarter
+    // of the full one, so its deepest names keep some room.
+    readonly property int producerDepth: 10
     readonly property real indentStep: {
         const nameEnd = (valueColumn > 0 ? valueLeft : typeLeft) - columnGap
         const room = nameEnd - nameXAt(0, 0) - Math.round(Type.bodyPixels * 6)
-        return Math.max(Math.floor(Type.indent / 2), Math.min(Type.indent, Math.floor(room / indentDepth)))
+        const least = indentDepth > producerDepth ? Math.floor(Type.indent / 4) : Math.floor(Type.indent / 2)
+        return Math.max(least, Math.min(Type.indent, Math.floor(room / indentDepth)))
     }
     function walkDeepest() {
         const source = searchSource
@@ -649,6 +862,8 @@ Pane {
         endpointMenu.target = index
         endpointMenu.targetIsEndpoint = isEndpoint
         endpointMenu.targetIsGroup = isGroup(index)
+        endpointMenu.plans = dropActions ? { watchlist: dropPlanFor(index, "watchlist"), plot: dropPlanFor(index, "plot"),
+                                             batch: dropPlanFor(index, "batch") } : ({})
         endpointMenu.returnFocus = panel.Window.activeFocusItem
         endpointMenu.popup(anchor, x === undefined ? 16 : x, y === undefined ? anchor.height : y)
         return true
@@ -840,6 +1055,31 @@ Pane {
                 requestSelection(source)
             return true
         }
+        // Shift+Up and Shift+Down extend the picked rows; Ctrl+Space picks
+        // or lets go of the current one (16.2).
+        if ((event.key === Qt.Key_Up || event.key === Qt.Key_Down) && shift && !ctrl && !alt) {
+            const next = event.key === Qt.Key_Up ? row - 1 : row + 1
+            if (next < 0 || next >= endpointTree.rows)
+                return true
+            if (!pickAnchor || !pickAnchor.valid)
+                pickAnchor = source
+            setCurrentRow(next)
+            pickRange(sourceOf(endpointTree.index(next, 0)))
+            return true
+        }
+        if (event.key === Qt.Key_Space && ctrl && !alt) {
+            pickToggle(source)
+            return true
+        }
+        // Ctrl+P plots the picked rows' values, Ctrl+B adds them to the
+        // Batch, as a drop on each does (16.4).
+        if (event.key === Qt.Key_P && ctrl && !alt && !shift)
+            return plotPicked(source)
+        if (event.key === Qt.Key_B && ctrl && !alt && !shift)
+            return batchPicked(source)
+        // Several rows picked: Space acts on all of them, as a drop does.
+        if (event.key === Qt.Key_Space && plain && watchApi && pickedCount > 1 && isPicked(source, pickRevision))
+            return watchPicked(source)
         // Space watches the current row, as its box does.
         if (event.key === Qt.Key_Space && plain) {
             if (watchApi) {
@@ -1242,6 +1482,8 @@ Pane {
         property var target
         property bool targetIsEndpoint: false
         property bool targetIsGroup: false
+        // What each drop would do with the picked rows, made at the popup.
+        property var plans: ({})
         // Qt 6.4 does not hand focus back when a Menu closes; the keyboard
         // returns to whatever had it when the menu opened.
         property Item returnFocus: null
@@ -1295,6 +1537,30 @@ Pane {
             enabled: panel.bulkWatchAvailable && !panel.watchLocked
             onTriggered: panel.watchAll()
         }
+        // The drops from the keyboard (16.4): each counted before Enter, on
+        // the picked rows. A refused one stays enabled and says why.
+        MenuSeparator { visible: panel.dropActions }
+        MenuItem {
+            objectName: "endpointMenuDropWatch"
+            visible: panel.dropActions
+            height: visible ? implicitHeight : 0
+            text: panel.actionText(endpointMenu.plans.watchlist, "watchlist") + "\t" + qsTr("Space")
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.watchPicked(target) }
+        }
+        MenuItem {
+            objectName: "endpointMenuDropPlot"
+            visible: panel.dropActions
+            height: visible ? implicitHeight : 0
+            text: panel.actionText(endpointMenu.plans.plot, "plot") + "\t" + qsTr("Ctrl+P")
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.plotPicked(target) }
+        }
+        MenuItem {
+            objectName: "endpointMenuDropBatch"
+            visible: panel.dropActions
+            height: visible ? implicitHeight : 0
+            text: panel.actionText(endpointMenu.plans.batch, "batch") + "\t" + qsTr("Ctrl+B")
+            onTriggered: { const target = panel.menuTarget(); if (target) panel.batchPicked(target) }
+        }
         MenuItem {
             objectName: "endpointMenuDetails"
             text: "Show details"
@@ -1326,6 +1592,14 @@ Pane {
             text: qsTr("Collapse all")
             onTriggered: panel.collapseAll()
         }
+    }
+    // The drag's badge (16.3), made at each press outside the view and
+    // carried as an image.
+    DragBadge {
+        id: dragBadge
+        x: -width - 1000
+        y: 0
+        z: -1
     }
     // Typing settles before the tree is filtered.
     Timer { id: findTimer; interval: 50; onTriggered: panel.applyFind() }
@@ -1587,6 +1861,16 @@ Pane {
                 x: panel.typeLeft
                 width: panel.typeColumn
                 text: panel.columnTitles[2]
+                // Where the scopes went, and how to see one (14.2).
+                Accessible.description: panel.typeScopesCut ? typeTitleTip.text : ""
+                HoverHandler { id: typeTitleHover }
+                PlainToolTip {
+                    id: typeTitleTip
+                    objectName: "endpointTypeHeaderToolTip"
+                    visible: typeTitleHover.hovered && panel.typeScopesCut
+                    text: qsTr("Scopes are hidden for room; hover a type for its full name.")
+                    delay: 700
+                }
             }
             ColumnTitle {
                 objectName: "endpointColumnHeader_3"
@@ -1668,17 +1952,36 @@ Pane {
             // reads its required roles, never model.display.
             delegate: EndpointTreeRow {
                 id: endpointDelegate
-                // Dragged: the endpoint's path, or a group's endpoints.
+                // Dragged: what was picked, each {kind, path} (section 16).
                 property var dragged: []
+                readonly property var draggedPaths: dragged.map(item => item.path)
+                // The keys held at the press: a click picks with them.
+                property int pressModifiers: Qt.NoModifier
+                picked: panel.isPicked(sourceIndex, panel.pickRevision)
                 Drag.dragType: Drag.Automatic
                 Drag.supportedActions: Qt.CopyAction
                 Drag.active: endpointDrag.active
-                Drag.mimeData: ({"application/x-telemetry-paths": JSON.stringify({from: "device", paths: endpointDelegate.dragged}),
-                                "text/plain": endpointDelegate.dragged.join("\n")})
-                // The paths are taken at the press, before the drag starts.
+                Drag.imageSource: dragBadge.image
+                Drag.mimeData: ({"application/x-telemetry-paths": JSON.stringify({from: "device", items: endpointDelegate.dragged,
+                                                                                   paths: endpointDelegate.draggedPaths}),
+                                "text/plain": endpointDelegate.draggedPaths.join("\n")})
+                // What is picked is taken at the press, before the drag
+                // starts, and its badge made.
                 PointHandler {
+                    id: pressPoint
                     acceptedButtons: Qt.LeftButton
-                    onActiveChanged: if (active) endpointDelegate.dragged = panel.dragPaths(sourceIndex)
+                    onActiveChanged: {
+                        if (!active)
+                            return
+                        endpointDelegate.pressModifiers = pressPoint.point.modifiers
+                        const picked = panel.pickedFor(sourceIndex)
+                        endpointDelegate.dragged = picked.map(panel.dropItem).filter(item => item !== null)
+                        const first = endpointDelegate.dragged.length > 0 ? endpointDelegate.dragged[0] : null
+                        dragBadge.make(first ? (first.kind === "field" ? endpointDelegate.shownKind
+                                                : first.kind === "member" || first.kind === "element" ? endpointDelegate.shownKind
+                                                : first.kind) : "",
+                                       first ? first.path : "", panel.badgeDetail(sourceIndex, picked))
+                    }
                 }
                 DragHandler {
                     id: endpointDrag
@@ -1714,6 +2017,8 @@ Pane {
                 watchRefusal: panel.refusalOf(sourceIndex, panel.watchRevision)
                 onMeasured: function(value, type) { panel.noteMeasured(value, type) }
                 typeText: typeof model.typeText === "string" ? model.typeText : ""
+                typeSpoken: typeof model.typeSpoken === "string" ? model.typeSpoken : ""
+                typeScopesCut: panel.typeScopesCut
                 accessText: typeof model.accessText === "string" ? model.accessText : ""
                 // Every row of a Field shows its access, its values included
                 // (the owner, 20 November 2026).
@@ -1731,8 +2036,8 @@ Pane {
                 previewsShown: panel.previewsSupported && panel.previewValues
                 // Optional for third-party providers. Selection stays owned by the
                 // provider, including when it refuses a click while busy.
-                highlighted: isEndpoint && panel.selectedEndpointIndex !== undefined
-                    && sourceIndex === panel.selectedEndpointIndex
+                highlighted: (isEndpoint && panel.selectedEndpointIndex !== undefined
+                    && sourceIndex === panel.selectedEndpointIndex) || picked
                 readonly property int boxState: panel.stateOf(sourceIndex, panel.watchRevision)
                 // A struct's, an array's or a group's box counts its values;
                 // its tooltip says what a click does before it adds hundreds.
@@ -1758,7 +2063,10 @@ Pane {
                         panel.toggleWatchMark(sourceIndex)
                 }
                 onClicked: {
-                    if (isEndpoint)
+                    // Ctrl and Shift pick rows (16.2); Details still shows
+                    // the current one.
+                    panel.pickClick(sourceIndex, pressModifiers)
+                    if (isEndpoint && (pressModifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === 0)
                         panel.requestSelection(sourceIndex)
                 }
                 onContextMenuRequested: function(x, y) {

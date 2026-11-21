@@ -712,15 +712,29 @@ Pane {
                     anchors.fill: parent
                     keys: ["application/x-telemetry-paths"]
                     property int count: 0
-                    function pathsOf(event) {
+                    // A drop from the Device tree: the provider's plan for
+                    // what was picked (section 16), its words on the frame;
+                    // a refusal explained, then refused.
+                    property var plan: null
+                    readonly property bool refused: !!plan && plan.status !== "ok"
+                    function payloadOf(event) {
                         let payload = null
                         try { payload = JSON.parse(event.getDataAsString("application/x-telemetry-paths")) } catch (e) {}
-                        if (!payload || payload.from === "batch" || !Array.isArray(payload.paths))
+                        return payload && payload.from !== "batch" ? payload : null
+                    }
+                    function pathsOf(event) {
+                        const payload = payloadOf(event)
+                        if (!payload || !Array.isArray(payload.paths))
                             return []
                         return payload.paths.filter((path, at) => typeof path === "string" && path.length > 0
                                                                  && payload.paths.indexOf(path) === at)
                     }
                     onEntered: drag => {
+                        const payload = payloadOf(drag)
+                        if (payload && Array.isArray(payload.items) && typeof panel.provider.dropPlan === "function") {
+                            plan = panel.provider.dropPlan(payload.items, "batch")
+                            return
+                        }
                         const paths = pathsOf(drag)
                         if (paths.length === 0 || !batchAdd.visible || !batchAdd.enabled) {
                             drag.accepted = false
@@ -729,29 +743,59 @@ Pane {
                         count = typeof panel.provider.batchItemCount === "function"
                                 ? panel.provider.batchItemCount(paths) : paths.length
                     }
-                    onExited: count = 0
+                    onExited: { count = 0; plan = null }
                     onDropped: drop => {
-                        const paths = pathsOf(drop)
+                        const payload = payloadOf(drop)
+                        const refused = batchDrop.refused
+                        const planned = batchDrop.plan !== null
                         count = 0
-                        if (panel.dropPaths(paths))
+                        plan = null
+                        if (planned) {
+                            if (!refused && panel.dropItems(payload.items))
+                                drop.acceptProposedAction()
+                            return
+                        }
+                        if (panel.dropPaths(pathsOf(drop)))
                             drop.acceptProposedAction()
                     }
+                    // Where the items will go: a 2 px line after the last one.
                     Rectangle {
+                        objectName: "batchDropInsertion"
+                        visible: batchDrop.containsDrag && !batchDrop.refused
+                        x: Type.padding
+                        width: parent.width - Type.padding * 2
+                        height: 2
+                        y: Math.min(parent.height - height, items.y + Math.min(items.contentHeight, items.height))
+                        color: Theme.focusRing
+                        Accessible.ignored: true
+                    }
+                    Rectangle {
+                        objectName: "batchDropFrame"
                         anchors.fill: parent
                         visible: batchDrop.containsDrag
                         color: "transparent"
                         border.width: 2
-                        border.color: Theme.focusRing
-                        Label {
-                            objectName: "batchDropText"
+                        border.color: batchDrop.refused ? Theme.error : Theme.focusRing
+                        Row {
                             anchors.horizontalCenter: parent.horizontalCenter
                             anchors.bottom: parent.bottom
                             anchors.bottomMargin: Type.padding
-                            text: batchDrop.count === 1 ? qsTr("Drop to add 1 item to the Batch")
-                                                        : qsTr("Drop to add %L1 items to the Batch").arg(batchDrop.count)
-                            color: Theme.textPrimary
-                            padding: Type.tight
-                            background: Rectangle { color: Theme.surface; radius: Type.radius }
+                            spacing: Type.tight
+                            ErrorGlyph {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: batchDrop.refused
+                            }
+                            Label {
+                                objectName: "batchDropText"
+                                width: Math.min(implicitWidth, batchDrop.width - Type.padding * 4)
+                                wrapMode: Text.Wrap
+                                text: batchDrop.plan ? (batchDrop.refused ? batchDrop.plan.refusal : batchDrop.plan.words)
+                                    : batchDrop.count === 1 ? qsTr("Drop to add 1 item to the Batch")
+                                    : qsTr("Drop to add %L1 items to the Batch").arg(batchDrop.count)
+                                color: batchDrop.refused ? Theme.error : Theme.textPrimary
+                                padding: Type.tight
+                                background: Rectangle { color: Theme.surface; radius: Type.radius }
+                            }
                         }
                     }
                 }
@@ -845,6 +889,24 @@ Pane {
     }
     // Paths dropped on the list, added as the "+" row adds them; said on its
     // notice line.
+    // Rows picked in the Device tree (section 16): one item per Field under
+    // them at any depth, a Command or a Service only when picked by itself,
+    // all or none, as one step.
+    function dropItems(items) {
+        if (!Array.isArray(items) || items.length === 0 || typeof provider.dropOn !== "function")
+            return false
+        const result = provider.dropOn(items, "batch")
+        const ok = result.status === "ok" && result.added > 0
+        batchAdd.lastRefused = !ok
+        batchNotice.text = result.message || result.refusal || ""
+        if (ok)
+            Qt.callLater(() => {
+                expanded.checked = true
+                items.currentIndex = items.count - 1
+                items.positionViewAtEnd()
+            })
+        return ok
+    }
     function dropPaths(paths) {
         if (paths.length === 0 || typeof provider.addBatchPaths !== "function")
             return false

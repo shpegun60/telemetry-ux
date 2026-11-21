@@ -391,7 +391,7 @@ void WatchTraces::unplot(const QString& path)
 	unplotMany({path});
 }
 
-QVariantMap WatchTraces::plotMany(const QStringList& paths)
+QVariantMap WatchTraces::plotMany(const QStringList& paths, const QString& mergeKey)
 {
 	QVariantMap after;
 	QString refusal, last;
@@ -409,7 +409,7 @@ QVariantMap WatchTraces::plotMany(const QStringList& paths)
 	}
 	if (!after.isEmpty())
 		record(after.size() == 1 ? tr("Plot %1").arg(last) : tr("Plot %L1 values").arg(after.size()),
-		       QStringLiteral("plot.curves"), {}, after);
+		       QStringLiteral("plot.curves"), {}, after, mergeKey);
 	return {{QStringLiteral("added"), int(after.size())}, {QStringLiteral("refusal"), refusal},
 	        {QStringLiteral("last"), last}};
 }

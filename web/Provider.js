@@ -55,6 +55,9 @@ function graph(types, limits)
 		    type.kind > 4 || !Number.isSafeInteger(type.wireBytes) || type.wireBytes < 0)
 			fail('Invalid presentation type');
 		const row = {id, kind : type.kind, wireBytes : type.wireBytes};
+		// A v3.1 enum's or struct's name, "adc::Config"; absent when unnamed.
+		if ((row.kind === 2 || row.kind === 3) && typeof type.name === 'string' && type.name)
+			row.name = type.name;
 		if (row.kind === 1) {
 			if (!Number.isInteger(type.scalarCode) || type.scalarCode < 1 || type.scalarCode > 11)
 				fail('Invalid presentation scalar');
@@ -310,7 +313,8 @@ function dynamicDescription(schema)
 				endpoints.push({
 					...row,
 					category,
-					catalog : catalog.name,
+					// A group tree's group by its path, "demo/adc/channel1".
+					catalog : schema.groupTree ? schema.groups[catalog.group].path : catalog.name,
 					valueType : category === 1 ? row.typeId : 0,
 					requestType : category === 1 ? 0 : row.requestTypeId,
 					responseType : category === 3 ? row.responseTypeId : 0
@@ -806,7 +810,9 @@ function presentation(adapter, inputLimits, hooks = {}, overlay)
 				    (item?.endpoint ?? selected).category === 1 ? 'value'
 				    : source === 'response' || source === 'batchResponse' ? 'response' : 'request', childPath),
 				kind : kinds[type.kind],
-				type : scalarNames[scalarType.scalarCode] || kinds[type.kind],
+				// A named enum or struct by its name, as the Qt models write it.
+				type : type.name || scalarNames[scalarType.scalarCode] || kinds[type.kind],
+				typeName : type.name || '',
 				children : type.kind === 3   ? type.members.length
 				           : type.kind === 4 ? type.elementCount
 				                             : 0,

@@ -213,18 +213,34 @@ Pane {
         if (numeric && width > numberSeen) numberSeen = width
     }
     function noteType(width) { if (width > typeSeen) typeSeen = width }
-    function resetColumns() { valueSeen = 0; numberSeen = 0; typeSeen = 0; ++columnEpoch }
+    // The widest type with its scopes cut to "…::" (the review's 14.2).
+    property real typeShortSeen: 0
+    function noteShortType(width) { if (width > typeShortSeen) typeShortSeen = width }
+    function resetColumns() { valueSeen = 0; numberSeen = 0; typeSeen = 0; typeShortSeen = 0; ++columnEpoch }
     Connections { target: Type; function onBodyChanged() { panel.resetColumns() } }
     function valueWidth(width) {
         const most = Math.max(Math.min(Type.bodyPixels * 16.5, width * 0.4), numberSeen)
         return Math.min(Math.max(Type.bodyPixels * 4.2, valueSeen), most)
     }
-    function typeWidth() { return Math.min(Type.bodyPixels * 9.6, Math.max(Type.bodyPixels * 3, typeSeen)) }
-    function typeShown(width) {
-        return width - Type.padding * 2 - valueWidth(width) - typeWidth() - Type.columnGap * 2 - Type.indent
-            >= Type.bodyPixels * 7.2
+    function typeWideWidth() { return Math.min(Type.bodyPixels * 9.6, Math.max(Type.bodyPixels * 3, typeSeen)) }
+    function typeNarrowWidth() {
+        return typeShortSeen > 0 ? Math.min(typeWideWidth(), Math.max(Type.bodyPixels * 3, typeShortSeen)) : typeWideWidth()
     }
-    function typeX(width) { return width - Type.padding - typeWidth() }
+    // What Name keeps beside a type column this wide.
+    function nameRoom(width, type) {
+        return width - Type.padding * 2 - valueWidth(width) - type - Type.columnGap * 2 - Type.indent
+    }
+    // The type scopes give way before Type hides (the review's 14.2): the
+    // whole column reads "…::Config" while the full names would leave Name
+    // less than 7.2 body heights.
+    function typeScopesCut(width) {
+        return typeNarrowWidth() < typeWideWidth() && nameRoom(width, typeWideWidth()) < Type.bodyPixels * 7.2
+    }
+    function typeWidth(width) { return typeScopesCut(width) ? typeNarrowWidth() : typeWideWidth() }
+    function typeShown(width) {
+        return nameRoom(width, typeWidth(width)) >= Type.bodyPixels * 7.2
+    }
+    function typeX(width) { return width - Type.padding - typeWidth(width) }
     function valueX(width) { return (typeShown(width) ? typeX(width) - Type.columnGap : width - Type.padding) - valueWidth(width) }
     function nameEnd(width) { return valueX(width) - Type.columnGap }
 
@@ -491,7 +507,7 @@ Pane {
         Label {
             objectName: "tableHeadingType"
             x: panel.typeX(heading.tableWidth)
-            width: panel.typeWidth()
+            width: panel.typeWidth(heading.tableWidth)
             visible: !heading.bare && panel.typeShown(heading.tableWidth)
             anchors.verticalCenter: parent.verticalCenter
             text: qsTr("Type"); color: Theme.textSecondary; font.pointSize: Type.caption
@@ -968,6 +984,9 @@ Pane {
         function noteMeasured() {
             if (valueCell.item)
                 panel.noteValue(measuredValue, valueCell.item.numeric === true)
+            // The type in both forms, again after the columns are forgotten.
+            panel.noteType(Math.ceil(typeFullMetrics.advanceWidth))
+            panel.noteShortType(Math.ceil(typeShortMetrics.advanceWidth))
             if (treeView && typeof treeView.noteDepth === "function")
                 treeView.noteDepth(depth)
         }
@@ -1076,21 +1095,40 @@ Pane {
                 width: panel.valueWidth(cellRow.width)
                 sourceComponent: cellRow.valueComponent
             }
-            Label {
+            // A named type in two tones, "…::" while the column gives its
+            // scopes way (the review's 14.2).
+            TypeLabel {
                 id: typeCellLabel
                 objectName: "detailCellType"
                 x: panel.typeX(cellRow.width)
-                width: panel.typeWidth()
+                width: panel.typeWidth(cellRow.width)
                 height: Type.rowHeight
                 visible: panel.typeShown(cellRow.width)
                 verticalAlignment: Text.AlignVCenter
-                textFormat: Text.PlainText; text: cellRow.cellType; elide: Text.ElideRight
-                font.family: Type.fixedFamily; font.pointSize: Type.caption
-                color: cellRow.highlighted ? Theme.selectedForeground : Theme.textSecondary
-                onImplicitWidthChanged: panel.noteType(implicitWidth)
-                Component.onCompleted: panel.noteType(implicitWidth)
+                typeText: cellRow.cellType
+                shortScopes: panel.typeScopesCut(cellRow.width)
+                nameColor: cellRow.highlighted ? Theme.selectedForeground : Theme.textSecondary
+                scopeColor: cellRow.highlighted ? Theme.selectedForeground : Theme.textMuted
+                // Both forms measured, shown or not.
+                TextMetrics {
+                    id: typeFullMetrics
+                    font: typeCellLabel.font
+                    text: cellRow.cellType
+                    onAdvanceWidthChanged: panel.noteType(Math.ceil(advanceWidth))
+                    Component.onCompleted: panel.noteType(Math.ceil(advanceWidth))
+                }
+                TextMetrics {
+                    id: typeShortMetrics
+                    font: typeCellLabel.font
+                    text: typeCellLabel.cut(cellRow.cellType)
+                    onAdvanceWidthChanged: panel.noteShortType(Math.ceil(advanceWidth))
+                    Component.onCompleted: panel.noteShortType(Math.ceil(advanceWidth))
+                }
                 HoverHandler { id: typeHover }
-                PlainToolTip { visible: typeHover.hovered && typeCellLabel.truncated; text: cellRow.cellType }
+                PlainToolTip {
+                    visible: typeHover.hovered && (typeCellLabel.truncated || typeCellLabel.cutShown)
+                    text: cellRow.cellType
+                }
             }
         }
     }

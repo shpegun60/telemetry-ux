@@ -5,7 +5,7 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Netw
 find_package(Telemetry 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection tcp_server)
 find_package(TelemetryUX 0.1.0 CONFIG REQUIRED COMPONENTS qt_connection)
 qt_standard_project_setup(REQUIRES 6.12)
-qt_add_executable(telemetry_qt_connection_check main.cpp
+qt_add_executable(telemetry_qt_connection_check main.cpp Drops.cpp
     ../../examples/inspector/DemoPeer.cpp ../../examples/inspector/TcpDemoServer.cpp)
 qt_add_resources(telemetry_qt_connection_check "entry" PREFIX "/"
     BASE "../../examples/qt_connection" FILES ../../examples/qt_connection/Main.qml)

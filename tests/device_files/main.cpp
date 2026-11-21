@@ -3281,7 +3281,8 @@ void lazyDescriptor()
 	const auto lines = decoded.textOf(second, QStringLiteral("text"));
 	const auto copyOneMs = clock.elapsed();
 	CHECK(lines.count(QLatin1Char('\n')) == 1 + 54612 && model->rowCount(second) == 0 && decoded.copyNote().isEmpty());
-	CHECK(decoded.textOf(second, QStringLiteral("tsv")).contains(QStringLiteral("deep.d001.a.a.a.a.a.a.a.x\tmember\tf32\t\n")));
+	// The last column is the named type (v3.1); an f32 has none.
+	CHECK(decoded.textOf(second, QStringLiteral("tsv")).contains(QStringLiteral("deep.d001.a.a.a.a.a.a.a.x\tmember\tf32\t\t\n")));
 	CHECK(decoded.textOf(second, QStringLiteral("json")).contains(QStringLiteral("\"members\"")));
 
 	// Find by path into members not made: the way there made, one match. The

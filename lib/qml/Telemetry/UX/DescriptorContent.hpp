@@ -45,8 +45,10 @@ public:
 	Q_ENUM(Role)
 
 	struct Node {
-		// path: the names below the category joined by "." ("measure.Voltage").
-		QString name, kind, type, access, path, mark;
+		// path: the names below the category joined by "." ("measure.Voltage");
+		// a nested group's by "/" ("demo/adc.Config"). typeName: the named
+		// type the row shows ("adc::Config"), for copies and exports.
+		QString name, kind, type, access, path, mark, typeName;
 		int count = 0;
 		// 0 Fields, 1 Commands, 2 Services: the word a count is in.
 		int category = 0;
@@ -108,10 +110,12 @@ public:
 	// Why bytes are not a descriptor this program reads - the files-only
 	// card's list (doc/DEVICE_FILES.md in the client): empty, too large, a
 	// version it does not read, ending early at a byte, a fingerprint that
-	// does not match the content; anything else is bytes not laid out as a
-	// descriptor, at the byte where that shows when the header says it.
+	// does not match the content, a limit this program reads past (groups
+	// nested deeper than its ceiling, a name or a path longer, the format's
+	// own counts); anything else is bytes not laid out as a descriptor, at the
+	// byte where that shows when the header says it.
 	struct Problem {
-		enum Kind { None, Empty, TooLarge, Version, EndsEarly, Fingerprint, Layout };
+		enum Kind { None, Empty, TooLarge, Version, EndsEarly, Fingerprint, Layout, Limit };
 		Kind kind = None;
 		// The byte: where the file ends early, or where its layout breaks; -1 when not known.
 		qint64 at = -1;

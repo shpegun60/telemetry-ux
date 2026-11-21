@@ -186,6 +186,11 @@ public:
 	// build false: counts only (entries left empty, adds said in `adds`),
 	// cheap enough for every keystroke.
 	PathResolution resolvePath(const QString& text, bool build = true) const;
+	// Every value a path names, watched or not, as the Watchlist names its
+	// rows: a scalar Field's own path, a struct's or an array's values
+	// ("demo/adc/Config.Gain", ...); empty for a path this device cannot
+	// watch. What a drop on the Plot draws (the designer's section 16).
+	QStringList valuePaths(const QString& text) const;
 	// Rows for paths this device lacks (WL-4c): unresolved keys, kept in place,
 	// found again on every connection. missingEntry makes one for path;
 	// rebindRows resolves every such row against the device now attached.
@@ -208,8 +213,15 @@ public:
 	};
 	QVector<PathCandidate> pathCandidates(const QString& text, int limit = 50) const;
 	// A row as it is saved: {group, name} or {group, name, member}; empty
-	// when the row or its Field is not known.
+	// when the row or its Field is not known. group is the group's key: a
+	// flat catalog's name ("device", "power.meter") or a group tree's
+	// groups joined by "/" ("demo/adc/channel1"), so a project saved with
+	// either kind of device reopens.
 	QVariantMap binding(int row) const;
+	// The path of a saved row's parts, as the device writes it:
+	// "demo/adc/channel1/Gain", "power\.meter/Voltage"; member is appended
+	// as given (".Gain", "[3]").
+	QString pathOf(const QString& group, const QString& name, const QString& member = {}) const;
 	// Whether holdable can answer now; cheap.
 	bool canTellHoldable() const;
 	// The keys held, and a counter that moves whenever they change.
