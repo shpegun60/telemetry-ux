@@ -449,6 +449,14 @@ int main(int argc, char** argv)
 			rig.shot(out, QStringLiteral("details-refused-560-125.png"));
 			CHECK(named(item(gainRow), "valueCaption")->isVisible());
 			rig.call("setBody", 10);
+			// WL-9b leaves Details' refused draft alone: its cell opens on the
+			// draft, never struck or held, and Esc keeps the draft and line 2.
+			rig.call("editorOpen", gainRow);
+			CHECK(cell(gainRow)->property("open").toBool() && !named(item(gainRow), "valueHeld")->isVisible());
+			CHECK(named(item(gainRow), "scalarEditor")->property("text").toString() == QStringLiteral("345"));
+			rig.key(Qt::Key_Escape);
+			CHECK(!cell(gainRow)->property("open").toBool() && rig.row(gainRow).value("valueText").toString() == QStringLiteral("345"));
+			CHECK(named(item(gainRow), "valueCaption")->property("text").toString() == QStringLiteral("Not applied · device holds 1.5"));
 			// Cancel: the values read, no line under any cell.
 			press(named(window->contentItem(), "cancelEditButton"));
 			CHECK(rig.row(gainRow).value("valueText").toString() == QStringLiteral("1.5"));

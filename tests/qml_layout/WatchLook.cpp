@@ -1191,6 +1191,143 @@ void run(const QString& output, double points, int& screens)
 		settle();
 	}
 
+	// ---- WL-9b. A refused value can be edited again (the owner's 33.png) ----
+	// In the Tree and the List: a refused write; each way back into the row -
+	// a double-click on the struck text, F2, Enter - opens the held text as
+	// typed, selected; Esc in the editor leaves it held, Esc on the row drops
+	// it; a valid value written clears it, the value the device holds too. The
+	// held text's tooltip says the way back (the designer's confirmation).
+	{
+		const QString path = QStringLiteral("device.Config.Gain");
+		const int g = look.rowOf(path);
+		const auto latin = [](const char* typed) { return QString::fromLatin1(typed); };
+		const auto refuse = [&](const char* typed, const char* holds) {
+			edit(v, path);
+			QTest::keyClick(v.window, Qt::Key_A, Qt::ControlModifier);
+			typeText(v.window, typed);
+			key(v.window, Qt::Key_Return);
+			settle(80);
+			auto* row = rowOf(v.list, path);
+			CHECK(!row->property("editing").toBool() && text(shown(row, "valueHeldText")) == latin(typed));
+			CHECK(text(shown(row, "valueCaption")) ==
+			      QStringLiteral("Refused: the device does not take this value · device holds %1").arg(latin(holds)));
+			CHECK(v.list->hasActiveFocus() && look.writes.last() == path + QStringLiteral(" = ") + latin(typed));
+			return row;
+		};
+		// Open on the held text, all of it selected, the keys in its editor.
+		const auto reopened = [&](const char* how, const char* typed) {
+			auto* row = rowOf(v.list, path);
+			if (!row->property("editing").toBool())
+				throw std::runtime_error(std::string("the held text did not open by ") + how);
+			auto* editor = shown(row, "scalarEditor");
+			CHECK(text(editor) == latin(typed) && editor->property("selectedText").toString() == latin(typed));
+			CHECK(editor->hasActiveFocus());
+		};
+		// Esc in the editor closes it, writes nothing and leaves the text held.
+		const auto escape = [&](const char* typed) {
+			const auto before = look.writes.size();
+			key(v.window, Qt::Key_Escape);
+			auto* row = rowOf(v.list, path);
+			CHECK(!row->property("editing").toBool() && text(shown(row, "valueHeldText")) == latin(typed));
+			CHECK(look.writes.size() == before && v.list->hasActiveFocus());
+		};
+		const auto doubleClick = [&](QQuickItem* target) {
+			QTest::mouseDClick(v.window, Qt::LeftButton, Qt::NoModifier,
+			                   target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint());
+			settle();
+		};
+		for (const bool tree : {true, false}) {
+			showTree(v, tree);
+			const char* const view = tree ? "the Tree" : "the List";
+			std::printf("WL-9b in %s\n", view);
+			refuse("444", "3");
+			// A double-click on the struck text (the owner's way).
+			doubleClick(shown(rowOf(v.list, path), "valueHeldText"));
+			reopened("a double-click", "444");
+			escape("444");
+			// F2 and Enter on the current row.
+			key(v.window, Qt::Key_F2);
+			reopened("F2", "444");
+			escape("444");
+			key(v.window, Qt::Key_Return);
+			reopened("Enter", "444");
+			escape("444");
+			// The way back is in view: the struck text's tooltip ends with it.
+			auto* gain = rowOf(v.list, path);
+			{
+				auto* held = shown(gain, "valueHeldText");
+				QTest::mouseMove(v.window, shown(v.content, "refreshWatchButton")->mapToScene(QPointF(2, 2)).toPoint());
+				settle();
+				QTest::mouseMove(v.window, held->mapToScene(QPointF(held->width() / 2, held->height() / 2)).toPoint());
+				auto* tip = gain->findChild<QObject*>(QStringLiteral("valueHeldToolTip"));
+				CHECK(tip);
+				// After its 700 ms delay; a loaded machine may take longer.
+				for (int waited = 0; waited < 3000 && !tip->property("visible").toBool(); waited += 50)
+					QTest::qWait(50);
+				CHECK(tip->property("visible").toBool());
+				CHECK(tip->property("text").toString() == QStringLiteral("F2 to change it · Esc drops it"));
+			}
+			// Esc on the row drops it, the tooltip shown or not: what the
+			// device holds, on one line.
+			key(v.window, Qt::Key_Escape);
+			gain = rowOf(v.list, path);
+			CHECK(!named(gain, "valueHeldText") && text(shown(gain, "watchValueText")) == QStringLiteral("3"));
+			CHECK(near(gain->height(), tok("rowHeight"), 0.5));
+			QTest::mouseMove(v.window, shown(v.content, "refreshWatchButton")->mapToScene(QPointF(2, 2)).toPoint());
+			// Refused again; a valid value typed over the held text writes, and
+			// the held text goes with the write.
+			refuse("555", "3");
+			doubleClick(shown(rowOf(v.list, path), "valueHeldText"));
+			reopened("a double-click", "555");
+			typeText(v.window, "2");
+			key(v.window, Qt::Key_Return);
+			QTest::qWait(700);  // past the flash of a value read back as written
+			gain = rowOf(v.list, path);
+			CHECK(look.writes.last() == path + QStringLiteral(" = 2"));
+			CHECK(!named(gain, "valueHeldText") && text(shown(gain, "watchValueText")) == QStringLiteral("2"));
+			// The value the device holds, typed over a held text, is written too.
+			refuse("666", "2");
+			key(v.window, Qt::Key_F2);
+			reopened("F2", "666");
+			typeText(v.window, "2");
+			key(v.window, Qt::Key_Return);
+			QTest::qWait(700);
+			gain = rowOf(v.list, path);
+			CHECK(look.writes.last() == path + QStringLiteral(" = 2"));
+			CHECK(!named(gain, "valueHeldText") && text(shown(gain, "watchValueText")) == QStringLiteral("2"));
+			look.values[g].bits = floatBits(3);
+			look.values[g].writeState.clear();
+			look.values[g].changedAt = 0;
+			look.fill(g);
+			settle();
+		}
+		showTree(v, true);
+		// A held text wider than the Value column reaches over the name's
+		// tail: a double-click there opens it too.
+		{
+			const QString threshold = QStringLiteral("device.Threshold");
+			edit(v, threshold);
+			QTest::keyClick(v.window, Qt::Key_A, Qt::ControlModifier);
+			typeText(v.window, "123455555555555");
+			key(v.window, Qt::Key_Tab);
+			auto* row = rowOf(v.list, threshold);
+			auto* held = shown(row, "valueHeldText");
+			const QPointF left = held->mapToScene(QPointF(held->width() * 0.1, held->height() / 2));
+			CHECK(left.x() < sx(row, prop(row, "valueLeft")));
+			current(v, row);
+			v.list->forceActiveFocus();
+			settle();
+			QTest::mouseDClick(v.window, Qt::LeftButton, Qt::NoModifier, left.toPoint());
+			settle();
+			row = rowOf(v.list, threshold);
+			CHECK(row->property("editing").toBool() && text(shown(row, "scalarEditor")) == QStringLiteral("123455555555555"));
+			key(v.window, Qt::Key_Escape);
+			CHECK(text(shown(rowOf(v.list, threshold), "valueHeldText")) == QStringLiteral("123455555555555"));
+			key(v.window, Qt::Key_Escape);
+			CHECK(!named(rowOf(v.list, threshold), "valueHeldText"));
+		}
+	}
+
 	// ---- 10. The pace: in the bar when it fits whole, else under it ----
 	{
 		QTest::qWait(650);  // the last write's flashes past, for the pictures

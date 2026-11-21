@@ -2265,3 +2265,36 @@ headless Chromium), `WatchLook.cpp` (the Watchlist's scopes;
 `watch-scoped-types-320.png`); the provider suites' type texts.
 `DeviceTreeKinds.cpp` builds its device without names, so the unnamed words
 stay covered.
+
+## The Watchlist: a refused value can be edited again (WL-9b, November 2026)
+
+After a refused write the row took no new value by a double-click. The value's
+double-click handler lived in the value box, which hides whenever the
+`ValueCell` lies over it - a held text, a write under way, a confirmed write's
+flash - so the double-click reached nothing; F2 and Enter still opened it.
+
+`WatchlistPanel`: the double-click is on its own area under the cell
+(`watchValueTapArea`), present on every value row and reaching as far left as
+the cell shows, a long held text included. A double-click, F2 or Enter opens
+a held text as it was typed, selected; Esc in the editor keeps it held, Esc on
+the row drops it, as before. The held text's tooltip ends "F2 to change it ·
+Esc drops it".
+
+`ValueCell` (draft mode):
+- Opened on a held text (`openedHeld`), any value left in it is written by
+  `commitText`, the value the device holds too: only a write lets go of a held
+  text, and before this nothing was written when the text typed was the
+  device's own, so the held text stayed.
+- `heldHint`: words at the end of the held text's tooltip, the owner's keys
+  ("" by default). The tooltip (`valueHeldToolTip`) is on the glyph and the
+  text, with the whole text first when it is cut, after 700 ms.
+- `editorWidth` includes a held text that reaches left of the cell.
+
+Details' cells (live mode) and their refused draft are unchanged.
+
+Checks: `tests/qml_layout/WatchLook.cpp` (WL-9b: in the Tree and the List a
+refused write, then a double-click on the struck text, F2 and Enter each open
+it selected and Esc keeps it, the tooltip, Esc on the row, a valid value and
+the device's own value written and the held text gone, a double-click on a
+long held text left of the Value column), `DetailsTree.cpp` (a refused
+Apply's draft cell opens on its draft and Esc keeps it).
