@@ -2356,3 +2356,66 @@ line, and labels at exactly their implicit width, which failed before);
 provider and a TCP connection, a group, a subgroup, an endpoint, a member and
 an element; `path-completion-*.png`); `tests/qt_connection/main.cpp` (the
 Batch's group and member rows).
+
+## The Log says what happened, to what (LG-1, November 2026)
+
+**A line names its target and its outcome.** `LogModel::record(QVariantMap)`
+takes an event with `source`, `kind` (the `KindIcon` glyph), `path` in the one
+grammar, `values` (what follows the path: `= 2`, `(true)`, `(2, 3) → 6`),
+`text` (the outcome's words) and either `severity` or `result`. `result` is
+the outcome's kind and alone decides the severity: `ok` and `pending` Info,
+`doubt` a Warning, `refused` and `failed` an Error. A host never picks a
+severity from the words any more; the client's regular expression over
+"fail|refus|…" is gone. `append(severity, source, text)` still logs a plain
+event. New roles: `kind`, `path`, `values`, `detail`, `line`; `text` stays the
+words, so a plain event reads as before, and `newest()`, `appended` and Copy
+use the line (path, values and words).
+
+**One line per operation.** Events under one `key` share a line. A `pending`
+event waits `LogModel::progressThresholdMs` (1 s) and shows only if the
+operation is still running; its outcome then replaces that line, keeping its
+time, and an outcome before the threshold is the only line. A later event
+under the key (what a refused Field holds) replaces the line too. So "Command
+pending" followed by "Executed" is now one line, "control/Reset  executed".
+
+**The provider tells the Log.** `DynamicConfiguratorProvider::operationOutcome`
+is emitted for Details' Apply, Execute and Call and for a Watchlist row's
+write: `pending` at the start, then the outcome under the same key. Pass it
+on as it is: `onOperationOutcome: function(outcome) { eventLog.record(outcome) }`.
+Words: Details' verb in the past and " · " a detail - `written · read back
+2`, `written · the device reads back 3` (a doubt), `written · not read back:
+…`, `executed`, `accepted · not confirmed finished` (a doubt), `called · 19
+ms`, `refused · <why>`, `not confirmed · the reply was lost, …` (a doubt),
+`failed · <why>`; past the threshold the time taken (" · 2.6 s"). One value
+in an Apply names its place in the Field (`device/Config.Gain = 2`); several
+name the Field and count them (`written · 3 values · read back`); a refused
+value's line gains " · it holds 3" from the read after it. Reads are not
+logged. `writeOutcome`, `commandOutcome` and `serviceOutcome` are unchanged
+for status lines; a host that logged them should switch to the signal.
+`ValueModel::callLine(texts, bare)` gives the "(2, 3)" form.
+
+**Grouped problems.** `ProblemsModel::raise()` takes `items` after `scope`: one
+summary line ("8 watched values wait for a device") in Problems and in the
+Log, the list in the `detail` role (20 lines, then "and 12 more"; Copy writes
+them all). Raised again, the summary and list change in place. A host that
+joined many lines into one problem's text should give a summary and items
+instead. `resolveWith(key, words, severity, items)` resolves with a line
+saying what changed ("All 8 watched values found on Emulated device"; a
+warning with what is left, "5 of 8 found on Emulated device · 3 are not on
+it"). `resolve(key)` without words logs "Resolved: " and the summary's first
+line only, never a line of the list.
+
+**LogLine.qml** draws one line for a host's list - time, a glyph for a warning
+or an error only, the source, the kind glyph, a `PathLabel`, the values and
+the words - with `expanded` for the current row (the words whole, a list
+open) and `narrow` below 360 px (no source column; the word stays in
+`spoken`, the row's accessible name). An info line has no glyph and its words
+are `textSecondary`; a warning's and an error's are `textPrimary`.
+
+Checks: `tests/device_files/event_log.cpp` (the pending threshold, one line
+per operation, severity from the kind, grouped problems and their
+resolution), `tests/dynamic_qml_configurator/main.cpp` ("outcomes": every
+operation's outcome from the real provider, into a LogModel),
+`tests/qml_layout/LogLines.cpp` (new: the lines as drawn - a Command, a
+refused write, a Service, a grouped warning opened and its resolution, the
+give-way at 320 px; `log-lines-*.png`).

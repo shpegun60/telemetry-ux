@@ -489,6 +489,22 @@ Q_SIGNALS:
 	// A write from a Watchlist row finished; `confirmed` when the device
 	// accepted it and a fresh read published the value.
 	void watchWriteFinished(bool confirmed);
+	// An operation for the Log (LG-1), as LogModel::record takes it: Details'
+	// Apply, Execute and Call, and a Watchlist row's write. {key, source
+	// (the kind word: "Field", "Command", "Service"), kind (the glyph:
+	// "value", "struct", "array", "command", "service"), path
+	// ("device/Config.Gain"), values ("= 2", "(true)", "(2, 3) → 6"), result,
+	// text}. result is the outcome's kind - "pending" at the start, then
+	// "ok", "doubt" (not read back, not confirmed), "refused" (the device or
+	// the program said no) or "failed" (no answer, a broken link) - and text
+	// its words: Details' verb in the past and " · " a detail ("written · read
+	// back 2", "executed", "called · 19 ms", "refused · the device does not
+	// take this value"); past LogModel::progressThresholdMs the time it took.
+	// One key per operation: its start, its outcome and a later word on it
+	// (what the device holds after a refused write) share it, so the Log
+	// keeps one line. A host passes it on as it is and decides nothing from
+	// the words.
+	void operationOutcome(const QVariantMap& outcome);
 
 private:
 	friend class QtConnectionBinding;

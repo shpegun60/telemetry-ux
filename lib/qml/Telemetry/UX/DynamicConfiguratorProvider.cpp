@@ -6,6 +6,7 @@
 #include "DynamicWatchlist.hpp"
 #include "DynamicBatch.hpp"
 #include "EndpointPaths.hpp"
+#include "EventLog.hpp"
 #include "PathGrammar.hpp"
 #include "ScalarEditor.hpp"
 #include "ScalarEditorMetadata.hpp"
@@ -347,6 +348,43 @@ QString operationText(const ins::OperationResult& result)
 	    .arg(result.endpointStatus);
 }
 
+// The Log's kind of an outcome that did not succeed (LG-1): the device
+// answered no ("refused"), the reply was lost and it may have happened
+// ("doubt"), or it never got an answer ("failed").
+QString unsuccessfulKind(const ins::OperationResult& result)
+{
+	if (result.status == cl::Status::Ok)
+		return QStringLiteral("refused");
+	return result.status == cl::Status::OutcomeUnknown ? QStringLiteral("doubt") : QStringLiteral("failed");
+}
+
+// Its words: "refused · <why>", "not confirmed · <why>", "failed · <why>".
+QString unsuccessfulText(const ins::OperationResult& result)
+{
+	const auto kind = unsuccessfulKind(result);
+	const auto verb = kind == QLatin1String("refused") ? said("refused")
+	                  : kind == QLatin1String("doubt") ? said("not confirmed")
+	                                                   : said("failed");
+	return verb + QStringLiteral(" · ") + whyText(result);
+}
+
+// How long an operation took, in the Log's words: "19 ms" under the
+// progress threshold, "2.6 s" past it.
+QString tookText(qint64 ms)
+{
+	return ms < LogModel::progressThresholdMs ? said("%L1 ms").arg(ms)
+	                                          : said("%L1 s").arg(double(ms) / 1000.0, 0, 'f', 1);
+}
+
+// A value's place in its Field, as the path grammar writes it after the
+// Field: ".Gain", "[3]", ".Phase[2].Offset"; empty for the Field itself.
+QString memberSuffix(const QString& key)
+{
+	if (key.isEmpty())
+		return {};
+	return key.startsWith(QLatin1Char('[')) ? key : QLatin1Char('.') + key;
+}
+
 } // namespace
 
 // One selected schema branch, reusing the endpoint model's local type traversal.
@@ -545,6 +583,66 @@ struct DynamicConfiguratorProvider::Impl {
 	qint64 took() const
 	{
 		return actionTimer.isValid() ? actionTimer.elapsed() : 0;
+	}
+	// An operation as the Log names it (LG-1): one key from its start to its
+	// outcome, its target, and when it started. `action` is Details' (one
+	// at a time), `watchAction` a Watchlist row's write, `refusedAction` a
+	// refused Apply of one value, waiting for the read that says what the
+	// device holds (member: that value's path in the Field).
+	struct Logged {
+		QString key, source, kind, path, values, member, text;
+		// The values an Apply sent: one names its path, several are counted.
+		int count = 0;
+		QElapsedTimer started;
+		bool active() const { return !key.isEmpty(); }
+	};
+	// An outcome whose words need the values this turn shows: what a Field
+	// reads back, what a Service returns.
+	struct Deferred {
+		Logged operation;
+		QString result, text;
+		enum class Fill { None, ReadBack, Response } fill = Fill::None;
+	};
+	Logged action, watchAction, refusedAction;
+	quint64 loggedSerial = 0;
+	// Outcomes taken off the queue in this turn, published once the state is.
+	QList<QVariantMap> logged;
+	Logged startLogged(int category, const QString& kind, const QString& path, const QString& values)
+	{
+		Logged started;
+		started.key = QStringLiteral("operation:%1").arg(++loggedSerial);
+		started.source = endpoint_paths::kindWord(category);
+		started.kind = kind;
+		started.path = path;
+		started.values = values;
+		started.started.start();
+		return started;
+	}
+	static QVariantMap outcomeOf(const Logged& operation, const QString& result, const QString& text)
+	{
+		return {{QStringLiteral("key"), operation.key},       {QStringLiteral("source"), operation.source},
+		        {QStringLiteral("kind"), operation.kind},     {QStringLiteral("path"), operation.path},
+		        {QStringLiteral("values"), operation.values}, {QStringLiteral("result"), result},
+		        {QStringLiteral("text"), text}};
+	}
+	// An outcome's words with the time it took once it outlasted the
+	// progress threshold (it showed as pending): "executed · 2.6 s".
+	static QString timed(const Logged& operation, const QString& text)
+	{
+		const auto ms = operation.started.isValid() ? operation.started.elapsed() : 0;
+		return ms < LogModel::progressThresholdMs ? text : text + QStringLiteral(" · ") + tookText(ms);
+	}
+	// The outcomes of this turn, in order; false when the provider went.
+	bool publishLogged()
+	{
+		const auto outcomes = std::exchange(logged, {});
+		QPointer<DynamicConfiguratorProvider> alive = q;
+		for (const auto& outcome : outcomes) {
+			if (!alive)
+				return false;
+			Q_EMIT alive->operationOutcome(outcome);
+		}
+		return bool(alive);
 	}
 	// The selected endpoint's types: a Field's value or a request, and a
 	// Service's response; for the tables' structure before anything is read
@@ -1260,6 +1358,8 @@ struct DynamicConfiguratorProvider::Impl {
 		// A refused Apply's one read (WL-9 C4): asked for after this turn, and
 		// its draft put back over the values it brings.
 		bool rereadNow = false, restoreDraft = false;
+		// The Log's outcomes whose words wait for the values this turn shows.
+		std::vector<Deferred> deferred;
 		if (writer && writer->read) {
 			writer->read.reset();
 			writer->action = DynamicViewState::Action::None;
@@ -1287,6 +1387,8 @@ struct DynamicConfiguratorProvider::Impl {
 			watchWriteHolds = false;
 			QString rowState;
 			bool held = false;
+			// The Log's kind of outcome and its words (LG-1).
+			QString logResult, logText;
 			if (written && !back.isEmpty()) {
 				const bool same = back == writeIntended;
 				watchWrite = (same ? said("Wrote %1 · %2 = %3 · read back %4")
@@ -1294,22 +1396,31 @@ struct DynamicConfiguratorProvider::Impl {
 				                 .arg(at, writeName, intended, shown(back));
 				watchWriteKind = same ? QStringLiteral("confirmed") : QStringLiteral("differs");
 				rowState = watchWriteKind;
+				logResult = same ? QStringLiteral("ok") : QStringLiteral("doubt");
+				logText = (same ? said("written · read back %1") : said("written · the device reads back %1"))
+				              .arg(shown(back));
 			} else if (written) {
 				const auto why = !result.refreshCompleted                  ? said("no reply in time")
 				                 : !result.refresh.operation.succeeded() ? whyText(result.refresh.operation)
 				                                                         : said("the reply could not be read");
 				watchWrite = said("Wrote %1 · %2 = %3 · not read back: %4").arg(at, writeName, intended, why);
 				watchWriteKind = rowState = QStringLiteral("unconfirmed");
+				logResult = QStringLiteral("doubt");
+				logText = said("written · not read back: %1").arg(why);
 			} else if (writeLeaf && (result.write.status == cl::Status::PayloadFull ||
 			                         result.write.status == cl::Status::BufferTooSmall)) {
 				watchWrite = said("Not written · %1 is larger than one write, so a value in it can't be written on its own.")
 				                 .arg(endpoints.fieldPath(writeId));
 				watchWriteKind = QStringLiteral("refused");
+				logResult = QStringLiteral("refused");
+				logText = said("not written · %1 is larger than one write").arg(endpoints.fieldPath(writeId));
 			} else if (result.write.status == cl::Status::OutcomeUnknown) {
 				watchWrite = said("Write not confirmed %1 · %2 = %3 · the reply was lost; it may have been written")
 				                 .arg(at, writeName, intended);
 				watchWriteKind = rowState = QStringLiteral("unconfirmed");
 				watchWriteHolds = true;
+				logResult = QStringLiteral("doubt");
+				logText = said("not confirmed · the reply was lost; it may have been written");
 			} else {
 				const auto why = whyText(result.write);
 				watchWrite = said("Write refused %1 · %2 = %3 · %4").arg(at, writeName, intended, why);
@@ -1318,6 +1429,8 @@ struct DynamicConfiguratorProvider::Impl {
 				held = model && row >= 0 &&
 				       model->setHeld(row, writeTyped, said("Refused: %1").arg(why), QStringLiteral("refused"),
 				                      binding ? binding->fingerprint() : QString{});
+				logResult = unsuccessfulKind(result.write);
+				logText = unsuccessfulText(result.write);
 			}
 			if (model && row >= 0) {
 				model->setWriteState(row, rowState);
@@ -1325,6 +1438,12 @@ struct DynamicConfiguratorProvider::Impl {
 				// replaces it.
 				if (!held && watchWriteKind != QStringLiteral("refused"))
 					model->dropHeld(row);
+			}
+			if (watchAction.active()) {
+				// The value as written, in the row's format.
+				watchAction.values = QStringLiteral("= ") + intended;
+				logged.push_back(outcomeOf(watchAction, logResult, timed(watchAction, logText)));
+				watchAction = {};
 			}
 		}
 		std::optional<std::pair<bool, bool>> commandDone, serviceDone;
@@ -1391,6 +1510,33 @@ struct DynamicConfiguratorProvider::Impl {
 				}
 				if (!rereadNow)
 					refusedDraft.clear();
+				if (action.active()) {
+					auto operation = std::exchange(action, {});
+					const bool one = operation.count == 1;
+					const auto counted = one ? QString{} : QCoreApplication::translate("DynamicConfiguratorProvider", " · %n values", nullptr, operation.count);
+					if (*applyDone) {
+						if (one)
+							deferred.push_back({operation, QStringLiteral("ok"), {}, Deferred::Fill::ReadBack});
+						else
+							logged.push_back(outcomeOf(operation, QStringLiteral("ok"),
+							                           timed(operation, said("written%1 · read back").arg(counted))));
+					} else if (result.writeCompleted && result.write.succeeded()) {
+						logged.push_back(outcomeOf(operation, QStringLiteral("doubt"),
+						                           timed(operation, said("written%1 · not read back").arg(counted))));
+					} else if (result.writeCompleted && result.write.status == cl::Status::Ok) {
+						auto why = whyText(result.write);
+						if (!one && why == said("the device does not take this value"))
+							why = said("the device does not take these values");
+						operation.text = timed(operation, said("refused · %1").arg(why));
+						logged.push_back(outcomeOf(operation, QStringLiteral("refused"), operation.text));
+						// The read after it says what the device holds (WL-9 C4).
+						if (one && rereadNow)
+							refusedAction = operation;
+					} else {
+						logged.push_back(outcomeOf(operation, unsuccessfulKind(result.write),
+						                           timed(operation, unsuccessfulText(result.write))));
+					}
+				}
 			}
 			if (state->commanded) {
 				const auto result = *state->commanded;
@@ -1406,6 +1552,17 @@ struct DynamicConfiguratorProvider::Impl {
 					         said("Accepted means the device took the Command, not that it finished."));
 				else
 					finished(said("Execute failed %1 · %2").arg(clockText(), whyText(result)), true);
+				if (action.active()) {
+					const auto operation = std::exchange(action, {});
+					// Accepted is not confirmed finished: a doubt.
+					logged.push_back(result.executed() ? outcomeOf(operation, QStringLiteral("ok"),
+					                                               timed(operation, said("executed")))
+					                 : result.accepted()
+					                     ? outcomeOf(operation, QStringLiteral("doubt"),
+					                                 timed(operation, said("accepted · not confirmed finished")))
+					                     : outcomeOf(operation, unsuccessfulKind(result),
+					                                 timed(operation, unsuccessfulText(result))));
+				}
 			}
 			if (state->serviced) {
 				const auto result = *state->serviced;
@@ -1430,6 +1587,20 @@ struct DynamicConfiguratorProvider::Impl {
 				                             : QStringLiteral("Completed - value status %1")
 				                                   .arg(static_cast<unsigned>(result.valueStatus))
 				                       : operationText(result.operation);
+				if (action.active()) {
+					const auto operation = std::exchange(action, {});
+					const auto ms = operation.started.isValid() ? operation.started.elapsed() : 0;
+					// A Service always says how long it took: its answer is the point.
+					if (result.operation.succeeded() && result.published)
+						deferred.push_back({operation, QStringLiteral("ok"), said("called · %1").arg(tookText(ms)),
+						                    Deferred::Fill::Response});
+					else if (result.operation.succeeded())
+						logged.push_back(outcomeOf(operation, QStringLiteral("doubt"),
+						                           said("called · %1 · the response could not be read").arg(tookText(ms))));
+					else
+						logged.push_back(outcomeOf(operation, unsuccessfulKind(result.operation),
+						                           timed(operation, unsuccessfulText(result.operation))));
+				}
 			}
 			if (!current()) {
 				// Only a provider that is gone stops here: one rebound while
@@ -1505,6 +1676,22 @@ struct DynamicConfiguratorProvider::Impl {
 			}
 			state->dirty = false;
 		}
+		for (auto& item : deferred) {
+			if (item.fill == Deferred::Fill::ReadBack) {
+				// The value the device read back, as Details now shows it.
+				const auto back = values.shownTexts().value(item.operation.member);
+				item.text = timed(item.operation, back.isEmpty() ? said("written · read back")
+				                                                 : said("written · read back %1").arg(back));
+			} else if (item.fill == Deferred::Fill::Response) {
+				// "(2, 3) → 6": the request as sent, then what came back.
+				const auto answer = responses.callLine(responses.shownTexts(), true);
+				if (!answer.isEmpty())
+					item.operation.values = item.operation.values.isEmpty()
+					                            ? QStringLiteral("→ ") + answer
+					                            : item.operation.values + QStringLiteral(" → ") + answer;
+			}
+			logged.push_back(outcomeOf(item.operation, item.result, item.text));
+		}
 		updating = false;
 		// A write, Command or Service may have changed watched values: the
 		// Watchlist reads them again now rather than on its next tick.
@@ -1539,6 +1726,8 @@ struct DynamicConfiguratorProvider::Impl {
 			Q_EMIT alive->serviceFinished(serviceDone->first, serviceDone->second);
 		if (alive && watchWriteDone)
 			Q_EMIT alive->watchWriteFinished(*watchWriteDone);
+		if (alive)
+			publishLogged();
 	}
 
 	// The written value in the writer's current snapshot: the Field itself,
@@ -1635,9 +1824,16 @@ struct DynamicConfiguratorProvider::Impl {
 	void restoreRefusedDraft()
 	{
 		const auto draft = std::exchange(refusedDraft, {});
+		const auto refused = std::exchange(refusedAction, {});
 		if (draft.isEmpty() || category != 1 || !state || state->view.beginEdit() != rt::Status::Ok)
 			return;
 		const auto device = values.shownTexts();
+		// The refused value's Log line says what the device holds instead,
+		// in its place: "refused · the device does not take this value · it
+		// holds 3" (LG-1).
+		if (const auto held = device.value(refused.member); refused.active() && !held.isEmpty())
+			logged.push_back(
+			    outcomeOf(refused, QStringLiteral("refused"), refused.text + QStringLiteral(" · ") + said("it holds %1").arg(held)));
 		QHash<QString, QString> notes;
 		for (auto it = draft.cbegin(); it != draft.cend(); ++it) {
 			const auto index = values.indexOfPath(it.key());
@@ -1673,20 +1869,27 @@ struct DynamicConfiguratorProvider::Impl {
 		return said("Writing %1 = %2…").arg(writeName, model && row >= 0 ? model->shownFor(row, writeIntended) : writeIntended);
 	}
 
-	void failWatchWrite(QString text)
+	// A row write that stops before the device answers: why, in words ("the
+	// Field could not be read first").
+	void failWatchWrite(const QString& reason)
 	{
 		if (writer && writer->view.editing())
 			writer->view.cancelEdit();
-		watchWrite = std::move(text);
+		watchWrite = writeName + QStringLiteral(" not written: ") + reason;
 		watchWriteKind = QStringLiteral("refused");
 		watchWriteAt = double(QDateTime::currentMSecsSinceEpoch());
 		watchWriteHolds = false;
 		if (auto* model = watchModel(); model && writeRow() >= 0)
 			model->setWriteState(writeRow(), QString{});
+		if (watchAction.active())
+			logged.push_back(outcomeOf(std::exchange(watchAction, {}), QStringLiteral("refused"),
+			                           said("not written · %1").arg(reason)));
 		QPointer<DynamicConfiguratorProvider> alive = q;
 		notify();
 		if (alive)
 			Q_EMIT alive->watchWriteFinished(false);
+		if (alive)
+			publishLogged();
 	}
 
 	// Second step of a row write: the writer view has read the Field; make an
@@ -1695,20 +1898,20 @@ struct DynamicConfiguratorProvider::Impl {
 	{
 		if (!writer || writer->retired || !current() || !allowed || !binding ||
 		    !binding->mutationsAllowed()) {
-			failWatchWrite(writeName + QStringLiteral(" not written: changes are not allowed now"));
+			failWatchWrite(QStringLiteral("changes are not allowed now"));
 			return;
 		}
 		auto& view = writer->view;
 		const auto snapshot = view.snapshotInfo();
 		if (!snapshot.ready || view.beginEdit() != rt::Status::Ok) {
-			failWatchWrite(writeName + QStringLiteral(" not written: the Field could not be read first"));
+			failWatchWrite(QStringLiteral("the Field could not be read first"));
 			return;
 		}
 		bool parsed = false;
 		auto set = rt::Status::TypeMismatch;
 		const auto node = nodeOf();
 		if (!node) {
-			failWatchWrite(writeName + QStringLiteral(" not written: the Field changed since it was watched"));
+			failWatchWrite(QStringLiteral("the Field changed since it was watched"));
 			return;
 		}
 		if (const auto info = view.info(*node)) {
@@ -1718,8 +1921,7 @@ struct DynamicConfiguratorProvider::Impl {
 		if (!parsed || set != rt::Status::Ok) {
 			// Why, in words: the type's range for a number past it (WL-3b).
 			const auto why = writeType.valid() ? watch_format::encode(writeText, writeType, writeForm).error : QString{};
-			failWatchWrite(writeName + QStringLiteral(" not written: ") +
-			               (why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why));
+			failWatchWrite(why.isEmpty() ? QStringLiteral("\"") + writeText + QStringLiteral("\" is not a valid value") : why);
 			return;
 		}
 		auto target = writer;
@@ -1728,8 +1930,7 @@ struct DynamicConfiguratorProvider::Impl {
 			target->dirty = true;
 		});
 		if (!submitted) {
-			failWatchWrite(writeName + QStringLiteral(" not written: refused %1")
-			                               .arg(static_cast<unsigned>(submitted.status)));
+			failWatchWrite(QStringLiteral("refused %1").arg(static_cast<unsigned>(submitted.status)));
 			return;
 		}
 		writer->action = DynamicViewState::Action::Apply;
@@ -4220,12 +4421,19 @@ bool DynamicConfiguratorProvider::writeWatch(int row, const QString& text)
 		watchedRow->setWriteState(row, QStringLiteral("pending"), watchedRow->shownFor(row, typed));
 	p->watchWrite = p->writingText();
 	p->watchWriteKind = QStringLiteral("writing");
+	// The Log's line (LG-1): the row's path and the value as typed, in the
+	// row's format.
+	p->watchAction = p->startLogged(1, QStringLiteral("value"), p->writeName,
+	                                QStringLiteral("= ") + (watchedRow ? watchedRow->shownFor(row, typed) : typed));
 	// Never a step: the first Ctrl+Z says so instead (UR-1).
 	if (p->undoHistory)
 		p->undoHistory->noteIrreversible(
 		    previous.isEmpty() ? tr("The write to %1 is not undone.").arg(p->writeName)
 		                       : tr("The write to %1 is not undone; write %2 to go back.").arg(p->writeName, previous));
+	const QPointer<DynamicConfiguratorProvider> alive(this);
 	p->notify();
+	if (alive && p->watchAction.active())
+		Q_EMIT operationOutcome(Impl::outcomeOf(p->watchAction, QStringLiteral("pending"), said("writing…")));
 	return true;
 }
 
@@ -4564,6 +4772,20 @@ bool DynamicConfiguratorProvider::apply()
 	p->write = p->status = QStringLiteral("Write pending");
 	p->writeAttention = false;
 	p->actionTimer.start();
+	// The Log's line (LG-1): the one value changed names its place in the
+	// Field ("device/Config.Gain = 2"); several are counted.
+	p->refusedAction = {};
+	if (p->refusedDraft.size() == 1) {
+		const auto only = p->refusedDraft.cbegin();
+		p->action = p->startLogged(1, QStringLiteral("value"), p->selection + memberSuffix(only.key()),
+		                           QStringLiteral("= ") + only.value());
+		p->action.member = only.key();
+	} else {
+		const auto root = p->values.index(0, 0);
+		const auto kind = root.isValid() ? p->values.data(root, ValueModel::KindRole).toString() : QString{};
+		p->action = p->startLogged(1, kind.isEmpty() ? QStringLiteral("struct") : kind, p->selection, {});
+	}
+	p->action.count = static_cast<int>(p->refusedDraft.size());
 	// Never a step: the first Ctrl+Z says so instead (UR-1).
 	if (p->undoHistory)
 		p->undoHistory->noteIrreversible(
@@ -4576,7 +4798,10 @@ bool DynamicConfiguratorProvider::apply()
 	p->updating = false;
 	if (p->binding)
 		p->binding->mutationAccepted(state);
+	const QPointer<DynamicConfiguratorProvider> alive(this);
 	p->notify();
+	if (alive && p->action.active())
+		Q_EMIT operationOutcome(Impl::outcomeOf(p->action, QStringLiteral("pending"), said("writing…")));
 	return true;
 }
 
@@ -4598,6 +4823,8 @@ bool DynamicConfiguratorProvider::executeCommand()
 		return false;
 	}
 	state->action = DynamicViewState::Action::Command;
+	// The Log's line (LG-1): the Command and its arguments, "(true)".
+	p->action = p->startLogged(2, QStringLiteral("command"), p->selection, p->values.callLine(texts));
 	p->remember(std::move(texts));
 	p->commandSession = state->view.session();
 	state->submittedSession = state->view.session();
@@ -4617,7 +4844,10 @@ bool DynamicConfiguratorProvider::executeCommand()
 	p->updating = false;
 	if (p->binding)
 		p->binding->mutationAccepted(state);
+	const QPointer<DynamicConfiguratorProvider> alive(this);
 	p->notify();
+	if (alive && p->action.active())
+		Q_EMIT operationOutcome(Impl::outcomeOf(p->action, QStringLiteral("pending"), said("executing…")));
 	return true;
 }
 
@@ -4640,6 +4870,9 @@ bool DynamicConfiguratorProvider::callService()
 		return false;
 	}
 	state->action = DynamicViewState::Action::Service;
+	// The Log's line (LG-1): the request as sent, "(2, 3)"; the answer joins
+	// it when it comes.
+	p->action = p->startLogged(3, QStringLiteral("service"), p->selection, p->values.callLine(texts));
 	p->remember(std::move(texts));
 	p->serviceSession = state->view.session();
 	p->responseEndpoint = p->selection;
@@ -4664,7 +4897,10 @@ bool DynamicConfiguratorProvider::callService()
 	p->updating = false;
 	if (p->binding)
 		p->binding->mutationAccepted(state);
+	const QPointer<DynamicConfiguratorProvider> alive(this);
 	p->notify();
+	if (alive && p->action.active())
+		Q_EMIT operationOutcome(Impl::outcomeOf(p->action, QStringLiteral("pending"), said("calling…")));
 	return true;
 }
 

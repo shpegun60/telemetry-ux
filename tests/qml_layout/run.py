@@ -157,7 +157,11 @@ def main():
                 # WL-10a: the Watchlist's and the Batch's "+" complete a
                 # group, a subgroup, an endpoint, a member and an element in
                 # the one grammar, through a real provider and connection.
-                ('path-completion', 'telemetry_qml_path_completion', r'Path completion checks=(\d+) warnings=0', 90)):
+                ('path-completion', 'telemetry_qml_path_completion', r'Path completion checks=(\d+) warnings=0', 90),
+                # LG-1: a line names its target and its outcome - a Command
+                # run, a refused write, a Service, a grouped warning and its
+                # resolution - severity by glyph, the source column at 360 px.
+                ('log-lines', 'telemetry_qml_log_lines', r'Log lines checks=(\d+) warnings=0', 50)):
             binary = output / 'build' / (binary_name + ('.exe' if os.name == 'nt' else ''))
             found = re.search(pattern, run(name, [binary, output]))
             if not found or int(found[1]) < least:

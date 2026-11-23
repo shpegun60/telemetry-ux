@@ -729,6 +729,56 @@ on the GUI thread and own no transport. `LogModel` retains at most 2000 events;
 Repeated `raise()` updates a problem without adding a duplicate log entry.
 Clearing the log does not resolve problems.
 
+A line says what happened, to what (LG-1, the designer's §7). `record()`
+takes an event with its target - `kind` (the `KindIcon` glyph: `value`,
+`struct`, `array`, `command`, `service`), `path` in the one path grammar,
+`values` (what follows the path: `= 2`, `(true)`, `(2, 3) → 6`) - its `text`
+(the outcome's words, `written · read back 2`), and either a `severity` or a
+`result`: the outcome's kind, which alone decides the severity (`ok` and
+`pending` Info, `doubt` a Warning, `refused` and `failed` an Error). Words
+never decide it. A `key` names one operation: a `pending` event under a key
+shows only once the operation has run `LogModel::progressThresholdMs`
+(1 s, one constant), and its outcome then takes that line's place, its time
+kept; an outcome before then is the only line. A later word on the same
+operation (what a refused Field holds) also replaces its line. `items` is a
+grouped event's list: the row's `detail` role shows its first 20 lines and
+"and 12 more", and Copy and Save as write every item under the line. The
+roles `kind`, `path`, `values`, `detail` and `line` (path, values and words
+as one line) join the old ones; `text` stays the words, and the filter also
+finds a path inside a list.
+
+`ProblemsModel::raise()` takes the same `items` for a grouped problem: one
+summary line ("8 watched values wait for a device") in Problems and in the
+Log, the list in its `detail`. `resolveWith(key, words, severity, items)`
+resolves it with a line saying what changed ("All 8 watched values found on
+Emulated device"), a warning with what is left when something is ("5 of 8
+found on Emulated device · 3 are not on it"). `resolve()` without words logs
+"Resolved: " and the summary's first line, never the list.
+
+`LogLine.qml` is one such line for a host's list, as the client's Log shows
+it: time, a glyph for a warning or an error only (an info keeps the slot
+empty and its words quieter, `textSecondary`), the source (the kind word for
+an operation, else the subsystem), then the kind glyph, a `PathLabel`, the
+values and the words; the words give way to `Type.nameFloor` before the path
+drops segments. A host sets `expanded` on its current row: the words show
+whole (under the path when they would not fit beside it) and a grouped
+event opens its list. `narrow` (below 360 px) hides the source column; the
+word stays in `spoken`, which the host gives as the row's accessible name.
+
+`DynamicConfiguratorProvider::operationOutcome(QVariantMap)` is that event
+for Details' Apply, Execute and Call and a Watchlist row's write, ready for
+`LogModel::record()`: `pending` with "writing…", "executing…" or "calling…"
+at the start, then the outcome under the same key - `device/Config.Gain = 2
+· written · read back 2`, `control/Reset · executed`, `control/Scale (2, 3) →
+6 · called · 19 ms`, `device/Config.Gain = 345 · refused · the device does
+not take this value`, and after the read that follows a refusal of one value
+" · it holds 3" in the same line. Several values in one Apply name the Field
+and count them (`written · 3 values · read back`). Past the threshold the
+words end with the time taken (" · 2.6 s"). Reads are not logged. A host
+passes the map on as it is (`eventLog.record(outcome)`) and decides nothing
+from its words; `writeOutcome`, `commandOutcome` and `serviceOutcome` stay
+for status lines.
+
 `SessionProblems` in the optional `qt_connection` component adapts a session's
 connection failures, files-only limitation and identity problem. Applications
 should not log the same session failure independently. Transfer and application
