@@ -595,6 +595,19 @@ int main(int argc, char** argv)
 				key(window, Qt::Key_Escape);
 			CHECK(!field->hasActiveFocus() && field->property("text").toString().isEmpty());
 			CHECK(calls.added.size() == before + 1);
+			// DD-3: rows dropped from the Device tree are selected and revealed: the new last row
+			// is current, with no TypeError from the drop's deferred step.
+			{
+				const int warned = warnings;
+				const int rowsBefore = list->property("count").toInt();
+				list->setProperty("currentIndex", 0);
+				QVariant ok;
+				CHECK(QMetaObject::invokeMethod(window, "dropFromTree", Q_RETURN_ARG(QVariant, ok)));
+				settle();
+				CHECK(ok.toBool() && list->property("count").toInt() == rowsBefore + 2);
+				CHECK(list->property("currentIndex").toInt() == rowsBefore + 1);
+				CHECK(warnings == warned);
+			}
 			window->close();
 		}
 		settle();
