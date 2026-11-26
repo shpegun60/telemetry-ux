@@ -49,6 +49,13 @@ ApplicationWindow {
         function removeBatch(row) { return batchAddCalls.remove(row) }
         function checkBatchPath(text) { return batchAddCalls.check(text) }
         function batchPathCandidates(text) { return batchAddCalls.candidates(text) }
+        // The Device tree's drop (section 16): one item per path.
+        function dropOn(dropped, target) {
+            const result = batchAddCalls.addPaths(dropped.map(item => item.path))
+            batchCount += result.added
+            stateChanged()
+            return result
+        }
         function addBatchPaths(lines) {
             const result = batchAddCalls.addPaths(lines)
             batchCount += result.added
@@ -56,7 +63,12 @@ ApplicationWindow {
             return result
         }
     }
+    // What the Device tree's drop hands over: a real JS array, as JSON.parse makes it.
+    function dropFromTree() {
+        return batchPanel.dropItems([{path: "drop.A"}, {path: "drop.B"}])
+    }
     BatchPanel {
+        id: batchPanel
         objectName: "batchAddPanel"
         anchors.fill: parent
         provider: fixtureProvider

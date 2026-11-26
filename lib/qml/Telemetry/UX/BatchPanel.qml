@@ -907,10 +907,10 @@ Pane {
     // Rows picked in the Device tree (section 16): one item per Field under
     // them at any depth, a Command or a Service only when picked by itself,
     // all or none, as one step.
-    function dropItems(items) {
-        if (!Array.isArray(items) || items.length === 0 || typeof provider.dropOn !== "function")
+    function dropItems(dropped) {
+        if (!Array.isArray(dropped) || dropped.length === 0 || typeof provider.dropOn !== "function")
             return false
-        const result = provider.dropOn(items, "batch")
+        const result = provider.dropOn(dropped, "batch")
         const ok = result.status === "ok" && result.added > 0
         batchAdd.lastRefused = !ok
         batchNotice.text = result.message || result.refusal || ""

@@ -26,6 +26,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlComponent>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlExpression>
 #include <QtQuick/QQuickItem>
@@ -795,6 +796,25 @@ int main(int argc, char** argv)
 			          .toString() == QStringLiteral("and 2 more"));
 			CHECK(t.call("badgeDetail", QVariant::fromValue(QModelIndex(config)), QVariantList{}).toString() ==
 			      QStringLiteral("adc::Config"));
+		}
+
+		// DD-3: the badge's image is one the platform drag may ask a source size of
+		// without a warning ("Ignoring sourceSize request for image url that came
+		// from grabToImage"): a grab's own image:// url answers every such
+		// request with one, so the image must be a file.
+		{
+			auto* badge = t.panel->findChild<QQuickItem*>(QStringLiteral("dragBadge"));
+			CHECK(badge);
+			const auto image = badge->property("image").toUrl();
+			CHECK(image.isLocalFile() && QFile::exists(image.toLocalFile()));
+			const int before = warnings;
+			QQmlComponent component(&engine);
+			component.setData("import QtQuick; Image { asynchronous: false; sourceSize.width: 48; sourceSize.height: 24 }", QUrl());
+			std::unique_ptr<QObject> probe(component.create());
+			CHECK(probe);
+			probe->setProperty("source", image);
+			settle(100);
+			CHECK(probe->property("status").toInt() == 1 && warnings == before);
 		}
 
 		// ---- Ceilings in the window: a twelve-level tree at 280 px ----

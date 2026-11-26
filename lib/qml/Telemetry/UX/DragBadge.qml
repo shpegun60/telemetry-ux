@@ -6,6 +6,7 @@
 // surface, a 1 px outline and the caption type. MIT.
 import QtQuick
 import QtQuick.Controls
+import QtCore
 
 Rectangle {
     id: badge
@@ -20,14 +21,28 @@ Rectangle {
     readonly property real most: 240
     signal made(url image)
 
+    // The grab written to one of a few rotating temp files (a name is never
+    // reused while the last drag may still hold it); "" when it cannot be.
+    property int slot: 0
+    readonly property string token: Math.random().toString(36).slice(2, 10)
+    function saved(result) {
+        const dir = StandardPaths.writableLocation(StandardPaths.TempLocation).toString()
+        badge.slot = (badge.slot + 1) % 8
+        const name = dir + "/telemetry-ux-drag-" + badge.token + "-" + badge.slot + ".png"
+        return result.saveToFile(name.replace(/^file:\/\/\//, "")) ? name : ""
+    }
     // Grabs what it shows now; made() carries the image's url.
     function make(kind, path, detail) {
         badge.kind = kind
         badge.path = path
         badge.detail = detail
         badge.grabToImage(function(result) {
-            badge.image = result.url
-            badge.made(result.url)
+            // A file, not the grab's own image:// url: the platform drag asks
+            // its image for a source size, which a grab result answers with
+            // a warning on every request.
+            const url = badge.saved(result) || result.url
+            badge.image = url
+            badge.made(url)
         })
     }
 
